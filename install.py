@@ -8,10 +8,9 @@ SENDTO_DIRECTORY = r"%APPDATA%\Microsoft\Windows\SendTo"
 # Registry of entrypoints
 # Format: { "Shortcut Name": { "arguments": "...", "desc": "description" } }
 ENTRYPOINTS = {
-    # Added in later tasks:
-    # "Kardenwort Merge": { "arguments": "merge --files", "desc": "Merge multiple kardenwort TSVs" }
-    # "Kardenwort Desk Restore": { "arguments": "restore --file", "desc": "Restore a prior session" }
-    # "Kardenwort Desk": { "arguments": "desk --file", "desc": "Open text file in desk window" }
+    "Kardenwort Merge": { "arguments": "merge --files", "desc": "Merge multiple kardenwort TSVs" },
+    "Kardenwort Desk Restore": { "arguments": "restore --file", "desc": "Restore a prior session" },
+    "Kardenwort Desk": { "arguments": "desk --file", "desc": "Open text file in desk window" }
 }
 
 def create_shortcut(name, arguments, description):

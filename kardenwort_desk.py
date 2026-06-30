@@ -785,12 +785,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 tok_data["row_ids"] = mapped_rows
         token_manifest.append(tok_data)
         
-    html_page = f"""<!DOCTYPE html>
+    html_page = """<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
 <style>
-  body {{
+  body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background-color: #0d0f12;
     color: #e3e6eb;
@@ -798,62 +799,70 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     padding: 16px;
     font-size: 14px;
     line-height: 1.5;
-  }}
-  .container {{
+  }
+  .container {
     max-width: 100%;
     display: flex;
     flex-direction: column;
     gap: 16px;
-  }}
-  .section {{
+  }
+  .section {
     background: rgba(255, 255, 255, 0.03);
     border: 1px solid rgba(255, 255, 255, 0.08);
     border-radius: 12px;
     padding: 16px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-  }}
-  .section-title {{
+  }
+  .section-title {
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
     color: #8b949e;
     margin-bottom: 8px;
     font-weight: 600;
-  }}
-  .source-text {{
+  }
+  .source-text {
     font-size: 16px;
     color: #f0f6fc;
     line-height: 1.6;
     word-break: break-word;
-  }}
-  .source-text span.word {{
+  }
+  .source-text span.word {
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     border-radius: 3px;
     padding: 0 2px;
-  }}
-  .source-text span.word:hover {{
+  }
+  .source-text span.word:hover {
     background-color: rgba(255, 255, 255, 0.1);
-  }}
-  .source-text span.highlight-yellow {{
-    background-color: rgba(255, 215, 0, 0.2);
+  }
+  .source-text span.highlight-yellow {
+    background-color: rgba(255, 215, 0, 0.15);
     border-bottom: 2px solid #ffd700;
-  }}
-  .source-text span.highlight-purple {{
-    background-color: rgba(147, 112, 219, 0.2);
+  }
+  .source-text span.highlight-purple {
+    background-color: rgba(147, 112, 219, 0.15);
     border-bottom: 2px solid #9370db;
-  }}
-  .translation-text {{
+  }
+  .source-text span.highlight-yellow-active {
+    background-color: #ffd700;
+    color: #0d0f12;
+  }
+  .source-text span.highlight-purple-active {
+    background-color: #9370db;
+    color: #ffffff;
+  }
+  .translation-text {
     font-size: 15px;
     color: #c9d1d9;
     font-style: italic;
-  }}
-  table {{
+  }
+  table {
     width: 100%;
     border-collapse: collapse;
     margin-top: 8px;
-  }}
-  th {{
+  }
+  th {
     text-align: left;
     padding: 10px 12px;
     font-size: 11px;
@@ -862,23 +871,26 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     color: #8b949e;
     border-bottom: 1px solid rgba(255, 255, 255, 0.1);
     font-weight: 600;
-  }}
-  td {{
+  }
+  td {
     padding: 10px 12px;
     border-bottom: 1px solid rgba(255, 255, 255, 0.05);
     color: #c9d1d9;
     vertical-align: top;
-  }}
-  tr:hover td {{
+  }
+  tr:hover td {
     background: rgba(255, 255, 255, 0.02);
-  }}
-  tr.selected td {{
+  }
+  tr.selected td {
     background: rgba(56, 139, 253, 0.15);
     color: #58a6ff;
-  }}
-  .editable {{
+  }
+  .editable {
     cursor: pointer;
-  }}
+  }
+  td.dirty {
+    border-left: 3px solid #ff7b72;
+  }
 </style>
 </head>
 <body>
@@ -916,11 +928,301 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   </div>
 </div>
 <script id="token-map" type="application/json">
-{json.dumps(token_manifest)}
+{token_manifest}
+</script>
+<script id="tsv-path" type="text/plain">{working_tsv_path}</script>
+<script id="session-zid" type="text/plain">{zid}</script>
+<script id="session-lang" type="text/plain">{language}</script>
+
+<script type="text/javascript">
+document.addEventListener('DOMContentLoaded', function() {
+    let selectedRowIds = new Set();
+    let lastClickedRowId = null;
+    let focusedRowId = null;
+    let deltas = [];
+    let touchedCells = {};
+    
+    let tokenMap = [];
+    try {
+        tokenMap = JSON.parse(document.getElementById('token-map').innerText);
+    } catch(e) {}
+    
+    let tokenSpans = document.querySelectorAll('#source-container span.word');
+    
+    tokenSpans.forEach(span => {
+        span.addEventListener('click', function(e) {
+            let lowerClean = span.getAttribute('data-lower-clean');
+            let tokenData = tokenMap.find(t => t.lower_clean === lowerClean && t.is_word);
+            if (!tokenData || !tokenData.row_ids) return;
+            
+            if (!e.ctrlKey) {
+                clearAllSelections();
+            }
+            
+            tokenData.row_ids.forEach(rowId => {
+                toggleRowSelection(rowId, true);
+            });
+            updateBidirectionalHighlights();
+            notifyAHKSelection();
+        });
+    });
+    
+    let tableRows = document.querySelectorAll('#lemma-table tbody tr');
+    tableRows.forEach(row => {
+        row.addEventListener('click', function(e) {
+            let rowId = parseInt(row.getAttribute('data-row-id'));
+            
+            if (e.shiftKey && lastClickedRowId !== null) {
+                let start = Math.min(lastClickedRowId, rowId);
+                let end = Math.max(lastClickedRowId, rowId);
+                if (!e.ctrlKey) {
+                    selectedRowIds.clear();
+                }
+                for (let i = start; i <= end; i++) {
+                    selectedRowIds.add(i);
+                }
+            } else if (e.ctrlKey) {
+                if (selectedRowIds.has(rowId)) {
+                    selectedRowIds.delete(rowId);
+                } else {
+                    selectedRowIds.add(rowId);
+                }
+                lastClickedRowId = rowId;
+            } else {
+                let wasSelected = selectedRowIds.has(rowId);
+                selectedRowIds.clear();
+                if (!wasSelected || tableRows.length > 1) {
+                    selectedRowIds.add(rowId);
+                }
+                lastClickedRowId = rowId;
+            }
+            
+            focusedRowId = rowId;
+            updateRowStyles();
+            updateBidirectionalHighlights();
+            notifyAHKSelection();
+        });
+        
+        row.querySelectorAll('td.editable').forEach(cell => {
+            cell.addEventListener('dblclick', function() {
+                makeEditable(cell);
+            });
+        });
+    });
+    
+    document.addEventListener('keydown', function(e) {
+        if (document.activeElement.tagName === 'INPUT') return;
+        
+        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+            e.preventDefault();
+            if (tableRows.length === 0) return;
+            
+            if (focusedRowId === null) {
+                focusedRowId = 0;
+            } else {
+                if (e.key === 'ArrowDown') {
+                    focusedRowId = Math.min(focusedRowId + 1, tableRows.length - 1);
+                } else {
+                    focusedRowId = Math.max(focusedRowId - 1, 0);
+                }
+            }
+            updateRowFocus();
+        } else if (e.key === 'Space') {
+            e.preventDefault();
+            if (focusedRowId !== null) {
+                if (selectedRowIds.has(focusedRowId)) {
+                    selectedRowIds.delete(focusedRowId);
+                } else {
+                    selectedRowIds.add(focusedRowId);
+                }
+                lastClickedRowId = focusedRowId;
+                updateRowStyles();
+                updateBidirectionalHighlights();
+                notifyAHKSelection();
+            }
+        } else if (e.key === 'F2') {
+            if (focusedRowId !== null) {
+                let activeRow = document.querySelector(`#lemma-table tbody tr[data-row-id="${focusedRowId}"]`);
+                if (activeRow) {
+                    let firstEditable = activeRow.querySelector('td.editable');
+                    if (firstEditable) {
+                        makeEditable(firstEditable);
+                    }
+                }
+            }
+        }
+    });
+    
+    function clearAllSelections() {
+        selectedRowIds.clear();
+        lastClickedRowId = null;
+        updateRowStyles();
+    }
+    
+    function toggleRowSelection(rowId, forceState) {
+        if (forceState) {
+            selectedRowIds.add(rowId);
+        } else {
+            if (selectedRowIds.has(rowId)) {
+                selectedRowIds.delete(rowId);
+            } else {
+                selectedRowIds.add(rowId);
+            }
+        }
+        updateRowStyles();
+    }
+    
+    function updateRowStyles() {
+        tableRows.forEach(row => {
+            let rowId = parseInt(row.getAttribute('data-row-id'));
+            if (selectedRowIds.has(rowId)) {
+                row.classList.add('selected');
+            } else {
+                row.classList.remove('selected');
+            }
+        });
+    }
+    
+    function updateRowFocus() {
+        tableRows.forEach(row => {
+            let rowId = parseInt(row.getAttribute('data-row-id'));
+            if (rowId === focusedRowId) {
+                row.style.outline = '1px solid #58a6ff';
+                row.scrollIntoView({ block: 'nearest' });
+            } else {
+                row.style.outline = 'none';
+            }
+        });
+    }
+    
+    function updateBidirectionalHighlights() {
+        tokenSpans.forEach(span => {
+            span.classList.remove('highlight-yellow-active', 'highlight-purple-active');
+        });
+        
+        selectedRowIds.forEach(rowId => {
+            tokenMap.forEach(token => {
+                if (token.row_ids && token.row_ids.includes(rowId)) {
+                    let span = document.querySelector(`#source-container span.word[data-word-idx="${token.visual_idx}"]`);
+                    if (span) {
+                        if (span.classList.contains('highlight-purple')) {
+                            span.classList.add('highlight-purple-active');
+                        } else {
+                            span.classList.add('highlight-yellow-active');
+                        }
+                    }
+                }
+            });
+        });
+    }
+    
+    function notifyAHKSelection() {
+        if (window.ahkCall) {
+            window.ahkCall('selection', Array.from(selectedRowIds).join(','));
+        }
+    }
+    
+    function makeEditable(cell) {
+        if (cell.querySelector('input')) return;
+        
+        let originalValue = cell.innerText;
+        let colName = cell.getAttribute('data-col');
+        let rowId = cell.parentElement.getAttribute('data-row-id');
+        
+        let input = document.createElement('input');
+        input.type = 'text';
+        input.value = originalValue;
+        input.style.width = '100%';
+        input.style.boxSizing = 'border-box';
+        input.style.background = '#1c1f24';
+        input.style.color = '#e3e6eb';
+        input.style.border = '1px solid #58a6ff';
+        input.style.borderRadius = '4px';
+        input.style.padding = '4px';
+        
+        cell.innerHTML = '';
+        cell.appendChild(input);
+        input.focus();
+        input.select();
+        
+        function commit() {
+            let newValue = input.value;
+            cell.innerHTML = newValue;
+            if (newValue !== originalValue) {
+                let existingIndex = deltas.findIndex(d => d.row_id === parseInt(rowId) && d.column === colName);
+                if (existingIndex !== -1) {
+                    deltas[existingIndex].value = newValue;
+                } else {
+                    deltas.push({
+                        row_id: parseInt(rowId),
+                        column: colName,
+                        value: newValue
+                    });
+                }
+                cell.classList.add('dirty');
+                touchedCells[`${rowId}_${colName}`] = true;
+                if (window.ahkCall) {
+                    window.ahkCall('dirty', 'true');
+                }
+            }
+        }
+        
+        input.addEventListener('keydown', function(e) {
+            if (e.key === 'Enter') {
+                commit();
+            } else if (e.key === 'Escape') {
+                cell.innerHTML = originalValue;
+            } else if (e.key === 'Tab') {
+                e.preventDefault();
+                commit();
+                let editables = Array.from(document.querySelectorAll('.editable'));
+                let idx = editables.indexOf(cell);
+                let nextIdx = e.shiftKey ? idx - 1 : idx + 1;
+                if (nextIdx >= 0 && nextIdx < editables.length) {
+                    makeEditable(editables[nextIdx]);
+                }
+            }
+        });
+        
+        input.addEventListener('blur', function() {
+            commit();
+        });
+    }
+    
+    window.getSelectedRows = function() {
+        return JSON.stringify(Array.from(selectedRowIds));
+    };
+    
+    window.getDeltas = function() {
+        return JSON.stringify(deltas);
+    };
+    
+    window.clearDirty = function() {
+        deltas = [];
+        document.querySelectorAll('td.dirty').forEach(cell => {
+            cell.classList.remove('dirty');
+        });
+        if (window.ahkCall) {
+            window.ahkCall('dirty', 'false');
+        }
+    };
+    
+    window.isDirty = function() {
+        return deltas.length > 0;
+    };
+});
 </script>
 </body>
 </html>
 """
+    html_page = html_page.replace("{source_html}", source_html)
+    html_page = html_page.replace("{sentence_html}", sentence_html)
+    html_page = html_page.replace("{table_rows_html}", table_rows_html)
+    html_page = html_page.replace("{token_manifest}", json.dumps(token_manifest))
+    html_page = html_page.replace("{working_tsv_path}", str(working_tsv_path))
+    html_page = html_page.replace("{zid}", zid)
+    html_page = html_page.replace("{language}", language)
+    
     return html_page
 
 def cmd_render(args):
@@ -1237,6 +1539,16 @@ def cmd_merge(args):
         print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
         sys.exit(1)
 
+def spawn_ahk(args_list, base_dir):
+    ahk_script = base_dir.parent / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
+    ahk_exe = "AutoHotkey.exe"
+    cmd = [ahk_exe, str(ahk_script)] + args_list
+    logger.info(f"Spawning AHK: {' '.join(cmd)}")
+    try:
+        subprocess.Popen(cmd)
+    except Exception as e:
+        logger.error(f"Failed to spawn AHK window process: {e}")
+
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")
     config, resolved_paths = load_config(args.config)
@@ -1245,6 +1557,10 @@ def cmd_restore(args):
     if not input_path.exists():
         print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
         sys.exit(1)
+        
+    if not args.no_gui:
+        spawn_ahk(["--restore", str(input_path)], resolved_paths['base_dir'])
+        return
         
     zid = extract_zid(input_path)
     parent_dir = input_path.parent
@@ -1316,6 +1632,10 @@ def cmd_desk(args):
         print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
         sys.exit(1)
         
+    if not args.no_gui:
+        spawn_ahk(["--desk", str(file_path), "--text-mode", args.text_mode], resolved_paths['base_dir'])
+        return
+        
     try:
         text = file_path.read_text(encoding='utf-8')
     except Exception as e:
@@ -1374,12 +1694,14 @@ def main():
     # restore
     p_restore = subparsers.add_parser("restore")
     p_restore.add_argument("--file", required=True, help="Session file to restore")
+    p_restore.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
 
     # desk
     p_desk = subparsers.add_parser("desk")
     p_desk.add_argument("--file", required=True, help="Text file to analyze")
     p_desk.add_argument("--text-mode", choices=["single", "multi"], default="multi")
     p_desk.add_argument("--language", help="Language code")
+    p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
 
     try:
         args = parser.parse_args()
