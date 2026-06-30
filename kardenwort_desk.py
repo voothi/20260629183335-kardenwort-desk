@@ -901,6 +901,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     border-radius: 3px;
     padding: 0 2px;
   }
+  .source-text span.word.flipped {
+    background-color: rgba(56, 166, 255, 0.15);
+    color: #58a6ff;
+    font-style: italic;
+    border: 1px dashed rgba(56, 166, 255, 0.4);
+    padding: 0 3px;
+    margin: 0 -1px;
+    border-radius: 4px;
+  }
   .source-text span.word:hover {
     background-color: rgba(255, 255, 255, 0.1);
   }
@@ -1040,6 +1049,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         var dragSelectMode = true;
         var isTokenDragSelecting = false;
         var tokenDragMode = true;
+        var isRmbDragSelecting = false;
+        var rmbDragMode = true;
         var dragOccurred = false;
         var justFinishedDrag = false;
         
@@ -1069,43 +1080,103 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             return null;
         }
         
+        function getWordTranslation(span) {
+            var lowerClean = span.getAttribute('data-lower-clean');
+            var tokenData = findTokenData(lowerClean);
+            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                return "";
+            }
+            var translations = [];
+            for (var j = 0; j < tokenData.row_ids.length; j++) {
+                var rowId = tokenData.row_ids[j];
+                var tr = null;
+                for (var k = 0; k < tableRows.length; k++) {
+                    if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                        tr = tableRows[k];
+                        break;
+                    }
+                }
+                if (tr) {
+                    var tds = tr.getElementsByTagName('td');
+                    for (var m = 0; m < tds.length; m++) {
+                        if (tds[m].getAttribute('data-col') === 'WordDestination') {
+                            var trans = tds[m].textContent || tds[m].innerText || "";
+                            trans = trans.trim();
+                            if (trans && translations.indexOf(trans) === -1) {
+                                translations.push(trans);
+                            }
+                        }
+                    }
+                }
+            }
+            return translations.join(', ');
+        }
+        
         for (var i = 0; i < tokenSpans.length; i++) {
             (function(span) {
                 addEvent(span, 'mousedown', function(e) {
                     e = e || window.event;
-                    if (e.button !== 0) return;
                     
-                    var lowerClean = span.getAttribute('data-lower-clean');
-                    var tokenData = findTokenData(lowerClean);
-                    if (!tokenData || !tokenData.row_ids) return;
-                    
-                    isTokenDragSelecting = true;
-                    dragOccurred = false;
-                    
-                    var allSelected = true;
-                    for (var j = 0; j < tokenData.row_ids.length; j++) {
-                        if (!selectedRowIdsMap.hasOwnProperty(String(tokenData.row_ids[j]))) {
-                            allSelected = false;
-                            break;
+                    if (e.button === 0) { // LMB
+                        var lowerClean = span.getAttribute('data-lower-clean');
+                        var tokenData = findTokenData(lowerClean);
+                        if (!tokenData || !tokenData.row_ids) return;
+                        
+                        isTokenDragSelecting = true;
+                        dragOccurred = false;
+                        
+                        var allSelected = true;
+                        for (var j = 0; j < tokenData.row_ids.length; j++) {
+                            if (!selectedRowIdsMap.hasOwnProperty(String(tokenData.row_ids[j]))) {
+                                allSelected = false;
+                                break;
+                            }
                         }
-                    }
-                    
-                    tokenDragMode = !allSelected;
-                    
-                    for (var j = 0; j < tokenData.row_ids.length; j++) {
-                        if (allSelected) {
-                            delete selectedRowIdsMap[String(tokenData.row_ids[j])];
+                        
+                        tokenDragMode = !allSelected;
+                        
+                        for (var j = 0; j < tokenData.row_ids.length; j++) {
+                            if (allSelected) {
+                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
+                            } else {
+                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
+                            }
+                        }
+                        updateRowStyles();
+                        updateBidirectionalHighlights();
+                        
+                        if (e.preventDefault) {
+                            e.preventDefault();
                         } else {
-                            selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
+                            e.returnValue = false;
                         }
-                    }
-                    updateRowStyles();
-                    updateBidirectionalHighlights();
-                    
-                    if (e.preventDefault) {
-                        e.preventDefault();
-                    } else {
-                        e.returnValue = false;
+                    } else if (e.button === 2) { // RMB
+                        isRmbDragSelecting = true;
+                        dragOccurred = false;
+                        
+                        if (!span.getAttribute('data-original-text')) {
+                            span.setAttribute('data-original-text', span.textContent || span.innerText || "");
+                        }
+                        
+                        var isFlipped = (span.className.indexOf('flipped') !== -1);
+                        if (isFlipped) {
+                            span.className = span.className.replace(/\bflipped\b/g, '').trim();
+                            span.textContent = span.getAttribute('data-original-text');
+                            rmbDragMode = false;
+                        } else {
+                            var trans = getWordTranslation(span);
+                            if (trans) {
+                                span.className += ' flipped';
+                                span.textContent = trans;
+                                rmbDragMode = true;
+                            }
+                        }
+                        
+                        if (e.preventDefault) {
+                            e.preventDefault();
+                        } else {
+                            e.returnValue = false;
+                        }
                     }
                 });
                 
@@ -1131,9 +1202,43 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         }
                         updateRowStyles();
                         updateBidirectionalHighlights();
+                    } else if (isRmbDragSelecting) {
+                        if (e.buttons !== undefined && (e.buttons & 2) === 0) {
+                            isRmbDragSelecting = false;
+                            return;
+                        }
+                        dragOccurred = true;
+                        
+                        var isFlipped = (span.className.indexOf('flipped') !== -1);
+                        if (rmbDragMode) {
+                            if (!span.getAttribute('data-original-text')) {
+                                span.setAttribute('data-original-text', span.textContent || span.innerText || "");
+                            }
+                            if (!isFlipped) {
+                                var trans = getWordTranslation(span);
+                                if (trans) {
+                                    span.className += ' flipped';
+                                    span.textContent = trans;
+                                }
+                            }
+                        } else {
+                            if (isFlipped) {
+                                span.className = span.className.replace(/\bflipped\b/g, '').trim();
+                                span.textContent = span.getAttribute('data-original-text') || "";
+                            }
+                        }
                     }
                 });
             })(tokenSpans[i]);
+        }
+        
+        var sourceContainer = document.getElementById('source-container');
+        if (sourceContainer) {
+            addEvent(sourceContainer, 'contextmenu', function(e) {
+                e = e || window.event;
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                return false;
+            });
         }
         
         var lemmaTable = document.getElementById('lemma-table');
@@ -1246,7 +1351,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         
         addEvent(document, 'mouseup', function(e) {
             var needNotify = false;
-            if (isDragSelecting || isTokenDragSelecting) {
+            if (isDragSelecting || isTokenDragSelecting || isRmbDragSelecting) {
                 if (dragOccurred) {
                     justFinishedDrag = true;
                     setTimeout(function() {
@@ -1255,10 +1360,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 }
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
+                isRmbDragSelecting = false;
                 needNotify = true;
             }
             if (needNotify) {
                 notifyAHKSelection();
+            }
+        });
+        
+        addEvent(document, 'contextmenu', function(e) {
+            if (justFinishedDrag) {
+                e = e || window.event;
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                return false;
             }
         });
         
