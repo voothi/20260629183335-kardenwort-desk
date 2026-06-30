@@ -1757,21 +1757,59 @@ def cmd_merge(args):
 
 def spawn_ahk(args_list, base_dir):
     ahk_script = base_dir.parent / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
-    ahk_exe = "AutoHotkey.exe"
-    cmd = [ahk_exe, str(ahk_script)] + args_list
-    logger.info(f"Spawning AHK: {' '.join(cmd)}")
-    try:
-        subprocess.Popen(cmd)
-    except FileNotFoundError:
-        logger.warning(f"AutoHotkey.exe not found in PATH, falling back to os.startfile for {ahk_script.name}")
+    
+    import shutil
+    ahk_exes = ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]
+    found_exe = None
+    
+    # 1. Try to find any in PATH
+    for name in ahk_exes:
+        path_match = shutil.which(name)
+        if path_match:
+            found_exe = path_match
+            break
+            
+    # 2. Check common installation directories
+    if not found_exe:
+        possible_dirs = [
+            Path(r"C:\Program Files\AutoHotkey\v2"),
+            Path(r"C:\Program Files\AutoHotkey"),
+            Path(r"C:\Program Files (x86)\AutoHotkey"),
+        ]
+        # Scan C:\AHK and its subfolders (like C:\AHK\AutoHotkey_2.0.18)
         try:
-            # os.startfile supports arguments in Python 3.10+
+            c_ahk = Path(r"C:\AHK")
+            if c_ahk.exists():
+                possible_dirs.append(c_ahk)
+                for sub in c_ahk.iterdir():
+                    if sub.is_dir() and "autohotkey" in sub.name.lower():
+                        possible_dirs.append(sub)
+        except Exception:
+            pass
+            
+        for p_dir in possible_dirs:
+            for name in ahk_exes:
+                candidate = p_dir / name
+                if candidate.exists():
+                    found_exe = str(candidate)
+                    break
+            if found_exe:
+                break
+                
+    if found_exe:
+        cmd = [found_exe, str(ahk_script)] + args_list
+        logger.info(f"Spawning AHK via executable: {' '.join(cmd)}")
+        try:
+            subprocess.Popen(cmd)
+        except Exception as e:
+            logger.error(f"Failed to spawn AHK window process: {e}")
+    else:
+        logger.warning(f"No AutoHotkey executable found, falling back to os.startfile for {ahk_script.name}")
+        try:
             args_str = ' '.join(f'"{a}"' for a in args_list)
             os.startfile(str(ahk_script), operation='open', arguments=args_str)
         except Exception as e2:
             logger.error(f"Failed to spawn AHK via os.startfile: {e2}")
-    except Exception as e:
-        logger.error(f"Failed to spawn AHK window process: {e}")
 
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")
