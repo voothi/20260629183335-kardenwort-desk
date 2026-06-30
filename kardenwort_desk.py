@@ -935,328 +935,406 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
 <script id="session-lang" type="text/plain">{language}</script>
 
 <script type="text/javascript">
-document.addEventListener('DOMContentLoaded', function() {
-    var selectedRowIdsMap = {};
-    var lastClickedRowId = null;
-    var focusedRowId = null;
-    var deltas = [];
-    var touchedCells = {};
-    
-    var tokenMap = [];
-    try {
-        tokenMap = JSON.parse(document.getElementById('token-map').innerText);
-    } catch(e) {}
-    
-    var tokenSpans = document.querySelectorAll('#source-container span.word');
-    
-    function findTokenData(lowerClean) {
-        for (var i = 0; i < tokenMap.length; i++) {
-            var t = tokenMap[i];
-            if (t.lower_clean === lowerClean && t.is_word) {
-                return t;
-            }
-        }
-        return null;
-    }
-    
-    for (var i = 0; i < tokenSpans.length; i++) {
-        (function(span) {
-            span.addEventListener('click', function(e) {
-                var lowerClean = span.getAttribute('data-lower-clean');
-                var tokenData = findTokenData(lowerClean);
-                if (!tokenData || !tokenData.row_ids) return;
-                
-                if (!e.ctrlKey) {
-                    clearAllSelections();
-                }
-                
-                for (var j = 0; j < tokenData.row_ids.length; j++) {
-                    toggleRowSelection(tokenData.row_ids[j], true);
-                }
-                updateBidirectionalHighlights();
-                notifyAHKSelection();
-            });
-        })(tokenSpans[i]);
-    }
-    
-    var tableRows = document.querySelectorAll('#lemma-table tbody tr');
-    for (var i = 0; i < tableRows.length; i++) {
-        (function(row) {
-            row.addEventListener('click', function(e) {
-                var rowId = parseInt(row.getAttribute('data-row-id'));
-                
-                if (e.shiftKey && lastClickedRowId !== null) {
-                    var start = Math.min(lastClickedRowId, rowId);
-                    var end = Math.max(lastClickedRowId, rowId);
-                    if (!e.ctrlKey) {
-                        selectedRowIdsMap = {};
-                    }
-                    for (var j = start; j <= end; j++) {
-                        selectedRowIdsMap[j] = true;
-                    }
-                } else if (e.ctrlKey) {
-                    if (selectedRowIdsMap.hasOwnProperty(rowId)) {
-                        delete selectedRowIdsMap[rowId];
-                    } else {
-                        selectedRowIdsMap[rowId] = true;
-                    }
-                    lastClickedRowId = rowId;
-                } else {
-                    var wasSelected = selectedRowIdsMap.hasOwnProperty(rowId);
-                    selectedRowIdsMap = {};
-                    if (!wasSelected || tableRows.length > 1) {
-                        selectedRowIdsMap[rowId] = true;
-                    }
-                    lastClickedRowId = rowId;
-                }
-                
-                focusedRowId = rowId;
-                updateRowStyles();
-                updateBidirectionalHighlights();
-                notifyAHKSelection();
-            });
-            
-            var editables = row.querySelectorAll('td.editable');
-            for (var j = 0; j < editables.length; j++) {
-                (function(cell) {
-                    cell.addEventListener('dblclick', function() {
-                        makeEditable(cell);
-                    });
-                })(editables[j]);
-            }
-        })(tableRows[i]);
-    }
-    
-    document.addEventListener('keydown', function(e) {
-        if (document.activeElement.tagName === 'INPUT') return;
-        
-        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
-            e.preventDefault();
-            if (tableRows.length === 0) return;
-            
-            if (focusedRowId === null) {
-                focusedRowId = 0;
-            } else {
-                if (e.key === 'ArrowDown') {
-                    focusedRowId = Math.min(focusedRowId + 1, tableRows.length - 1);
-                } else {
-                    focusedRowId = Math.max(focusedRowId - 1, 0);
-                }
-            }
-            updateRowFocus();
-        } else if (e.key === 'Space') {
-            e.preventDefault();
-            if (focusedRowId !== null) {
-                if (selectedRowIdsMap.hasOwnProperty(focusedRowId)) {
-                    delete selectedRowIdsMap[focusedRowId];
-                } else {
-                    selectedRowIdsMap[focusedRowId] = true;
-                }
-                lastClickedRowId = focusedRowId;
-                updateRowStyles();
-                updateBidirectionalHighlights();
-                notifyAHKSelection();
-            }
-        } else if (e.key === 'F2') {
-            if (focusedRowId !== null) {
-                var activeRow = document.querySelector('#lemma-table tbody tr[data-row-id="' + focusedRowId + '"]');
-                if (activeRow) {
-                    var firstEditable = activeRow.querySelector('td.editable');
-                    if (firstEditable) {
-                        makeEditable(firstEditable);
-                    }
-                }
-            }
-        }
-    });
-    
-    function clearAllSelections() {
-        selectedRowIdsMap = {};
-        lastClickedRowId = null;
-        updateRowStyles();
-    }
-    
-    function toggleRowSelection(rowId, forceState) {
-        if (forceState) {
-            selectedRowIdsMap[rowId] = true;
+(function() {
+    function addEvent(el, type, fn) {
+        if (el.addEventListener) {
+            el.addEventListener(type, fn, false);
+        } else if (el.attachEvent) {
+            el.attachEvent('on' + type, fn);
         } else {
-            if (selectedRowIdsMap.hasOwnProperty(rowId)) {
-                delete selectedRowIdsMap[rowId];
-            } else {
-                selectedRowIdsMap[rowId] = true;
-            }
-        }
-        updateRowStyles();
-    }
-    
-    function updateRowStyles() {
-        for (var i = 0; i < tableRows.length; i++) {
-            var row = tableRows[i];
-            var rowId = parseInt(row.getAttribute('data-row-id'));
-            if (selectedRowIdsMap.hasOwnProperty(rowId)) {
-                row.className = row.className.replace(/\bselected\b/g, '') + ' selected';
-            } else {
-                row.className = row.className.replace(/\bselected\b/g, '');
-            }
+            el['on' + type] = fn;
         }
     }
-    
-    function updateRowFocus() {
-        for (var i = 0; i < tableRows.length; i++) {
-            var row = tableRows[i];
-            var rowId = parseInt(row.getAttribute('data-row-id'));
-            if (rowId === focusedRowId) {
-                row.style.outline = '1px solid #58a6ff';
-                row.scrollIntoView({ block: 'nearest' });
-            } else {
-                row.style.outline = 'none';
+
+    function init() {
+        var selectedRowIdsMap = {};
+        var lastClickedRowId = null;
+        var focusedRowId = null;
+        var deltas = [];
+        var touchedCells = {};
+        
+        var tokenMap = [];
+        try {
+            var tokenMapEl = document.getElementById('token-map');
+            tokenMap = JSON.parse(tokenMapEl.textContent || tokenMapEl.innerText || "[]");
+        } catch(e) {}
+        
+        var sourceContainer = document.getElementById('source-container');
+        var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
+        var tokenSpans = [];
+        for (var i = 0; i < spans.length; i++) {
+            if (spans[i].className.indexOf('word') !== -1) {
+                tokenSpans.push(spans[i]);
             }
-        }
-    }
-    
-    function updateBidirectionalHighlights() {
-        for (var i = 0; i < tokenSpans.length; i++) {
-            var span = tokenSpans[i];
-            span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '').replace(/\bhighlight-purple-active\b/g, '');
         }
         
-        for (var rId in selectedRowIdsMap) {
-            if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
-            var rowId = parseInt(rId);
+        function findTokenData(lowerClean) {
             for (var i = 0; i < tokenMap.length; i++) {
-                var token = tokenMap[i];
-                if (token.row_ids && token.row_ids.indexOf(rowId) !== -1) {
-                    var span = document.querySelector('#source-container span.word[data-word-idx="' + token.visual_idx + '"]');
-                    if (span) {
-                        if (span.className.indexOf('highlight-purple') !== -1) {
-                            span.className = span.className.replace(/\bhighlight-purple-active\b/g, '') + ' highlight-purple-active';
+                var t = tokenMap[i];
+                if (t.lower_clean === lowerClean && t.is_word) {
+                    return t;
+                }
+            }
+            return null;
+        }
+        
+        for (var i = 0; i < tokenSpans.length; i++) {
+            (function(span) {
+                addEvent(span, 'click', function(e) {
+                    e = e || window.event;
+                    var lowerClean = span.getAttribute('data-lower-clean');
+                    var tokenData = findTokenData(lowerClean);
+                    if (!tokenData || !tokenData.row_ids) return;
+                    
+                    if (!e.ctrlKey) {
+                        clearAllSelections();
+                    }
+                    
+                    for (var j = 0; j < tokenData.row_ids.length; j++) {
+                        toggleRowSelection(tokenData.row_ids[j], true);
+                    }
+                    updateBidirectionalHighlights();
+                    notifyAHKSelection();
+                });
+            })(tokenSpans[i]);
+        }
+        
+        var lemmaTable = document.getElementById('lemma-table');
+        var tableRows = [];
+        if (lemmaTable) {
+            var tbodies = lemmaTable.getElementsByTagName('tbody');
+            var rowsContainer = tbodies.length > 0 ? tbodies[0] : lemmaTable;
+            var allRows = rowsContainer.getElementsByTagName('tr');
+            for (var i = 0; i < allRows.length; i++) {
+                if (allRows[i].getAttribute('data-row-id') !== null) {
+                    tableRows.push(allRows[i]);
+                }
+            }
+        }
+        
+        for (var i = 0; i < tableRows.length; i++) {
+            (function(row) {
+                addEvent(row, 'click', function(e) {
+                    e = e || window.event;
+                    var rowId = parseInt(row.getAttribute('data-row-id'));
+                    
+                    if (e.shiftKey && lastClickedRowId !== null) {
+                        var start = Math.min(lastClickedRowId, rowId);
+                        var end = Math.max(lastClickedRowId, rowId);
+                        if (!e.ctrlKey) {
+                            selectedRowIdsMap = {};
+                        }
+                        for (var j = start; j <= end; j++) {
+                            selectedRowIdsMap[j] = true;
+                        }
+                    } else if (e.ctrlKey) {
+                        if (selectedRowIdsMap.hasOwnProperty(rowId)) {
+                            delete selectedRowIdsMap[rowId];
                         } else {
-                            span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '') + ' highlight-yellow-active';
+                            selectedRowIdsMap[rowId] = true;
+                        }
+                        lastClickedRowId = rowId;
+                    } else {
+                        var wasSelected = selectedRowIdsMap.hasOwnProperty(rowId);
+                        selectedRowIdsMap = {};
+                        if (!wasSelected || tableRows.length > 1) {
+                            selectedRowIdsMap[rowId] = true;
+                        }
+                        lastClickedRowId = rowId;
+                    }
+                    
+                    focusedRowId = rowId;
+                    updateRowStyles();
+                    updateBidirectionalHighlights();
+                    notifyAHKSelection();
+                });
+                
+                var tds = row.getElementsByTagName('td');
+                for (var j = 0; j < tds.length; j++) {
+                    if (tds[j].className.indexOf('editable') !== -1) {
+                        (function(cell) {
+                            addEvent(cell, 'dblclick', function() {
+                                makeEditable(cell);
+                            });
+                        })(tds[j]);
+                    }
+                }
+            })(tableRows[i]);
+        }
+        
+        addEvent(document, 'keydown', function(e) {
+            e = e || window.event;
+            var activeEl = document.activeElement;
+            if (activeEl && activeEl.tagName === 'INPUT') return;
+            
+            var keyCode = e.keyCode;
+            if (keyCode === 40 || keyCode === 38) { // ArrowDown or ArrowUp
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                if (tableRows.length === 0) return;
+                
+                if (focusedRowId === null) {
+                    focusedRowId = 0;
+                } else {
+                    if (keyCode === 40) {
+                        focusedRowId = Math.min(focusedRowId + 1, tableRows.length - 1);
+                    } else {
+                        focusedRowId = Math.max(focusedRowId - 1, 0);
+                    }
+                }
+                updateRowFocus();
+            } else if (keyCode === 32) { // Space
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                if (focusedRowId !== null) {
+                    if (selectedRowIdsMap.hasOwnProperty(focusedRowId)) {
+                        delete selectedRowIdsMap[focusedRowId];
+                    } else {
+                        selectedRowIdsMap[focusedRowId] = true;
+                    }
+                    lastClickedRowId = focusedRowId;
+                    updateRowStyles();
+                    updateBidirectionalHighlights();
+                    notifyAHKSelection();
+                }
+            } else if (keyCode === 113) { // F2
+                if (focusedRowId !== null) {
+                    var activeRow = null;
+                    for (var k = 0; k < tableRows.length; k++) {
+                        if (tableRows[k].getAttribute('data-row-id') == focusedRowId) {
+                            activeRow = tableRows[k];
+                            break;
+                        }
+                    }
+                    if (activeRow) {
+                        var tds = activeRow.getElementsByTagName('td');
+                        for (var k = 0; k < tds.length; k++) {
+                            if (tds[k].className.indexOf('editable') !== -1) {
+                                makeEditable(tds[k]);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+        });
+        
+        function clearAllSelections() {
+            selectedRowIdsMap = {};
+            lastClickedRowId = null;
+            updateRowStyles();
+        }
+        
+        function toggleRowSelection(rowId, forceState) {
+            if (forceState) {
+                selectedRowIdsMap[rowId] = true;
+            } else {
+                if (selectedRowIdsMap.hasOwnProperty(rowId)) {
+                    delete selectedRowIdsMap[rowId];
+                } else {
+                    selectedRowIdsMap[rowId] = true;
+                }
+            }
+            updateRowStyles();
+        }
+        
+        function updateRowStyles() {
+            for (var i = 0; i < tableRows.length; i++) {
+                var row = tableRows[i];
+                var rowId = parseInt(row.getAttribute('data-row-id'));
+                if (selectedRowIdsMap.hasOwnProperty(rowId)) {
+                    row.className = row.className.replace(/\bselected\b/g, '') + ' selected';
+                } else {
+                    row.className = row.className.replace(/\bselected\b/g, '');
+                }
+            }
+        }
+        
+        function updateRowFocus() {
+            for (var i = 0; i < tableRows.length; i++) {
+                var row = tableRows[i];
+                var rowId = parseInt(row.getAttribute('data-row-id'));
+                if (rowId === focusedRowId) {
+                    row.style.outline = '1px solid #58a6ff';
+                    row.scrollIntoView({ block: 'nearest' });
+                } else {
+                    row.style.outline = 'none';
+                }
+            }
+        }
+        
+        function updateBidirectionalHighlights() {
+            for (var i = 0; i < tokenSpans.length; i++) {
+                var span = tokenSpans[i];
+                span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '').replace(/\bhighlight-purple-active\b/g, '');
+            }
+            
+            for (var rId in selectedRowIdsMap) {
+                if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
+                var rowId = parseInt(rId);
+                for (var i = 0; i < tokenMap.length; i++) {
+                    var token = tokenMap[i];
+                    if (token.row_ids && token.row_ids.indexOf(rowId) !== -1) {
+                        var span = null;
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            if (tokenSpans[k].getAttribute('data-word-idx') == token.visual_idx) {
+                                span = tokenSpans[k];
+                                break;
+                            }
+                        }
+                        if (span) {
+                            if (span.className.indexOf('highlight-purple') !== -1) {
+                                span.className = span.className.replace(/\bhighlight-purple-active\b/g, '') + ' highlight-purple-active';
+                            } else {
+                                span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '') + ' highlight-yellow-active';
+                            }
                         }
                     }
                 }
             }
         }
-    }
-    
-    function getSelectedRowsArray() {
-        var arr = [];
-        for (var k in selectedRowIdsMap) {
-            if (selectedRowIdsMap.hasOwnProperty(k)) {
-                arr.push(parseInt(k));
+        
+        function getSelectedRowsArray() {
+            var arr = [];
+            for (var k in selectedRowIdsMap) {
+                if (selectedRowIdsMap.hasOwnProperty(k)) {
+                    arr.push(parseInt(k));
+                }
+            }
+            return arr;
+        }
+        
+        function notifyAHKSelection() {
+            if (window.ahkCall) {
+                window.ahkCall('selection', getSelectedRowsArray().join(','));
             }
         }
-        return arr;
-    }
-    
-    function notifyAHKSelection() {
-        if (window.ahkCall) {
-            window.ahkCall('selection', getSelectedRowsArray().join(','));
-        }
-    }
-    
-    function makeEditable(cell) {
-        if (cell.querySelector('input')) return;
         
-        var originalValue = cell.innerText;
-        var colName = cell.getAttribute('data-col');
-        var rowId = cell.parentElement.getAttribute('data-row-id');
-        
-        var input = document.createElement('input');
-        input.type = 'text';
-        input.value = originalValue;
-        input.style.width = '100%';
-        input.style.boxSizing = 'border-box';
-        input.style.background = '#1c1f24';
-        input.style.color = '#e3e6eb';
-        input.style.border = '1px solid #58a6ff';
-        input.style.borderRadius = '4px';
-        input.style.padding = '4px';
-        
-        cell.innerHTML = '';
-        cell.appendChild(input);
-        input.focus();
-        input.select();
-        
-        function commit() {
-            var newValue = input.value;
-            cell.innerHTML = newValue;
-            if (newValue !== originalValue) {
-                var existingIndex = -1;
-                for (var k = 0; k < deltas.length; k++) {
-                    if (deltas[k].row_id === parseInt(rowId) && deltas[k].column === colName) {
-                        existingIndex = k;
-                        break;
+        function makeEditable(cell) {
+            if (cell.getElementsByTagName('input').length > 0) return;
+            
+            var originalValue = cell.textContent || cell.innerText || "";
+            var colName = cell.getAttribute('data-col');
+            var rowId = cell.parentElement.getAttribute('data-row-id');
+            
+            var input = document.createElement('input');
+            input.type = 'text';
+            input.value = originalValue;
+            input.style.width = '100%';
+            input.style.boxSizing = 'border-box';
+            input.style.background = '#1c1f24';
+            input.style.color = '#e3e6eb';
+            input.style.border = '1px solid #58a6ff';
+            input.style.borderRadius = '4px';
+            input.style.padding = '4px';
+            
+            cell.innerHTML = '';
+            cell.appendChild(input);
+            input.focus();
+            try {
+                input.select();
+            } catch(e) {}
+            
+            function commit() {
+                var newValue = input.value;
+                cell.innerHTML = '';
+                cell.appendChild(document.createTextNode(newValue));
+                if (newValue !== originalValue) {
+                    var existingIndex = -1;
+                    for (var k = 0; k < deltas.length; k++) {
+                        if (deltas[k].row_id === parseInt(rowId) && deltas[k].column === colName) {
+                            existingIndex = k;
+                            break;
+                        }
+                    }
+                    if (existingIndex !== -1) {
+                        deltas[existingIndex].value = newValue;
+                    } else {
+                        deltas.push({
+                            row_id: parseInt(rowId),
+                            column: colName,
+                            value: newValue
+                        });
+                    }
+                    cell.className = cell.className.replace(/\bdirty\b/g, '') + ' dirty';
+                    touchedCells[rowId + '_' + colName] = true;
+                    if (window.ahkCall) {
+                        window.ahkCall('dirty', 'true');
                     }
                 }
-                if (existingIndex !== -1) {
-                    deltas[existingIndex].value = newValue;
-                } else {
-                    deltas.push({
-                        row_id: parseInt(rowId),
-                        column: colName,
-                        value: newValue
-                    });
-                }
-                cell.className = cell.className.replace(/\bdirty\b/g, '') + ' dirty';
-                touchedCells[rowId + '_' + colName] = true;
-                if (window.ahkCall) {
-                    window.ahkCall('dirty', 'true');
-                }
             }
-        }
-        
-        input.addEventListener('keydown', function(e) {
-            if (e.key === 'Enter') {
-                commit();
-            } else if (e.key === 'Escape') {
-                cell.innerHTML = originalValue;
-            } else if (e.key === 'Tab') {
-                e.preventDefault();
-                commit();
-                var editables = document.querySelectorAll('.editable');
-                var idx = -1;
-                for (var k = 0; k < editables.length; k++) {
-                    if (editables[k] === cell) {
-                        idx = k;
-                        break;
+            
+            addEvent(input, 'keydown', function(e) {
+                e = e || window.event;
+                var keyCode = e.keyCode;
+                if (keyCode === 13) { // Enter
+                    commit();
+                } else if (keyCode === 27) { // Escape
+                    cell.innerHTML = '';
+                    cell.appendChild(document.createTextNode(originalValue));
+                } else if (keyCode === 9) { // Tab
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                    commit();
+                    
+                    var tds = document.getElementsByTagName('td');
+                    var editables = [];
+                    for (var k = 0; k < tds.length; k++) {
+                        if (tds[k].className.indexOf('editable') !== -1) {
+                            editables.push(tds[k]);
+                        }
+                    }
+                    
+                    var idx = -1;
+                    for (var k = 0; k < editables.length; k++) {
+                        if (editables[k] === cell) {
+                            idx = k;
+                            break;
+                        }
+                    }
+                    var nextIdx = e.shiftKey ? idx - 1 : idx + 1;
+                    if (nextIdx >= 0 && nextIdx < editables.length) {
+                        makeEditable(editables[nextIdx]);
                     }
                 }
-                var nextIdx = e.shiftKey ? idx - 1 : idx + 1;
-                if (nextIdx >= 0 && nextIdx < editables.length) {
-                    makeEditable(editables[nextIdx]);
+            });
+            
+            addEvent(input, 'blur', function() {
+                commit();
+            });
+        }
+        
+        window.getSelectedRows = function() {
+            return JSON.stringify(getSelectedRowsArray());
+        };
+        
+        window.getDeltas = function() {
+            return JSON.stringify(deltas);
+        };
+        
+        window.clearDirty = function() {
+            var tds = document.getElementsByTagName('td');
+            for (var k = 0; k < tds.length; k++) {
+                if (tds[k].className.indexOf('dirty') !== -1) {
+                    tds[k].className = tds[k].className.replace(/\bdirty\b/g, '');
                 }
             }
-        });
+            deltas = [];
+            if (window.ahkCall) {
+                window.ahkCall('dirty', 'false');
+            }
+        };
         
-        input.addEventListener('blur', function() {
-            commit();
-        });
+        window.isDirty = function() {
+            return deltas.length > 0;
+        };
     }
-    
-    window.getSelectedRows = function() {
-        return JSON.stringify(getSelectedRowsArray());
-    };
-    
-    window.getDeltas = function() {
-        return JSON.stringify(deltas);
-    };
-    
-    window.clearDirty = function() {
-        var dirtyCells = document.querySelectorAll('td.dirty');
-        for (var k = 0; k < dirtyCells.length; k++) {
-            dirtyCells[k].className = dirtyCells[k].className.replace(/\bdirty\b/g, '');
-        }
-        deltas = [];
-        if (window.ahkCall) {
-            window.ahkCall('dirty', 'false');
-        }
-    };
-    
-    window.isDirty = function() {
-        return deltas.length > 0;
-    };
-});
+
+    if (window.addEventListener) {
+        window.addEventListener('load', init, false);
+    } else if (window.attachEvent) {
+        window.attachEvent('onload', init);
+    } else {
+        window.onload = init;
+    }
+})();
 </script>
 </body>
 </html>
