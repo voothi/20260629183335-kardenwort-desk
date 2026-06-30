@@ -902,11 +902,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     padding: 0 2px;
   }
   .source-text span.word.flipped {
-    background-color: rgba(56, 166, 255, 0.15);
-    color: #58a6ff;
+    background-color: rgba(56, 166, 255, 0.22);
+    color: #a5d6ff;
     font-weight: 300;
-    text-decoration: none !important;
-    border: 1px dashed rgba(56, 166, 255, 0.4);
+    text-decoration: underline;
+    border: 1px dashed rgba(165, 214, 255, 0.6);
     padding: 0 3px;
     margin: 0 -1px;
     border-radius: 4px;
