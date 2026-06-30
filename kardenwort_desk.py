@@ -866,10 +866,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     background-color: rgba(255, 255, 255, 0.1);
   }
   .source-text span.highlight-yellow {
-    border-bottom: 2px solid rgba(255, 215, 0, 0.4);
+    border-bottom: 2px solid #e6c200;
   }
   .source-text span.highlight-purple {
-    border-bottom: 2px dashed rgba(147, 112, 219, 0.4);
+    border-bottom: 2px dashed #9370db;
   }
   .source-text span.highlight-yellow-active {
     background-color: #ffd700;
@@ -984,7 +984,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         var tokenMap = [];
         try {
             var tokenMapEl = document.getElementById('token-map');
-            tokenMap = JSON.parse(tokenMapEl.textContent || tokenMapEl.innerText || "[]");
+            var jsonStr = tokenMapEl.text || tokenMapEl.textContent || tokenMapEl.innerHTML || "[]";
+            tokenMap = JSON.parse(jsonStr);
         } catch(e) {}
         
         var sourceContainer = document.getElementById('source-container');
@@ -1016,7 +1017,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     
                     var allSelected = true;
                     for (var j = 0; j < tokenData.row_ids.length; j++) {
-                        if (!selectedRowIdsMap.hasOwnProperty(tokenData.row_ids[j])) {
+                        if (!selectedRowIdsMap.hasOwnProperty(String(tokenData.row_ids[j]))) {
                             allSelected = false;
                             break;
                         }
@@ -1059,28 +1060,29 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 addEvent(row, 'click', function(e) {
                     e = e || window.event;
                     var rowId = parseInt(row.getAttribute('data-row-id'));
+                    var rowIdStr = String(rowId);
                     
                     if (e.shiftKey && lastClickedRowId !== null) {
-                        var start = Math.min(lastClickedRowId, rowId);
-                        var end = Math.max(lastClickedRowId, rowId);
+                        var start = Math.min(parseInt(lastClickedRowId), parseInt(rowId));
+                        var end = Math.max(parseInt(lastClickedRowId), parseInt(rowId));
                         if (!e.ctrlKey) {
                             selectedRowIdsMap = {};
                         }
                         for (var j = start; j <= end; j++) {
-                            selectedRowIdsMap[j] = true;
+                            selectedRowIdsMap[String(j)] = true;
                         }
                     } else if (e.ctrlKey) {
-                        if (selectedRowIdsMap.hasOwnProperty(rowId)) {
-                            delete selectedRowIdsMap[rowId];
+                        if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
+                            delete selectedRowIdsMap[rowIdStr];
                         } else {
-                            selectedRowIdsMap[rowId] = true;
+                            selectedRowIdsMap[rowIdStr] = true;
                         }
                         lastClickedRowId = rowId;
                     } else {
-                        var wasSelected = selectedRowIdsMap.hasOwnProperty(rowId);
+                        var wasSelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
                         selectedRowIdsMap = {};
                         if (!wasSelected) {
-                            selectedRowIdsMap[rowId] = true;
+                            selectedRowIdsMap[rowIdStr] = true;
                         }
                         lastClickedRowId = rowId;
                     }
@@ -1166,13 +1168,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         }
         
         function toggleRowSelection(rowId, forceState) {
+            var rIdStr = String(rowId);
             if (forceState) {
-                selectedRowIdsMap[rowId] = true;
+                selectedRowIdsMap[rIdStr] = true;
             } else {
-                if (selectedRowIdsMap.hasOwnProperty(rowId)) {
-                    delete selectedRowIdsMap[rowId];
+                if (selectedRowIdsMap.hasOwnProperty(rIdStr)) {
+                    delete selectedRowIdsMap[rIdStr];
                 } else {
-                    selectedRowIdsMap[rowId] = true;
+                    selectedRowIdsMap[rIdStr] = true;
                 }
             }
             updateRowStyles();
@@ -1181,8 +1184,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         function updateRowStyles() {
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
-                var rowId = parseInt(row.getAttribute('data-row-id'));
-                if (selectedRowIdsMap.hasOwnProperty(rowId)) {
+                var rowIdStr = String(row.getAttribute('data-row-id'));
+                if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
                     row.className = row.className.replace(/\bselected\b/g, '') + ' selected';
                 } else {
                     row.className = row.className.replace(/\bselected\b/g, '');
