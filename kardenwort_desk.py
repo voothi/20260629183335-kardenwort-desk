@@ -1325,6 +1325,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             
             var input = document.createElement('input');
             input.type = 'text';
+            input.className = 'edit-input';
             input.value = originalValue;
             input.style.width = '100%';
             input.style.boxSizing = 'border-box';
