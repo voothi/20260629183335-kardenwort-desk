@@ -1040,6 +1040,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         var dragSelectMode = true;
         var isTokenDragSelecting = false;
         var tokenDragMode = true;
+        var dragOccurred = false;
+        var justFinishedDrag = false;
         
         var tokenMap = [];
         try {
@@ -1078,6 +1080,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     if (!tokenData || !tokenData.row_ids) return;
                     
                     isTokenDragSelecting = true;
+                    dragOccurred = false;
                     
                     var allSelected = true;
                     for (var j = 0; j < tokenData.row_ids.length; j++) {
@@ -1114,6 +1117,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                             notifyAHKSelection();
                             return;
                         }
+                        dragOccurred = true;
                         var lowerClean = span.getAttribute('data-lower-clean');
                         var tokenData = findTokenData(lowerClean);
                         if (!tokenData || !tokenData.row_ids) return;
@@ -1160,6 +1164,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     var rowIdStr = String(rowId);
                     
                     isDragSelecting = true;
+                    dragOccurred = false;
                     
                     if (e.shiftKey && lastClickedRowId !== null) {
                         dragSelectMode = true;
@@ -1199,6 +1204,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                             notifyAHKSelection();
                             return;
                         }
+                        dragOccurred = true;
                         var rowId = parseInt(row.getAttribute('data-row-id'));
                         var rowIdStr = String(rowId);
                         
@@ -1240,11 +1246,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         
         addEvent(document, 'mouseup', function(e) {
             var needNotify = false;
-            if (isDragSelecting) {
+            if (isDragSelecting || isTokenDragSelecting) {
+                if (dragOccurred) {
+                    justFinishedDrag = true;
+                    setTimeout(function() {
+                        justFinishedDrag = false;
+                    }, 50);
+                }
                 isDragSelecting = false;
-                needNotify = true;
-            }
-            if (isTokenDragSelecting) {
                 isTokenDragSelecting = false;
                 needNotify = true;
             }
@@ -1331,6 +1340,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         });
         
         addEvent(document, 'click', function(e) {
+            if (justFinishedDrag) {
+                justFinishedDrag = false;
+                return;
+            }
             e = e || window.event;
             var target = e.target || e.srcElement;
             
