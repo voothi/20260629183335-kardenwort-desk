@@ -966,21 +966,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     width: 100%;
     border-collapse: collapse;
     margin-top: 8px;
-    table-layout: fixed;
+    table-layout: auto;
   }
-  #lemma-table col.col-lemma     { width: 18%; }
-  #lemma-table col.col-inflected  { width: 18%; }
-  #lemma-table col.col-trans      { width: 18%; }
-  #lemma-table col.col-morph      { width: 26%; }
-  #lemma-table col.col-ipa        { width: 16%; }
-  #lemma-table col.col-spacer     { width: 4%; }
   #lemma-table th, #lemma-table td {
+    width: 1%;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
   }
   #lemma-table th.spacer, #lemma-table td.spacer {
-    width: auto;
+    width: 100%;
   }
   th {
     text-align: left;
@@ -1036,14 +1031,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   <div class="section">
     <div class="section-title">Lemmas</div>
     <table id="lemma-table">
-      <colgroup>
-        <col class="col-lemma">
-        <col class="col-inflected">
-        <col class="col-trans">
-        <col class="col-morph">
-        <col class="col-ipa">
-        <col class="col-spacer">
-      </colgroup>
       <thead>
         <tr>
           <th>Lemma</th>
