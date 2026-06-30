@@ -824,8 +824,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
         table_rows.append(
             f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
-            f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
             f'<td class="{inflected_class}" data-col="WordSourceInflectedForm">{inflected_val}</td>'
+            f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{morph_val}</td>'
             f'<td>{ipa_val}</td>'
@@ -1021,8 +1021,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     <table id="lemma-table">
       <thead>
         <tr>
-          <th>Lemma</th>
           <th>Inflected</th>
+          <th>Lemma</th>
           <th>Translation</th>
           <th>Morphology</th>
           <th>IPA</th>
