@@ -1016,7 +1016,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
   body:not(.maximized) .scrollable-cell {
     overflow-x: auto;
-    white-space: normal;
+    white-space: nowrap;
     max-width: 250px;
   }
 
