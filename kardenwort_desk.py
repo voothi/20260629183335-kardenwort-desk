@@ -1762,6 +1762,14 @@ def spawn_ahk(args_list, base_dir):
     logger.info(f"Spawning AHK: {' '.join(cmd)}")
     try:
         subprocess.Popen(cmd)
+    except FileNotFoundError:
+        logger.warning(f"AutoHotkey.exe not found in PATH, falling back to os.startfile for {ahk_script.name}")
+        try:
+            # os.startfile supports arguments in Python 3.10+
+            args_str = ' '.join(f'"{a}"' for a in args_list)
+            os.startfile(str(ahk_script), operation='open', arguments=args_str)
+        except Exception as e2:
+            logger.error(f"Failed to spawn AHK via os.startfile: {e2}")
     except Exception as e:
         logger.error(f"Failed to spawn AHK window process: {e}")
 
