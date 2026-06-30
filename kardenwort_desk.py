@@ -1409,7 +1409,7 @@ def cmd_export(args):
         sys.exit(1)
         
     try:
-        with open(manifest_path, 'r', encoding='utf-8') as f:
+        with open(manifest_path, 'r', encoding='utf-8-sig') as f:
             manifest = json.load(f)
     except Exception as e:
         print_structured_error("INVALID_ARGS", f"Failed to parse selection manifest: {e}")
@@ -1500,7 +1500,7 @@ def cmd_edit_save(args):
         sys.exit(1)
         
     try:
-        with open(deltas_path, 'r', encoding='utf-8') as f:
+        with open(deltas_path, 'r', encoding='utf-8-sig') as f:
             deltas = json.load(f)
     except Exception as e:
         print_structured_error("INVALID_ARGS", f"Failed to parse deltas: {e}")
