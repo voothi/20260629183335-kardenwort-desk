@@ -59,6 +59,12 @@ Merge mode (combines multiple TSV files into one, ordered by ZID):
 python kardenwort_desk.py merge --files <f1.tsv> <f2.tsv> --target new [--config <path>]
 ```
 
+Reprocess mode (clears AI fields for selected rows and runs IntelliFiller again):
+
+```
+python kardenwort_desk.py reprocess --selection-manifest <path> --language en [--config <path>]
+```
+
 Restore mode (opens a .txt or .tsv file and reconstitutes the desk window state):
 
 ```
