@@ -859,6 +859,21 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     -moz-box-sizing: border-box;
     box-sizing: border-box;
   }
+  /* For standard Webkit/Blink browsers */
+  ::-webkit-scrollbar {
+    width: 8px;
+    height: 8px;
+  }
+  ::-webkit-scrollbar-track {
+    background: #0d0f12;
+  }
+  ::-webkit-scrollbar-thumb {
+    background: #30363d;
+    border-radius: 4px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: #8b949e;
+  }
   body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background-color: #0d0f12;
@@ -869,6 +884,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     line-height: 1.5;
     zoom: {zoom_level};
     width: {inverse_zoom_width};
+    /* For IE11 / Shell.Explorer emulation scrollbar styling */
+    scrollbar-face-color: #30363d;
+    scrollbar-track-color: #0d0f12;
+    scrollbar-arrow-color: #8b949e;
+    scrollbar-shadow-color: #0d0f12;
+    scrollbar-highlight-color: #0d0f12;
+    scrollbar-3dlight-color: #0d0f12;
+    scrollbar-darkshadow-color: #0d0f12;
+    scrollbar-base-color: #0d0f12;
   }
   .container {
     padding: 16px;
