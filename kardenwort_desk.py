@@ -1341,10 +1341,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 input.select();
             } catch(e) {}
             
+            window.cancelActiveEdit = function() {
+                cell.innerHTML = '';
+                cell.appendChild(document.createTextNode(originalValue));
+                cell.className = cell.className.replace(/\\s*editing\\b/g, '');
+                window.cancelActiveEdit = null;
+            };
+            
             function commit() {
                 var newValue = input.value;
                 cell.innerHTML = '';
                 cell.appendChild(document.createTextNode(newValue));
+                cell.className = cell.className.replace(/\\s*editing\\b/g, '');
+                window.cancelActiveEdit = null;
                 if (newValue !== originalValue) {
                     var existingIndex = -1;
                     for (var k = 0; k < deltas.length; k++) {
@@ -1362,7 +1371,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                             value: newValue
                         });
                     }
-                    cell.className = cell.className.replace(/\bdirty\b/g, '') + ' dirty';
+                    cell.className = cell.className.replace(/\\bdirty\\b/g, '') + ' dirty';
                     touchedCells[rowId + '_' + colName] = true;
                     if (window.ahkCall) {
                         window.ahkCall('dirty', 'true');
@@ -1378,8 +1387,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     commit();
                 } else if (keyCode === 27) { // Escape
                     if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                    cell.innerHTML = '';
-                    cell.appendChild(document.createTextNode(originalValue));
+                    if (window.cancelActiveEdit) window.cancelActiveEdit();
                 } else if (keyCode === 9) { // Tab
                     if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                     commit();
