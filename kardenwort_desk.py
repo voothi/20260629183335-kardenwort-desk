@@ -1378,6 +1378,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     }
                 }
             }
+            window.commitActiveEdit = commit;
             
             addEvent(input, 'keydown', function(e) {
                 e = e || window.event;
