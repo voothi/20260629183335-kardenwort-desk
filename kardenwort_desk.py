@@ -866,12 +866,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     background-color: rgba(255, 255, 255, 0.1);
   }
   .source-text span.highlight-yellow {
-    background-color: rgba(255, 215, 0, 0.15);
-    border-bottom: 2px solid #ffd700;
+    border-bottom: 2px solid rgba(255, 215, 0, 0.4);
   }
   .source-text span.highlight-purple {
-    background-color: rgba(147, 112, 219, 0.15);
-    border-bottom: 2px solid #9370db;
+    border-bottom: 2px dashed rgba(147, 112, 219, 0.4);
   }
   .source-text span.highlight-yellow-active {
     background-color: #ffd700;
@@ -911,8 +909,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     background: rgba(255, 255, 255, 0.02);
   }
   tr.selected td {
-    background: rgba(56, 139, 253, 0.15);
-    color: #58a6ff;
+    background: rgba(255, 215, 0, 0.15);
+    color: #ffd700;
   }
   .editable {
     cursor: pointer;
@@ -1016,13 +1014,27 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     var tokenData = findTokenData(lowerClean);
                     if (!tokenData || !tokenData.row_ids) return;
                     
-                    if (!e.ctrlKey) {
-                        clearAllSelections();
+                    var allSelected = true;
+                    for (var j = 0; j < tokenData.row_ids.length; j++) {
+                        if (!selectedRowIdsMap.hasOwnProperty(tokenData.row_ids[j])) {
+                            allSelected = false;
+                            break;
+                        }
                     }
                     
-                    for (var j = 0; j < tokenData.row_ids.length; j++) {
-                        toggleRowSelection(tokenData.row_ids[j], true);
+                    if (!e.ctrlKey) {
+                        clearAllSelections();
+                        if (!allSelected) {
+                            for (var j = 0; j < tokenData.row_ids.length; j++) {
+                                toggleRowSelection(tokenData.row_ids[j], true);
+                            }
+                        }
+                    } else {
+                        for (var j = 0; j < tokenData.row_ids.length; j++) {
+                            toggleRowSelection(tokenData.row_ids[j], !allSelected);
+                        }
                     }
+                    
                     updateBidirectionalHighlights();
                     notifyAHKSelection();
                 });
@@ -1067,7 +1079,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     } else {
                         var wasSelected = selectedRowIdsMap.hasOwnProperty(rowId);
                         selectedRowIdsMap = {};
-                        if (!wasSelected || tableRows.length > 1) {
+                        if (!wasSelected) {
                             selectedRowIdsMap[rowId] = true;
                         }
                         lastClickedRowId = rowId;
