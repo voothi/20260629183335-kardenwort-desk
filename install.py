@@ -9,7 +9,8 @@ SENDTO_DIRECTORY = r"%APPDATA%\Microsoft\Windows\SendTo"
 # Format: { "Shortcut Name": { "arguments": "...", "desc": "description" } }
 ENTRYPOINTS = {
     "Kardenwort Merge": { "arguments": "merge --files", "desc": "Merge multiple kardenwort TSVs" },
-    "Kardenwort Desk": { "arguments": "desk --file", "desc": "Open text file or restore session in desk window" }
+    "Kardenwort Desk Restore": { "arguments": "restore --file", "desc": "Restore a prior session by ZID lookup" },
+    "Kardenwort Desk": { "arguments": "desk --file", "desc": "Open any text file for fresh analysis" }
 }
 
 def create_shortcut(name, arguments, description):
