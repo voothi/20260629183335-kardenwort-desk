@@ -1105,6 +1105,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             (function(row) {
                 addEvent(row, 'click', function(e) {
                     e = e || window.event;
+                    var target = e.target || e.srcElement;
+                    if (target && target.tagName === 'INPUT') {
+                        return;
+                    }
                     var rowId = parseInt(row.getAttribute('data-row-id'));
                     var rowIdStr = String(rowId);
                     
