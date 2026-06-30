@@ -1066,10 +1066,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         var dragSelectMode = true;
         var isTokenDragSelecting = false;
         var tokenDragMode = true;
-        var isRmbDragSelecting = false;
-        var rmbDragMode = true;
         var dragOccurred = false;
         var justFinishedDrag = false;
+        var tokenDragStartIdx = -1;
+        var initialSelectedMap = null;
+        var mousedownTargetSpan = null;
         
         var tokenMap = [];
         try {
@@ -1134,13 +1135,29 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 addEvent(span, 'mousedown', function(e) {
                     e = e || window.event;
                     
-                    if (e.button === 0) { // LMB
+                    if (e.button === 0 || e.button === 2) { // LMB or RMB
                         var lowerClean = span.getAttribute('data-lower-clean');
                         var tokenData = findTokenData(lowerClean);
                         if (!tokenData || !tokenData.row_ids) return;
                         
                         isTokenDragSelecting = true;
                         dragOccurred = false;
+                        mousedownTargetSpan = span;
+                        
+                        tokenDragStartIdx = -1;
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            if (tokenSpans[k] === span) {
+                                tokenDragStartIdx = k;
+                                break;
+                            }
+                        }
+                        
+                        initialSelectedMap = {};
+                        for (var key in selectedRowIdsMap) {
+                            if (selectedRowIdsMap.hasOwnProperty(key)) {
+                                initialSelectedMap[key] = selectedRowIdsMap[key];
+                            }
+                        }
                         
                         var allSelected = true;
                         for (var j = 0; j < tokenData.row_ids.length; j++) {
@@ -1153,41 +1170,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         tokenDragMode = !allSelected;
                         
                         for (var j = 0; j < tokenData.row_ids.length; j++) {
-                            if (allSelected) {
-                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
-                            } else {
+                            if (tokenDragMode) {
                                 selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
+                            } else {
+                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
                             }
                         }
                         updateRowStyles();
                         updateBidirectionalHighlights();
-                        
-                        if (e.preventDefault) {
-                            e.preventDefault();
-                        } else {
-                            e.returnValue = false;
-                        }
-                    } else if (e.button === 2) { // RMB
-                        isRmbDragSelecting = true;
-                        dragOccurred = false;
-                        
-                        if (!span.getAttribute('data-original-text')) {
-                            span.setAttribute('data-original-text', span.textContent || span.innerText || "");
-                        }
-                        
-                        var isFlipped = span.classList.contains('flipped');
-                        if (isFlipped) {
-                            span.classList.remove('flipped');
-                            span.textContent = span.getAttribute('data-original-text');
-                            rmbDragMode = false;
-                        } else {
-                            var trans = getWordTranslation(span);
-                            if (trans) {
-                                span.classList.add('flipped');
-                                span.textContent = trans;
-                                rmbDragMode = true;
-                            }
-                        }
                         
                         if (e.preventDefault) {
                             e.preventDefault();
@@ -1200,50 +1190,48 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 addEvent(span, 'mouseover', function(e) {
                     e = e || window.event;
                     if (isTokenDragSelecting) {
-                        if (e.buttons !== undefined && (e.buttons & 1) === 0) {
+                        if (e.buttons !== undefined && (e.buttons & 3) === 0) {
                             isTokenDragSelecting = false;
                             notifyAHKSelection();
                             return;
                         }
                         dragOccurred = true;
-                        var lowerClean = span.getAttribute('data-lower-clean');
-                        var tokenData = findTokenData(lowerClean);
-                        if (!tokenData || !tokenData.row_ids) return;
                         
-                        for (var j = 0; j < tokenData.row_ids.length; j++) {
-                            if (tokenDragMode) {
-                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
-                            } else {
-                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
+                        var currIdx = -1;
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            if (tokenSpans[k] === span) {
+                                currIdx = k;
+                                break;
+                            }
+                        }
+                        if (currIdx === -1 || tokenDragStartIdx === -1) return;
+                        
+                        selectedRowIdsMap = {};
+                        for (var key in initialSelectedMap) {
+                            if (initialSelectedMap.hasOwnProperty(key)) {
+                                selectedRowIdsMap[key] = initialSelectedMap[key];
+                            }
+                        }
+                        
+                        var minIdx = Math.min(tokenDragStartIdx, currIdx);
+                        var maxIdx = Math.max(tokenDragStartIdx, currIdx);
+                        
+                        for (var k = minIdx; k <= maxIdx; k++) {
+                            var s = tokenSpans[k];
+                            var lc = s.getAttribute('data-lower-clean');
+                            var td = findTokenData(lc);
+                            if (td && td.row_ids) {
+                                for (var j = 0; j < td.row_ids.length; j++) {
+                                    if (tokenDragMode) {
+                                        selectedRowIdsMap[String(td.row_ids[j])] = true;
+                                    } else {
+                                        delete selectedRowIdsMap[String(td.row_ids[j])];
+                                    }
+                                }
                             }
                         }
                         updateRowStyles();
                         updateBidirectionalHighlights();
-                    } else if (isRmbDragSelecting) {
-                        if (e.buttons !== undefined && (e.buttons & 2) === 0) {
-                            isRmbDragSelecting = false;
-                            return;
-                        }
-                        dragOccurred = true;
-                        
-                        var isFlipped = span.classList.contains('flipped');
-                        if (rmbDragMode) {
-                            if (!span.getAttribute('data-original-text')) {
-                                span.setAttribute('data-original-text', span.textContent || span.innerText || "");
-                            }
-                            if (!isFlipped) {
-                                var trans = getWordTranslation(span);
-                                if (trans) {
-                                    span.classList.add('flipped');
-                                    span.textContent = trans;
-                                }
-                            }
-                        } else {
-                            if (isFlipped) {
-                                span.classList.remove('flipped');
-                                span.textContent = span.getAttribute('data-original-text') || "";
-                            }
-                        }
                     }
                 });
             })(tokenSpans[i]);
@@ -1367,8 +1355,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         }
         
         addEvent(document, 'mouseup', function(e) {
+            e = e || window.event;
             var needNotify = false;
-            if (isDragSelecting || isTokenDragSelecting || isRmbDragSelecting) {
+            if (isDragSelecting || isTokenDragSelecting) {
                 if (dragOccurred) {
                     justFinishedDrag = true;
                     setTimeout(function() {
@@ -1377,9 +1366,27 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 }
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
-                isRmbDragSelecting = false;
                 needNotify = true;
             }
+            if (e.button === 2 && mousedownTargetSpan && !dragOccurred) {
+                var span = mousedownTargetSpan;
+                if (!span.getAttribute('data-original-text')) {
+                    span.setAttribute('data-original-text', span.textContent || span.innerText || "");
+                }
+                
+                var isFlipped = span.classList.contains('flipped');
+                if (isFlipped) {
+                    span.classList.remove('flipped');
+                    span.textContent = span.getAttribute('data-original-text');
+                } else {
+                    var trans = getWordTranslation(span);
+                    if (trans) {
+                        span.classList.add('flipped');
+                        span.textContent = trans;
+                    }
+                }
+            }
+            mousedownTargetSpan = null;
             if (needNotify) {
                 notifyAHKSelection();
             }
