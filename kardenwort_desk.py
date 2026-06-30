@@ -872,6 +872,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   }
   .container {
     padding: 16px;
+    display: inline-block;
+    min-width: 100%;
   }
   .section {
     background: rgba(255, 255, 255, 0.03);
