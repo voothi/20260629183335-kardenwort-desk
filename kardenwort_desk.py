@@ -1374,8 +1374,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 e = e || window.event;
                 var keyCode = e.keyCode;
                 if (keyCode === 13) { // Enter
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                     commit();
                 } else if (keyCode === 27) { // Escape
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                     cell.innerHTML = '';
                     cell.appendChild(document.createTextNode(originalValue));
                 } else if (keyCode === 9) { // Tab
