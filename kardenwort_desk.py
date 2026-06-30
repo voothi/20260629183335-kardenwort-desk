@@ -854,81 +854,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <style>
-  :root {
-    --bg-color: #0d0f12;
-    --text-color: #e3e6eb;
-    --section-bg: rgba(255, 255, 255, 0.03);
-    --section-border: rgba(255, 255, 255, 0.08);
-    --text-muted: #8b949e;
-    --table-border: rgba(255, 255, 255, 0.05);
-    --table-th-border: rgba(255, 255, 255, 0.1);
-    --table-text: #c9d1d9;
-    --row-hover: rgba(255, 255, 255, 0.02);
-    --word-hover: rgba(255, 255, 255, 0.1);
-    
-    --highlight-orange-active-bg: #ffcc00;
-    --highlight-orange-active-text: #0d0f12;
-    --highlight-orange-active-hover-bg: #e6b800;
-    
-    --highlight-purple-active-bg: #9370db;
-    --highlight-purple-active-text: #ffffff;
-    --highlight-purple-active-hover-bg: #7b59c4;
-    
-    --selected-orange-row-bg: rgba(255, 204, 0, 0.15);
-    --selected-orange-row-text: #ffcc00;
-    
-    --selected-purple-row-bg: rgba(147, 112, 219, 0.15);
-    --selected-purple-row-text: #b39ddb;
-    
-    --flipped-bg: rgba(56, 166, 255, 0.22);
-    --flipped-text: #a5d6ff;
-    --flipped-border: rgba(165, 214, 255, 0.6);
-    
-    --input-bg: #1c1f24;
-    --input-border: #58a6ff;
-    
-    --scrollbar-track: #0d0f12;
-    --scrollbar-thumb: #30363d;
-    --scrollbar-thumb-hover: #8b949e;
-  }
+  
 
-  body.theme-light {
-    --bg-color: #f6f8fa;
-    --text-color: #24292f;
-    --section-bg: #ffffff;
-    --section-border: #d0d7de;
-    --text-muted: #57606a;
-    --table-border: #d8dee4;
-    --table-th-border: #d0d7de;
-    --table-text: #24292f;
-    --row-hover: #f3f4f6;
-    --word-hover: rgba(0, 0, 0, 0.05);
-    
-    --highlight-orange-active-bg: #ffe169;
-    --highlight-orange-active-text: #24292f;
-    --highlight-orange-active-hover-bg: #ffd33d;
-    
-    --highlight-purple-active-bg: #dcd0ff;
-    --highlight-purple-active-text: #24292f;
-    --highlight-purple-active-hover-bg: #b89bf8;
-    
-    --selected-orange-row-bg: rgba(255, 225, 105, 0.3);
-    --selected-orange-row-text: #b07e00;
-    
-    --selected-purple-row-bg: rgba(220, 208, 255, 0.3);
-    --selected-purple-row-text: #6f42c1;
-    
-    --flipped-bg: rgba(56, 166, 255, 0.15);
-    --flipped-text: #0969da;
-    --flipped-border: rgba(9, 105, 218, 0.6);
-    
-    --input-bg: #ffffff;
-    --input-border: #0969da;
-    
-    --scrollbar-track: #f6f8fa;
-    --scrollbar-thumb: #d0d7de;
-    --scrollbar-thumb-hover: #afb8c1;
-  }
+  
 
   *, *:before, *:after {
     -webkit-box-sizing: border-box;
@@ -941,19 +869,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     height: 8px;
   }
   ::-webkit-scrollbar-track {
-    background: var(--scrollbar-track);
+    background: {scrollbar_track};
   }
   ::-webkit-scrollbar-thumb {
-    background: var(--scrollbar-thumb);
+    background: {scrollbar_thumb};
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: var(--scrollbar-thumb-hover);
+    background: {scrollbar_thumb_hover};
   }
   body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background-color: var(--bg-color);
-    color: var(--text-color);
+    background-color: {bg_color};
+    color: {text_color};
     margin: 0;
     padding: 0;
     font-size: 14px;
@@ -961,14 +889,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     zoom: {zoom_level};
     width: {inverse_zoom_width};
     /* For IE11 / Shell.Explorer emulation scrollbar styling */
-    scrollbar-face-color: var(--scrollbar-thumb);
-    scrollbar-track-color: var(--scrollbar-track);
-    scrollbar-arrow-color: var(--text-muted);
-    scrollbar-shadow-color: var(--scrollbar-track);
-    scrollbar-highlight-color: var(--scrollbar-track);
-    scrollbar-3dlight-color: var(--scrollbar-track);
-    scrollbar-darkshadow-color: var(--scrollbar-track);
-    scrollbar-base-color: var(--scrollbar-track);
+    scrollbar-face-color: {scrollbar_thumb};
+    scrollbar-track-color: {scrollbar_track};
+    scrollbar-arrow-color: {text_muted};
+    scrollbar-shadow-color: {scrollbar_track};
+    scrollbar-highlight-color: {scrollbar_track};
+    scrollbar-3dlight-color: {scrollbar_track};
+    scrollbar-darkshadow-color: {scrollbar_track};
+    scrollbar-base-color: {scrollbar_track};
   }
   .container {
     padding: 16px;
@@ -976,8 +904,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     min-width: 100%;
   }
   .section {
-    background: var(--section-bg);
-    border: 1px solid var(--section-border);
+    background: {section_bg};
+    border: 1px solid {section_border};
     border-radius: 12px;
     padding: 16px;
     margin-bottom: 16px;
@@ -987,13 +915,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: var(--text-muted);
+    color: {text_muted};
     margin-bottom: 8px;
     font-weight: 600;
   }
   .source-text {
     font-size: 16px;
-    color: var(--text-color);
+    color: {text_color};
     line-height: 1.6;
     word-break: break-word;
     -moz-user-select: none;
@@ -1008,42 +936,42 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     padding: 0 2px;
   }
   .source-text span.word.flipped {
-    background-color: var(--flipped-bg);
-    color: var(--flipped-text);
+    background-color: {flipped_bg};
+    color: {flipped_text};
     font-weight: 300;
-    border: 1px dashed var(--flipped-border);
+    border: 1px dashed {flipped_border};
     padding: 0 3px;
     margin: 0 -1px;
     border-radius: 4px;
   }
   .source-text span.word:hover {
-    background-color: var(--word-hover);
+    background-color: {word_hover};
   }
   .source-text span.highlight-orange {
   }
   .source-text span.highlight-purple {
   }
   .source-text span.highlight-orange-active {
-    background-color: var(--highlight-orange-active-bg);
-    color: var(--highlight-orange-active-text);
+    background-color: {highlight_orange_active_bg};
+    color: {highlight_orange_active_text};
     text-decoration: none;
   }
   .source-text span.word.highlight-orange-active:hover {
-    background-color: var(--highlight-orange-active-hover-bg);
-    color: var(--highlight-orange-active-text);
+    background-color: {highlight_orange_active_hover_bg};
+    color: {highlight_orange_active_text};
   }
   .source-text span.highlight-purple-active {
-    background-color: var(--highlight-purple-active-bg);
-    color: var(--highlight-purple-active-text);
+    background-color: {highlight_purple_active_bg};
+    color: {highlight_purple_active_text};
     text-decoration: none;
   }
   .source-text span.word.highlight-purple-active:hover {
-    background-color: var(--highlight-purple-active-hover-bg);
-    color: var(--highlight-purple-active-text);
+    background-color: {highlight_purple_active_hover_bg};
+    color: {highlight_purple_active_text};
   }
   .translation-text {
     font-size: 15px;
-    color: var(--table-text);
+    color: {table_text};
     font-style: italic;
   }
   table {
@@ -1102,26 +1030,26 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: var(--text-muted);
-    border-bottom: 1px solid var(--table-th-border);
+    color: {text_muted};
+    border-bottom: 1px solid {table_th_border};
     font-weight: 600;
   }
   td {
     padding: 10px 12px;
-    border-bottom: 1px solid var(--table-border);
-    color: var(--table-text);
+    border-bottom: 1px solid {table_border};
+    color: {table_text};
     vertical-align: top;
   }
   tr:hover td {
-    background: var(--row-hover);
+    background: {row_hover};
   }
   tr.selected.highlight-orange td {
-    background: var(--selected-orange-row-bg);
-    color: var(--selected-orange-row-text);
+    background: {selected_orange_row_bg};
+    color: {selected_orange_row_text};
   }
   tr.selected.highlight-purple td {
-    background: var(--selected-purple-row-bg);
-    color: var(--selected-purple-row-text);
+    background: {selected_purple_row_bg};
+    color: {selected_purple_row_text};
   }
   .editable {
     cursor: pointer;
@@ -1735,9 +1663,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             input.value = originalValue;
             input.style.width = '100%';
             input.style.boxSizing = 'border-box';
-            input.style.background = 'var(--input-bg)';
-            input.style.color = 'var(--text-color)';
-            input.style.border = '1px solid var(--input-border)';
+            input.style.background = '{input_bg}';
+            input.style.color = '{text_color}';
+            input.style.border = '1px solid {input_border}';
             input.style.borderRadius = '4px';
             input.style.padding = '4px';
             
@@ -1978,6 +1906,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
+
+    theme = theme.lower()
+    if theme in ("light", "white"):
+        theme_colors = {'bg_color': '#f6f8fa', 'text_color': '#24292f', 'section_bg': '#ffffff', 'section_border': '#d0d7de', 'text_muted': '#57606a', 'table_border': '#d8dee4', 'table_th_border': '#d0d7de', 'table_text': '#24292f', 'row_hover': '#f3f4f6', 'word_hover': 'rgba(0, 0, 0, 0.05)', 'highlight_orange_active_bg': '#ffe169', 'highlight_orange_active_text': '#24292f', 'highlight_orange_active_hover_bg': '#ffd33d', 'highlight_purple_active_bg': '#dcd0ff', 'highlight_purple_active_text': '#24292f', 'highlight_purple_active_hover_bg': '#b89bf8', 'selected_orange_row_bg': 'rgba(255, 225, 105, 0.3)', 'selected_orange_row_text': '#b07e00', 'selected_purple_row_bg': 'rgba(220, 208, 255, 0.3)', 'selected_purple_row_text': '#6f42c1', 'flipped_bg': 'rgba(56, 166, 255, 0.15)', 'flipped_text': '#0969da', 'flipped_border': 'rgba(9, 105, 218, 0.6)', 'input_bg': '#ffffff', 'input_border': '#0969da', 'scrollbar_track': '#f6f8fa', 'scrollbar_thumb': '#d0d7de', 'scrollbar_thumb_hover': '#afb8c1'}
+    else:
+        theme_colors = {'bg_color': '#0d0f12', 'text_color': '#e3e6eb', 'section_bg': 'rgba(255, 255, 255, 0.03)', 'section_border': 'rgba(255, 255, 255, 0.08)', 'text_muted': '#8b949e', 'table_border': 'rgba(255, 255, 255, 0.05)', 'table_th_border': 'rgba(255, 255, 255, 0.1)', 'table_text': '#c9d1d9', 'row_hover': 'rgba(255, 255, 255, 0.02)', 'word_hover': 'rgba(255, 255, 255, 0.1)', 'highlight_orange_active_bg': '#ffcc00', 'highlight_orange_active_text': '#0d0f12', 'highlight_orange_active_hover_bg': '#e6b800', 'highlight_purple_active_bg': '#9370db', 'highlight_purple_active_text': '#ffffff', 'highlight_purple_active_hover_bg': '#7b59c4', 'selected_orange_row_bg': 'rgba(255, 204, 0, 0.15)', 'selected_orange_row_text': '#ffcc00', 'selected_purple_row_bg': 'rgba(147, 112, 219, 0.15)', 'selected_purple_row_text': '#b39ddb', 'flipped_bg': 'rgba(56, 166, 255, 0.22)', 'flipped_text': '#a5d6ff', 'flipped_border': 'rgba(165, 214, 255, 0.6)', 'input_bg': '#1c1f24', 'input_border': '#58a6ff', 'scrollbar_track': '#0d0f12', 'scrollbar_thumb': '#30363d', 'scrollbar_thumb_hover': '#8b949e'}
+
+    for key, val in theme_colors.items():
+        html_page = html_page.replace('{' + key + '}', val)
+
     
     return html_page
 
@@ -2491,7 +2429,7 @@ def main():
     p_render.add_argument("--zid", required=True, help="Session ZID")
     p_render.add_argument("--text-mode", choices=["single", "multi"], default="single")
     p_render.add_argument("--zoom", default="100", help="Zoom level for CSS scaling")
-    p_render.add_argument("--theme", default="dark", choices=["dark", "light"], help="Theme (dark or light)")
+    p_render.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
 
     # export
     p_export = subparsers.add_parser("export")
@@ -2520,7 +2458,7 @@ def main():
     p_desk.add_argument("--text-mode", choices=["single", "multi"], default="multi")
     p_desk.add_argument("--language", help="Language code")
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
-    p_desk.add_argument("--theme", default="dark", choices=["dark", "light"], help="Theme (dark or light)")
+    p_desk.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
 
     try:
         args = parser.parse_args()
