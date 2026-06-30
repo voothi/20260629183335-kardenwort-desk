@@ -968,19 +968,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   .scrollable-cell {
     width: 100%;
     box-sizing: border-box;
+    -ms-overflow-style: none;  /* IE and Edge */
+    scrollbar-width: none;  /* Firefox */
   }
   .scrollable-cell::-webkit-scrollbar {
-    height: 4px;
-  }
-  .scrollable-cell::-webkit-scrollbar-track {
-    background: rgba(255, 255, 255, 0.03);
-  }
-  .scrollable-cell::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.15);
-    border-radius: 2px;
-  }
-  .scrollable-cell::-webkit-scrollbar-thumb:hover {
-    background: rgba(255, 255, 255, 0.3);
+    display: none; /* Chrome, Safari and Opera */
   }
 
   /* When the window is NOT maximized (normally sized) */
@@ -1847,27 +1839,35 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         };
     }
 
-    // Shift+Wheel or Alt+Wheel → horizontal scroll
-    addEvent(document, 'mousewheel', function(e) {
+    function handleHorizontalScroll(e) {
         e = e || window.event;
         if (e.shiftKey || e.altKey) {
             var delta = e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0);
-            var scrollEl = document.documentElement || document.body;
-            scrollEl.scrollLeft += delta;
+            
+            var target = e.target || e.srcElement;
+            var scrollCell = null;
+            var curr = target;
+            while (curr) {
+                if (curr.className && curr.className.indexOf('scrollable-cell') !== -1) {
+                    scrollCell = curr;
+                    break;
+                }
+                curr = curr.parentNode;
+            }
+            
+            if (scrollCell) {
+                scrollCell.scrollLeft += delta;
+            } else {
+                var scrollEl = document.documentElement || document.body;
+                scrollEl.scrollLeft += delta;
+            }
+            
             if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
             return false;
         }
-    });
-    addEvent(document, 'DOMMouseScroll', function(e) {
-        e = e || window.event;
-        if (e.shiftKey || e.altKey) {
-            var delta = e.detail ? e.detail * 40 : 0;
-            var scrollEl = document.documentElement || document.body;
-            scrollEl.scrollLeft += delta;
-            if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-            return false;
-        }
-    });
+    }
+    addEvent(document, 'mousewheel', handleHorizontalScroll);
+    addEvent(document, 'DOMMouseScroll', handleHorizontalScroll);
 
     if (window.addEventListener) {
         window.addEventListener('load', init, false);
