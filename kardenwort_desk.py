@@ -1896,6 +1896,14 @@ def cmd_desk(args):
         print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
         sys.exit(1)
         
+    # Auto-detection: if it's a .tsv or starts with a 14-digit ZID, it's a restore session
+    is_tsv = file_path.suffix == '.tsv'
+    has_zid = bool(re.match(r"^\d{14}-", file_path.name))
+    if is_tsv or has_zid:
+        logger.info(f"File '{file_path.name}' is recognized as an existing session. Delegating to restore...")
+        cmd_restore(args)
+        return
+        
     if not args.no_gui:
         spawn_ahk(["--desk", str(file_path), "--text-mode", args.text_mode], resolved_paths['base_dir'])
         return
