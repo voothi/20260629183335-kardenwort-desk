@@ -539,7 +539,7 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
     except subprocess.CalledProcessError as e:
         return False, e.stderr
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level):
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -1828,7 +1828,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
 </body>
 </html>
 """
-    zoom_level = config.get('settings', 'default_zoom', fallback='150%')
+    # zoom_level is now passed as an argument
     
     try:
         numeric_zoom = float(zoom_level.replace('%', ''))
@@ -1866,7 +1866,7 @@ def cmd_render(args):
         text = args.text
         
     try:
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths)
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, args.zoom)
         from b64util import encode
         print(encode(html))
     except Exception as e:
@@ -2360,6 +2360,7 @@ def main():
     p_render.add_argument("--language", required=True, help="Language code")
     p_render.add_argument("--zid", required=True, help="Session ZID")
     p_render.add_argument("--text-mode", choices=["single", "multi"], default="single")
+    p_render.add_argument("--zoom", default="100", help="Zoom level for CSS scaling")
 
     # export
     p_export = subparsers.add_parser("export")
