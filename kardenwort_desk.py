@@ -945,7 +945,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     font-style: italic;
   }
   table {
-    width: 100%;
+    width: auto;
+    max-width: 100%;
     border-collapse: collapse;
     margin-top: 8px;
     table-layout: auto;
