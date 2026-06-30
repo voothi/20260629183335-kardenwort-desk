@@ -2,7 +2,68 @@ import sys
 import argparse
 import json
 import logging
+import configparser
+from pathlib import Path
 from datetime import datetime
+
+class ConfigError(Exception):
+    pass
+
+def load_config(config_path=None):
+    """
+    Loads config.ini.
+    Resolves relative paths starting with '../' or './' relative to the config file's location.
+    Validates that all environment paths exist.
+    """
+    if config_path is None:
+        config_path = Path(__file__).resolve().parent / "config.ini"
+    else:
+        config_path = Path(config_path).resolve()
+        
+    if not config_path.exists():
+        raise ConfigError(f"Config file not found: {config_path}")
+        
+    config = configparser.ConfigParser(allow_no_value=True)
+    config.read(config_path, encoding='utf-8')
+    
+    base_dir = config_path.parent
+    resolved_paths = {}
+    
+    # 1. Resolve environment paths
+    if 'environment' in config:
+        for key, value in config['environment'].items():
+            if value.startswith('../') or value.startswith('./'):
+                resolved_path = (base_dir / value).resolve()
+            else:
+                resolved_path = Path(value).resolve()
+            resolved_paths[key] = resolved_path
+            
+    # Check each resolved path exists
+    for key, path in resolved_paths.items():
+        if not path.exists():
+            raise ConfigError(f"Path configured for '{key}' does not exist: {path}")
+            
+    # 2. Settings paths
+    if 'settings' in config:
+        # favorites_output_dir is relative to config.ini location
+        fav_dir = config['settings'].get('favorites_output_dir', './favorites')
+        if fav_dir.startswith('../') or fav_dir.startswith('./'):
+            resolved_paths['favorites_output_dir'] = (base_dir / fav_dir).resolve()
+        else:
+            resolved_paths['favorites_output_dir'] = Path(fav_dir).resolve()
+            
+        # anki_mapping_file is relative to config.ini location
+        mapping_file = config['settings'].get('anki_mapping_file', './anki-mapping.ini')
+        if mapping_file.startswith('../') or mapping_file.startswith('./'):
+            resolved_paths['anki_mapping_file'] = (base_dir / mapping_file).resolve()
+        else:
+            resolved_paths['anki_mapping_file'] = Path(mapping_file).resolve()
+            
+        if not resolved_paths['anki_mapping_file'].exists():
+            raise ConfigError(f"anki_mapping_file path configured for 'anki_mapping_file' does not exist: {resolved_paths['anki_mapping_file']}")
+            
+    return config, resolved_paths
+
 
 # Setup structured logging
 class JSONFormatter(logging.Formatter):
