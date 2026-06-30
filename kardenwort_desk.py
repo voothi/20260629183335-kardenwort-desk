@@ -870,7 +870,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     zoom: {zoom_level};
   }
   .container {
-    width: 100%;
     padding: 16px;
     display: -webkit-box;
     display: -ms-flexbox;
@@ -887,7 +886,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     border-radius: 12px;
     padding: 16px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
-    width: 100%;
   }
   .section-title {
     font-size: 11px;
@@ -957,15 +955,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     font-style: italic;
   }
   table {
+    width: 100%;
     border-collapse: collapse;
     margin-top: 8px;
     table-layout: auto;
   }
   #lemma-table th, #lemma-table td {
+    width: 1%;
     white-space: nowrap;
     padding-right: 24px;
   }
   #lemma-table th:last-child, #lemma-table td:last-child {
+    width: auto;
     padding-right: 12px;
   }
   th {
