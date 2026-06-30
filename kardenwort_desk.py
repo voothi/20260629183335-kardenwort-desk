@@ -539,7 +539,7 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
     except subprocess.CalledProcessError as e:
         return False, e.stderr
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark"):
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -854,6 +854,82 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <style>
+  :root {
+    --bg-color: #0d0f12;
+    --text-color: #e3e6eb;
+    --section-bg: rgba(255, 255, 255, 0.03);
+    --section-border: rgba(255, 255, 255, 0.08);
+    --text-muted: #8b949e;
+    --table-border: rgba(255, 255, 255, 0.05);
+    --table-th-border: rgba(255, 255, 255, 0.1);
+    --table-text: #c9d1d9;
+    --row-hover: rgba(255, 255, 255, 0.02);
+    --word-hover: rgba(255, 255, 255, 0.1);
+    
+    --highlight-orange-active-bg: #ffcc00;
+    --highlight-orange-active-text: #0d0f12;
+    --highlight-orange-active-hover-bg: #e6b800;
+    
+    --highlight-purple-active-bg: #9370db;
+    --highlight-purple-active-text: #ffffff;
+    --highlight-purple-active-hover-bg: #7b59c4;
+    
+    --selected-orange-row-bg: rgba(255, 204, 0, 0.15);
+    --selected-orange-row-text: #ffcc00;
+    
+    --selected-purple-row-bg: rgba(147, 112, 219, 0.15);
+    --selected-purple-row-text: #b39ddb;
+    
+    --flipped-bg: rgba(56, 166, 255, 0.22);
+    --flipped-text: #a5d6ff;
+    --flipped-border: rgba(165, 214, 255, 0.6);
+    
+    --input-bg: #1c1f24;
+    --input-border: #58a6ff;
+    
+    --scrollbar-track: #0d0f12;
+    --scrollbar-thumb: #30363d;
+    --scrollbar-thumb-hover: #8b949e;
+  }
+
+  body.theme-light {
+    --bg-color: #f6f8fa;
+    --text-color: #24292f;
+    --section-bg: #ffffff;
+    --section-border: #d0d7de;
+    --text-muted: #57606a;
+    --table-border: #d8dee4;
+    --table-th-border: #d0d7de;
+    --table-text: #24292f;
+    --row-hover: #f3f4f6;
+    --word-hover: rgba(0, 0, 0, 0.05);
+    
+    --highlight-orange-active-bg: #ffe169;
+    --highlight-orange-active-text: #24292f;
+    --highlight-orange-active-hover-bg: #ffd33d;
+    
+    --highlight-purple-active-bg: #dcd0ff;
+    --highlight-purple-active-text: #24292f;
+    --highlight-purple-active-hover-bg: #b89bf8;
+    
+    --selected-orange-row-bg: rgba(255, 225, 105, 0.3);
+    --selected-orange-row-text: #b07e00;
+    
+    --selected-purple-row-bg: rgba(220, 208, 255, 0.3);
+    --selected-purple-row-text: #6f42c1;
+    
+    --flipped-bg: rgba(56, 166, 255, 0.15);
+    --flipped-text: #0969da;
+    --flipped-border: rgba(9, 105, 218, 0.6);
+    
+    --input-bg: #ffffff;
+    --input-border: #0969da;
+    
+    --scrollbar-track: #f6f8fa;
+    --scrollbar-thumb: #d0d7de;
+    --scrollbar-thumb-hover: #afb8c1;
+  }
+
   *, *:before, *:after {
     -webkit-box-sizing: border-box;
     -moz-box-sizing: border-box;
@@ -865,19 +941,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     height: 8px;
   }
   ::-webkit-scrollbar-track {
-    background: #0d0f12;
+    background: var(--scrollbar-track);
   }
   ::-webkit-scrollbar-thumb {
-    background: #30363d;
+    background: var(--scrollbar-thumb);
     border-radius: 4px;
   }
   ::-webkit-scrollbar-thumb:hover {
-    background: #8b949e;
+    background: var(--scrollbar-thumb-hover);
   }
   body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-    background-color: #0d0f12;
-    color: #e3e6eb;
+    background-color: var(--bg-color);
+    color: var(--text-color);
     margin: 0;
     padding: 0;
     font-size: 14px;
@@ -885,14 +961,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     zoom: {zoom_level};
     width: {inverse_zoom_width};
     /* For IE11 / Shell.Explorer emulation scrollbar styling */
-    scrollbar-face-color: #30363d;
-    scrollbar-track-color: #0d0f12;
-    scrollbar-arrow-color: #8b949e;
-    scrollbar-shadow-color: #0d0f12;
-    scrollbar-highlight-color: #0d0f12;
-    scrollbar-3dlight-color: #0d0f12;
-    scrollbar-darkshadow-color: #0d0f12;
-    scrollbar-base-color: #0d0f12;
+    scrollbar-face-color: var(--scrollbar-thumb);
+    scrollbar-track-color: var(--scrollbar-track);
+    scrollbar-arrow-color: var(--text-muted);
+    scrollbar-shadow-color: var(--scrollbar-track);
+    scrollbar-highlight-color: var(--scrollbar-track);
+    scrollbar-3dlight-color: var(--scrollbar-track);
+    scrollbar-darkshadow-color: var(--scrollbar-track);
+    scrollbar-base-color: var(--scrollbar-track);
   }
   .container {
     padding: 16px;
@@ -900,8 +976,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     min-width: 100%;
   }
   .section {
-    background: rgba(255, 255, 255, 0.03);
-    border: 1px solid rgba(255, 255, 255, 0.08);
+    background: var(--section-bg);
+    border: 1px solid var(--section-border);
     border-radius: 12px;
     padding: 16px;
     margin-bottom: 16px;
@@ -911,13 +987,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.1em;
-    color: #8b949e;
+    color: var(--text-muted);
     margin-bottom: 8px;
     font-weight: 600;
   }
   .source-text {
     font-size: 16px;
-    color: #f0f6fc;
+    color: var(--text-color);
     line-height: 1.6;
     word-break: break-word;
     -moz-user-select: none;
@@ -932,42 +1008,42 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     padding: 0 2px;
   }
   .source-text span.word.flipped {
-    background-color: rgba(56, 166, 255, 0.22);
-    color: #a5d6ff;
+    background-color: var(--flipped-bg);
+    color: var(--flipped-text);
     font-weight: 300;
-    border: 1px dashed rgba(165, 214, 255, 0.6);
+    border: 1px dashed var(--flipped-border);
     padding: 0 3px;
     margin: 0 -1px;
     border-radius: 4px;
   }
   .source-text span.word:hover {
-    background-color: rgba(255, 255, 255, 0.1);
+    background-color: var(--word-hover);
   }
   .source-text span.highlight-orange {
   }
   .source-text span.highlight-purple {
   }
   .source-text span.highlight-orange-active {
-    background-color: #ffcc00;
-    color: #0d0f12;
+    background-color: var(--highlight-orange-active-bg);
+    color: var(--highlight-orange-active-text);
     text-decoration: none;
   }
   .source-text span.word.highlight-orange-active:hover {
-    background-color: #e6b800;
-    color: #0d0f12;
+    background-color: var(--highlight-orange-active-hover-bg);
+    color: var(--highlight-orange-active-text);
   }
   .source-text span.highlight-purple-active {
-    background-color: #9370db;
-    color: #ffffff;
+    background-color: var(--highlight-purple-active-bg);
+    color: var(--highlight-purple-active-text);
     text-decoration: none;
   }
   .source-text span.word.highlight-purple-active:hover {
-    background-color: #7b59c4;
-    color: #ffffff;
+    background-color: var(--highlight-purple-active-hover-bg);
+    color: var(--highlight-purple-active-text);
   }
   .translation-text {
     font-size: 15px;
-    color: #c9d1d9;
+    color: var(--table-text);
     font-style: italic;
   }
   table {
@@ -1026,26 +1102,26 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
-    color: #8b949e;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    color: var(--text-muted);
+    border-bottom: 1px solid var(--table-th-border);
     font-weight: 600;
   }
   td {
     padding: 10px 12px;
-    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
-    color: #c9d1d9;
+    border-bottom: 1px solid var(--table-border);
+    color: var(--table-text);
     vertical-align: top;
   }
   tr:hover td {
-    background: rgba(255, 255, 255, 0.02);
+    background: var(--row-hover);
   }
   tr.selected.highlight-orange td {
-    background: rgba(255, 204, 0, 0.15);
-    color: #ffcc00;
+    background: var(--selected-orange-row-bg);
+    color: var(--selected-orange-row-text);
   }
   tr.selected.highlight-purple td {
-    background: rgba(147, 112, 219, 0.15);
-    color: #b39ddb;
+    background: var(--selected-purple-row-bg);
+    color: var(--selected-purple-row-text);
   }
   .editable {
     cursor: pointer;
@@ -1055,7 +1131,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
 </style>
 </head>
-<body>
+<body class="{theme_class}">
 <div class="container">
   <div class="section">
     <div class="section-title">Source Text</div>
@@ -1659,9 +1735,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             input.value = originalValue;
             input.style.width = '100%';
             input.style.boxSizing = 'border-box';
-            input.style.background = '#1c1f24';
-            input.style.color = '#e3e6eb';
-            input.style.border = '1px solid #58a6ff';
+            input.style.background = 'var(--input-bg)';
+            input.style.color = 'var(--text-color)';
+            input.style.border = '1px solid var(--input-border)';
             input.style.borderRadius = '4px';
             input.style.padding = '4px';
             
@@ -1901,6 +1977,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{language}", language)
+    html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     
     return html_page
 
@@ -1918,7 +1995,7 @@ def cmd_render(args):
         text = args.text
         
     try:
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, args.zoom)
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, args.zoom, args.theme)
         from b64util import encode
         print(encode(html))
     except Exception as e:
@@ -2391,7 +2468,8 @@ def cmd_desk(args):
     timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
     
     try:
-        html = run_render_flow(text, lang, timestamp_id, args.text_mode, config, resolved_paths)
+        theme_val = args.theme if hasattr(args, 'theme') else "dark"
+        html = run_render_flow(text, lang, timestamp_id, args.text_mode, config, resolved_paths, theme=theme_val)
         from b64util import encode
         print(encode(html))
     except Exception as e:
@@ -2413,6 +2491,7 @@ def main():
     p_render.add_argument("--zid", required=True, help="Session ZID")
     p_render.add_argument("--text-mode", choices=["single", "multi"], default="single")
     p_render.add_argument("--zoom", default="100", help="Zoom level for CSS scaling")
+    p_render.add_argument("--theme", default="dark", choices=["dark", "light"], help="Theme (dark or light)")
 
     # export
     p_export = subparsers.add_parser("export")
@@ -2441,6 +2520,7 @@ def main():
     p_desk.add_argument("--text-mode", choices=["single", "multi"], default="multi")
     p_desk.add_argument("--language", help="Language code")
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
+    p_desk.add_argument("--theme", default="dark", choices=["dark", "light"], help="Theme (dark or light)")
 
     try:
         args = parser.parse_args()
