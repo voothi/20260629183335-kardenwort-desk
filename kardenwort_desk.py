@@ -911,7 +911,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     background-color: rgba(56, 166, 255, 0.22);
     color: #a5d6ff;
     font-weight: 300;
-    text-decoration: underline;
     border: 1px dashed rgba(165, 214, 255, 0.6);
     padding: 0 3px;
     margin: 0 -1px;
@@ -921,11 +920,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     background-color: rgba(255, 255, 255, 0.1);
   }
   .source-text span.highlight-orange {
-    text-decoration: underline;
   }
   .source-text span.highlight-purple {
-    text-decoration: underline;
-    text-decoration-style: dashed;
   }
   .source-text span.highlight-orange-active {
     background-color: #ffcc00;
