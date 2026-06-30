@@ -1475,24 +1475,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 justFinishedDrag = false;
                 return;
             }
-            e = e || window.event;
-            var target = e.target || e.srcElement;
-            
-            var isTable = false;
-            var curr = target;
-            while (curr) {
-                if (curr.id === 'lemma-table' || (curr.className && curr.className.indexOf('word') !== -1)) {
-                    isTable = true;
-                    break;
-                }
-                curr = curr.parentNode;
-            }
-            
-            if (!isTable) {
-                clearAllSelections();
-                updateBidirectionalHighlights();
-                notifyAHKSelection();
-            }
         });
         
         function clearAllSelections() {
