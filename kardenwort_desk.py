@@ -867,18 +867,21 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     background-color: rgba(255, 255, 255, 0.1);
   }
   .source-text span.highlight-yellow {
-    border-bottom: 2px solid #e6c200;
+    text-decoration: underline;
   }
   .source-text span.highlight-purple {
-    border-bottom: 2px dashed #9370db;
+    text-decoration: underline;
+    text-decoration-style: dashed;
   }
   .source-text span.highlight-yellow-active {
     background-color: #ffd700;
     color: #0d0f12;
+    text-decoration: none;
   }
   .source-text span.highlight-purple-active {
     background-color: #9370db;
     color: #ffffff;
+    text-decoration: none;
   }
   .translation-text {
     font-size: 15px;
@@ -1081,8 +1084,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         lastClickedRowId = rowId;
                     } else {
                         var wasSelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                        var numSelected = 0;
+                        for (var k in selectedRowIdsMap) {
+                            if (selectedRowIdsMap.hasOwnProperty(k)) numSelected++;
+                        }
                         selectedRowIdsMap = {};
-                        if (!wasSelected) {
+                        if (!wasSelected || numSelected > 1) {
                             selectedRowIdsMap[rowIdStr] = true;
                         }
                         lastClickedRowId = rowId;
