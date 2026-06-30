@@ -1509,6 +1509,52 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         window.isDirty = function() {
             return deltas.length > 0;
         };
+        
+        window.editFocusedCell = function() {
+            var cellToEdit = null;
+            if (lastHoveredCell) {
+                var rId = parseInt(lastHoveredCell.parentElement.getAttribute('data-row-id'));
+                if (rId === focusedRowId) {
+                    cellToEdit = lastHoveredCell;
+                }
+            }
+            if (!cellToEdit && lastClickedCell) {
+                var rId = parseInt(lastClickedCell.parentElement.getAttribute('data-row-id'));
+                if (rId === focusedRowId) {
+                    cellToEdit = lastClickedCell;
+                }
+            }
+            if (!cellToEdit && focusedRowId !== null) {
+                for (var k = 0; k < tableRows.length; k++) {
+                    if (tableRows[k].getAttribute('data-row-id') == focusedRowId) {
+                        var tds = tableRows[k].getElementsByTagName('td');
+                        for (var j = 0; j < tds.length; j++) {
+                            if (tds[j].className.indexOf('editable') !== -1) {
+                                cellToEdit = tds[j];
+                                break;
+                            }
+                        }
+                        break;
+                    }
+                }
+            }
+            if (cellToEdit) {
+                makeEditable(cellToEdit);
+            }
+        };
+        
+        window.selectAllInActiveEdit = function() {
+            var el = document.activeElement;
+            if (el && el.tagName === 'INPUT') {
+                el.select();
+            }
+        };
+        
+        window.copyFromActiveEdit = function() {
+            try {
+                document.execCommand('copy');
+            } catch(e) {}
+        };
     }
 
     if (window.addEventListener) {
