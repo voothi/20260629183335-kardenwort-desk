@@ -1804,12 +1804,15 @@ def spawn_ahk(args_list, base_dir):
         except Exception as e:
             logger.error(f"Failed to spawn AHK window process: {e}")
     else:
-        logger.warning(f"No AutoHotkey executable found, falling back to os.startfile for {ahk_script.name}")
+        logger.warning(f"No AutoHotkey executable found, falling back to shell execution for {ahk_script.name}")
         try:
             args_str = ' '.join(f'"{a}"' for a in args_list)
-            os.startfile(str(ahk_script), operation='open', arguments=args_str)
+            if sys.version_info >= (3, 10):
+                os.startfile(str(ahk_script), operation='open', arguments=args_str)
+            else:
+                subprocess.Popen(["cmd.exe", "/c", "start", '""', str(ahk_script)] + args_list)
         except Exception as e2:
-            logger.error(f"Failed to spawn AHK via os.startfile: {e2}")
+            logger.error(f"Failed to spawn AHK via fallback: {e2}")
 
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")
