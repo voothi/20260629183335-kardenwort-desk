@@ -904,7 +904,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   .source-text span.word.flipped {
     background-color: rgba(56, 166, 255, 0.15);
     color: #58a6ff;
-    font-style: italic;
+    font-weight: 300;
+    text-decoration: none !important;
     border: 1px dashed rgba(56, 166, 255, 0.4);
     padding: 0 3px;
     margin: 0 -1px;
@@ -1158,15 +1159,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                             span.setAttribute('data-original-text', span.textContent || span.innerText || "");
                         }
                         
-                        var isFlipped = (span.className.indexOf('flipped') !== -1);
+                        var isFlipped = span.classList.contains('flipped');
                         if (isFlipped) {
-                            span.className = span.className.replace(/\bflipped\b/g, '').trim();
+                            span.classList.remove('flipped');
                             span.textContent = span.getAttribute('data-original-text');
                             rmbDragMode = false;
                         } else {
                             var trans = getWordTranslation(span);
                             if (trans) {
-                                span.className += ' flipped';
+                                span.classList.add('flipped');
                                 span.textContent = trans;
                                 rmbDragMode = true;
                             }
@@ -1209,7 +1210,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         }
                         dragOccurred = true;
                         
-                        var isFlipped = (span.className.indexOf('flipped') !== -1);
+                        var isFlipped = span.classList.contains('flipped');
                         if (rmbDragMode) {
                             if (!span.getAttribute('data-original-text')) {
                                 span.setAttribute('data-original-text', span.textContent || span.innerText || "");
@@ -1217,13 +1218,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                             if (!isFlipped) {
                                 var trans = getWordTranslation(span);
                                 if (trans) {
-                                    span.className += ' flipped';
+                                    span.classList.add('flipped');
                                     span.textContent = trans;
                                 }
                             }
                         } else {
                             if (isFlipped) {
-                                span.className = span.className.replace(/\bflipped\b/g, '').trim();
+                                span.classList.remove('flipped');
                                 span.textContent = span.getAttribute('data-original-text') || "";
                             }
                         }
