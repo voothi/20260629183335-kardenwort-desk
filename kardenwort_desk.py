@@ -826,9 +826,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="WordSourceInflectedForm">{inflected_val}</td>'
             f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
+            f'<td>{ipa_val}</td>'
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{morph_val}</td>'
-            f'<td>{ipa_val}</td>'
             f'</tr>'
         )
     table_rows_html = "\n".join(table_rows)
@@ -1023,9 +1023,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         <tr>
           <th>Inflected</th>
           <th>Lemma</th>
+          <th>IPA</th>
           <th>Translation</th>
           <th>Morphology</th>
-          <th>IPA</th>
         </tr>
       </thead>
       <tbody>
