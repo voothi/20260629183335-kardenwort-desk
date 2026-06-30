@@ -789,8 +789,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         lemma_class = "editable" if 'WordSource' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         trans_class = "editable" if 'WordDestination' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
+        is_row_paired = False
+        if inflected_val:
+            if len(re.findall(r"[\w']+", inflected_val)) > 1:
+                is_row_paired = True
+        row_highlight_class = "highlight-purple" if is_row_paired else "highlight-orange"
+        
         table_rows.append(
-            f'<tr data-row-id="{row_id}">'
+            f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
             f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
             f'<td>{inflected_val}</td>'
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
@@ -921,9 +927,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   tr:hover td {
     background: rgba(255, 255, 255, 0.02);
   }
-  tr.selected td {
+  tr.selected.highlight-orange td {
     background: rgba(255, 204, 0, 0.15);
     color: #ffcc00;
+  }
+  tr.selected.highlight-purple td {
+    background: rgba(147, 112, 219, 0.15);
+    color: #b39ddb;
   }
   .editable {
     cursor: pointer;
