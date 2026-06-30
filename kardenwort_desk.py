@@ -990,6 +990,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   #lemma-table th:last-child, #lemma-table td:last-child {
     width: auto;
     padding-right: 12px;
+    white-space: normal;
   }
   .scrollable-cell {
     width: 100%;
