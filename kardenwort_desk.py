@@ -1550,7 +1550,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             }
         };
         
-        window.copyFromActiveEdit = function() {
+        window.copySelection = function() {
             try {
                 document.execCommand('copy');
             } catch(e) {}
