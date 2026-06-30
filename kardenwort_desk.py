@@ -752,7 +752,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 if is_paired:
                     classes.append("highlight-purple")
                 else:
-                    classes.append("highlight-yellow")
+                    classes.append("highlight-orange")
             classes_str = " ".join(classes)
             span_htmls.append(
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
@@ -867,20 +867,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   .source-text span.word:hover {
     background-color: rgba(255, 255, 255, 0.1);
   }
-  .source-text span.highlight-yellow {
+  .source-text span.highlight-orange {
     text-decoration: underline;
   }
   .source-text span.highlight-purple {
     text-decoration: underline;
     text-decoration-style: dashed;
   }
-  .source-text span.highlight-yellow-active {
-    background-color: #ffd700;
+  .source-text span.highlight-orange-active {
+    background-color: #ffcc00;
     color: #0d0f12;
     text-decoration: none;
   }
-  .source-text span.word.highlight-yellow-active:hover {
-    background-color: #e6c200;
+  .source-text span.word.highlight-orange-active:hover {
+    background-color: #e6b800;
     color: #0d0f12;
   }
   .source-text span.highlight-purple-active {
@@ -1244,7 +1244,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         function updateBidirectionalHighlights() {
             for (var i = 0; i < tokenSpans.length; i++) {
                 var span = tokenSpans[i];
-                span.className = span.className.replace(/highlight-yellow-active/g, '')
+                span.className = span.className.replace(/highlight-orange-active/g, '')
                                                .replace(/highlight-purple-active/g, '')
                                                .replace(/\\s+/g, ' ')
                                                .replace(/^\\s+|\\s+$/g, '');
@@ -1268,9 +1268,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                                 if (span.className.indexOf('highlight-purple-active') === -1) {
                                     span.className += ' highlight-purple-active';
                                 }
-                            } else if (span.className.indexOf('highlight-yellow') !== -1) {
-                                if (span.className.indexOf('highlight-yellow-active') === -1) {
-                                    span.className += ' highlight-yellow-active';
+                            } else if (span.className.indexOf('highlight-orange') !== -1) {
+                                if (span.className.indexOf('highlight-orange-active') === -1) {
+                                    span.className += ' highlight-orange-active';
                                 }
                             }
                         }
