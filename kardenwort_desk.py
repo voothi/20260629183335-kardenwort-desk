@@ -922,8 +922,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     background: rgba(255, 255, 255, 0.02);
   }
   tr.selected td {
-    background: rgba(255, 215, 0, 0.15);
-    color: #ffd700;
+    background: rgba(255, 204, 0, 0.15);
+    color: #ffcc00;
   }
   .editable {
     cursor: pointer;
