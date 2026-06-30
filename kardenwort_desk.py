@@ -955,6 +955,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   #lemma-table th, #lemma-table td {
     width: 1%;
     white-space: nowrap;
+    max-width: 15vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
   #lemma-table th.spacer, #lemma-table td.spacer {
     width: auto;
@@ -1012,6 +1015,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   
   <div class="section">
     <div class="section-title">Lemmas</div>
+    <div style="overflow-x: auto; width: 100%;">
     <table id="lemma-table">
       <thead>
         <tr>
@@ -1027,6 +1031,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         {table_rows_html}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 <script id="token-map" type="application/json">
