@@ -1030,6 +1030,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         var focusedRowId = null;
         var deltas = [];
         var touchedCells = {};
+        var lastClickedCell = null;
+        var lastHoveredCell = null;
         
         var tokenMap = [];
         try {
@@ -1138,6 +1140,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 for (var j = 0; j < tds.length; j++) {
                     if (tds[j].className.indexOf('editable') !== -1) {
                         (function(cell) {
+                            addEvent(cell, 'click', function(e) {
+                                lastClickedCell = cell;
+                            });
+                            addEvent(cell, 'mouseover', function(e) {
+                                lastHoveredCell = cell;
+                            });
+                            addEvent(cell, 'mouseout', function(e) {
+                                if (lastHoveredCell === cell) {
+                                    lastHoveredCell = null;
+                                }
+                            });
                             addEvent(cell, 'dblclick', function() {
                                 makeEditable(cell);
                             });
@@ -1187,7 +1200,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     notifyAHKSelection();
                 }
             } else if (keyCode === 113) { // F2
-                if (focusedRowId !== null) {
+                var cellToEdit = null;
+                if (lastHoveredCell) {
+                    var rId = parseInt(lastHoveredCell.parentElement.getAttribute('data-row-id'));
+                    if (rId === focusedRowId) {
+                        cellToEdit = lastHoveredCell;
+                    }
+                }
+                if (!cellToEdit && lastClickedCell) {
+                    var rId = parseInt(lastClickedCell.parentElement.getAttribute('data-row-id'));
+                    if (rId === focusedRowId) {
+                        cellToEdit = lastClickedCell;
+                    }
+                }
+                if (!cellToEdit && focusedRowId !== null) {
                     var activeRow = null;
                     for (var k = 0; k < tableRows.length; k++) {
                         if (tableRows[k].getAttribute('data-row-id') == focusedRowId) {
@@ -1199,11 +1225,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         var tds = activeRow.getElementsByTagName('td');
                         for (var k = 0; k < tds.length; k++) {
                             if (tds[k].className.indexOf('editable') !== -1) {
-                                makeEditable(tds[k]);
+                                cellToEdit = tds[k];
                                 break;
                             }
                         }
                     }
+                }
+                if (cellToEdit) {
+                    makeEditable(cellToEdit);
                 }
             }
         });
@@ -1404,7 +1433,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             addEvent(input, 'keydown', function(e) {
                 e = e || window.event;
                 var keyCode = e.keyCode;
-                if (keyCode === 13) { // Enter
+                if (e.ctrlKey && keyCode === 65) { // Ctrl+A
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                    input.select();
+                } else if (keyCode === 13) { // Enter
                     if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                     commit();
                 } else if (keyCode === 27) { // Escape
