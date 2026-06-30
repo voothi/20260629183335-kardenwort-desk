@@ -936,79 +936,96 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
 
 <script type="text/javascript">
 document.addEventListener('DOMContentLoaded', function() {
-    let selectedRowIds = new Set();
-    let lastClickedRowId = null;
-    let focusedRowId = null;
-    let deltas = [];
-    let touchedCells = {};
+    var selectedRowIdsMap = {};
+    var lastClickedRowId = null;
+    var focusedRowId = null;
+    var deltas = [];
+    var touchedCells = {};
     
-    let tokenMap = [];
+    var tokenMap = [];
     try {
         tokenMap = JSON.parse(document.getElementById('token-map').innerText);
     } catch(e) {}
     
-    let tokenSpans = document.querySelectorAll('#source-container span.word');
+    var tokenSpans = document.querySelectorAll('#source-container span.word');
     
-    tokenSpans.forEach(span => {
-        span.addEventListener('click', function(e) {
-            let lowerClean = span.getAttribute('data-lower-clean');
-            let tokenData = tokenMap.find(t => t.lower_clean === lowerClean && t.is_word);
-            if (!tokenData || !tokenData.row_ids) return;
-            
-            if (!e.ctrlKey) {
-                clearAllSelections();
+    function findTokenData(lowerClean) {
+        for (var i = 0; i < tokenMap.length; i++) {
+            var t = tokenMap[i];
+            if (t.lower_clean === lowerClean && t.is_word) {
+                return t;
             }
-            
-            tokenData.row_ids.forEach(rowId => {
-                toggleRowSelection(rowId, true);
-            });
-            updateBidirectionalHighlights();
-            notifyAHKSelection();
-        });
-    });
+        }
+        return null;
+    }
     
-    let tableRows = document.querySelectorAll('#lemma-table tbody tr');
-    tableRows.forEach(row => {
-        row.addEventListener('click', function(e) {
-            let rowId = parseInt(row.getAttribute('data-row-id'));
-            
-            if (e.shiftKey && lastClickedRowId !== null) {
-                let start = Math.min(lastClickedRowId, rowId);
-                let end = Math.max(lastClickedRowId, rowId);
+    for (var i = 0; i < tokenSpans.length; i++) {
+        (function(span) {
+            span.addEventListener('click', function(e) {
+                var lowerClean = span.getAttribute('data-lower-clean');
+                var tokenData = findTokenData(lowerClean);
+                if (!tokenData || !tokenData.row_ids) return;
+                
                 if (!e.ctrlKey) {
-                    selectedRowIds.clear();
+                    clearAllSelections();
                 }
-                for (let i = start; i <= end; i++) {
-                    selectedRowIds.add(i);
+                
+                for (var j = 0; j < tokenData.row_ids.length; j++) {
+                    toggleRowSelection(tokenData.row_ids[j], true);
                 }
-            } else if (e.ctrlKey) {
-                if (selectedRowIds.has(rowId)) {
-                    selectedRowIds.delete(rowId);
-                } else {
-                    selectedRowIds.add(rowId);
-                }
-                lastClickedRowId = rowId;
-            } else {
-                let wasSelected = selectedRowIds.has(rowId);
-                selectedRowIds.clear();
-                if (!wasSelected || tableRows.length > 1) {
-                    selectedRowIds.add(rowId);
-                }
-                lastClickedRowId = rowId;
-            }
-            
-            focusedRowId = rowId;
-            updateRowStyles();
-            updateBidirectionalHighlights();
-            notifyAHKSelection();
-        });
-        
-        row.querySelectorAll('td.editable').forEach(cell => {
-            cell.addEventListener('dblclick', function() {
-                makeEditable(cell);
+                updateBidirectionalHighlights();
+                notifyAHKSelection();
             });
-        });
-    });
+        })(tokenSpans[i]);
+    }
+    
+    var tableRows = document.querySelectorAll('#lemma-table tbody tr');
+    for (var i = 0; i < tableRows.length; i++) {
+        (function(row) {
+            row.addEventListener('click', function(e) {
+                var rowId = parseInt(row.getAttribute('data-row-id'));
+                
+                if (e.shiftKey && lastClickedRowId !== null) {
+                    var start = Math.min(lastClickedRowId, rowId);
+                    var end = Math.max(lastClickedRowId, rowId);
+                    if (!e.ctrlKey) {
+                        selectedRowIdsMap = {};
+                    }
+                    for (var j = start; j <= end; j++) {
+                        selectedRowIdsMap[j] = true;
+                    }
+                } else if (e.ctrlKey) {
+                    if (selectedRowIdsMap.hasOwnProperty(rowId)) {
+                        delete selectedRowIdsMap[rowId];
+                    } else {
+                        selectedRowIdsMap[rowId] = true;
+                    }
+                    lastClickedRowId = rowId;
+                } else {
+                    var wasSelected = selectedRowIdsMap.hasOwnProperty(rowId);
+                    selectedRowIdsMap = {};
+                    if (!wasSelected || tableRows.length > 1) {
+                        selectedRowIdsMap[rowId] = true;
+                    }
+                    lastClickedRowId = rowId;
+                }
+                
+                focusedRowId = rowId;
+                updateRowStyles();
+                updateBidirectionalHighlights();
+                notifyAHKSelection();
+            });
+            
+            var editables = row.querySelectorAll('td.editable');
+            for (var j = 0; j < editables.length; j++) {
+                (function(cell) {
+                    cell.addEventListener('dblclick', function() {
+                        makeEditable(cell);
+                    });
+                })(editables[j]);
+            }
+        })(tableRows[i]);
+    }
     
     document.addEventListener('keydown', function(e) {
         if (document.activeElement.tagName === 'INPUT') return;
@@ -1030,10 +1047,10 @@ document.addEventListener('DOMContentLoaded', function() {
         } else if (e.key === 'Space') {
             e.preventDefault();
             if (focusedRowId !== null) {
-                if (selectedRowIds.has(focusedRowId)) {
-                    selectedRowIds.delete(focusedRowId);
+                if (selectedRowIdsMap.hasOwnProperty(focusedRowId)) {
+                    delete selectedRowIdsMap[focusedRowId];
                 } else {
-                    selectedRowIds.add(focusedRowId);
+                    selectedRowIdsMap[focusedRowId] = true;
                 }
                 lastClickedRowId = focusedRowId;
                 updateRowStyles();
@@ -1042,9 +1059,9 @@ document.addEventListener('DOMContentLoaded', function() {
             }
         } else if (e.key === 'F2') {
             if (focusedRowId !== null) {
-                let activeRow = document.querySelector(`#lemma-table tbody tr[data-row-id="${focusedRowId}"]`);
+                var activeRow = document.querySelector('#lemma-table tbody tr[data-row-id="' + focusedRowId + '"]');
                 if (activeRow) {
-                    let firstEditable = activeRow.querySelector('td.editable');
+                    var firstEditable = activeRow.querySelector('td.editable');
                     if (firstEditable) {
                         makeEditable(firstEditable);
                     }
@@ -1054,82 +1071,98 @@ document.addEventListener('DOMContentLoaded', function() {
     });
     
     function clearAllSelections() {
-        selectedRowIds.clear();
+        selectedRowIdsMap = {};
         lastClickedRowId = null;
         updateRowStyles();
     }
     
     function toggleRowSelection(rowId, forceState) {
         if (forceState) {
-            selectedRowIds.add(rowId);
+            selectedRowIdsMap[rowId] = true;
         } else {
-            if (selectedRowIds.has(rowId)) {
-                selectedRowIds.delete(rowId);
+            if (selectedRowIdsMap.hasOwnProperty(rowId)) {
+                delete selectedRowIdsMap[rowId];
             } else {
-                selectedRowIds.add(rowId);
+                selectedRowIdsMap[rowId] = true;
             }
         }
         updateRowStyles();
     }
     
     function updateRowStyles() {
-        tableRows.forEach(row => {
-            let rowId = parseInt(row.getAttribute('data-row-id'));
-            if (selectedRowIds.has(rowId)) {
-                row.classList.add('selected');
+        for (var i = 0; i < tableRows.length; i++) {
+            var row = tableRows[i];
+            var rowId = parseInt(row.getAttribute('data-row-id'));
+            if (selectedRowIdsMap.hasOwnProperty(rowId)) {
+                row.className = row.className.replace(/\bselected\b/g, '') + ' selected';
             } else {
-                row.classList.remove('selected');
+                row.className = row.className.replace(/\bselected\b/g, '');
             }
-        });
+        }
     }
     
     function updateRowFocus() {
-        tableRows.forEach(row => {
-            let rowId = parseInt(row.getAttribute('data-row-id'));
+        for (var i = 0; i < tableRows.length; i++) {
+            var row = tableRows[i];
+            var rowId = parseInt(row.getAttribute('data-row-id'));
             if (rowId === focusedRowId) {
                 row.style.outline = '1px solid #58a6ff';
                 row.scrollIntoView({ block: 'nearest' });
             } else {
                 row.style.outline = 'none';
             }
-        });
+        }
     }
     
     function updateBidirectionalHighlights() {
-        tokenSpans.forEach(span => {
-            span.classList.remove('highlight-yellow-active', 'highlight-purple-active');
-        });
+        for (var i = 0; i < tokenSpans.length; i++) {
+            var span = tokenSpans[i];
+            span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '').replace(/\bhighlight-purple-active\b/g, '');
+        }
         
-        selectedRowIds.forEach(rowId => {
-            tokenMap.forEach(token => {
-                if (token.row_ids && token.row_ids.includes(rowId)) {
-                    let span = document.querySelector(`#source-container span.word[data-word-idx="${token.visual_idx}"]`);
+        for (var rId in selectedRowIdsMap) {
+            if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
+            var rowId = parseInt(rId);
+            for (var i = 0; i < tokenMap.length; i++) {
+                var token = tokenMap[i];
+                if (token.row_ids && token.row_ids.indexOf(rowId) !== -1) {
+                    var span = document.querySelector('#source-container span.word[data-word-idx="' + token.visual_idx + '"]');
                     if (span) {
-                        if (span.classList.contains('highlight-purple')) {
-                            span.classList.add('highlight-purple-active');
+                        if (span.className.indexOf('highlight-purple') !== -1) {
+                            span.className = span.className.replace(/\bhighlight-purple-active\b/g, '') + ' highlight-purple-active';
                         } else {
-                            span.classList.add('highlight-yellow-active');
+                            span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '') + ' highlight-yellow-active';
                         }
                     }
                 }
-            });
-        });
+            }
+        }
+    }
+    
+    function getSelectedRowsArray() {
+        var arr = [];
+        for (var k in selectedRowIdsMap) {
+            if (selectedRowIdsMap.hasOwnProperty(k)) {
+                arr.push(parseInt(k));
+            }
+        }
+        return arr;
     }
     
     function notifyAHKSelection() {
         if (window.ahkCall) {
-            window.ahkCall('selection', Array.from(selectedRowIds).join(','));
+            window.ahkCall('selection', getSelectedRowsArray().join(','));
         }
     }
     
     function makeEditable(cell) {
         if (cell.querySelector('input')) return;
         
-        let originalValue = cell.innerText;
-        let colName = cell.getAttribute('data-col');
-        let rowId = cell.parentElement.getAttribute('data-row-id');
+        var originalValue = cell.innerText;
+        var colName = cell.getAttribute('data-col');
+        var rowId = cell.parentElement.getAttribute('data-row-id');
         
-        let input = document.createElement('input');
+        var input = document.createElement('input');
         input.type = 'text';
         input.value = originalValue;
         input.style.width = '100%';
@@ -1146,10 +1179,16 @@ document.addEventListener('DOMContentLoaded', function() {
         input.select();
         
         function commit() {
-            let newValue = input.value;
+            var newValue = input.value;
             cell.innerHTML = newValue;
             if (newValue !== originalValue) {
-                let existingIndex = deltas.findIndex(d => d.row_id === parseInt(rowId) && d.column === colName);
+                var existingIndex = -1;
+                for (var k = 0; k < deltas.length; k++) {
+                    if (deltas[k].row_id === parseInt(rowId) && deltas[k].column === colName) {
+                        existingIndex = k;
+                        break;
+                    }
+                }
                 if (existingIndex !== -1) {
                     deltas[existingIndex].value = newValue;
                 } else {
@@ -1159,8 +1198,8 @@ document.addEventListener('DOMContentLoaded', function() {
                         value: newValue
                     });
                 }
-                cell.classList.add('dirty');
-                touchedCells[`${rowId}_${colName}`] = true;
+                cell.className = cell.className.replace(/\bdirty\b/g, '') + ' dirty';
+                touchedCells[rowId + '_' + colName] = true;
                 if (window.ahkCall) {
                     window.ahkCall('dirty', 'true');
                 }
@@ -1175,9 +1214,15 @@ document.addEventListener('DOMContentLoaded', function() {
             } else if (e.key === 'Tab') {
                 e.preventDefault();
                 commit();
-                let editables = Array.from(document.querySelectorAll('.editable'));
-                let idx = editables.indexOf(cell);
-                let nextIdx = e.shiftKey ? idx - 1 : idx + 1;
+                var editables = document.querySelectorAll('.editable');
+                var idx = -1;
+                for (var k = 0; k < editables.length; k++) {
+                    if (editables[k] === cell) {
+                        idx = k;
+                        break;
+                    }
+                }
+                var nextIdx = e.shiftKey ? idx - 1 : idx + 1;
                 if (nextIdx >= 0 && nextIdx < editables.length) {
                     makeEditable(editables[nextIdx]);
                 }
@@ -1190,7 +1235,7 @@ document.addEventListener('DOMContentLoaded', function() {
     }
     
     window.getSelectedRows = function() {
-        return JSON.stringify(Array.from(selectedRowIds));
+        return JSON.stringify(getSelectedRowsArray());
     };
     
     window.getDeltas = function() {
@@ -1198,10 +1243,11 @@ document.addEventListener('DOMContentLoaded', function() {
     };
     
     window.clearDirty = function() {
+        var dirtyCells = document.querySelectorAll('td.dirty');
+        for (var k = 0; k < dirtyCells.length; k++) {
+            dirtyCells[k].className = dirtyCells[k].className.replace(/\bdirty\b/g, '');
+        }
         deltas = [];
-        document.querySelectorAll('td.dirty').forEach(cell => {
-            cell.classList.remove('dirty');
-        });
         if (window.ahkCall) {
             window.ahkCall('dirty', 'false');
         }
