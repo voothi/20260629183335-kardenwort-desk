@@ -2188,6 +2188,85 @@ def cmd_export(args):
         print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
         sys.exit(1)
 
+def cmd_reprocess(args):
+    logger.info("Reprocess subcommand invoked")
+    config, resolved_paths = load_config(args.config)
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    
+    manifest_path = Path(args.selection_manifest).resolve()
+    if not manifest_path.exists():
+        print_structured_error("INVALID_ARGS", f"Selection manifest not found: {manifest_path}")
+        sys.exit(1)
+        
+    try:
+        with open(manifest_path, 'r', encoding='utf-8-sig') as f:
+            manifest = json.load(f)
+    except Exception as e:
+        print_structured_error("INVALID_ARGS", f"Failed to parse selection manifest: {e}")
+        sys.exit(1)
+        
+    selected_rows = manifest.get("selected_row_ids", [])
+    zid = manifest.get("zid")
+    if not zid:
+        print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
+        sys.exit(1)
+        
+    if not selected_rows:
+        logger.warning("No rows selected for reprocess.")
+        print("Warning: No rows selected. Reprocess skipped.")
+        sys.exit(0)
+        
+    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    tsv_path = find_working_tsv(results_dir, zid, lang)
+    if not tsv_path or not tsv_path.exists():
+        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
+        sys.exit(1)
+        
+    try:
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
+        sys.exit(1)
+        
+    mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+    ai_cols = ['WordSourceMorphologyAI', 'WordSourceIPA', 'WordRussian', 'WordEnglish', 'WordUkrainian']
+    editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
+    fields_to_clear = [c for c in editable_cols if c not in ('WordSource', 'WordSourceInflectedForm')]
+    for col in ai_cols:
+        if col not in fields_to_clear:
+            fields_to_clear.append(col)
+            
+    cleared_count = 0
+    for row_id in selected_rows:
+        if 0 <= row_id < len(data_rows):
+            for col in fields_to_clear:
+                if col in headers:
+                    col_idx = headers.index(col)
+                    if len(data_rows[row_id]) > col_idx:
+                        data_rows[row_id][col_idx] = ""
+            cleared_count += 1
+            
+    if cleared_count == 0:
+        print("Warning: None of the selected row indices were valid.")
+        sys.exit(0)
+        
+    try:
+        with file_lock(tsv_path):
+            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
+        sys.exit(1)
+        
+    prompt_name = config.get('languages', f'{lang}_prompt')
+    logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows.")
+    run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths)
+    print(json.dumps({"reprocess_started": True, "rows": cleared_count}))
+
+
 def cmd_edit_save(args):
     logger.info("Edit-save subcommand invoked", extra={"zid": args.zid})
     config, resolved_paths = load_config(args.config)
@@ -2601,6 +2680,11 @@ def main():
     p_export.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_export.add_argument("--language", required=True, help="Language code")
 
+    # reprocess
+    p_reprocess = subparsers.add_parser("reprocess")
+    p_reprocess.add_argument("--selection-manifest", required=True, help="Selection manifest path")
+    p_reprocess.add_argument("--language", required=True, help="Language code")
+
     # edit-save
     p_edit = subparsers.add_parser("edit-save")
     p_edit.add_argument("--deltas", required=True, help="Deltas JSON file path")
@@ -2638,6 +2722,7 @@ def main():
     commands = {
         "render": cmd_render,
         "export": cmd_export,
+        "reprocess": cmd_reprocess,
         "edit-save": cmd_edit_save,
         "merge": cmd_merge,
         "restore": cmd_restore,
