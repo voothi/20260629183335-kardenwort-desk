@@ -1028,26 +1028,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         }
                     }
                     
-                    if (!e.ctrlKey) {
+                    for (var j = 0; j < tokenData.row_ids.length; j++) {
                         if (allSelected) {
-                            clearAllSelections();
+                            delete selectedRowIdsMap[String(tokenData.row_ids[j])];
                         } else {
-                            clearAllSelections();
-                            for (var j = 0; j < tokenData.row_ids.length; j++) {
-                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
-                            }
-                            updateRowStyles();
+                            selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
                         }
-                    } else {
-                        for (var j = 0; j < tokenData.row_ids.length; j++) {
-                            if (allSelected) {
-                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
-                            } else {
-                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
-                            }
-                        }
-                        updateRowStyles();
                     }
+                    updateRowStyles();
                     
                     updateBidirectionalHighlights();
                     notifyAHKSelection();
@@ -1078,29 +1066,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     if (e.shiftKey && lastClickedRowId !== null) {
                         var start = Math.min(parseInt(lastClickedRowId), parseInt(rowId));
                         var end = Math.max(parseInt(lastClickedRowId), parseInt(rowId));
-                        if (!e.ctrlKey) {
-                            selectedRowIdsMap = {};
-                        }
                         for (var j = start; j <= end; j++) {
                             selectedRowIdsMap[String(j)] = true;
                         }
-                    } else if (e.ctrlKey) {
+                        lastClickedRowId = rowId;
+                    } else {
                         if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
                             delete selectedRowIdsMap[rowIdStr];
                         } else {
-                            selectedRowIdsMap[rowIdStr] = true;
-                        }
-                        lastClickedRowId = rowId;
-                    } else {
-                        var wasSelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
-                        var numSelected = 0;
-                        for (var k in selectedRowIdsMap) {
-                            if (selectedRowIdsMap.hasOwnProperty(k)) numSelected++;
-                        }
-                        if (wasSelected && numSelected === 1) {
-                            selectedRowIdsMap = {};
-                        } else {
-                            selectedRowIdsMap = {};
                             selectedRowIdsMap[rowIdStr] = true;
                         }
                         lastClickedRowId = rowId;
