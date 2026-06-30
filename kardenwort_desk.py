@@ -829,6 +829,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{morph_val}</td>'
             f'<td>{ipa_val}</td>'
+            f'<td class="spacer"></td>'
             f'</tr>'
         )
     table_rows_html = "\n".join(table_rows)
@@ -951,12 +952,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     margin-top: 8px;
     table-layout: auto;
   }
-  #lemma-table th:nth-child(1), #lemma-table td:nth-child(1),
-  #lemma-table th:nth-child(2), #lemma-table td:nth-child(2),
-  #lemma-table th:nth-child(4), #lemma-table td:nth-child(4),
-  #lemma-table th:nth-child(5), #lemma-table td:nth-child(5) {
+  #lemma-table th, #lemma-table td {
     width: 1%;
     white-space: nowrap;
+  }
+  #lemma-table th.spacer, #lemma-table td.spacer {
+    width: 100%;
   }
   th {
     text-align: left;
@@ -1019,6 +1020,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
           <th>Translation</th>
           <th>Morphology</th>
           <th>IPA</th>
+          <th class="spacer"></th>
         </tr>
       </thead>
       <tbody>
