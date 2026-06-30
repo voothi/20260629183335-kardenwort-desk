@@ -1032,6 +1032,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         var touchedCells = {};
         var lastClickedCell = null;
         var lastHoveredCell = null;
+        var isDragSelecting = false;
+        var dragSelectMode = true;
         
         var tokenMap = [];
         try {
@@ -1105,16 +1107,22 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         
         for (var i = 0; i < tableRows.length; i++) {
             (function(row) {
-                addEvent(row, 'click', function(e) {
+                addEvent(row, 'mousedown', function(e) {
                     e = e || window.event;
                     var target = e.target || e.srcElement;
                     if (target && target.tagName === 'INPUT') {
                         return;
                     }
+                    if (e.button !== 0) {
+                        return;
+                    }
                     var rowId = parseInt(row.getAttribute('data-row-id'));
                     var rowIdStr = String(rowId);
                     
+                    isDragSelecting = true;
+                    
                     if (e.shiftKey && lastClickedRowId !== null) {
+                        dragSelectMode = true;
                         var start = Math.min(parseInt(lastClickedRowId), parseInt(rowId));
                         var end = Math.max(parseInt(lastClickedRowId), parseInt(rowId));
                         for (var j = start; j <= end; j++) {
@@ -1124,8 +1132,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     } else {
                         if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
                             delete selectedRowIdsMap[rowIdStr];
+                            dragSelectMode = false;
                         } else {
                             selectedRowIdsMap[rowIdStr] = true;
+                            dragSelectMode = true;
                         }
                         lastClickedRowId = rowId;
                     }
@@ -1133,7 +1143,35 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     focusedRowId = rowId;
                     updateRowStyles();
                     updateBidirectionalHighlights();
-                    notifyAHKSelection();
+                    
+                    if (e.preventDefault) {
+                        e.preventDefault();
+                    } else {
+                        e.returnValue = false;
+                    }
+                });
+                
+                addEvent(row, 'mouseover', function(e) {
+                    e = e || window.event;
+                    if (isDragSelecting) {
+                        if (e.buttons !== undefined && (e.buttons & 1) === 0) {
+                            isDragSelecting = false;
+                            notifyAHKSelection();
+                            return;
+                        }
+                        var rowId = parseInt(row.getAttribute('data-row-id'));
+                        var rowIdStr = String(rowId);
+                        
+                        if (dragSelectMode) {
+                            selectedRowIdsMap[rowIdStr] = true;
+                        } else {
+                            delete selectedRowIdsMap[rowIdStr];
+                        }
+                        
+                        focusedRowId = rowId;
+                        updateRowStyles();
+                        updateBidirectionalHighlights();
+                    }
                 });
                 
                 var tds = row.getElementsByTagName('td');
@@ -1159,6 +1197,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 }
             })(tableRows[i]);
         }
+        
+        addEvent(document, 'mouseup', function(e) {
+            if (isDragSelecting) {
+                isDragSelecting = false;
+                notifyAHKSelection();
+            }
+        });
         
         addEvent(document, 'keydown', function(e) {
             e = e || window.event;
