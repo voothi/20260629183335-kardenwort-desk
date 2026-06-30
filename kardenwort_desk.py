@@ -709,6 +709,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                     
     token_to_rows = {}
+    row_candidates = {}
     for row_id, row in enumerate(data_rows):
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
@@ -725,10 +726,28 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         clean_part = "".join(ch for ch in part if ch.isalnum() or ch == "'")
                         if clean_part:
                             candidates.add(clean_part)
+        row_candidates[row_id] = candidates
         for cand in candidates:
             if cand not in token_to_rows:
                 token_to_rows[cand] = []
             token_to_rows[cand].append(row_id)
+            
+    natively_paired_rows = set()
+    for row_id, row in enumerate(data_rows):
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        if inflected_val and len(re.findall(r"[\w']+", inflected_val)) > 1:
+            natively_paired_rows.add(row_id)
+            
+    paired_tokens = set()
+    for cand, r_ids in token_to_rows.items():
+        if any(r in natively_paired_rows for r in r_ids):
+            paired_tokens.add(cand)
+            
+    paired_rows = set()
+    for row_id in range(len(data_rows)):
+        candidates = row_candidates.get(row_id, set())
+        if any(cand in paired_tokens for cand in candidates):
+            paired_rows.add(row_id)
             
     source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
     
@@ -743,12 +762,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             
             classes = ["word"]
             if mapped_rows:
-                is_paired = False
-                for r_idx in mapped_rows:
-                    inf_val = data_rows[r_idx][col_inflected] if col_inflected != -1 and len(data_rows[r_idx]) > col_inflected else ""
-                    if inf_val and len(re.findall(r"[\w']+", inf_val)) > 1:
-                        is_paired = True
-                        break
+                is_paired = any(r_idx in paired_rows for r_idx in mapped_rows)
                 if is_paired:
                     classes.append("highlight-purple")
                 else:
@@ -789,11 +803,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         lemma_class = "editable" if 'WordSource' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         trans_class = "editable" if 'WordDestination' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
-        is_row_paired = False
-        if inflected_val:
-            if len(re.findall(r"[\w']+", inflected_val)) > 1:
-                is_row_paired = True
-        row_highlight_class = "highlight-purple" if is_row_paired else "highlight-orange"
+        row_highlight_class = "highlight-purple" if row_id in paired_rows else "highlight-orange"
         
         table_rows.append(
             f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
