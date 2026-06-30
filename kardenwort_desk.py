@@ -868,6 +868,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     font-size: 14px;
     line-height: 1.5;
     zoom: {zoom_level};
+    width: {inverse_zoom_width};
   }
   .container {
     padding: 16px;
@@ -1826,9 +1827,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
 </html>
 """
     zoom_level = config.get('settings', 'default_zoom', fallback='150%')
+    
+    try:
+        numeric_zoom = float(zoom_level.replace('%', ''))
+        inverse_width = f"{10000 / numeric_zoom:.3f}%"
+    except Exception:
+        inverse_width = "100%"
+
     if zoom_level.isdigit():
         zoom_level = f"{zoom_level}%"
+        
     html_page = html_page.replace("{zoom_level}", zoom_level)
+    html_page = html_page.replace("{inverse_zoom_width}", inverse_width)
     html_page = html_page.replace("{source_html}", source_html)
     html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{table_rows_html}", table_rows_html)
