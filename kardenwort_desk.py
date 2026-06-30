@@ -855,6 +855,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <style>
+  *, *:before, *:after {
+    -webkit-box-sizing: border-box;
+    -moz-box-sizing: border-box;
+    box-sizing: border-box;
+  }
+  html {
+    overflow-x: hidden;
+  }
   body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background-color: #0d0f12;
@@ -864,10 +872,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     font-size: 14px;
     line-height: 1.5;
     zoom: {zoom_level};
+    overflow-x: hidden;
+    width: 100%;
   }
   .container {
-    max-width: 100%;
+    width: 100%;
+    display: -webkit-box;
+    display: -ms-flexbox;
     display: flex;
+    -webkit-box-orient: vertical;
+    -webkit-box-direction: normal;
+    -ms-flex-direction: column;
     flex-direction: column;
     gap: 16px;
   }
@@ -877,6 +892,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     border-radius: 12px;
     padding: 16px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    width: 100%;
+    overflow: hidden;
   }
   .section-title {
     font-size: 11px;
@@ -947,15 +964,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   }
   table {
     width: 100%;
-    max-width: 100%;
     border-collapse: collapse;
     margin-top: 8px;
-    table-layout: auto;
+    table-layout: fixed;
   }
+  #lemma-table col.col-lemma     { width: 18%; }
+  #lemma-table col.col-inflected  { width: 18%; }
+  #lemma-table col.col-trans      { width: 18%; }
+  #lemma-table col.col-morph      { width: 26%; }
+  #lemma-table col.col-ipa        { width: 16%; }
+  #lemma-table col.col-spacer     { width: 4%; }
   #lemma-table th, #lemma-table td {
-    width: 1%;
     white-space: nowrap;
-    max-width: 15vw;
     overflow: hidden;
     text-overflow: ellipsis;
   }
@@ -1015,8 +1035,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   
   <div class="section">
     <div class="section-title">Lemmas</div>
-    <div style="overflow-x: auto; width: 100%;">
     <table id="lemma-table">
+      <colgroup>
+        <col class="col-lemma">
+        <col class="col-inflected">
+        <col class="col-trans">
+        <col class="col-morph">
+        <col class="col-ipa">
+        <col class="col-spacer">
+      </colgroup>
       <thead>
         <tr>
           <th>Lemma</th>
@@ -1031,7 +1058,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         {table_rows_html}
       </tbody>
     </table>
-    </div>
   </div>
 </div>
 <script id="token-map" type="application/json">
