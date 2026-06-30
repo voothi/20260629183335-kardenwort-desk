@@ -443,10 +443,23 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
     
     logger.info(f"Kicking off background IntelliFiller: {' '.join(cmd)}")
     if sys.platform == 'win32':
-        creationflags = 0x00000200 | 0x00000008
-        subprocess.Popen(cmd, creationflags=creationflags, close_fds=True)
+        # CREATE_NO_WINDOW = 0x08000000
+        # CREATE_NEW_PROCESS_GROUP = 0x00000200
+        creationflags = 0x08000000 | 0x00000200
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+            close_fds=True
+        )
     else:
-        subprocess.Popen(cmd, close_fds=True)
+        subprocess.Popen(
+            cmd,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True
+        )
 
 def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
     python_exe = resolved_paths['kardenwort_python']
