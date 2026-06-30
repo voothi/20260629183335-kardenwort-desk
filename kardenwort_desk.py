@@ -890,6 +890,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     color: #f0f6fc;
     line-height: 1.6;
     word-break: break-word;
+    -moz-user-select: none;
+    -webkit-user-select: none;
+    -ms-user-select: none;
+    user-select: none;
   }
   .source-text span.word {
     cursor: pointer;
@@ -1034,6 +1038,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         var lastHoveredCell = null;
         var isDragSelecting = false;
         var dragSelectMode = true;
+        var isTokenDragSelecting = false;
+        var tokenDragMode = true;
         
         var tokenMap = [];
         try {
@@ -1063,11 +1069,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         
         for (var i = 0; i < tokenSpans.length; i++) {
             (function(span) {
-                addEvent(span, 'click', function(e) {
+                addEvent(span, 'mousedown', function(e) {
                     e = e || window.event;
+                    if (e.button !== 0) return;
+                    
                     var lowerClean = span.getAttribute('data-lower-clean');
                     var tokenData = findTokenData(lowerClean);
                     if (!tokenData || !tokenData.row_ids) return;
+                    
+                    isTokenDragSelecting = true;
                     
                     var allSelected = true;
                     for (var j = 0; j < tokenData.row_ids.length; j++) {
@@ -1077,6 +1087,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         }
                     }
                     
+                    tokenDragMode = !allSelected;
+                    
                     for (var j = 0; j < tokenData.row_ids.length; j++) {
                         if (allSelected) {
                             delete selectedRowIdsMap[String(tokenData.row_ids[j])];
@@ -1085,9 +1097,37 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         }
                     }
                     updateRowStyles();
-                    
                     updateBidirectionalHighlights();
-                    notifyAHKSelection();
+                    
+                    if (e.preventDefault) {
+                        e.preventDefault();
+                    } else {
+                        e.returnValue = false;
+                    }
+                });
+                
+                addEvent(span, 'mouseover', function(e) {
+                    e = e || window.event;
+                    if (isTokenDragSelecting) {
+                        if (e.buttons !== undefined && (e.buttons & 1) === 0) {
+                            isTokenDragSelecting = false;
+                            notifyAHKSelection();
+                            return;
+                        }
+                        var lowerClean = span.getAttribute('data-lower-clean');
+                        var tokenData = findTokenData(lowerClean);
+                        if (!tokenData || !tokenData.row_ids) return;
+                        
+                        for (var j = 0; j < tokenData.row_ids.length; j++) {
+                            if (tokenDragMode) {
+                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
+                            } else {
+                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
+                            }
+                        }
+                        updateRowStyles();
+                        updateBidirectionalHighlights();
+                    }
                 });
             })(tokenSpans[i]);
         }
@@ -1199,8 +1239,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         }
         
         addEvent(document, 'mouseup', function(e) {
+            var needNotify = false;
             if (isDragSelecting) {
                 isDragSelecting = false;
+                needNotify = true;
+            }
+            if (isTokenDragSelecting) {
+                isTokenDragSelecting = false;
+                needNotify = true;
+            }
+            if (needNotify) {
                 notifyAHKSelection();
             }
         });
