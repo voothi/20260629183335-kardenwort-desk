@@ -949,6 +949,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
 {token_manifest}
 </script>
 <script id="tsv-path" type="text/plain">{working_tsv_path}</script>
+<script id="llm-filled" type="text/plain">{llm_filled_js}</script>
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
 
@@ -1366,6 +1367,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     html_page = html_page.replace("{table_rows_html}", table_rows_html)
     html_page = html_page.replace("{token_manifest}", json.dumps(token_manifest))
     html_page = html_page.replace("{working_tsv_path}", str(working_tsv_path))
+    html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{language}", language)
     
