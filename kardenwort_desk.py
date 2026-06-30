@@ -976,6 +976,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
 
   /* When the window is NOT maximized (normally sized) */
+  /* When the window is NOT maximized (normally sized) */
   body:not(.maximized) {
     max-width: 100vw;
     overflow-x: hidden;
@@ -988,38 +989,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   body:not(.maximized) .section {
     max-width: 100%;
   }
-  body:not(.maximized) #lemma-table {
-    table-layout: fixed;
-    width: 100%;
-  }
-  body:not(.maximized) #lemma-table th, 
-  body:not(.maximized) #lemma-table td {
-    width: auto;
-    white-space: normal;
-    overflow-wrap: break-word;
-    word-break: break-word;
-    padding-right: 12px;
-  }
-  body:not(.maximized) #lemma-table th:nth-child(1),
-  body:not(.maximized) #lemma-table td:nth-child(1) { width: 20%; } /* Inflected */
-  body:not(.maximized) #lemma-table th:nth-child(2),
-  body:not(.maximized) #lemma-table td:nth-child(2) { width: 20%; } /* Lemma */
-  body:not(.maximized) #lemma-table th:nth-child(3),
-  body:not(.maximized) #lemma-table td:nth-child(3) { width: 30%; } /* Translation */
-  body:not(.maximized) #lemma-table th:nth-child(4),
-  body:not(.maximized) #lemma-table td:nth-child(4) { width: 15%; } /* IPA */
-  body:not(.maximized) #lemma-table th:nth-child(5),
-  body:not(.maximized) #lemma-table td:nth-child(5) { width: 15%; } /* Morphology */
-
   body:not(.maximized) .scrollable-cell {
     overflow-x: auto;
     white-space: nowrap;
+    max-width: 120px;
   }
 
   /* When maximized */
   body.maximized .scrollable-cell {
     overflow-x: visible;
     white-space: normal;
+    max-width: none;
   }
   th {
     text-align: left;
