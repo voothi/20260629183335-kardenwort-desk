@@ -1456,7 +1456,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         addEvent(document, 'mouseup', function(e) {
             e = e || window.event;
             var needNotify = false;
-            if (isDragSelecting || isTokenDragSelecting) {
+            if (isDragSelecting || isTokenDragSelecting || isRmbDragFlipping) {
                 if (dragOccurred) {
                     justFinishedDrag = true;
                     setTimeout(function() {
@@ -1465,25 +1465,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 }
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
+                isRmbDragFlipping = false;
                 needNotify = true;
-            }
-            if (e.button === 2 && mousedownTargetSpan && !dragOccurred) {
-                var span = mousedownTargetSpan;
-                if (!span.getAttribute('data-original-text')) {
-                    span.setAttribute('data-original-text', span.textContent || span.innerText || "");
-                }
-                
-                var isFlipped = span.classList.contains('flipped');
-                if (isFlipped) {
-                    span.classList.remove('flipped');
-                    span.textContent = span.getAttribute('data-original-text');
-                } else {
-                    var trans = getWordTranslation(span);
-                    if (trans) {
-                        span.classList.add('flipped');
-                        span.textContent = trans;
-                    }
-                }
             }
             mousedownTargetSpan = null;
             if (needNotify) {
