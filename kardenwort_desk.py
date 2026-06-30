@@ -457,6 +457,7 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
         creationflags = 0x08000000 | 0x00000200
         subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             creationflags=creationflags,
@@ -465,6 +466,7 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
     else:
         subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL,
             close_fds=True
