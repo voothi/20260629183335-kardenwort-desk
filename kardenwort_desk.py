@@ -967,7 +967,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     font-style: italic;
   }
   table {
-    width: 100%;
+    min-width: 100%;
     border-collapse: collapse;
     margin-top: 8px;
     table-layout: auto;
@@ -975,8 +975,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   #lemma-table th, #lemma-table td {
     width: 1%;
     white-space: nowrap;
-    overflow: hidden;
-    text-overflow: ellipsis;
   }
   #lemma-table th.spacer, #lemma-table td.spacer {
     width: 100%;
