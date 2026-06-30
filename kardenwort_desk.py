@@ -3,8 +3,15 @@ import argparse
 import json
 import logging
 import configparser
+import os
+import re
+import subprocess
+import tempfile
+import contextlib
 from pathlib import Path
 from datetime import datetime
+
+import text_tokenizer as tok
 
 class ConfigError(Exception):
     pass
@@ -27,7 +34,7 @@ def load_config(config_path=None):
     config.read(config_path, encoding='utf-8')
     
     base_dir = config_path.parent
-    resolved_paths = {}
+    resolved_paths = {'base_dir': base_dir}
     
     # 1. Resolve environment paths
     if 'environment' in config:
@@ -40,6 +47,8 @@ def load_config(config_path=None):
             
     # Check each resolved path exists
     for key, path in resolved_paths.items():
+        if key == 'base_dir':
+            continue
         if not path.exists():
             raise ConfigError(f"Path configured for '{key}' does not exist: {path}")
             
@@ -64,6 +73,16 @@ def load_config(config_path=None):
             
     return config, resolved_paths
 
+def load_kardenwort_config(kardenwort_workspace):
+    kw_config = configparser.ConfigParser(allow_no_value=True)
+    kw_config.read(kardenwort_workspace / "config.ini", encoding='utf-8')
+    return kw_config
+
+def load_anki_mapping(mapping_path):
+    mapping = configparser.ConfigParser(allow_no_value=True)
+    mapping.optionxform = str # Preserve case for Anki field names!
+    mapping.read(mapping_path, encoding='utf-8')
+    return mapping
 
 # Setup structured logging
 class JSONFormatter(logging.Formatter):
@@ -100,29 +119,1226 @@ def print_structured_error(error_code, message, details=None):
         error_payload["details"] = details
     sys.stderr.write(json.dumps(error_payload) + "\n")
 
+def get_deepl_key(config, base_dir):
+    deepl_settings_file_val = config.get('environment', 'deepl_settings_file', fallback=None)
+    if not deepl_settings_file_val:
+        return None
+        
+    settings_path = (base_dir / deepl_settings_file_val).resolve()
+    if not settings_path.exists():
+        logger.warning(f"DeepL settings file not found: {settings_path}")
+        return None
+        
+    settings = configparser.ConfigParser()
+    settings.read(settings_path, encoding='utf-8')
+    
+    salt = settings.get('Security', 'Salt', fallback='')
+    secrets_path_val = settings.get('Security', 'SecretsPath', fallback='')
+    if not secrets_path_val:
+        return None
+        
+    secrets_path = (settings_path.parent / secrets_path_val).resolve()
+    if not secrets_path.exists():
+        logger.warning(f"DeepL secrets file not found: {secrets_path}")
+        return None
+        
+    secrets = configparser.ConfigParser()
+    secrets.read(secrets_path, encoding='utf-8')
+    
+    obfuscated_key = secrets.get('DeepL', 'Key', fallback='')
+    if not obfuscated_key:
+        return None
+        
+    import base64
+    try:
+        decoded_bytes = base64.b64decode(obfuscated_key)
+        if not salt:
+            return obfuscated_key
+            
+        salt_bytes = salt.encode('utf-8')
+        deobfuscated_bytes = bytearray()
+        for i, b in enumerate(decoded_bytes):
+            deobfuscated_bytes.append(b ^ salt_bytes[i % len(salt_bytes)])
+            
+        key_str = deobfuscated_bytes.decode('utf-8', errors='replace')
+        if key_str.startswith('%%SEC%%'):
+            return key_str[7:]
+        else:
+            return obfuscated_key
+    except Exception as e:
+        logger.warning(f"Error deobfuscating DeepL key: {e}. Using raw key.")
+        return obfuscated_key
+
+@contextlib.contextmanager
+def file_lock(file_path):
+    lock_file_path = file_path.with_suffix('.lock')
+    lock_file = open(lock_file_path, 'w')
+    try:
+        if sys.platform == 'win32':
+            import msvcrt
+            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
+        else:
+            import fcntl
+            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+        yield
+    finally:
+        try:
+            if sys.platform == 'win32':
+                import msvcrt
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+        except Exception:
+            pass
+        lock_file.close()
+        try:
+            os.remove(lock_file_path)
+        except Exception:
+            pass
+
+def extract_zid(path):
+    name = path.name
+    match = re.match(r'^(\d{14})', name)
+    return match.group(1) if match else "00000000000000"
+
+def generate_slug(text, max_words=4):
+    cleaned = re.sub(r'\{[^}]*\}', '', text)
+    cleaned = re.sub(r'[^\w\s]', '', cleaned.lower())
+    words = cleaned.split()[:max_words]
+    slug = '-'.join(words)
+    return slug if slug else "untitled"
+
+def load_tsv_rows(tsv_path):
+    comments = []
+    headers = []
+    data_rows = []
+    with open(tsv_path, 'r', encoding='utf-8') as f:
+        for line in f:
+            line_str = line.rstrip('\r\n')
+            if line_str.startswith('#'):
+                comments.append(line_str)
+            elif not headers:
+                headers = line_str.split('\t')
+            else:
+                data_rows.append(line_str.split('\t'))
+    return comments, headers, data_rows
+
+def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
+    temp_path = tsv_path.with_suffix('.tsv.tmp')
+    bak_path = tsv_path.with_suffix('.tsv.bak')
+    
+    try:
+        with open(temp_path, 'w', encoding='utf-8', newline='') as f:
+            writer = csv_writer = re.sub(r'\r', '', '') # placeholder logic, use standard csv
+            import csv
+            writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+            for comment in comments:
+                f.write(comment + '\n')
+            writer.writerow(headers)
+            for row in data_rows:
+                writer.writerow(row)
+                
+        if tsv_path.exists():
+            if bak_path.exists():
+                os.remove(bak_path)
+            os.rename(tsv_path, bak_path)
+            
+        try:
+            os.rename(temp_path, tsv_path)
+        except Exception as e:
+            if bak_path.exists():
+                os.rename(bak_path, tsv_path)
+            raise e
+            
+        if bak_path.exists():
+            try:
+                os.remove(bak_path)
+            except OSError:
+                pass
+    except Exception as e:
+        if temp_path.exists():
+            try:
+                os.remove(temp_path)
+            except OSError:
+                pass
+        raise e
+
+def is_tsv_llm_filled(headers, data_rows, mapping):
+    check_cols = ['WordSourceMorphologyAI', 'WordSourceIPA', 'WordRussian', 'WordEnglish']
+    for col in check_cols:
+        if col in headers:
+            col_idx = headers.index(col)
+            if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
+                return True
+    return False
+
+def find_working_tsv(results_dir, zid, language):
+    files = list(results_dir.glob(f"{zid}-*.{language}.tsv"))
+    if not files:
+        files = list(results_dir.glob(f"{zid}-*.tsv"))
+    if files:
+        return files[0]
+    return None
+
+def run_google_translation(text, source, target, config, resolved_paths):
+    python_exe = resolved_paths['deep_translator_python']
+    script_path = resolved_paths['translate_google_script']
+    
+    cmd = [
+        str(python_exe),
+        str(script_path),
+        "--text", text,
+        "--source", source,
+        "--target", target,
+    ]
+    if config.getboolean('translation_providers', 'use_local_fork', fallback=True):
+        cmd.append("--use-local-fork")
+        
+    timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
+    logger.info(f"Running Google translation command: {' '.join(cmd)}")
+    
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    if res.returncode == 0:
+        return res.stdout.strip()
+    else:
+        raise Exception(f"Google translation failed: {res.stderr}")
+
+def run_deepl_translation(text, source, target, config, resolved_paths):
+    python_exe = resolved_paths['deep_translator_python']
+    script_path = resolved_paths['translate_deepl_script']
+    
+    deepl_key = get_deepl_key(config, resolved_paths['base_dir'])
+    if not deepl_key:
+        raise Exception("DeepL API key not configured or failed to resolve")
+        
+    cmd = [
+        str(python_exe),
+        str(script_path),
+        "--text", text,
+        "--source", source,
+        "--target", target,
+        "--deepl-api-key", deepl_key,
+    ]
+    if config.getboolean('translation_providers', 'use_local_fork', fallback=True):
+        cmd.append("--use-local-fork")
+        
+    timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
+    
+    logged_cmd = cmd[:]
+    if "--deepl-api-key" in logged_cmd:
+        idx = logged_cmd.index("--deepl-api-key")
+        if idx + 1 < len(logged_cmd):
+            logged_cmd[idx + 1] = "********"
+    logger.info(f"Running DeepL translation command: {' '.join(logged_cmd)}")
+    
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    if res.returncode == 0:
+        return res.stdout.strip()
+    else:
+        raise Exception(f"DeepL translation failed: {res.stderr}")
+
+def translate_text(text, source, target, config, resolved_paths, provider):
+    if provider == 'google':
+        try:
+            return run_google_translation(text, source, target, config, resolved_paths)
+        except Exception as e:
+            logger.warning(f"Google translation failed: {e}. No failover.")
+            raise
+    elif provider == 'deepl':
+        return run_deepl_translation(text, source, target, config, resolved_paths)
+    elif provider in ('combined', 'intellifiller'):
+        try:
+            return run_google_translation(text, source, target, config, resolved_paths)
+        except Exception as e:
+            logger.warning(f"Google translation failed: {e}. Trying DeepL failover...")
+            try:
+                return run_deepl_translation(text, source, target, config, resolved_paths)
+            except Exception as ex:
+                logger.error(f"DeepL failover also failed: {ex}")
+                raise ex
+    else:
+        raise Exception(f"Unsupported translation provider: {provider}")
+
+def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider):
+    if not lemmas:
+        return {}
+        
+    compact_line = "; ".join(lemmas)
+    try:
+        translated_line = translate_text(compact_line, source, target, config, resolved_paths, provider)
+        parts = [p.strip() for p in translated_line.split(';')]
+        parts = [p for p in parts if p]
+        if len(parts) == len(lemmas):
+            logger.info("Fast-path lemma translation aligned successfully.")
+            return {lemmas[i]: parts[i] for i in range(len(lemmas))}
+        else:
+            logger.warning(f"Fast-path alignment failure: expected {len(lemmas)} parts, got {len(parts)}. Falling back to individual calls.")
+    except Exception as e:
+        logger.warning(f"Fast-path translation failed: {e}. Falling back to individual calls.")
+        
+    translations = {}
+    for lemma in lemmas:
+        try:
+            translations[lemma] = translate_text(lemma, source, target, config, resolved_paths, provider)
+        except Exception as e:
+            logger.warning(f"Failed to translate lemma '{lemma}': {e}")
+            translations[lemma] = ""
+    return translations
+
+def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider):
+    if text_mode == 'single':
+        try:
+            return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider)}
+        except Exception as e:
+            logger.warning(f"Failed to translate main text: {e}")
+            return {0: ""}
+    else:
+        lines = text.splitlines()
+        translations = {}
+        for idx, line in enumerate(lines):
+            line_clean = line.strip()
+            if line_clean:
+                try:
+                    translations[idx] = translate_text(line_clean, source_lang, target_lang, config, resolved_paths, provider)
+                except Exception as e:
+                    logger.warning(f"Failed to translate line {idx+1}: {e}")
+                    translations[idx] = ""
+            else:
+                translations[idx] = ""
+        return translations
+
+def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths):
+    python_exe = resolved_paths['kardenwort_python']
+    headless_script = resolved_paths['intellifiller_headless']
+    
+    cmd = [
+        str(python_exe),
+        str(headless_script),
+        "--tsv", str(tsv_path),
+        "--prompt", prompt_name,
+    ]
+    
+    timeout = config.getint('timeouts', 'intellifiller_timeout', fallback=120)
+    logger.info(f"Running headless IntelliFiller command: {' '.join(cmd)}")
+    
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    if res.returncode == 0:
+        logger.info("Headless IntelliFiller finished successfully.")
+        return True
+    else:
+        logger.error(f"Headless IntelliFiller failed with exit code {res.returncode}: {res.stderr}")
+        return False
+
+def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths):
+    python_exe = resolved_paths['kardenwort_python']
+    headless_script = resolved_paths['intellifiller_headless']
+    
+    cmd = [
+        str(python_exe),
+        str(headless_script),
+        "--tsv", str(tsv_path),
+        "--prompt", prompt_name,
+    ]
+    
+    logger.info(f"Kicking off background IntelliFiller: {' '.join(cmd)}")
+    subprocess.Popen(cmd, close_fds=True)
+
+def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
+    python_exe = resolved_paths['kardenwort_python']
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    runner_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort_runner.py"
+    
+    cmd = [
+        str(python_exe),
+        str(runner_script),
+        "--import-only",
+        "--tsv", str(favorites_tsv_path),
+        "--play-sound-on-completion"
+    ]
+    
+    log_file_path = favorites_tsv_path.parent / f"{zid}-import.log"
+    log_file = open(log_file_path, 'w', encoding='utf-8')
+    
+    logger.info(f"Launching detached import: {' '.join(cmd)}")
+    
+    if sys.platform == 'win32':
+        creationflags = 0x00000200 | 0x00000008
+        p = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            creationflags=creationflags,
+            close_fds=True
+        )
+    else:
+        p = subprocess.Popen(
+            cmd,
+            stdout=log_file,
+            stderr=subprocess.STDOUT,
+            start_new_session=True,
+            close_fds=True
+        )
+        
+    return p.pid, str(log_file_path)
+
+def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
+    python_exe = resolved_paths['kardenwort_python']
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    runner_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort_runner.py"
+    
+    cmd = [
+        str(python_exe),
+        str(runner_script),
+        "--import-only",
+        "--tsv", str(favorites_tsv_path),
+    ]
+    
+    logger.info(f"Running synchronous import: {' '.join(cmd)}")
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', check=True)
+        return True, res.stdout
+    except subprocess.CalledProcessError as e:
+        return False, e.stderr
+
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir.mkdir(parents=True, exist_ok=True)
+    
+    slug = generate_slug(text)
+    working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
+    source_text_path = results_dir / f"{zid}-{slug}.txt"
+    
+    save_source_text = config.getboolean('settings', 'save_source_text', fallback=True)
+    if save_source_text and not source_text_path.exists():
+        source_text_path.write_text(text, encoding='utf-8')
+        
+    mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+    fields = list(mapping['fields'].keys())
+    field_mapping = dict(mapping['fields_mapping.word'])
+    
+    if not working_tsv_path.exists():
+        lemma_index_rel = config.get('languages', f'{language}_lemma_index')
+        lemma_override_rel = config.get('languages', f'{language}_lemma_override')
+        
+        lemma_index_file = kardenwort_workspace / lemma_index_rel
+        lemma_override_file = kardenwort_workspace / lemma_override_rel
+        
+        python_exe = resolved_paths['kardenwort_python']
+        kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
+        
+        text_file_to_pass = source_text_path
+        if not save_source_text:
+            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
+            text_to_write = text
+            if text_mode == 'single':
+                text_to_write = " ".join([line.strip() for line in text.splitlines() if line.strip()])
+            temp_file.write(text_to_write)
+            temp_file.close()
+            text_file_to_pass = Path(temp_file.name)
+            
+        cmd = [
+            str(python_exe),
+            str(kardenwort_script),
+            "--type", "word",
+            "--language", language,
+            "--deduplication-scope", "global",
+            "--lemma-index-file", str(lemma_index_file),
+            "--lemma-override-file", str(lemma_override_file),
+            "--sentence-context-size", "0",
+            "--anki-csv-header", json.dumps(fields),
+            "--anki-field-mapping", json.dumps(field_mapping),
+            "--output-file", str(working_tsv_path),
+            "--text1-file", str(text_file_to_pass)
+        ]
+        
+        if language == "de":
+            de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
+            de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
+            cmd.extend([
+                "--de-fix-genitive",
+                "--de-dictionary-file", str(de_dict_path),
+            ])
+            
+        kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        
+        logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
+        except subprocess.TimeoutExpired as e:
+            print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
+            sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
+            sys.exit(1)
+        finally:
+            if not save_source_text and 'temp_file' in locals():
+                try:
+                    os.remove(temp_file.name)
+                except OSError:
+                    pass
+                    
+    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+    target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
+    
+    main_text_provider = config.get('translation_providers', 'main_text_translation', fallback='combined')
+    lemmas_provider = config.get('translation_providers', 'lemmas_translation', fallback='combined')
+    
+    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+    if 'WordSourceMorphologyAI' in headers and 'morphology' not in role_fields:
+        role_fields['morphology'] = 'WordSourceMorphologyAI'
+    if 'WordSourceIPA' in headers and 'ipa' not in role_fields:
+        role_fields['ipa'] = 'WordSourceIPA'
+        
+    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
+    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields else -1
+    
+    sentence_translated = False
+    if col_sentence_dest != -1:
+        if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
+            sentence_translated = True
+            
+    if not sentence_translated:
+        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
+        col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+        for row in data_rows:
+            line_idx = 0
+            if col_index != -1 and len(row) > col_index:
+                try:
+                    line_idx = int(row[col_index]) - 1
+                except ValueError:
+                    pass
+            if col_sentence_dest != -1:
+                while len(row) <= col_sentence_dest:
+                    row.append("")
+                row[col_sentence_dest] = sentence_translations.get(line_idx, "")
+        with file_lock(working_tsv_path):
+            save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            
+    sentence_translations = {}
+    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+    for row in data_rows:
+        line_idx = 0
+        if col_index != -1 and len(row) > col_index:
+            try:
+                line_idx = int(row[col_index]) - 1
+            except ValueError:
+                pass
+        if col_sentence_dest != -1 and len(row) > col_sentence_dest:
+            sentence_translations[line_idx] = row[col_sentence_dest]
+            
+    word_translations_empty = True
+    if col_word_dest != -1:
+        if any(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows):
+            word_translations_empty = False
+            
+    if not llm_filled:
+        prompt_name = config.get('languages', f'{language}_prompt')
+        
+        if lemmas_provider == 'intellifiller':
+            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+            comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+            
+        elif lemmas_provider == 'combined':
+            if word_translations_empty:
+                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, 'combined')
+                
+                for row in data_rows:
+                    if col_lemma != -1 and len(row) > col_lemma:
+                        lemma_val = row[col_lemma]
+                        if col_word_dest != -1:
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                with file_lock(working_tsv_path):
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                    
+            run_headless_intellifiller_async(working_tsv_path, prompt_name, config, resolved_paths)
+            
+        elif lemmas_provider in ('google', 'deepl'):
+            if word_translations_empty:
+                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, lemmas_provider)
+                
+                for row in data_rows:
+                    if col_lemma != -1 and len(row) > col_lemma:
+                        lemma_val = row[col_lemma]
+                        if col_word_dest != -1:
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                with file_lock(working_tsv_path):
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                    
+    token_to_rows = {}
+    for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        
+        candidates = set()
+        for val in (lemma_val, inflected_val):
+            if val:
+                clean_val = "".join(ch for ch in val.lower() if ch.isalnum() or ch == "'")
+                if clean_val:
+                    candidates.add(clean_val)
+                parts = re.findall(r"[\w']+", val.lower())
+                if len(parts) > 1:
+                    for part in parts:
+                        clean_part = "".join(ch for ch in part if ch.isalnum() or ch == "'")
+                        if clean_part:
+                            candidates.add(clean_part)
+        for cand in candidates:
+            if cand not in token_to_rows:
+                token_to_rows[cand] = []
+            token_to_rows[cand].append(row_id)
+            
+    source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
+    
+    span_htmls = []
+    for token in source_tokens:
+        tok_text = token["text"]
+        text_escaped = tok_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        
+        if token["is_word"]:
+            lower_clean = token.get("lower_clean", "")
+            mapped_rows = token_to_rows.get(lower_clean, [])
+            
+            classes = ["word"]
+            if mapped_rows:
+                is_paired = False
+                for r_idx in mapped_rows:
+                    inf_val = data_rows[r_idx][col_inflected] if col_inflected != -1 and len(data_rows[r_idx]) > col_inflected else ""
+                    if inf_val and len(re.findall(r"[\w']+", inf_val)) > 1:
+                        is_paired = True
+                        break
+                if is_paired:
+                    classes.append("highlight-purple")
+                else:
+                    classes.append("highlight-yellow")
+            classes_str = " ".join(classes)
+            span_htmls.append(
+                f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
+                f'data-lower-clean="{lower_clean}">{text_escaped}</span>'
+            )
+        else:
+            if tok_text in ("\\N", "\\n", "\n"):
+                span_htmls.append("<br>")
+            else:
+                span_htmls.append(text_escaped)
+                
+    source_html = "".join(span_htmls)
+    
+    sentence_htmls = []
+    for idx in sorted(sentence_translations.keys()):
+        trans = sentence_translations[idx]
+        if trans:
+            sentence_htmls.append(f"<div>{trans}</div>")
+        else:
+            sentence_htmls.append("<div>&nbsp;</div>")
+    sentence_html = "".join(sentence_htmls)
+    
+    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields else -1
+    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
+    
+    table_rows = []
+    for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
+        morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
+        ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+        
+        lemma_class = "editable" if 'WordSource' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
+        trans_class = "editable" if 'WordDestination' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
+        
+        table_rows.append(
+            f'<tr data-row-id="{row_id}">'
+            f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
+            f'<td>{inflected_val}</td>'
+            f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
+            f'<td>{morph_val}</td>'
+            f'<td>{ipa_val}</td>'
+            f'</tr>'
+        )
+    table_rows_html = "\n".join(table_rows)
+    
+    token_manifest = []
+    for token in source_tokens:
+        tok_data = {
+            "text": token["text"],
+            "is_word": token["is_word"],
+            "visual_idx": token["visual_idx"]
+        }
+        if token["is_word"] and "lower_clean" in token:
+            mapped_rows = token_to_rows.get(token["lower_clean"], [])
+            if mapped_rows:
+                tok_data["row_ids"] = mapped_rows
+        token_manifest.append(tok_data)
+        
+    html_page = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+  body {{
+    font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background-color: #0d0f12;
+    color: #e3e6eb;
+    margin: 0;
+    padding: 16px;
+    font-size: 14px;
+    line-height: 1.5;
+  }}
+  .container {{
+    max-width: 100%;
+    display: flex;
+    flex-direction: column;
+    gap: 16px;
+  }}
+  .section {{
+    background: rgba(255, 255, 255, 0.03);
+    border: 1px solid rgba(255, 255, 255, 0.08);
+    border-radius: 12px;
+    padding: 16px;
+    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+  }}
+  .section-title {{
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.1em;
+    color: #8b949e;
+    margin-bottom: 8px;
+    font-weight: 600;
+  }}
+  .source-text {{
+    font-size: 16px;
+    color: #f0f6fc;
+    line-height: 1.6;
+    word-break: break-word;
+  }}
+  .source-text span.word {{
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    border-radius: 3px;
+    padding: 0 2px;
+  }}
+  .source-text span.word:hover {{
+    background-color: rgba(255, 255, 255, 0.1);
+  }}
+  .source-text span.highlight-yellow {{
+    background-color: rgba(255, 215, 0, 0.2);
+    border-bottom: 2px solid #ffd700;
+  }}
+  .source-text span.highlight-purple {{
+    background-color: rgba(147, 112, 219, 0.2);
+    border-bottom: 2px solid #9370db;
+  }}
+  .translation-text {{
+    font-size: 15px;
+    color: #c9d1d9;
+    font-style: italic;
+  }}
+  table {{
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+  }}
+  th {{
+    text-align: left;
+    padding: 10px 12px;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: #8b949e;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    font-weight: 600;
+  }}
+  td {{
+    padding: 10px 12px;
+    border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+    color: #c9d1d9;
+    vertical-align: top;
+  }}
+  tr:hover td {{
+    background: rgba(255, 255, 255, 0.02);
+  }}
+  tr.selected td {{
+    background: rgba(56, 139, 253, 0.15);
+    color: #58a6ff;
+  }}
+  .editable {{
+    cursor: pointer;
+  }}
+</style>
+</head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="section-title">Source Text</div>
+    <div class="source-text" id="source-container">
+      {source_html}
+    </div>
+  </div>
+  
+  <div class="section">
+    <div class="section-title">Translation</div>
+    <div class="translation-text" id="translation-container">
+      {sentence_html}
+    </div>
+  </div>
+  
+  <div class="section">
+    <div class="section-title">Lemmas</div>
+    <table id="lemma-table">
+      <thead>
+        <tr>
+          <th>Lemma</th>
+          <th>Inflected</th>
+          <th>Translation</th>
+          <th>Morphology</th>
+          <th>IPA</th>
+        </tr>
+      </thead>
+      <tbody>
+        {table_rows_html}
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">
+{json.dumps(token_manifest)}
+</script>
+</body>
+</html>
+"""
+    return html_page
+
 def cmd_render(args):
     logger.info("Render subcommand invoked", extra={"zid": args.zid})
-    print("RENDER SKELETON OUTPUT")
+    config, resolved_paths = load_config(args.config)
+    
+    if not args.text:
+        if not sys.stdin.isatty():
+            text = sys.stdin.read()
+        else:
+            print_structured_error("INVALID_ARGS", "No text provided to render")
+            sys.exit(1)
+    else:
+        text = args.text
+        
+    try:
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths)
+        from b64util import encode
+        print(encode(html))
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Render failed: {str(e)}")
+        sys.exit(1)
 
 def cmd_export(args):
     logger.info("Export subcommand invoked")
-    print("EXPORT SKELETON OUTPUT")
+    config, resolved_paths = load_config(args.config)
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    
+    manifest_path = Path(args.selection_manifest).resolve()
+    if not manifest_path.exists():
+        print_structured_error("INVALID_ARGS", f"Selection manifest not found: {manifest_path}")
+        sys.exit(1)
+        
+    try:
+        with open(manifest_path, 'r', encoding='utf-8') as f:
+            manifest = json.load(f)
+    except Exception as e:
+        print_structured_error("INVALID_ARGS", f"Failed to parse selection manifest: {e}")
+        sys.exit(1)
+        
+    selected_rows = manifest.get("selected_row_ids", [])
+    zid = manifest.get("zid")
+    if not zid:
+        print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
+        sys.exit(1)
+        
+    if not selected_rows:
+        logger.warning("No rows selected for export.")
+        print("Warning: No rows selected. Export skipped.")
+        sys.exit(0)
+        
+    tsv_path = find_working_tsv(results_dir, zid, args.language)
+    if not tsv_path or not tsv_path.exists():
+        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
+        sys.exit(1)
+        
+    try:
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
+        sys.exit(1)
+        
+    exported_rows = []
+    for row_id in selected_rows:
+        if 0 <= row_id < len(data_rows):
+            exported_rows.append(data_rows[row_id])
+        else:
+            logger.warning(f"Export row index {row_id} is out of bounds (total rows: {len(data_rows)})")
+            
+    if not exported_rows:
+        print("Warning: None of the selected row indices were valid.")
+        sys.exit(0)
+        
+    fav_dir = resolved_paths['favorites_output_dir']
+    fav_dir.mkdir(parents=True, exist_ok=True)
+    
+    dest_filename = f"favorites-{tsv_path.name}"
+    dest_path = fav_dir / dest_filename
+    
+    try:
+        with file_lock(dest_path):
+            save_tsv_rows_safely(dest_path, comments, headers, exported_rows)
+        logger.info(f"Exported favorites to {dest_path}")
+        
+        send_to_anki = config.getboolean('settings', 'send_to_anki_after_export', fallback=False)
+        if send_to_anki:
+            detach = config.getboolean('settings', 'detach_import_on_send', fallback=True)
+            if detach:
+                pid, log_path = run_detached_import(dest_path, config, resolved_paths, zid)
+                response = {
+                    "import_started": True,
+                    "pid": pid,
+                    "log": log_path,
+                    "tsv": str(dest_path),
+                    "note": "safe to close the window"
+                }
+                print(json.dumps(response))
+            else:
+                success, output = run_synchronous_import(dest_path, config, resolved_paths)
+                if success:
+                    print(json.dumps({"import_complete": True, "output": output}))
+                else:
+                    print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
+                    sys.exit(1)
+        else:
+            print(f"SUCCESS: Exported to {dest_path}")
+    except Exception as e:
+        print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
+        sys.exit(1)
 
 def cmd_edit_save(args):
     logger.info("Edit-save subcommand invoked", extra={"zid": args.zid})
-    print("EDIT-SAVE SKELETON OUTPUT")
+    config, resolved_paths = load_config(args.config)
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    
+    mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+    editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
+    
+    deltas_path = Path(args.deltas).resolve()
+    if not deltas_path.exists():
+        print_structured_error("INVALID_ARGS", f"Deltas file not found: {deltas_path}")
+        sys.exit(1)
+        
+    try:
+        with open(deltas_path, 'r', encoding='utf-8') as f:
+            deltas = json.load(f)
+    except Exception as e:
+        print_structured_error("INVALID_ARGS", f"Failed to parse deltas: {e}")
+        sys.exit(1)
+        
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    
+    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    tsv_path = find_working_tsv(results_dir, args.zid, lang)
+    if not tsv_path or not tsv_path.exists():
+        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {args.zid}")
+        sys.exit(1)
+        
+    try:
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to load working TSV: {e}")
+        sys.exit(1)
+        
+    for delta in deltas:
+        row_id = delta.get("row_id")
+        col_name = delta.get("column")
+        val = delta.get("value")
+        
+        if row_id is None or col_name is None or val is None:
+            print_structured_error("INVALID_ARGS", "Each delta must have 'row_id', 'column', and 'value'")
+            sys.exit(1)
+            
+        if col_name not in editable_cols:
+            print_structured_error("DESK_FAILED", f"Column '{col_name}' is not inline-editable.")
+            sys.exit(1)
+            
+        if col_name not in headers:
+            print_structured_error("DESK_FAILED", f"Column '{col_name}' not found in TSV headers.")
+            sys.exit(1)
+            
+        col_idx = headers.index(col_name)
+        if 0 <= row_id < len(data_rows):
+            data_rows[row_id][col_idx] = val
+        else:
+            print_structured_error("DESK_FAILED", f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
+            sys.exit(1)
+            
+    try:
+        with file_lock(tsv_path):
+            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        print("SUCCESS")
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to save working TSV: {e}")
+        sys.exit(1)
 
 def cmd_merge(args):
     logger.info("Merge subcommand invoked")
-    print("MERGE SKELETON OUTPUT")
+    config, resolved_paths = load_config(args.config)
+    
+    files = [Path(f).resolve() for f in args.files]
+    files.sort(key=extract_zid)
+    
+    first_headers = None
+    for f in files:
+        if not f.exists():
+            print_structured_error("INVALID_ARGS", f"File not found: {f}")
+            sys.exit(1)
+        try:
+            _, headers, _ = load_tsv_rows(f)
+            if first_headers is None:
+                first_headers = headers
+            else:
+                if headers != first_headers:
+                    print_structured_error(
+                        "MERGE_SCHEMA_MISMATCH",
+                        f"Schema mismatch in file: {f.name}. All files must share the same header."
+                    )
+                    sys.exit(1)
+        except Exception as e:
+            print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
+            sys.exit(1)
+            
+    all_comments = []
+    all_data_rows = []
+    sibling_texts = []
+    
+    for f in files:
+        comments, _, rows = load_tsv_rows(f)
+        if not all_comments:
+            all_comments = comments
+        all_data_rows.extend(rows)
+        
+        zid = extract_zid(f)
+        parent_dir = f.parent
+        txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
+        if not txt_files:
+            base_txt = f.with_suffix('.txt')
+            if base_txt.exists():
+                txt_files = [base_txt]
+        if txt_files:
+            try:
+                content = txt_files[0].read_text(encoding='utf-8')
+                sibling_texts.append(content)
+            except Exception as e:
+                logger.warning(f"Failed to read sibling text {txt_files[0]}: {e}")
+        else:
+            logger.warning(f"No sibling .txt found for {f.name}")
+            
+    dest_dir = files[0].parent
+    
+    if args.target == "new":
+        timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
+        lang = "en"
+        lang_match = re.search(r'\.([a-z]{2})\.tsv$', files[0].name)
+        if lang_match:
+            lang = lang_match.group(1)
+        dest_tsv_path = dest_dir / f"{timestamp_id}-merged.{lang}.tsv"
+        dest_txt_path = dest_dir / f"{timestamp_id}-merged.txt"
+    elif args.target == "first":
+        dest_tsv_path = files[0]
+        zid = extract_zid(files[0])
+        txt_files = list(files[0].parent.glob(f"{zid}-*.txt"))
+        if txt_files:
+            dest_txt_path = txt_files[0]
+        else:
+            dest_txt_path = files[0].with_suffix('.txt')
+    else:
+        dest_tsv_path = Path(args.target).resolve()
+        zid = extract_zid(dest_tsv_path)
+        txt_files = list(dest_tsv_path.parent.glob(f"{zid}-*.txt"))
+        if txt_files:
+            dest_txt_path = txt_files[0]
+        else:
+            dest_txt_path = dest_tsv_path.with_suffix('.txt')
+            
+    merged_text = "\n\n".join(sibling_texts)
+    
+    try:
+        with file_lock(dest_tsv_path):
+            save_tsv_rows_safely(dest_tsv_path, all_comments, first_headers, all_data_rows)
+            
+        if dest_txt_path:
+            with file_lock(dest_txt_path):
+                temp_txt = dest_txt_path.with_suffix('.txt.tmp')
+                bak_txt = dest_txt_path.with_suffix('.txt.bak')
+                try:
+                    temp_txt.write_text(merged_text, encoding='utf-8')
+                    if dest_txt_path.exists():
+                        if bak_txt.exists():
+                            os.remove(bak_txt)
+                        os.rename(dest_txt_path, bak_txt)
+                    try:
+                        os.rename(temp_txt, dest_txt_path)
+                    except Exception as e:
+                        if bak_txt.exists():
+                            os.rename(bak_txt, dest_txt_path)
+                        raise e
+                    if bak_txt.exists():
+                        try:
+                            os.remove(bak_txt)
+                        except OSError:
+                            pass
+                except Exception as e:
+                    if temp_txt.exists():
+                        try:
+                            os.remove(temp_txt)
+                        except OSError:
+                            pass
+                    raise e
+                    
+        delete_sources = config.getboolean('settings', 'merge_delete_sources', fallback=False)
+        if delete_sources:
+            for f in files:
+                if f == dest_tsv_path:
+                    continue
+                try:
+                    os.remove(f)
+                    zid = extract_zid(f)
+                    for t_file in f.parent.glob(f"{zid}-*.txt"):
+                        if t_file != dest_txt_path:
+                            os.remove(t_file)
+                except Exception as e:
+                    logger.warning(f"Failed to delete merged source {f.name}: {e}")
+                    
+        print(f"SUCCESS: Merged TSV: {dest_tsv_path}, Merged TXT: {dest_txt_path}")
+    except Exception as e:
+        print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
+        sys.exit(1)
 
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")
-    print("RESTORE SKELETON OUTPUT")
+    config, resolved_paths = load_config(args.config)
+    
+    input_path = Path(args.file).resolve()
+    if not input_path.exists():
+        print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
+        sys.exit(1)
+        
+    zid = extract_zid(input_path)
+    parent_dir = input_path.parent
+    
+    tsv_path = None
+    txt_path = None
+    warnings = []
+    
+    if input_path.suffix == '.tsv':
+        tsv_path = input_path
+        txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
+        if txt_files:
+            txt_path = txt_files[0]
+        else:
+            txt_path = input_path.with_suffix('.txt')
+            if not txt_path.exists():
+                txt_path = None
+                warnings.append("Sibling source text file not found.")
+    else:
+        txt_path = input_path
+        tsv_files = list(parent_dir.glob(f"{zid}-*.tsv"))
+        if tsv_files:
+            tsv_path = tsv_files[0]
+        else:
+            lang = config.get('settings', 'default_language', fallback='en')
+            matches = list(parent_dir.glob(f"{zid}-*.tsv"))
+            if matches:
+                tsv_path = matches[0]
+            else:
+                tsv_path = input_path.with_suffix('.tsv')
+                if not tsv_path.exists():
+                    tsv_path = None
+                    warnings.append("Sibling TSV file not found.")
+                    
+    source_text = ""
+    if txt_path and txt_path.exists():
+        try:
+            source_text = txt_path.read_text(encoding='utf-8')
+        except Exception as e:
+            warnings.append(f"Failed to read source text: {e}")
+            
+    headers = []
+    data_rows = []
+    if tsv_path and tsv_path.exists():
+        try:
+            _, headers, data_rows = load_tsv_rows(tsv_path)
+        except Exception as e:
+            warnings.append(f"Failed to read TSV: {e}")
+            
+    payload = {
+        "source_text": source_text,
+        "headers": headers,
+        "data_rows": data_rows,
+        "warnings": warnings,
+        "tsv_path": str(tsv_path) if tsv_path else "",
+        "txt_path": str(txt_path) if txt_path else ""
+    }
+    
+    from b64util import encode
+    response_str = json.dumps(payload)
+    print(encode(response_str))
 
 def cmd_desk(args):
     logger.info("Desk subcommand invoked")
-    print("DESK SKELETON OUTPUT")
+    config, resolved_paths = load_config(args.config)
+    
+    file_path = Path(args.file).resolve()
+    if not file_path.exists():
+        print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
+        sys.exit(1)
+        
+    try:
+        text = file_path.read_text(encoding='utf-8')
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to read file: {e}")
+        sys.exit(1)
+        
+    lang = args.language
+    if not lang:
+        lang_match = re.search(r'\.([a-z]{2})\.(txt|srt)$', file_path.name)
+        if lang_match:
+            lang = lang_match.group(1)
+        else:
+            lang = config.get('settings', 'default_language', fallback='en')
+            
+    timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
+    
+    try:
+        html = run_render_flow(text, lang, timestamp_id, args.text_mode, config, resolved_paths)
+        from b64util import encode
+        print(encode(html))
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Desk flow failed: {str(e)}")
+        sys.exit(1)
 
 def main():
     parser = argparse.ArgumentParser(description="Kardenwort Desk Orchestration Core")
@@ -187,7 +1403,7 @@ def main():
     try:
         commands[args.command](args)
     except Exception as e:
-        print_structured_error("COMMAND_FAILED", str(e))
+        print_structured_error("DESK_FAILED", str(e))
         sys.exit(1)
 
 if __name__ == "__main__":
