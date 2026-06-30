@@ -1029,16 +1029,24 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                     }
                     
                     if (!e.ctrlKey) {
-                        clearAllSelections();
-                        if (!allSelected) {
+                        if (allSelected) {
+                            clearAllSelections();
+                        } else {
+                            clearAllSelections();
                             for (var j = 0; j < tokenData.row_ids.length; j++) {
-                                toggleRowSelection(tokenData.row_ids[j], true);
+                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
                             }
+                            updateRowStyles();
                         }
                     } else {
                         for (var j = 0; j < tokenData.row_ids.length; j++) {
-                            toggleRowSelection(tokenData.row_ids[j], !allSelected);
+                            if (allSelected) {
+                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
+                            } else {
+                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
+                            }
                         }
+                        updateRowStyles();
                     }
                     
                     updateBidirectionalHighlights();
@@ -1089,8 +1097,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         for (var k in selectedRowIdsMap) {
                             if (selectedRowIdsMap.hasOwnProperty(k)) numSelected++;
                         }
-                        selectedRowIdsMap = {};
-                        if (!wasSelected || numSelected > 1) {
+                        if (wasSelected && numSelected === 1) {
+                            selectedRowIdsMap = {};
+                        } else {
+                            selectedRowIdsMap = {};
                             selectedRowIdsMap[rowIdStr] = true;
                         }
                         lastClickedRowId = rowId;
@@ -1121,6 +1131,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             if (activeEl && activeEl.tagName === 'INPUT') return;
             
             var keyCode = e.keyCode;
+            if (keyCode === 27) { // Escape key
+                clearAllSelections();
+                updateBidirectionalHighlights();
+                notifyAHKSelection();
+                return;
+            }
             if (keyCode === 40 || keyCode === 38) { // ArrowDown or ArrowUp
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (tableRows.length === 0) return;
@@ -1170,6 +1186,27 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             }
         });
         
+        addEvent(document, 'click', function(e) {
+            e = e || window.event;
+            var target = e.target || e.srcElement;
+            
+            var isTable = false;
+            var curr = target;
+            while (curr) {
+                if (curr.id === 'lemma-table' || (curr.className && curr.className.indexOf('word') !== -1)) {
+                    isTable = true;
+                    break;
+                }
+                curr = curr.parentNode;
+            }
+            
+            if (!isTable) {
+                clearAllSelections();
+                updateBidirectionalHighlights();
+                notifyAHKSelection();
+            }
+        });
+        
         function clearAllSelections() {
             selectedRowIdsMap = {};
             lastClickedRowId = null;
@@ -1195,9 +1232,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
                 if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
-                    row.className = row.className.replace(/\bselected\b/g, '') + ' selected';
+                    if (row.className.indexOf('selected') === -1) {
+                        row.className += ' selected';
+                    }
                 } else {
-                    row.className = row.className.replace(/\bselected\b/g, '');
+                    row.className = row.className.replace(/selected/g, '').replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '');
                 }
             }
         }
@@ -1218,7 +1257,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         function updateBidirectionalHighlights() {
             for (var i = 0; i < tokenSpans.length; i++) {
                 var span = tokenSpans[i];
-                span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '').replace(/\bhighlight-purple-active\b/g, '');
+                span.className = span.className.replace(/highlight-yellow-active/g, '')
+                                               .replace(/highlight-purple-active/g, '')
+                                               .replace(/\\s+/g, ' ')
+                                               .replace(/^\\s+|\\s+$/g, '');
             }
             
             for (var rId in selectedRowIdsMap) {
@@ -1236,9 +1278,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                         }
                         if (span) {
                             if (span.className.indexOf('highlight-purple') !== -1) {
-                                span.className = span.className.replace(/\bhighlight-purple-active\b/g, '') + ' highlight-purple-active';
-                            } else {
-                                span.className = span.className.replace(/\bhighlight-yellow-active\b/g, '') + ' highlight-yellow-active';
+                                if (span.className.indexOf('highlight-purple-active') === -1) {
+                                    span.className += ' highlight-purple-active';
+                                }
+                            } else if (span.className.indexOf('highlight-yellow') !== -1) {
+                                if (span.className.indexOf('highlight-yellow-active') === -1) {
+                                    span.className += ' highlight-yellow-active';
+                                }
                             }
                         }
                     }
