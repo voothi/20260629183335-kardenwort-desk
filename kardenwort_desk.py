@@ -2129,7 +2129,14 @@ def cmd_export(args):
         print("Warning: No rows selected. Export skipped.")
         sys.exit(0)
         
-    tsv_path = find_working_tsv(results_dir, zid, args.language)
+    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    
+    tsv_path_str = manifest.get("tsv_path")
+    if tsv_path_str:
+        tsv_path = Path(tsv_path_str)
+    else:
+        tsv_path = find_working_tsv(results_dir, zid, lang)
+        
     if not tsv_path or not tsv_path.exists():
         print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
         sys.exit(1)
@@ -2221,7 +2228,13 @@ def cmd_reprocess(args):
         sys.exit(0)
         
     lang = args.language or config.get('settings', 'default_language', fallback='en')
-    tsv_path = find_working_tsv(results_dir, zid, lang)
+    
+    tsv_path_str = manifest.get("tsv_path")
+    if tsv_path_str:
+        tsv_path = Path(tsv_path_str)
+    else:
+        tsv_path = find_working_tsv(results_dir, zid, lang)
+        
     if not tsv_path or not tsv_path.exists():
         print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
         sys.exit(1)
@@ -2292,7 +2305,12 @@ def cmd_edit_save(args):
     results_dir = (kardenwort_workspace / results_dir_name).resolve()
     
     lang = args.language or config.get('settings', 'default_language', fallback='en')
-    tsv_path = find_working_tsv(results_dir, args.zid, lang)
+    
+    if hasattr(args, 'tsv') and args.tsv:
+        tsv_path = Path(args.tsv)
+    else:
+        tsv_path = find_working_tsv(results_dir, args.zid, lang)
+        
     if not tsv_path or not tsv_path.exists():
         print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {args.zid}")
         sys.exit(1)
@@ -2690,6 +2708,7 @@ def main():
     p_edit.add_argument("--deltas", required=True, help="Deltas JSON file path")
     p_edit.add_argument("--zid", required=True, help="Session ZID")
     p_edit.add_argument("--language", help="Language code")
+    p_edit.add_argument("--tsv", help="Explicit TSV path")
 
     # merge
     p_merge = subparsers.add_parser("merge")
