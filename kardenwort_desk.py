@@ -1777,7 +1777,8 @@ def cmd_restore(args):
     logger.info("Restore subcommand invoked")
     config, resolved_paths = load_config(args.config)
     
-    input_path = Path(args.file).resolve()
+    file_val = args.file[0] if isinstance(args.file, list) else args.file
+    input_path = Path(file_val).resolve()
     if not input_path.exists():
         print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
         sys.exit(1)
@@ -1851,7 +1852,8 @@ def cmd_desk(args):
     logger.info("Desk subcommand invoked")
     config, resolved_paths = load_config(args.config)
     
-    file_path = Path(args.file).resolve()
+    file_val = args.file[0] if isinstance(args.file, list) else args.file
+    file_path = Path(file_val).resolve()
     if not file_path.exists():
         print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
         sys.exit(1)
@@ -1917,12 +1919,12 @@ def main():
 
     # restore
     p_restore = subparsers.add_parser("restore")
-    p_restore.add_argument("--file", required=True, help="Session file to restore")
+    p_restore.add_argument("--file", nargs="+", required=True, help="Session file to restore")
     p_restore.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
 
     # desk
     p_desk = subparsers.add_parser("desk")
-    p_desk.add_argument("--file", required=True, help="Text file to analyze")
+    p_desk.add_argument("--file", nargs="+", required=True, help="Text file to analyze")
     p_desk.add_argument("--text-mode", choices=["single", "multi"], default="multi")
     p_desk.add_argument("--language", help="Language code")
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
