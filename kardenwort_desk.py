@@ -802,13 +802,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         
         lemma_class = "editable" if 'WordSource' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         trans_class = "editable" if 'WordDestination' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
+        inflected_class = "editable" if 'WordSourceInflectedForm' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
         row_highlight_class = "highlight-purple" if row_id in paired_rows else "highlight-orange"
         
         table_rows.append(
             f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
             f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
-            f'<td>{inflected_val}</td>'
+            f'<td class="{inflected_class}" data-col="WordSourceInflectedForm">{inflected_val}</td>'
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{morph_val}</td>'
             f'<td>{ipa_val}</td>'
