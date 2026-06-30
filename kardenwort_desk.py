@@ -1441,6 +1441,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             return JSON.stringify(getSelectedRowsArray());
         };
         
+        window.setSelectedRows = function(rowsJsonStr) {
+            selectedRowIdsMap = {};
+            try {
+                var arr = JSON.parse(rowsJsonStr);
+                for (var k = 0; k < arr.length; k++) {
+                    selectedRowIdsMap[String(arr[k])] = true;
+                }
+            } catch(e) {}
+            updateRowStyles();
+            updateBidirectionalHighlights();
+        };
+        
         window.getDeltas = function() {
             return JSON.stringify(deltas);
         };
