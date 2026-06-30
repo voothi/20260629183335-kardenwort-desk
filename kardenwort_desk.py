@@ -1120,6 +1120,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         var lastClickedRowId = null;
         var focusedRowId = null;
         var deltas = [];
+        var historyStack = [];
+        var historyIndex = -1;
         var touchedCells = {};
         var lastClickedCell = null;
         var lastHoveredCell = null;
@@ -1490,6 +1492,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             if (activeEl && activeEl.tagName === 'INPUT') return;
             
             var keyCode = e.keyCode;
+            if (e.ctrlKey && keyCode === 90) { // Ctrl+Z
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                if (window.undo) window.undo();
+                return;
+            } else if (e.ctrlKey && keyCode === 89) { // Ctrl+Y
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                if (window.redo) window.redo();
+                return;
+            }
             if (keyCode === 27) { // Escape key
                 clearAllSelections();
                 updateBidirectionalHighlights();
@@ -1717,30 +1728,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 var newValue = input.value;
                 cell.innerHTML = '';
                 cell.appendChild(document.createTextNode(newValue));
-                cell.className = cell.className.replace(/\\s*editing\\b/g, '');
+                cell.className = cell.className.replace(/\s*editing\b/g, '');
                 window.cancelActiveEdit = null;
                 if (newValue !== originalValue) {
-                    var existingIndex = -1;
-                    for (var k = 0; k < deltas.length; k++) {
-                        if (deltas[k].row_id === parseInt(rowId) && deltas[k].column === colName) {
-                            existingIndex = k;
-                            break;
-                        }
-                    }
-                    if (existingIndex !== -1) {
-                        deltas[existingIndex].value = newValue;
-                    } else {
-                        deltas.push({
-                            row_id: parseInt(rowId),
-                            column: colName,
-                            value: newValue
-                        });
-                    }
-                    cell.className = cell.className.replace(/\\bdirty\\b/g, '') + ' dirty';
+                    var action = {
+                        type: 'edit',
+                        rowId: parseInt(rowId),
+                        column: colName,
+                        oldValue: originalValue,
+                        newValue: newValue,
+                        cell: cell
+                    };
+                    pushHistory(action);
+                    rebuildDeltas();
                     touchedCells[rowId + '_' + colName] = true;
-                    if (window.ahkCall) {
-                        window.ahkCall('dirty', 'true');
-                    }
                 }
             }
             window.commitActiveEdit = commit;
@@ -1807,38 +1808,141 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         window.deleteSelectedRows = function() {
             var selected = getSelectedRowsArray();
             if (selected.length === 0) return;
-            for (var k = 0; k < selected.length; k++) {
-                var rowId = selected[k];
-                deltas.push({
-                    row_id: rowId,
-                    column: '_delete',
-                    value: true
-                });
-                for (var i = 0; i < tableRows.length; i++) {
-                    if (parseInt(tableRows[i].getAttribute('data-row-id')) === rowId) {
-                        tableRows[i].style.display = 'none';
-                        break;
+            var action = {
+                type: 'delete',
+                rowIds: selected
+            };
+            pushHistory(action);
+            applyAction(action);
+            rebuildDeltas();
+        };
+        
+        function pushHistory(action) {
+            historyStack.splice(historyIndex + 1);
+            historyStack.push(action);
+            historyIndex++;
+        }
+        
+        function applyAction(action) {
+            if (action.type === 'edit') {
+                action.cell.innerHTML = '';
+                action.cell.appendChild(document.createTextNode(action.newValue));
+            } else if (action.type === 'delete') {
+                for (var j = 0; j < action.rowIds.length; j++) {
+                    var rId = action.rowIds[j];
+                    for (var i = 0; i < tableRows.length; i++) {
+                        if (parseInt(tableRows[i].getAttribute('data-row-id')) === rId) {
+                            tableRows[i].style.display = 'none';
+                            break;
+                        }
+                    }
+                }
+                clearAllSelections();
+            }
+        }
+        
+        function revertAction(action) {
+            if (action.type === 'edit') {
+                action.cell.innerHTML = '';
+                action.cell.appendChild(document.createTextNode(action.oldValue));
+            } else if (action.type === 'delete') {
+                for (var j = 0; j < action.rowIds.length; j++) {
+                    var rId = action.rowIds[j];
+                    for (var i = 0; i < tableRows.length; i++) {
+                        if (parseInt(tableRows[i].getAttribute('data-row-id')) === rId) {
+                            tableRows[i].style.display = '';
+                            break;
+                        }
                     }
                 }
             }
-            clearAllSelections();
-            if (window.ahkCall) {
-                window.ahkCall('dirty', 'true');
-            }
+        }
+        
+        window.undo = function() {
+            if (historyIndex < 0) return;
+            var action = historyStack[historyIndex];
+            historyIndex--;
+            revertAction(action);
+            rebuildDeltas();
         };
         
-        window.getDeltas = function() {
-            return JSON.stringify(deltas);
+        window.redo = function() {
+            if (historyIndex >= historyStack.length - 1) return;
+            historyIndex++;
+            var action = historyStack[historyIndex];
+            applyAction(action);
+            rebuildDeltas();
         };
         
-        window.clearDirty = function() {
+        function rebuildDeltas() {
+            deltas = [];
             var tds = document.getElementsByTagName('td');
             for (var k = 0; k < tds.length; k++) {
                 if (tds[k].className.indexOf('dirty') !== -1) {
                     tds[k].className = tds[k].className.replace(/\bdirty\b/g, '');
                 }
             }
+            
+            for (var i = 0; i <= historyIndex; i++) {
+                var action = historyStack[i];
+                if (action.type === 'edit') {
+                    var found = false;
+                    for (var k = 0; k < deltas.length; k++) {
+                        if (deltas[k].row_id === action.rowId && deltas[k].column === action.column) {
+                            deltas[k].value = action.newValue;
+                            found = true;
+                            break;
+                        }
+                    }
+                    if (!found) {
+                        deltas.push({ row_id: action.rowId, column: action.column, value: action.newValue });
+                    }
+                } else if (action.type === 'delete') {
+                    for (var j = 0; j < action.rowIds.length; j++) {
+                        deltas.push({ row_id: action.rowIds[j], column: '_delete', value: true });
+                    }
+                }
+            }
+            
+            for (var k = 0; k < deltas.length; k++) {
+                var d = deltas[k];
+                if (d.column !== '_delete') {
+                    for (var j = 0; j < tableRows.length; j++) {
+                        if (parseInt(tableRows[j].getAttribute('data-row-id')) === d.row_id) {
+                            var tdst = tableRows[j].getElementsByTagName('td');
+                            for (var m = 0; m < tdst.length; m++) {
+                                if (tdst[m].getAttribute('data-col') === d.column) {
+                                    if (tdst[m].className.indexOf('dirty') === -1) {
+                                        tdst[m].className += ' dirty';
+                                    }
+                                    break;
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+            
+            if (window.ahkCall) {
+                window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
+            }
+        }
+        
+        window.getDeltas = function() {
+            return JSON.stringify(deltas);
+        };
+        
+        window.clearDirty = function() {
+            historyStack = [];
+            historyIndex = -1;
             deltas = [];
+            var tds = document.getElementsByTagName('td');
+            for (var k = 0; k < tds.length; k++) {
+                if (tds[k].className.indexOf('dirty') !== -1) {
+                    tds[k].className = tds[k].className.replace(/\bdirty\b/g, '');
+                }
+            }
             if (window.ahkCall) {
                 window.ahkCall('dirty', 'false');
             }
