@@ -808,6 +808,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             "visual_idx": token["visual_idx"]
         }
         if token["is_word"] and "lower_clean" in token:
+            tok_data["lower_clean"] = token["lower_clean"]
             mapped_rows = token_to_rows.get(token["lower_clean"], [])
             if mapped_rows:
                 tok_data["row_ids"] = mapped_rows
