@@ -1186,6 +1186,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             updateRowStyles();
         }
         
+        window.clearAllSelectionsAndNotify = function() {
+            clearAllSelections();
+            updateBidirectionalHighlights();
+            notifyAHKSelection();
+        };
+        
         function toggleRowSelection(rowId, forceState) {
             var rIdStr = String(rowId);
             if (forceState) {
