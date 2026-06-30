@@ -803,6 +803,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     padding: 16px;
     font-size: 14px;
     line-height: 1.5;
+    zoom: {zoom_level};
   }
   .container {
     max-width: 100%;
@@ -1343,6 +1344,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
 </body>
 </html>
 """
+    zoom_level = config.get('settings', 'default_zoom', fallback='150%')
+    if zoom_level.isdigit():
+        zoom_level = f"{zoom_level}%"
+    html_page = html_page.replace("{zoom_level}", zoom_level)
     html_page = html_page.replace("{source_html}", source_html)
     html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{table_rows_html}", table_rows_html)
