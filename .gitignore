@@ -17,3 +17,9 @@ openspec/
 AGENTS.md
 .kilocode/
 .pytest_cache/
+
+# Local artifacts and outputs
+favorites/
+*.tmp
+*.bak
+*.log

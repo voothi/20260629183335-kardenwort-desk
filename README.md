@@ -27,9 +27,11 @@ The orchestration logic — tokenizer, TSV, providers, merge, edit-race
 prevention — is written once here and never rewritten. Porting to Linux/Mac
 reuses this core unchanged (same stdlib); porting to mobile/web wraps the same
 module in an HTTP entrypoint. Only the frontend shim (hotkey/intent capture +
-HTML rendering) is rewritten per platform. Global hotkeys are inherently
-per-platform (AHK on Windows; AutoKey/Hammerspoon on Linux/Mac; share-sheet on
-mobile) — that non-portability is absorbed in the thin frontend, not here.
+HTML rendering) is rewritten per platform.
+
+For command line transport, multi-line payloads (like render mode's HTML output)
+are Base64-encoded to avoid shell quoting and UTF-8 encoding issues. This uses the
+Base64 transport helper [b64util.py](file:///U:/voothi/20260629183335-kardenwort-desk/b64util.py) on the backend and [Lib/B64Util.ahk](file:///U:/voothi/20240411110510-autohotkey/Lib/B64Util.ahk) on the frontend (mirroring `ftca`'s `s_b64` pattern).
 
 ## CLI contract (called by the AHK shell / SendTo)
 
@@ -222,3 +224,33 @@ a `.txt` or `.tsv` file, finds its sibling (same ZID prefix, other extension),
 and reconstitutes the desk window's working state (source text + lemma table +
 translations + edit state) for continued work. If the sibling file is missing,
 it opens with what's available and warns.
+
+## Integration Contracts & Formats
+
+### 1. Desk Core ↔ Headless IntelliFiller Contract (Task 2.2)
+Headless IntelliFiller is executed as:
+```bash
+python <intellifiller_headless> --tsv <tsv_path> --prompt <prompt_name>
+```
+- **Inputs**: A word TSV containing vocabulary at `<tsv_path>` and the prompt name (e.g. `English Vocabulary Analysis and Translation JSON`).
+- **Outputs**: Headless IntelliFiller updates the columns (e.g. `WordSourceMorphologyAI`, `WordSourceIPA`, `WordDestination`) in-place.
+
+### 2. Desk Core ↔ Kardenwort Invocation (Task 2.3)
+`kardenwort.py` is invoked as:
+```bash
+python <kardenwort_workspace>/src/kardenwort/core/kardenwort.py --type word --stdout-format html --text <text> --lemma-index-file <lemma_index> --lemma-override-file <lemma_override> --sentence-context-size 0
+```
+- **Inputs**: Selected text, target language index and overrides.
+- **Outputs**:
+  - HTML content printed to stdout (containing lemmatized spans).
+  - A TSV file (`<ZID>-<slug>.<lang>.tsv`) and optional JSON metadata produced via `--output-file`.
+
+### 3. Selection Manifest format (Task 2.4)
+For exporting favorites, the frontend creates a JSON file containing the selected row indices/lemma mappings:
+```json
+{
+  "tsv_path": "U:/voothi/...",
+  "selected_lemma_ids": ["lemma1", "lemma2"]
+}
+```
+The desk core reads this manifest, extracts the matching lines from the session's working TSV, and outputs a subset TSV into the favorites directory.
