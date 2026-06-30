@@ -860,11 +860,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     -moz-box-sizing: border-box;
     box-sizing: border-box;
   }
-  html {
-    overflow: hidden;
-    width: 100%;
-    height: 100%;
-  }
   body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background-color: #0d0f12;
@@ -874,10 +869,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     font-size: 14px;
     line-height: 1.5;
     zoom: {zoom_level};
-    overflow-y: auto;
-    overflow-x: hidden;
-    width: 100%;
-    height: 100%;
   }
   .container {
     width: 100%;
@@ -1032,7 +1023,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   
   <div class="section">
     <div class="section-title">Lemmas</div>
-    <div style="overflow-x: auto; width: 100%;">
     <table id="lemma-table">
       <thead>
         <tr>
@@ -1048,7 +1038,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         {table_rows_html}
       </tbody>
     </table>
-    </div>
   </div>
 </div>
 <script id="token-map" type="application/json">
@@ -1810,6 +1799,28 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
             } catch(e) {}
         };
     }
+
+    // Shift+Wheel or Alt+Wheel → horizontal scroll
+    addEvent(document, 'mousewheel', function(e) {
+        e = e || window.event;
+        if (e.shiftKey || e.altKey) {
+            var delta = e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0);
+            var scrollEl = document.documentElement || document.body;
+            scrollEl.scrollLeft += delta;
+            if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+            return false;
+        }
+    });
+    addEvent(document, 'DOMMouseScroll', function(e) {
+        e = e || window.event;
+        if (e.shiftKey || e.altKey) {
+            var delta = e.detail ? e.detail * 40 : 0;
+            var scrollEl = document.documentElement || document.body;
+            scrollEl.scrollLeft += delta;
+            if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+            return false;
+        }
+    });
 
     if (window.addEventListener) {
         window.addEventListener('load', init, false);
