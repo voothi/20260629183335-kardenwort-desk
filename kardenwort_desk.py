@@ -1130,6 +1130,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         var tokenDragStartIdx = -1;
         var initialSelectedMap = null;
         var mousedownTargetSpan = null;
+        var isRmbDragFlipping = false;
+        var rmbFlipMode = true;
         
         var tokenMap = [];
         try {
@@ -1147,6 +1149,24 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
         }
         
+        
+        function flipWord(span, toTranslation) {
+            if (!span.getAttribute('data-original-text')) {
+                span.setAttribute('data-original-text', span.textContent || span.innerText || "");
+            }
+            var isFlipped = span.classList.contains('flipped');
+            if (toTranslation && !isFlipped) {
+                var trans = getWordTranslation(span);
+                if (trans) {
+                    span.classList.add('flipped');
+                    span.textContent = trans;
+                }
+            } else if (!toTranslation && isFlipped) {
+                span.classList.remove('flipped');
+                span.textContent = span.getAttribute('data-original-text');
+            }
+        }
+
         function findTokenData(lowerClean) {
             for (var i = 0; i < tokenMap.length; i++) {
                 var t = tokenMap[i];
@@ -1194,7 +1214,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 addEvent(span, 'mousedown', function(e) {
                     e = e || window.event;
                     
-                    if (e.button === 0 || e.button === 2) { // LMB or RMB
+                    if (e.button === 0) { // LMB
                         var lowerClean = span.getAttribute('data-lower-clean');
                         var tokenData = findTokenData(lowerClean);
                         if (!tokenData || !tokenData.row_ids) return;
@@ -1243,13 +1263,26 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         } else {
                             e.returnValue = false;
                         }
+                    } else if (e.button === 2) { // RMB
+                        isRmbDragFlipping = true;
+                        dragOccurred = false;
+                        mousedownTargetSpan = span;
+                        
+                        rmbFlipMode = !span.classList.contains('flipped');
+                        flipWord(span, rmbFlipMode);
+                        
+                        if (e.preventDefault) {
+                            e.preventDefault();
+                        } else {
+                            e.returnValue = false;
+                        }
                     }
                 });
                 
                 addEvent(span, 'mouseover', function(e) {
                     e = e || window.event;
                     if (isTokenDragSelecting) {
-                        if (e.buttons !== undefined && (e.buttons & 3) === 0) {
+                        if (e.buttons !== undefined && (e.buttons & 1) === 0) {
                             isTokenDragSelecting = false;
                             notifyAHKSelection();
                             return;
@@ -1291,6 +1324,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         }
                         updateRowStyles();
                         updateBidirectionalHighlights();
+                    } else if (isRmbDragFlipping) {
+                        if (e.buttons !== undefined && (e.buttons & 2) === 0) {
+                            isRmbDragFlipping = false;
+                            return;
+                        }
+                        dragOccurred = true;
+                        flipWord(span, rmbFlipMode);
                     }
                 });
             })(tokenSpans[i]);
