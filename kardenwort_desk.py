@@ -893,7 +893,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     padding: 16px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     width: 100%;
-    overflow: hidden;
   }
   .section-title {
     font-size: 11px;
@@ -1030,6 +1029,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   
   <div class="section">
     <div class="section-title">Lemmas</div>
+    <div style="overflow-x: auto;">
     <table id="lemma-table">
       <thead>
         <tr>
@@ -1045,6 +1045,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         {table_rows_html}
       </tbody>
     </table>
+    </div>
   </div>
 </div>
 <script id="token-map" type="application/json">
