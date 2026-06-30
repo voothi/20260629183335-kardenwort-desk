@@ -952,6 +952,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
   }
   #lemma-table th:nth-child(1), #lemma-table td:nth-child(1),
   #lemma-table th:nth-child(2), #lemma-table td:nth-child(2),
+  #lemma-table th:nth-child(4), #lemma-table td:nth-child(4),
   #lemma-table th:nth-child(5), #lemma-table td:nth-child(5) {
     width: 1%;
     white-space: nowrap;
