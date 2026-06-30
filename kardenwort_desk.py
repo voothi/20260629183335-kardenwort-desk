@@ -879,10 +879,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     color: #0d0f12;
     text-decoration: none;
   }
+  .source-text span.word.highlight-yellow-active:hover {
+    background-color: #e6c200;
+    color: #0d0f12;
+  }
   .source-text span.highlight-purple-active {
     background-color: #9370db;
     color: #ffffff;
     text-decoration: none;
+  }
+  .source-text span.word.highlight-purple-active:hover {
+    background-color: #7b59c4;
+    color: #ffffff;
   }
   .translation-text {
     font-size: 15px;
