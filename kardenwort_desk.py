@@ -951,23 +951,25 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
   .source-text span.highlight-purple {
   }
-  .source-text span.highlight-orange-active {
-    background-color: {highlight_orange_active_bg};
-    color: {highlight_orange_active_text};
+  .source-text span.word.highlight-orange-active {
+    background-color: {highlight_orange_active_bg} !important;
+    color: {highlight_orange_active_text} !important;
     text-decoration: none;
+    border-color: {highlight_orange_active_text} !important;
   }
   .source-text span.word.highlight-orange-active:hover {
-    background-color: {highlight_orange_active_hover_bg};
-    color: {highlight_orange_active_text};
+    background-color: {highlight_orange_active_hover_bg} !important;
+    color: {highlight_orange_active_text} !important;
   }
-  .source-text span.highlight-purple-active {
-    background-color: {highlight_purple_active_bg};
-    color: {highlight_purple_active_text};
+  .source-text span.word.highlight-purple-active {
+    background-color: {highlight_purple_active_bg} !important;
+    color: {highlight_purple_active_text} !important;
     text-decoration: none;
+    border-color: {highlight_purple_active_text} !important;
   }
   .source-text span.word.highlight-purple-active:hover {
-    background-color: {highlight_purple_active_hover_bg};
-    color: {highlight_purple_active_text};
+    background-color: {highlight_purple_active_hover_bg} !important;
+    color: {highlight_purple_active_text} !important;
   }
   .translation-text {
     font-size: 15px;
