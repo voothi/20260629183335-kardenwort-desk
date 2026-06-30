@@ -828,7 +828,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{ipa_val}</td>'
-            f'<td>{morph_val}</td>'
+            f'<td><div class="scrollable-cell">{morph_val}</div></td>'
             f'</tr>'
         )
     table_rows_html = "\n".join(table_rows)
@@ -964,6 +964,70 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   #lemma-table th:last-child, #lemma-table td:last-child {
     width: auto;
     padding-right: 12px;
+  }
+  .scrollable-cell {
+    width: 100%;
+    box-sizing: border-box;
+  }
+  .scrollable-cell::-webkit-scrollbar {
+    height: 4px;
+  }
+  .scrollable-cell::-webkit-scrollbar-track {
+    background: rgba(255, 255, 255, 0.03);
+  }
+  .scrollable-cell::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.15);
+    border-radius: 2px;
+  }
+  .scrollable-cell::-webkit-scrollbar-thumb:hover {
+    background: rgba(255, 255, 255, 0.3);
+  }
+
+  /* When the window is NOT maximized (normally sized) */
+  body:not(.maximized) {
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+  body:not(.maximized) .container {
+    display: block;
+    width: 100%;
+    max-width: 100%;
+  }
+  body:not(.maximized) .section {
+    max-width: 100%;
+  }
+  body:not(.maximized) #lemma-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+  body:not(.maximized) #lemma-table th, 
+  body:not(.maximized) #lemma-table td {
+    width: auto;
+    white-space: normal;
+    overflow-wrap: break-word;
+    word-break: break-word;
+    padding-right: 12px;
+  }
+  body:not(.maximized) #lemma-table th:nth-child(1),
+  body:not(.maximized) #lemma-table td:nth-child(1) { width: 20%; } /* Inflected */
+  body:not(.maximized) #lemma-table th:nth-child(2),
+  body:not(.maximized) #lemma-table td:nth-child(2) { width: 20%; } /* Lemma */
+  body:not(.maximized) #lemma-table th:nth-child(3),
+  body:not(.maximized) #lemma-table td:nth-child(3) { width: 30%; } /* Translation */
+  body:not(.maximized) #lemma-table th:nth-child(4),
+  body:not(.maximized) #lemma-table td:nth-child(4) { width: 15%; } /* IPA */
+  body:not(.maximized) #lemma-table th:nth-child(5),
+  body:not(.maximized) #lemma-table td:nth-child(5) { width: 15%; } /* Morphology */
+
+  body:not(.maximized) .scrollable-cell {
+    overflow-x: auto;
+    white-space: nowrap;
+  }
+
+  /* When maximized */
+  body.maximized .scrollable-cell {
+    overflow-x: visible;
+    white-space: normal;
   }
   th {
     text-align: left;
