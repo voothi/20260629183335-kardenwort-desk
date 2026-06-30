@@ -861,22 +861,27 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     box-sizing: border-box;
   }
   html {
-    overflow-x: hidden;
+    overflow: hidden;
+    width: 100%;
+    height: 100%;
   }
   body {
     font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     background-color: #0d0f12;
     color: #e3e6eb;
     margin: 0;
-    padding: 16px;
+    padding: 0;
     font-size: 14px;
     line-height: 1.5;
     zoom: {zoom_level};
+    overflow-y: auto;
     overflow-x: hidden;
     width: 100%;
+    height: 100%;
   }
   .container {
     width: 100%;
+    padding: 16px;
     display: -webkit-box;
     display: -ms-flexbox;
     display: flex;
@@ -893,7 +898,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
     padding: 16px;
     box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
     width: 100%;
-    overflow: hidden;
   }
   .section-title {
     font-size: 11px;
