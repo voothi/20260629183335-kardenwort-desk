@@ -1662,7 +1662,7 @@ def cmd_desk(args):
 
 def main():
     parser = argparse.ArgumentParser(description="Kardenwort Desk Orchestration Core")
-    parser.add_argument("--config", default="config.ini", help="Path to config.ini")
+    parser.add_argument("--config", default=None, help="Path to config.ini")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     parser.add_argument("--debug", action="store_true", help="Debug logging")
 
