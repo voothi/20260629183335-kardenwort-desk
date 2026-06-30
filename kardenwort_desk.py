@@ -976,7 +976,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
 
   /* When the window is NOT maximized (normally sized) */
-  /* When the window is NOT maximized (normally sized) */
   body:not(.maximized) {
     max-width: 100vw;
     overflow-x: hidden;
