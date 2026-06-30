@@ -1510,6 +1510,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     }
                 }
                 updateRowFocus();
+            } else if (keyCode === 46) { // Delete
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                if (window.deleteSelectedRows) {
+                    window.deleteSelectedRows();
+                }
             } else if (keyCode === 32) { // Space
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (focusedRowId !== null) {
@@ -1797,6 +1802,29 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             } catch(e) {}
             updateRowStyles();
             updateBidirectionalHighlights();
+        };
+        
+        window.deleteSelectedRows = function() {
+            var selected = getSelectedRowsArray();
+            if (selected.length === 0) return;
+            for (var k = 0; k < selected.length; k++) {
+                var rowId = selected[k];
+                deltas.push({
+                    row_id: rowId,
+                    column: '_delete',
+                    value: true
+                });
+                for (var i = 0; i < tableRows.length; i++) {
+                    if (parseInt(tableRows[i].getAttribute('data-row-id')) === rowId) {
+                        tableRows[i].style.display = 'none';
+                        break;
+                    }
+                }
+            }
+            clearAllSelections();
+            if (window.ahkCall) {
+                window.ahkCall('dirty', 'true');
+            }
         };
         
         window.getDeltas = function() {
@@ -2101,6 +2129,11 @@ def cmd_edit_save(args):
             print_structured_error("INVALID_ARGS", "Each delta must have 'row_id', 'column', and 'value'")
             sys.exit(1)
             
+        if col_name == "_delete":
+            if 0 <= row_id < len(data_rows):
+                data_rows[row_id] = None
+            continue
+            
         if col_name not in editable_cols:
             print_structured_error("DESK_FAILED", f"Column '{col_name}' is not inline-editable.")
             sys.exit(1)
@@ -2111,10 +2144,13 @@ def cmd_edit_save(args):
             
         col_idx = headers.index(col_name)
         if 0 <= row_id < len(data_rows):
-            data_rows[row_id][col_idx] = val
+            if data_rows[row_id] is not None:
+                data_rows[row_id][col_idx] = val
         else:
             print_structured_error("DESK_FAILED", f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
             sys.exit(1)
+            
+    data_rows = [r for r in data_rows if r is not None]
             
     try:
         with file_lock(tsv_path):
