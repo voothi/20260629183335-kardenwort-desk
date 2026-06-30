@@ -206,3 +206,9 @@ def test_restore_subcommand():
         assert headers == ["Col1", "Col2"]
         assert data_rows == [["v1", "v2"]]
         assert source_text == "Hello source"
+
+def test_is_contiguous_subsequence():
+    assert desk.is_contiguous_subsequence(["set", "up"], ["i", "want", "to", "set", "up", "the", "system"]) is True
+    assert desk.is_contiguous_subsequence(["set", "up"], ["i", "set", "it", "up"]) is False
+    assert desk.is_contiguous_subsequence([], ["a", "b"]) is False
+    assert desk.is_contiguous_subsequence(["a"], []) is False

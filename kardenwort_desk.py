@@ -13,6 +13,16 @@ from datetime import datetime
 
 import text_tokenizer as tok
 
+def is_contiguous_subsequence(sub, seq):
+    if not sub or not seq:
+        return False
+    n = len(sub)
+    m = len(seq)
+    for i in range(m - n + 1):
+        if seq[i:i+n] == sub:
+            return True
+    return False
+
 class ConfigError(Exception):
     pass
 
@@ -732,11 +742,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
                 token_to_rows[cand] = []
             token_to_rows[cand].append(row_id)
             
+    source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
+    source_word_cleans = [t["lower_clean"] for t in source_tokens if t.get("is_word") and "lower_clean" in t]
+
     natively_paired_rows = set()
     for row_id, row in enumerate(data_rows):
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
-        if inflected_val and len(re.findall(r"[\w']+", inflected_val)) > 1:
-            natively_paired_rows.add(row_id)
+        if inflected_val:
+            inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch == "'"))
+                         for p in re.findall(r"[\w']+", inflected_val)]
+            inf_words = [w for w in inf_words if w]
+            if len(inf_words) > 1:
+                if not is_contiguous_subsequence(inf_words, source_word_cleans):
+                    natively_paired_rows.add(row_id)
             
     paired_tokens = set()
     for cand, r_ids in token_to_rows.items():
@@ -748,8 +766,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths):
         candidates = row_candidates.get(row_id, set())
         if any(cand in paired_tokens for cand in candidates):
             paired_rows.add(row_id)
-            
-    source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
     
     span_htmls = []
     for token in source_tokens:
