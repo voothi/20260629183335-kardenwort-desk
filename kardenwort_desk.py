@@ -30,7 +30,7 @@ def load_config(config_path=None):
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
         
-    config = configparser.ConfigParser(allow_no_value=True)
+    config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     config.read(config_path, encoding='utf-8')
     
     base_dir = config_path.parent
@@ -74,12 +74,12 @@ def load_config(config_path=None):
     return config, resolved_paths
 
 def load_kardenwort_config(kardenwort_workspace):
-    kw_config = configparser.ConfigParser(allow_no_value=True)
+    kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     kw_config.read(kardenwort_workspace / "config.ini", encoding='utf-8')
     return kw_config
 
 def load_anki_mapping(mapping_path):
-    mapping = configparser.ConfigParser(allow_no_value=True)
+    mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     mapping.optionxform = str # Preserve case for Anki field names!
     mapping.read(mapping_path, encoding='utf-8')
     return mapping
