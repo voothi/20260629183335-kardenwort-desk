@@ -265,8 +265,17 @@ def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
         raise e
 
 def is_tsv_llm_filled(headers, data_rows, mapping):
-    check_cols = ['WordSourceMorphologyAI', 'WordSourceIPA', 'WordRussian', 'WordEnglish']
-    for col in check_cols:
+    ai_cols = ['WordSourceMorphologyAI', 'WordSourceIPA']
+    present_ai_cols = [col for col in ai_cols if col in headers]
+    if present_ai_cols:
+        for col in present_ai_cols:
+            col_idx = headers.index(col)
+            if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
+                return True
+        return False
+        
+    fallback_cols = ['WordRussian', 'WordEnglish']
+    for col in fallback_cols:
         if col in headers:
             col_idx = headers.index(col)
             if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
