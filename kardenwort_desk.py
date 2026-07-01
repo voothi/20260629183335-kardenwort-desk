@@ -1086,16 +1086,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <div class="container">
   <div class="section">
     <div class="section-title">Source Text</div>
-    <div class="source-text" id="source-container">
-      {source_html}
-    </div>
+    <div class="source-text" id="source-container">{source_html}</div>
   </div>
   
   <div class="section">
     <div class="section-title">Translation</div>
-    <div class="translation-text" id="translation-container">
-      {sentence_html}
-    </div>
+    <div class="translation-text" id="translation-container">{sentence_html}</div>
   </div>
   
   <div class="section">
