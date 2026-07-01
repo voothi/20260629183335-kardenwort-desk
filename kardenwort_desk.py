@@ -94,6 +94,12 @@ def load_anki_mapping(mapping_path):
     mapping.read(mapping_path, encoding='utf-8')
     return mapping
 
+def build_field_mapping(mapping, mode):
+    field_mapping = dict(mapping[f'fields_mapping.{mode}'])
+    if 'tts' in mapping:
+        field_mapping.update(dict(mapping['tts']))
+    return field_mapping
+
 # Setup structured logging
 class JSONFormatter(logging.Formatter):
     def format(self, record):
@@ -671,7 +677,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     fields = list(mapping['fields'].keys())
-    field_mapping = dict(mapping['fields_mapping.word'])
+    field_mapping = build_field_mapping(mapping, 'word')
+    
+    target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
     if not working_tsv_path.exists():
         lemma_index_rel = config.get('languages', f'{language}_lemma_index')
@@ -705,7 +713,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             "--anki-csv-header", json.dumps(fields),
             "--anki-field-mapping", json.dumps(field_mapping),
             "--output-file", str(working_tsv_path),
-            "--text1-file", str(text_file_to_pass)
+            "--text1-file", str(text_file_to_pass),
+            "--tts-destination-lang", target_lang
         ]
         
         if language == "de":
@@ -737,7 +746,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     pass
                     
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-    target_lang = config.get('settings', 'default_target_language', fallback='ru')
     progressive_loading = config.getboolean('settings', 'progressive_loading', fallback=False)
     lazy_processing = config.getboolean('settings', 'lazy_processing', fallback=False)
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)

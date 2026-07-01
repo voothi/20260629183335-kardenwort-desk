@@ -212,3 +212,108 @@ def test_is_contiguous_subsequence():
     assert desk.is_contiguous_subsequence(["set", "up"], ["i", "set", "it", "up"]) is False
     assert desk.is_contiguous_subsequence([], ["a", "b"]) is False
     assert desk.is_contiguous_subsequence(["a"], []) is False
+
+def test_build_field_mapping_includes_tts():
+    mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
+    mapping.optionxform = str
+    mapping.read_string("""
+[fields_mapping.word]
+WordSource=lemma
+[tts]
+Source-en-GB=tts_source_en
+Destination-ru-RU=tts_dest_ru
+""")
+    res = desk.build_field_mapping(mapping, 'word')
+    assert res['WordSource'] == 'lemma'
+    assert res['Source-en-GB'] == 'tts_source_en'
+    assert res['Destination-ru-RU'] == 'tts_dest_ru'
+
+def test_build_field_mapping_without_tts_section():
+    mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
+    mapping.optionxform = str
+    mapping.read_string("""
+[fields_mapping.word]
+WordSource=lemma
+""")
+    res = desk.build_field_mapping(mapping, 'word')
+    assert res == {'WordSource': 'lemma'}
+
+def test_build_field_mapping_tts_does_not_overwrite_word_keys():
+    mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
+    mapping.optionxform = str
+    mapping.read_string("""
+[fields_mapping.word]
+OverlapKey=from_word
+[tts]
+OverlapKey=from_tts
+""")
+    res = desk.build_field_mapping(mapping, 'word')
+    assert res['OverlapKey'] == 'from_tts'
+
+def test_run_render_flow_passes_tts_destination_lang(monkeypatch):
+    import subprocess
+    import sys
+    
+    mock_cmd = []
+    def mock_run(cmd, *args, **kwargs):
+        mock_cmd.extend(cmd)
+        if "--output-file" in cmd:
+            out_idx = cmd.index("--output-file")
+            out_path = Path(cmd[out_idx+1])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("WordSource\\nword\\n", encoding='utf-8')
+        class MockProc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return MockProc()
+        
+    monkeypatch.setattr(subprocess, 'run', mock_run)
+    
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        workspace = tmp_path / "workspace"
+        workspace.mkdir()
+        (workspace / "config.ini").write_text("[project_structure]\\ngenerated_results_dir=results\\n")
+        
+        config = configparser.ConfigParser()
+        config.read_string("""
+[settings]
+default_target_language=uk
+save_source_text=False
+[languages]
+en_lemma_index=idx.txt
+en_lemma_override=override.txt
+""")
+        
+        mapping_file = tmp_path / "mapping.ini"
+        mapping_file.write_text("""
+[fields]
+WordSource=
+[fields_mapping.word]
+WordSource=lemma
+[tts]
+Destination-uk-UA=tts_dest_uk
+""")
+        
+        resolved_paths = {
+            'kardenwort_workspace': workspace,
+            'anki_mapping_file': mapping_file,
+            'kardenwort_python': Path(sys.executable),
+        }
+        
+        # Should populate mock_cmd
+        try:
+            desk.run_render_flow("test text", "en", "1234", "single", config, resolved_paths)
+        except Exception:
+            pass
+            
+        assert "--tts-destination-lang" in mock_cmd
+        idx = mock_cmd.index("--tts-destination-lang")
+        assert mock_cmd[idx+1] == "uk"
+        
+        assert "--anki-field-mapping" in mock_cmd
+        mapping_idx = mock_cmd.index("--anki-field-mapping")
+        mapping_json = mock_cmd[mapping_idx+1]
+        mapping_dict = json.loads(mapping_json)
+        assert mapping_dict['Destination-uk-UA'] == 'tts_dest_uk'
