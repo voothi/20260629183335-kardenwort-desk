@@ -2733,10 +2733,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields):
     with open(temp_path, 'w', encoding='utf-8') as f:
         f.write(js_content)
     try:
-        if update_js_path.exists():
-            os.remove(update_js_path)
-        os.rename(temp_path, update_js_path)
-    except Exception:
+        os.replace(temp_path, update_js_path)
+    except Exception as e:
+        logger.error(f"Failed to atomically replace update.js: {e}")
         pass
 
 def cmd_progressive_worker(args):
