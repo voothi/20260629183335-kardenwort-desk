@@ -7,6 +7,7 @@ import os
 import re
 import subprocess
 import tempfile
+import shutil
 import contextlib
 from pathlib import Path
 from datetime import datetime
@@ -2518,6 +2519,17 @@ def cmd_export(args):
             save_tsv_rows_safely(import_path, comments, headers, exported_rows)
         if save_to_favorites:
             logger.info(f"Exported favorites to {import_path}")
+            
+            copy_txt = config.getboolean('settings', 'copy_source_txt_to_favorites_on_export', fallback=False)
+            if copy_txt:
+                txt_files = list(tsv_path.parent.glob(f"{zid}-*.txt"))
+                for txt_file in txt_files:
+                    try:
+                        dest_txt_path = fav_dir / f"{fav_prefix}{txt_file.name}"
+                        shutil.copy2(txt_file, dest_txt_path)
+                        logger.info(f"Copied source text {txt_file.name} to favorites")
+                    except Exception as e:
+                        logger.error(f"Failed to copy source text {txt_file.name} to favorites: {e}")
         else:
             logger.info(f"Exported temporary file for Anki import to {import_path}")
         
