@@ -933,9 +933,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
 
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
-    if col_highlighted != -1:
-        header_cols.append("Highlight")
-    table_header_html = "<tr>" + "".join(f'<th style="display: none;">{h}</th>' if h == "Highlight" else f"<th>{h}</th>" for h in header_cols) + "</tr>"
+    table_header_html = "<tr>" + "".join(f"<th>{h}</th>" for h in header_cols) + "</tr>"
 
     table_rows = []
     for row_id, row in enumerate(data_rows):
@@ -951,19 +949,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
         row_highlight_class = "highlight-purple" if row_id in paired_rows else "highlight-orange"
         
-        highlighted_td = ""
+        is_selected = "0"
         if col_highlighted != -1:
             highlighted_val = row[col_highlighted] if len(row) > col_highlighted else ""
-            highlighted_td = f'<td data-col="{role_fields["selected"]}" style="display: none;">{highlighted_val}</td>'
+            if highlighted_val.strip().lower() in ["1", "true"]:
+                is_selected = "1"
 
         table_rows.append(
-            f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
+            f'<tr data-row-id="{row_id}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="WordSourceInflectedForm">{inflected_val}</td>'
             f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{ipa_val}</td>'
             f'<td><div class="scrollable-cell">{morph_val}</div></td>'
-            f'{highlighted_td}'
             f'</tr>'
         )
     table_rows_html = "\n".join(table_rows)
@@ -988,6 +986,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <head>
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
 <style>
   
 
@@ -1527,19 +1528,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
         }
         
+        var hasHighlightCol = {has_highlight_col};
+
         for (var i = 0; i < tableRows.length; i++) {
             var row = tableRows[i];
             var rowIdStr = String(row.getAttribute('data-row-id'));
-            var tds = row.getElementsByTagName('td');
             var isHighlighted = false;
-            for (var j = 0; j < tds.length; j++) {
-                if (tds[j].getAttribute('data-col') === '{selected_col_name}') {
-                    hasHighlightCol = true;
-                    var val = tds[j].textContent || tds[j].innerText || "";
-                    if (val.trim() === "1" || val.trim().toLowerCase() === "true") {
-                        isHighlighted = true;
-                    }
-                }
+            if (hasHighlightCol && row.getAttribute('data-selected') === '1') {
+                isHighlighted = true;
             }
             initialHighlights[rowIdStr] = isHighlighted;
             if (isHighlighted) {
@@ -1808,16 +1804,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     }
                 } else {
                     row.className = row.className.replace(/selected/g, '').replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '');
-                }
-                
-                if (hasHighlightCol) {
-                    var tds = row.getElementsByTagName('td');
-                    for (var j = 0; j < tds.length; j++) {
-                        if (tds[j].getAttribute('data-col') === '{selected_col_name}') {
-                            tds[j].innerHTML = isSelected ? '1' : '';
-                            break;
-                        }
-                    }
                 }
             }
         }
@@ -2305,6 +2291,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     selected_col_name = role_fields.get('selected', 'DeskSelected')
     html_page = html_page.replace("{selected_col_name}", selected_col_name)
+    html_page = html_page.replace("{has_highlight_col}", "true" if col_highlighted != -1 else "false")
 
     theme = theme.lower()
     if theme in ("light", "white"):
