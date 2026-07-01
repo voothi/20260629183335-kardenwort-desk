@@ -505,24 +505,32 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
         return False
 
 def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
-    python_exe = resolved_paths['kardenwort_python']
-    headless_script = resolved_paths['intellifiller_headless']
+    python_exe = sys.executable
+    desk_script = Path(__file__).resolve()
+    
+    if selected_rows is None:
+        try:
+            _, _, data_rows = load_tsv_rows(tsv_path)
+            selected_rows = list(range(len(data_rows)))
+        except Exception:
+            selected_rows = []
+            
+    if not selected_rows:
+        return
+        
+    rows_str = ",".join(str(r) for r in selected_rows)
     
     cmd = [
         str(python_exe),
-        str(headless_script),
+        str(desk_script),
+        "batch-worker",
         "--tsv", str(tsv_path),
         "--prompt", prompt_name,
+        "--rows", rows_str
     ]
-    
-    if selected_rows:
-        rows_str = ",".join(str(r) for r in selected_rows)
-        cmd.extend(["--selected-rows", rows_str])
         
-    logger.info(f"Kicking off background IntelliFiller: {' '.join(cmd)}")
+    logger.info(f"Kicking off background batch-worker: {' '.join(cmd)}")
     if sys.platform == 'win32':
-        # CREATE_NO_WINDOW = 0x08000000
-        # CREATE_NEW_PROCESS_GROUP = 0x00000200
         creationflags = 0x08000000 | 0x00000200
         subprocess.Popen(
             cmd,
