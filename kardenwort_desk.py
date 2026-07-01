@@ -932,6 +932,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     color: {text_color};
     line-height: 1.6;
     word-break: break-word;
+    white-space: {source_white_space};
     -moz-user-select: none;
     -webkit-user-select: none;
     -ms-user-select: none;
@@ -2071,6 +2072,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
+    html_page = html_page.replace("{source_white_space}", "pre-wrap" if text_mode == "multi" else "normal")
 
     theme = theme.lower()
     if theme in ("light", "white"):
