@@ -2688,19 +2688,27 @@ def cmd_reprocess_worker(args):
             logger.error(f"Failed fast-path translation during reprocess: {e}")
 
     if lemmas_provider in ('intellifiller', 'combined'):
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = mapping.get('desk_role_fields', {})
         for i in range(0, len(selected_rows), batch_size):
             batch = selected_rows[i:i + batch_size]
             logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
             run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+            
+            try:
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+                write_update_js(tsv_path, data_rows, headers, role_fields)
+            except Exception as e:
+                logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
 
 def write_update_js(tsv_path, data_rows, headers, role_fields):
     update_js_path = tsv_path.with_suffix('.update.js')
     
-    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
-    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields else -1
-    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
-    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields else -1
-    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
     
     update_data = {}
     for row_id, row in enumerate(data_rows):
