@@ -929,6 +929,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             sentence_htmls.append("<div>&nbsp;</div>")
     sentence_html = "".join(sentence_htmls)
     
+    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields else -1
+    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
+
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
     if col_highlighted != -1:
         header_cols.append("Highlight")
