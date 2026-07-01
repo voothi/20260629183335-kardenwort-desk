@@ -935,7 +935,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
     if col_highlighted != -1:
         header_cols.append("Highlight")
-    table_header_html = "<tr>" + "".join(f"<th>{h}</th>" for h in header_cols) + "</tr>"
+    table_header_html = "<tr>" + "".join(f'<th style="display: none;">{h}</th>' if h == "Highlight" else f"<th>{h}</th>" for h in header_cols) + "</tr>"
 
     table_rows = []
     for row_id, row in enumerate(data_rows):
@@ -954,7 +954,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         highlighted_td = ""
         if col_highlighted != -1:
             highlighted_val = row[col_highlighted] if len(row) > col_highlighted else ""
-            highlighted_td = f'<td data-col="{role_fields["selected"]}">{highlighted_val}</td>'
+            highlighted_td = f'<td data-col="{role_fields["selected"]}" style="display: none;">{highlighted_val}</td>'
 
         table_rows.append(
             f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
