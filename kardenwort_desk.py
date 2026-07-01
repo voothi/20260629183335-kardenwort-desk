@@ -725,6 +725,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         with file_lock(working_tsv_path):
             save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
             
+    translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+    
     extracted_translations = {}
     col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
     for row in data_rows:
@@ -738,16 +740,30 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             extracted_translations[content_line_idx] = row[col_sentence_dest]
             
     sentence_translations = {}
-    if text_mode == 'single':
-        sentence_translations[0] = extracted_translations.get(0, "")
+    if not sentence_translated and 'sentence_translations_raw' in locals():
+        sentence_translations = sentence_translations_raw
+    elif translation_text_path.exists():
+        translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
+        if text_mode == 'single':
+            sentence_translations[0] = " ".join(translation_lines)
+        else:
+            for a_idx, ln in enumerate(translation_lines):
+                sentence_translations[a_idx] = ln
+            # fill missing lines just in case
+            for a_idx in range(len(text.splitlines())):
+                if a_idx not in sentence_translations:
+                    sentence_translations[a_idx] = ""
     else:
-        c_idx = 0
-        for a_idx, ln in enumerate(text.splitlines()):
-            if ln.strip():
-                sentence_translations[a_idx] = extracted_translations.get(c_idx, "")
-                c_idx += 1
-            else:
-                sentence_translations[a_idx] = ""
+        if text_mode == 'single':
+            sentence_translations[0] = extracted_translations.get(0, "")
+        else:
+            c_idx = 0
+            for a_idx, ln in enumerate(text.splitlines()):
+                if ln.strip():
+                    sentence_translations[a_idx] = extracted_translations.get(c_idx, "")
+                    c_idx += 1
+                else:
+                    sentence_translations[a_idx] = ""
             
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
     if save_translation_text and sentence_translations:
