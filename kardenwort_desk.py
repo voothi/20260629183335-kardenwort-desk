@@ -654,33 +654,57 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             sentence_translated = True
             
     if not sentence_translated:
-        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
+        sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
         col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+        
+        content_to_absolute = {}
+        if text_mode != 'single':
+            c_idx = 0
+            for a_idx, ln in enumerate(text.splitlines()):
+                if ln.strip():
+                    content_to_absolute[c_idx] = a_idx
+                    c_idx += 1
+                    
         for row in data_rows:
-            line_idx = 0
+            content_line_idx = 0
             if col_index != -1 and len(row) > col_index:
                 try:
-                    line_idx = int(row[col_index]) - 1
+                    content_line_idx = int(row[col_index]) - 1
                 except ValueError:
                     pass
+            
+            abs_idx = content_to_absolute.get(content_line_idx, 0) if text_mode != 'single' else 0
+            
             if col_sentence_dest != -1:
                 while len(row) <= col_sentence_dest:
                     row.append("")
-                row[col_sentence_dest] = sentence_translations.get(line_idx, "")
+                row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
         with file_lock(working_tsv_path):
             save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
             
-    sentence_translations = {}
+    extracted_translations = {}
     col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
     for row in data_rows:
-        line_idx = 0
+        content_line_idx = 0
         if col_index != -1 and len(row) > col_index:
             try:
-                line_idx = int(row[col_index]) - 1
+                content_line_idx = int(row[col_index]) - 1
             except ValueError:
                 pass
         if col_sentence_dest != -1 and len(row) > col_sentence_dest:
-            sentence_translations[line_idx] = row[col_sentence_dest]
+            extracted_translations[content_line_idx] = row[col_sentence_dest]
+            
+    sentence_translations = {}
+    if text_mode == 'single':
+        sentence_translations[0] = extracted_translations.get(0, "")
+    else:
+        c_idx = 0
+        for a_idx, ln in enumerate(text.splitlines()):
+            if ln.strip():
+                sentence_translations[a_idx] = extracted_translations.get(c_idx, "")
+                c_idx += 1
+            else:
+                sentence_translations[a_idx] = ""
             
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
     if save_translation_text and sentence_translations:
