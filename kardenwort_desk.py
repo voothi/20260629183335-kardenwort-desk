@@ -728,6 +728,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     progressive_loading = config.getboolean('settings', 'progressive_loading', fallback=False)
+    lazy_processing = config.getboolean('settings', 'lazy_processing', fallback=False)
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
     main_text_provider = config.get('translation_providers', 'main_text_translation', fallback='combined')
@@ -841,7 +842,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     if not llm_filled:
         prompt_name = config.get('languages', f'{language}_prompt')
         
-        if progressive_loading:
+        if lazy_processing:
+            pass # Skip all automatic translation and IntelliFiller processing
+        elif progressive_loading:
             # Stage 2: Offload lemma translation and intellifiller to background
             run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty)
         else:
@@ -1278,6 +1281,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
 <script id="progressive-loading" type="text/plain">{str(progressive_loading).lower()}</script>
+<script id="lazy-processing" type="text/plain">{str(lazy_processing).lower()}</script>
 
 <script type="text/javascript">
 (function() {
@@ -2636,11 +2640,58 @@ def cmd_reprocess_worker(args):
         return
         
     selected_rows = [int(r.strip()) for r in rows_str.split(',') if r.strip()]
+    lemmas_provider = config.get('translation_providers', 'lemmas_translation', fallback='intellifiller')
+    language = config.get('settings', 'default_language', fallback='en')
+    target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
-    for i in range(0, len(selected_rows), batch_size):
-        batch = selected_rows[i:i + batch_size]
-        logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
-        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+    if lemmas_provider in ('combined', 'google', 'deepl'):
+        try:
+            with file_lock(tsv_path):
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+            
+            mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+            role_fields = mapping.get('desk_role_fields', {})
+            col_lemma_name = role_fields.get('lemma', 'WordSource')
+            col_word_dest_name = role_fields.get('word_translation', 'WordRussian')
+            
+            col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
+            col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
+            
+            if col_lemma != -1 and col_word_dest != -1:
+                lemmas_to_translate = []
+                for row_id in selected_rows:
+                    if 0 <= row_id < len(data_rows):
+                        row = data_rows[row_id]
+                        if len(row) > col_lemma and row[col_lemma].strip():
+                            lemmas_to_translate.append(row[col_lemma].strip())
+                
+                if lemmas_to_translate:
+                    lemmas_to_translate = list(set(lemmas_to_translate))
+                    provider_to_use = 'combined' if lemmas_provider == 'combined' else lemmas_provider
+                    lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, provider_to_use)
+                    
+                    with file_lock(tsv_path):
+                        comments, headers, data_rows = load_tsv_rows(tsv_path)
+                        for row_id in selected_rows:
+                            if 0 <= row_id < len(data_rows):
+                                row = data_rows[row_id]
+                                if len(row) > col_lemma:
+                                    lemma_val = row[col_lemma].strip()
+                                    while len(row) <= col_word_dest:
+                                        row.append("")
+                                    if lemma_val in lemma_translations:
+                                        row[col_word_dest] = lemma_translations[lemma_val]
+                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                        
+                    write_update_js(tsv_path, data_rows, headers, role_fields)
+        except Exception as e:
+            logger.error(f"Failed fast-path translation during reprocess: {e}")
+
+    if lemmas_provider in ('intellifiller', 'combined'):
+        for i in range(0, len(selected_rows), batch_size):
+            batch = selected_rows[i:i + batch_size]
+            logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
+            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
 
 def write_update_js(tsv_path, data_rows, headers, role_fields):
     update_js_path = tsv_path.with_suffix('.update.js')
