@@ -317,3 +317,97 @@ Destination-uk-UA=tts_dest_uk
         mapping_json = mock_cmd[mapping_idx+1]
         mapping_dict = json.loads(mapping_json)
         assert mapping_dict['Destination-uk-UA'] == 'tts_dest_uk'
+
+def test_cmd_export_selection_modes_and_favorites(monkeypatch, tmp_path):
+    import json
+    
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+export_selection_mode=all
+save_to_favorites_on_export=false
+send_to_anki_after_export=false
+""")
+    
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "config.ini").write_text("[project_structure]\ngenerated_results_dir=results\n")
+    results_dir = workspace / "results"
+    results_dir.mkdir()
+    
+    working_tsv = results_dir / "123-test.en.tsv"
+    working_tsv.write_text("H1\tH2\nv1\tv2\nv3\tv4\nv5\tv6\n", encoding='utf-8')
+    
+    fav_dir = tmp_path / "favorites"
+    fav_dir.mkdir()
+    
+    resolved_paths = {
+        'kardenwort_workspace': workspace,
+        'favorites_output_dir': fav_dir
+    }
+    
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "zid": "123",
+        "selected_row_ids": [1],
+        "tsv_path": str(working_tsv)
+    }))
+    
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths))
+    
+    class Args:
+        config = None
+        selection_manifest = str(manifest_path)
+        language = "en"
+        
+    saved_paths = []
+    saved_rows = []
+    
+    orig_save = desk.save_tsv_rows_safely
+    def mock_save(path, comments, headers, data_rows):
+        saved_paths.append(path)
+        saved_rows.append(data_rows)
+        orig_save(path, comments, headers, data_rows)
+        
+    monkeypatch.setattr(desk, 'save_tsv_rows_safely', mock_save)
+    
+    # 1. Test mode 'all' and save_to_favorites_on_export=false
+    try:
+        desk.cmd_export(Args())
+    except SystemExit:
+        pass
+        
+    assert len(saved_paths) == 1
+    assert saved_paths[0].parent == results_dir
+    assert saved_paths[0].name == "temp_import_123-test.en.tsv"
+    assert len(saved_rows[0]) == 3
+    
+    # 2. Test mode 'unselected' and save_to_favorites_on_export=true
+    config.set('settings', 'export_selection_mode', 'unselected')
+    config.set('settings', 'save_to_favorites_on_export', 'true')
+    saved_paths.clear()
+    saved_rows.clear()
+    try:
+        desk.cmd_export(Args())
+    except SystemExit:
+        pass
+        
+    assert len(saved_paths) == 1
+    assert saved_paths[0].parent == fav_dir
+    assert saved_paths[0].name == "123-test.en.tsv"
+    assert len(saved_rows[0]) == 2
+    assert saved_rows[0][0] == ["v1", "v2"]
+    assert saved_rows[0][1] == ["v5", "v6"]
+
+    # 3. Test mode 'selected'
+    config.set('settings', 'export_selection_mode', 'selected')
+    saved_paths.clear()
+    saved_rows.clear()
+    try:
+        desk.cmd_export(Args())
+    except SystemExit:
+        pass
+        
+    assert len(saved_paths) == 1
+    assert len(saved_rows[0]) == 1
+    assert saved_rows[0][0] == ["v3", "v4"]

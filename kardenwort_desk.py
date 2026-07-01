@@ -2461,11 +2461,6 @@ def cmd_export(args):
         print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
         sys.exit(1)
         
-    if not selected_rows:
-        logger.warning("No rows selected for export.")
-        print("Warning: No rows selected. Export skipped.")
-        sys.exit(0)
-        
     lang = args.language or config.get('settings', 'default_language', fallback='en')
     
     tsv_path_str = manifest.get("tsv_path")
@@ -2484,8 +2479,21 @@ def cmd_export(args):
         print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
         sys.exit(1)
         
+    export_selection_mode = config.get('settings', 'export_selection_mode', fallback='selected').lower()
+    if export_selection_mode == 'all':
+        actual_export_rows = list(range(len(data_rows)))
+    elif export_selection_mode == 'unselected':
+        actual_export_rows = [i for i in range(len(data_rows)) if i not in selected_rows]
+    else:
+        actual_export_rows = selected_rows
+        
+    if not actual_export_rows:
+        logger.warning("No rows to export based on selection mode.")
+        print("Warning: No rows to export based on selection mode. Export skipped.")
+        sys.exit(0)
+        
     exported_rows = []
-    for row_id in selected_rows:
+    for row_id in actual_export_rows:
         if 0 <= row_id < len(data_rows):
             exported_rows.append(data_rows[row_id])
         else:
@@ -2502,33 +2510,42 @@ def cmd_export(args):
     dest_filename = f"{fav_prefix}{tsv_path.name}"
     dest_path = fav_dir / dest_filename
     
+    save_to_favorites = config.getboolean('settings', 'save_to_favorites_on_export', fallback=True)
+    import_path = dest_path if save_to_favorites else (results_dir / f"temp_import_{dest_filename}")
+    
     try:
-        with file_lock(dest_path):
-            save_tsv_rows_safely(dest_path, comments, headers, exported_rows)
-        logger.info(f"Exported favorites to {dest_path}")
+        with file_lock(import_path):
+            save_tsv_rows_safely(import_path, comments, headers, exported_rows)
+        if save_to_favorites:
+            logger.info(f"Exported favorites to {import_path}")
+        else:
+            logger.info(f"Exported temporary file for Anki import to {import_path}")
         
         send_to_anki = config.getboolean('settings', 'send_to_anki_after_export', fallback=False)
         if send_to_anki:
             detach = config.getboolean('settings', 'detach_import_on_send', fallback=True)
             if detach:
-                pid, log_path = run_detached_import(dest_path, config, resolved_paths, zid)
+                pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
                 response = {
                     "import_started": True,
                     "pid": pid,
                     "log": log_path,
-                    "tsv": str(dest_path),
+                    "tsv": str(import_path),
                     "note": "safe to close the window"
                 }
                 print(json.dumps(response))
             else:
-                success, output = run_synchronous_import(dest_path, config, resolved_paths)
+                success, output = run_synchronous_import(import_path, config, resolved_paths)
                 if success:
                     print(json.dumps({"import_complete": True, "output": output}))
                 else:
                     print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
                     sys.exit(1)
         else:
-            print(f"SUCCESS: Exported to {dest_path}")
+            if save_to_favorites:
+                print(f"SUCCESS: Exported to {import_path}")
+            else:
+                print(f"SUCCESS: Ready for Anki (no favorites file created)")
     except Exception as e:
         print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
         sys.exit(1)
