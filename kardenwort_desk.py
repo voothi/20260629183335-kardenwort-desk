@@ -500,7 +500,7 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths):
         logger.error(f"Headless IntelliFiller failed with exit code {res.returncode}: {res.stderr}")
         return False
 
-def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths):
+def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
     python_exe = resolved_paths['kardenwort_python']
     headless_script = resolved_paths['intellifiller_headless']
     
@@ -511,6 +511,10 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
         "--prompt", prompt_name,
     ]
     
+    if selected_rows:
+        rows_str = ",".join(str(r) for r in selected_rows)
+        cmd.extend(["--selected-rows", rows_str])
+        
     logger.info(f"Kicking off background IntelliFiller: {' '.join(cmd)}")
     if sys.platform == 'win32':
         # CREATE_NO_WINDOW = 0x08000000
@@ -931,7 +935,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{ipa_val}</td>'
-            f'<td><div class="scrollable-cell">{morph_val}</div></td>'
+            f'<td>{morph_val}</td>'
             f'</tr>'
         )
     table_rows_html = "\n".join(table_rows)
@@ -1096,20 +1100,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     width: auto;
     padding-right: 12px;
   }
-  .scrollable-cell {
-    width: 100%;
-    box-sizing: border-box;
-    -ms-overflow-style: none;  /* IE and Edge */
-    scrollbar-width: none;  /* Firefox */
-  }
-  .scrollable-cell::-webkit-scrollbar {
-    display: none; /* Chrome, Safari and Opera */
-  }
-
   /* When the window is NOT maximized (normally sized) */
   body:not(.maximized) {
     max-width: 100vw;
-    overflow-x: hidden;
   }
   body:not(.maximized) .container {
     display: block;
@@ -1118,18 +1111,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
   body:not(.maximized) .section {
     max-width: 100%;
-  }
-  body:not(.maximized) .scrollable-cell {
-    overflow-x: auto;
-    white-space: nowrap;
-    max-width: 250px;
-  }
-
-  /* When maximized */
-  body.maximized .scrollable-cell {
-    overflow-x: visible;
-    white-space: normal;
-    max-width: none;
   }
   th {
     text-align: left;
@@ -2378,7 +2359,7 @@ def cmd_reprocess(args):
         
     prompt_name = config.get('languages', f'{lang}_prompt')
     logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows.")
-    run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths)
+    run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows)
     print(json.dumps({"reprocess_started": True, "rows": cleared_count}))
 
 
