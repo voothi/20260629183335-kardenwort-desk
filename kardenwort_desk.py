@@ -902,6 +902,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     classes.append("highlight-purple")
                 else:
                     classes.append("highlight-orange")
+            else:
+                classes.append("not-connected")
             classes_str = " ".join(classes)
             span_htmls.append(
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
@@ -1070,6 +1072,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   .source-text span.highlight-orange {
   }
   .source-text span.highlight-purple {
+  }
+  .source-text span.not-connected {
+    background-color: {not_connected_bg};
+    color: {not_connected_text};
+    cursor: default;
+  }
+  .source-text span.not-connected:hover {
+    background-color: {not_connected_bg};
   }
   .source-text span.word.highlight-orange-active {
     background-color: {highlight_orange_active_bg} !important;
@@ -2182,9 +2192,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     theme = theme.lower()
     if theme in ("light", "white"):
-        theme_colors = {'bg_color': '#f6f8fa', 'text_color': '#24292f', 'section_bg': '#ffffff', 'section_border': '#d0d7de', 'text_muted': '#57606a', 'table_border': '#d8dee4', 'table_th_border': '#d0d7de', 'table_text': '#24292f', 'row_hover': '#f3f4f6', 'word_hover': 'rgba(0, 0, 0, 0.05)', 'highlight_orange_active_bg': '#ffe169', 'highlight_orange_active_text': '#24292f', 'highlight_orange_active_hover_bg': '#ffd33d', 'highlight_purple_active_bg': '#dcd0ff', 'highlight_purple_active_text': '#24292f', 'highlight_purple_active_hover_bg': '#b89bf8', 'selected_orange_row_bg': 'rgba(255, 225, 105, 0.3)', 'selected_orange_row_text': '#b07e00', 'selected_purple_row_bg': 'rgba(220, 208, 255, 0.3)', 'selected_purple_row_text': '#6f42c1', 'flipped_bg': 'rgba(56, 166, 255, 0.15)', 'flipped_text': '#0969da', 'flipped_border': 'rgba(9, 105, 218, 0.6)', 'input_bg': '#ffffff', 'input_border': '#0969da', 'scrollbar_track': '#f6f8fa', 'scrollbar_thumb': '#d0d7de', 'scrollbar_thumb_hover': '#afb8c1'}
+        theme_colors = {'bg_color': '#f6f8fa', 'text_color': '#24292f', 'section_bg': '#ffffff', 'section_border': '#d0d7de', 'text_muted': '#57606a', 'table_border': '#d8dee4', 'table_th_border': '#d0d7de', 'table_text': '#24292f', 'row_hover': '#f3f4f6', 'word_hover': 'rgba(0, 0, 0, 0.05)', 'highlight_orange_active_bg': '#ffe169', 'highlight_orange_active_text': '#24292f', 'highlight_orange_active_hover_bg': '#ffd33d', 'highlight_purple_active_bg': '#dcd0ff', 'highlight_purple_active_text': '#24292f', 'highlight_purple_active_hover_bg': '#b89bf8', 'selected_orange_row_bg': 'rgba(255, 225, 105, 0.3)', 'selected_orange_row_text': '#b07e00', 'selected_purple_row_bg': 'rgba(220, 208, 255, 0.3)', 'selected_purple_row_text': '#6f42c1', 'flipped_bg': 'rgba(56, 166, 255, 0.15)', 'flipped_text': '#0969da', 'flipped_border': 'rgba(9, 105, 218, 0.6)', 'input_bg': '#ffffff', 'input_border': '#0969da', 'scrollbar_track': '#f6f8fa', 'scrollbar_thumb': '#d0d7de', 'scrollbar_thumb_hover': '#afb8c1', 'not_connected_bg': 'rgba(175, 184, 193, 0.15)', 'not_connected_text': '#57606a'}
     else:
-        theme_colors = {'bg_color': '#0d0f12', 'text_color': '#e3e6eb', 'section_bg': 'rgba(255, 255, 255, 0.03)', 'section_border': 'rgba(255, 255, 255, 0.08)', 'text_muted': '#8b949e', 'table_border': 'rgba(255, 255, 255, 0.05)', 'table_th_border': 'rgba(255, 255, 255, 0.1)', 'table_text': '#c9d1d9', 'row_hover': 'rgba(255, 255, 255, 0.02)', 'word_hover': 'rgba(255, 255, 255, 0.1)', 'highlight_orange_active_bg': '#ffcc00', 'highlight_orange_active_text': '#0d0f12', 'highlight_orange_active_hover_bg': '#e6b800', 'highlight_purple_active_bg': '#9370db', 'highlight_purple_active_text': '#ffffff', 'highlight_purple_active_hover_bg': '#7b59c4', 'selected_orange_row_bg': 'rgba(255, 204, 0, 0.15)', 'selected_orange_row_text': '#ffcc00', 'selected_purple_row_bg': 'rgba(147, 112, 219, 0.15)', 'selected_purple_row_text': '#b39ddb', 'flipped_bg': 'rgba(56, 166, 255, 0.22)', 'flipped_text': '#a5d6ff', 'flipped_border': 'rgba(165, 214, 255, 0.6)', 'input_bg': '#1c1f24', 'input_border': '#58a6ff', 'scrollbar_track': '#0d0f12', 'scrollbar_thumb': '#30363d', 'scrollbar_thumb_hover': '#8b949e'}
+        theme_colors = {'bg_color': '#0d0f12', 'text_color': '#e3e6eb', 'section_bg': 'rgba(255, 255, 255, 0.03)', 'section_border': 'rgba(255, 255, 255, 0.08)', 'text_muted': '#8b949e', 'table_border': 'rgba(255, 255, 255, 0.05)', 'table_th_border': 'rgba(255, 255, 255, 0.1)', 'table_text': '#c9d1d9', 'row_hover': 'rgba(255, 255, 255, 0.02)', 'word_hover': 'rgba(255, 255, 255, 0.1)', 'highlight_orange_active_bg': '#ffcc00', 'highlight_orange_active_text': '#0d0f12', 'highlight_orange_active_hover_bg': '#e6b800', 'highlight_purple_active_bg': '#9370db', 'highlight_purple_active_text': '#ffffff', 'highlight_purple_active_hover_bg': '#7b59c4', 'selected_orange_row_bg': 'rgba(255, 204, 0, 0.15)', 'selected_orange_row_text': '#ffcc00', 'selected_purple_row_bg': 'rgba(147, 112, 219, 0.15)', 'selected_purple_row_text': '#b39ddb', 'flipped_bg': 'rgba(56, 166, 255, 0.22)', 'flipped_text': '#a5d6ff', 'flipped_border': 'rgba(165, 214, 255, 0.6)', 'input_bg': '#1c1f24', 'input_border': '#58a6ff', 'scrollbar_track': '#0d0f12', 'scrollbar_thumb': '#30363d', 'scrollbar_thumb_hover': '#8b949e', 'not_connected_bg': 'rgba(139, 148, 158, 0.15)', 'not_connected_text': '#8b949e'}
 
     for key, val in theme_colors.items():
         html_page = html_page.replace('{' + key + '}', val)
