@@ -996,6 +996,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     font-size: 15px;
     color: {table_text};
     font-style: italic;
+    white-space: {source_white_space};
   }
   table {
     width: 100%;
