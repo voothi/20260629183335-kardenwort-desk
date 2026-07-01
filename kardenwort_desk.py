@@ -215,6 +215,10 @@ def extract_zid(path):
 def generate_slug(text, max_words=4):
     cleaned = re.sub(r'\{[^}]*\}', '', text)
     cleaned = re.sub(r'[^\w\s]', '', cleaned.lower())
+    
+    # Strip ZID from the start if the user highlighted text that begins with one
+    cleaned = re.sub(r'^\s*\d{14}\s+', '', cleaned)
+    
     words = cleaned.split()[:max_words]
     slug = '-'.join(words)
     return slug if slug else "untitled"
