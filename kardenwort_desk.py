@@ -643,6 +643,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     slug = generate_slug(text)
     working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
+    
+    # Clean up any leftover update.js from previous sessions to avoid polling stale data
+    update_js_path = working_tsv_path.with_suffix('.update.js')
+    if update_js_path.exists():
+        try:
+            os.remove(update_js_path)
+        except OSError:
+            pass
+            
     source_text_path = results_dir / f"{zid}-{slug}.{language}.txt"
     
     save_source_text = config.getboolean('settings', 'save_source_text', fallback=True)
@@ -1345,8 +1354,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         if (isProgressive) {
             var tsvPathStr = document.getElementById('tsv-path').textContent || "";
             if (tsvPathStr) {
-                var baseName = tsvPathStr.replace(/\.tsv$/i, '');
-                var jsUrl = "file:///" + baseName.replace(/\\/g, '/') + ".update.js";
+                var baseName = tsvPathStr.replace(/\\.tsv$/i, '');
+                var jsUrl = "file:///" + baseName.replace(/\\\\/g, '/') + ".update.js";
                 setInterval(function() {
                     var script = document.createElement('script');
                     script.src = jsUrl + "?t=" + new Date().getTime();
@@ -1989,7 +1998,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 var newValue = input.value;
                 cell.innerHTML = '';
                 cell.appendChild(document.createTextNode(newValue));
-                cell.className = cell.className.replace(/\s*editing\b/g, '');
+                cell.className = cell.className.replace(/\\s*editing\\b/g, '');
                 window.cancelActiveEdit = null;
                 if (newValue !== originalValue) {
                     var action = {
@@ -2691,15 +2700,18 @@ def cmd_progressive_worker(args):
             provider = 'combined' if args.provider == 'combined' else args.provider
             lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
             
-            for row in data_rows:
-                if col_lemma != -1 and len(row) > col_lemma:
-                    lemma_val = row[col_lemma]
-                    if col_word_dest != -1:
-                        while len(row) <= col_word_dest:
-                            row.append("")
-                        row[col_word_dest] = lemma_translations.get(lemma_val, "")
             with file_lock(tsv_path):
-                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                comments, headers, current_rows = load_tsv_rows(tsv_path)
+                for row in current_rows:
+                    if col_lemma != -1 and len(row) > col_lemma:
+                        lemma_val = row[col_lemma]
+                        if col_word_dest != -1:
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            if not row[col_word_dest].strip():
+                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                data_rows = current_rows
             write_update_js(tsv_path, data_rows, headers, role_fields)
                 
         if args.provider == 'combined':
