@@ -1454,10 +1454,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         updateRowStyles();
                         updateBidirectionalHighlights();
                     } else if (isRmbDragFlipping) {
-                        if (e.buttons !== undefined && (e.buttons & 2) === 0) {
-                            isRmbDragFlipping = false;
-                            return;
-                        }
                         dragOccurred = true;
                         flipWord(span, rmbFlipMode);
                     }
