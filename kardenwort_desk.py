@@ -478,7 +478,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             lines = text.splitlines()
             return {idx: "" for idx in range(len(lines))}
 
-def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths):
+def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
     python_exe = resolved_paths['kardenwort_python']
     headless_script = resolved_paths['intellifiller_headless']
     
@@ -488,6 +488,10 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths):
         "--tsv", str(tsv_path),
         "--prompt", prompt_name,
     ]
+    
+    if selected_rows:
+        rows_str = ",".join(str(r) for r in selected_rows)
+        cmd.extend(["--selected-rows", rows_str])
     
     timeout = config.getint('timeouts', 'intellifiller_timeout', fallback=120)
     logger.info(f"Running headless IntelliFiller command: {' '.join(cmd)}")
@@ -2358,9 +2362,59 @@ def cmd_reprocess(args):
         sys.exit(1)
         
     prompt_name = config.get('languages', f'{lang}_prompt')
-    logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows.")
-    run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows)
+    logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows in batches.")
+    
+    # Spawn the batch worker
+    python_exe = sys.executable
+    desk_script = Path(__file__).resolve()
+    
+    cmd = [
+        str(python_exe),
+        str(desk_script),
+        "batch-worker",
+        "--tsv", str(tsv_path),
+        "--prompt", prompt_name,
+        "--rows", ",".join(str(r) for r in selected_rows)
+    ]
+    if args.config:
+        cmd.extend(["--config", args.config])
+        
+    if sys.platform == 'win32':
+        creationflags = 0x08000000 | 0x00000200
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+            close_fds=True
+        )
+    else:
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True
+        )
     print(json.dumps({"reprocess_started": True, "rows": cleared_count}))
+
+def cmd_reprocess_worker(args):
+    config, resolved_paths = load_config(args.config)
+    batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
+    tsv_path = Path(args.tsv)
+    
+    rows_str = args.rows
+    if not rows_str:
+        return
+        
+    selected_rows = [int(r.strip()) for r in rows_str.split(',') if r.strip()]
+    
+    for i in range(0, len(selected_rows), batch_size):
+        batch = selected_rows[i:i + batch_size]
+        logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
+        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+
 
 
 def cmd_edit_save(args):
@@ -2786,6 +2840,12 @@ def main():
     p_reprocess.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_reprocess.add_argument("--language", required=True, help="Language code")
 
+    # batch-worker
+    p_batch_worker = subparsers.add_parser("batch-worker")
+    p_batch_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
+    p_batch_worker.add_argument("--prompt", required=True, help="Prompt name")
+    p_batch_worker.add_argument("--rows", required=True, help="Comma-separated list of row indices")
+
     # edit-save
     p_edit = subparsers.add_parser("edit-save")
     p_edit.add_argument("--deltas", required=True, help="Deltas JSON file path")
@@ -2825,6 +2885,7 @@ def main():
         "render": cmd_render,
         "export": cmd_export,
         "reprocess": cmd_reprocess,
+        "batch-worker": cmd_reprocess_worker,
         "edit-save": cmd_edit_save,
         "merge": cmd_merge,
         "restore": cmd_restore,
