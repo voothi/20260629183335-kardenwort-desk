@@ -701,7 +701,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         role_fields['morphology'] = 'WordSourceMorphologyAI'
     if 'WordSourceIPA' in headers and 'ipa' not in role_fields:
         role_fields['ipa'] = 'WordSourceIPA'
+    if 'DeskSelected' in headers and 'selected' not in role_fields:
+        role_fields['selected'] = 'DeskSelected'
         
+    col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
@@ -926,9 +929,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             sentence_htmls.append("<div>&nbsp;</div>")
     sentence_html = "".join(sentence_htmls)
     
-    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields else -1
-    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
-    
+    header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
+    if col_highlighted != -1:
+        header_cols.append("Highlight")
+    table_header_html = "<tr>" + "".join(f"<th>{h}</th>" for h in header_cols) + "</tr>"
+
     table_rows = []
     for row_id, row in enumerate(data_rows):
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
@@ -943,6 +948,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
         row_highlight_class = "highlight-purple" if row_id in paired_rows else "highlight-orange"
         
+        highlighted_td = ""
+        if col_highlighted != -1:
+            highlighted_val = row[col_highlighted] if len(row) > col_highlighted else ""
+            highlighted_td = f'<td data-col="{role_fields["selected"]}">{highlighted_val}</td>'
+
         table_rows.append(
             f'<tr data-row-id="{row_id}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="WordSourceInflectedForm">{inflected_val}</td>'
@@ -950,6 +960,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
             f'<td>{ipa_val}</td>'
             f'<td><div class="scrollable-cell">{morph_val}</div></td>'
+            f'{highlighted_td}'
             f'</tr>'
         )
     table_rows_html = "\n".join(table_rows)
@@ -1206,13 +1217,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     <div class="section-title">Lemmas</div>
     <table id="lemma-table">
       <thead>
-        <tr>
-          <th>Inflected</th>
-          <th>Lemma</th>
-          <th>Translation</th>
-          <th>IPA</th>
-          <th>Morphology</th>
-        </tr>
+        {table_header_html}
       </thead>
       <tbody>
         {table_rows_html}
@@ -1242,6 +1247,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     function init() {
         var selectedRowIdsMap = {};
+        var initialHighlights = {};
+        var hasHighlightCol = false;
         var lastClickedRowId = null;
         var focusedRowId = null;
         var deltas = [];
@@ -1518,6 +1525,28 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         }
         
         for (var i = 0; i < tableRows.length; i++) {
+            var row = tableRows[i];
+            var rowIdStr = String(row.getAttribute('data-row-id'));
+            var tds = row.getElementsByTagName('td');
+            var isHighlighted = false;
+            for (var j = 0; j < tds.length; j++) {
+                if (tds[j].getAttribute('data-col') === '{selected_col_name}') {
+                    hasHighlightCol = true;
+                    var val = tds[j].textContent || tds[j].innerText || "";
+                    if (val.trim() === "1" || val.trim().toLowerCase() === "true") {
+                        isHighlighted = true;
+                    }
+                }
+            }
+            initialHighlights[rowIdStr] = isHighlighted;
+            if (isHighlighted) {
+                selectedRowIdsMap[rowIdStr] = true;
+            }
+        }
+        updateRowStyles();
+        updateBidirectionalHighlights();
+        
+        for (var i = 0; i < tableRows.length; i++) {
             (function(row) {
                 addEvent(row, 'mousedown', function(e) {
                     e = e || window.event;
@@ -1769,12 +1798,23 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
-                if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
+                var isSelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                if (isSelected) {
                     if (row.className.indexOf('selected') === -1) {
                         row.className += ' selected';
                     }
                 } else {
-                    row.className = row.className.replace(/selected/g, '').replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '');
+                    row.className = row.className.replace(/selected/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+                }
+                
+                if (hasHighlightCol) {
+                    var tds = row.getElementsByTagName('td');
+                    for (var j = 0; j < tds.length; j++) {
+                        if (tds[j].getAttribute('data-col') === '{selected_col_name}') {
+                            tds[j].innerHTML = isSelected ? '1' : '';
+                            break;
+                        }
+                    }
                 }
             }
         }
@@ -1843,6 +1883,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         function notifyAHKSelection() {
             if (window.ahkCall) {
                 window.ahkCall('selection', getSelectedRowsArray().join(','));
+                window.ahkCall('dirty', window.isDirty() ? 'true' : 'false');
             }
         }
         
@@ -2085,13 +2126,39 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         }
         
         window.getDeltas = function() {
-            return JSON.stringify(deltas);
+            var mergedDeltas = [];
+            for (var i = 0; i < deltas.length; i++) {
+                mergedDeltas.push(deltas[i]);
+            }
+            if (hasHighlightCol) {
+                for (var i = 0; i < tableRows.length; i++) {
+                    var row = tableRows[i];
+                    var rowIdStr = String(row.getAttribute('data-row-id'));
+                    var currentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                    var initiallySelected = initialHighlights[rowIdStr] || false;
+                    if (currentlySelected !== initiallySelected) {
+                        mergedDeltas.push({
+                            row_id: parseInt(rowIdStr),
+                            column: '{selected_col_name}',
+                            value: currentlySelected ? '1' : ''
+                        });
+                    }
+                }
+            }
+            return JSON.stringify(mergedDeltas);
         };
         
         window.clearDirty = function() {
             historyStack = [];
             historyIndex = -1;
             deltas = [];
+            if (hasHighlightCol) {
+                for (var i = 0; i < tableRows.length; i++) {
+                    var row = tableRows[i];
+                    var rowIdStr = String(row.getAttribute('data-row-id'));
+                    initialHighlights[rowIdStr] = selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                }
+            }
             var tds = document.getElementsByTagName('td');
             for (var k = 0; k < tds.length; k++) {
                 if (tds[k].className.indexOf('dirty') !== -1) {
@@ -2104,7 +2171,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         };
         
         window.isDirty = function() {
-            return deltas.length > 0;
+            if (deltas.length > 0) return true;
+            if (hasHighlightCol) {
+                for (var i = 0; i < tableRows.length; i++) {
+                    var row = tableRows[i];
+                    var rowIdStr = String(row.getAttribute('data-row-id'));
+                    var currentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                    var initiallySelected = initialHighlights[rowIdStr] || false;
+                    if (currentlySelected !== initiallySelected) {
+                        return true;
+                    }
+                }
+            }
+            return false;
         };
         
         window.editFocusedCell = function() {
@@ -2211,6 +2290,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{inverse_zoom_width}", inverse_width)
     html_page = html_page.replace("{source_html}", source_html)
     html_page = html_page.replace("{sentence_html}", sentence_html)
+    html_page = html_page.replace("{table_header_html}", table_header_html)
     html_page = html_page.replace("{table_rows_html}", table_rows_html)
     html_page = html_page.replace("{token_manifest}", json.dumps(token_manifest))
     html_page = html_page.replace("{working_tsv_path}", str(working_tsv_path))
@@ -2219,6 +2299,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if text_mode == "multi" else "normal")
+    
+    selected_col_name = role_fields.get('selected', 'DeskSelected')
+    html_page = html_page.replace("{selected_col_name}", selected_col_name)
 
     theme = theme.lower()
     if theme in ("light", "white"):
@@ -2526,6 +2609,11 @@ def cmd_edit_save(args):
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to load working TSV: {e}")
         sys.exit(1)
+        
+    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+    selected_col_name = role_fields.get('selected', 'DeskSelected')
+    if selected_col_name not in editable_cols:
+        editable_cols.append(selected_col_name)
         
     for delta in deltas:
         row_id = delta.get("row_id")
