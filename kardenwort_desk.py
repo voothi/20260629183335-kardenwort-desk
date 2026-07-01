@@ -549,6 +549,33 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
             close_fds=True
         )
 
+def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty):
+    python_exe = sys.executable
+    desk_script = Path(__file__).resolve()
+    cmd = [
+        str(python_exe),
+        str(desk_script),
+        "progressive-worker",
+        "--tsv", str(tsv_path),
+        "--language", language,
+        "--target-lang", target_lang,
+        "--prompt", prompt_name,
+        "--provider", lemmas_provider,
+        "--word-empty", str(word_translations_empty)
+    ]
+    logger.info(f"Kicking off background progressive-worker: {' '.join(cmd)}")
+    if sys.platform == 'win32':
+        creationflags = 0x08000000 | 0x00000200
+        subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, creationflags=creationflags, close_fds=True
+        )
+    else:
+        subprocess.Popen(
+            cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL, close_fds=True
+        )
+
 def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -691,6 +718,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    progressive_loading = config.getboolean('settings', 'progressive_loading', fallback=False)
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
     main_text_provider = config.get('translation_providers', 'main_text_translation', fallback='combined')
@@ -804,41 +832,45 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     if not llm_filled:
         prompt_name = config.get('languages', f'{language}_prompt')
         
-        if lemmas_provider == 'intellifiller':
-            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
-            comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-            
-        elif lemmas_provider == 'combined':
-            if word_translations_empty:
-                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
-                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, 'combined')
+        if progressive_loading:
+            # Stage 2: Offload lemma translation and intellifiller to background
+            run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty)
+        else:
+            if lemmas_provider == 'intellifiller':
+                run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+                comments, headers, data_rows = load_tsv_rows(working_tsv_path)
                 
-                for row in data_rows:
-                    if col_lemma != -1 and len(row) > col_lemma:
-                        lemma_val = row[col_lemma]
-                        if col_word_dest != -1:
-                            while len(row) <= col_word_dest:
-                                row.append("")
-                            row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                with file_lock(working_tsv_path):
-                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            elif lemmas_provider == 'combined':
+                if word_translations_empty:
+                    lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+                    lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, 'combined')
                     
-            run_headless_intellifiller_async(working_tsv_path, prompt_name, config, resolved_paths)
-            
-        elif lemmas_provider in ('google', 'deepl'):
-            if word_translations_empty:
-                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
-                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, lemmas_provider)
+                    for row in data_rows:
+                        if col_lemma != -1 and len(row) > col_lemma:
+                            lemma_val = row[col_lemma]
+                            if col_word_dest != -1:
+                                while len(row) <= col_word_dest:
+                                    row.append("")
+                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                    with file_lock(working_tsv_path):
+                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                        
+                run_headless_intellifiller_async(working_tsv_path, prompt_name, config, resolved_paths)
                 
-                for row in data_rows:
-                    if col_lemma != -1 and len(row) > col_lemma:
-                        lemma_val = row[col_lemma]
-                        if col_word_dest != -1:
-                            while len(row) <= col_word_dest:
-                                row.append("")
-                            row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                with file_lock(working_tsv_path):
-                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            elif lemmas_provider in ('google', 'deepl'):
+                if word_translations_empty:
+                    lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+                    lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, lemmas_provider)
+                    
+                    for row in data_rows:
+                        if col_lemma != -1 and len(row) > col_lemma:
+                            lemma_val = row[col_lemma]
+                            if col_word_dest != -1:
+                                while len(row) <= col_word_dest:
+                                    row.append("")
+                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                    with file_lock(working_tsv_path):
+                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                     
     token_to_rows = {}
     row_candidates = {}
@@ -1236,6 +1268,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="llm-filled" type="text/plain">{llm_filled_js}</script>
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
+<script id="progressive-loading" type="text/plain">{str(progressive_loading).lower()}</script>
 
 <script type="text/javascript">
 (function() {
@@ -1280,6 +1313,49 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             var jsonStr = tokenMapEl.text || tokenMapEl.textContent || tokenMapEl.innerHTML || "[]";
             tokenMap = JSON.parse(jsonStr);
         } catch(e) {}
+        
+        var isProgressive = false;
+        try {
+            var progEl = document.getElementById('progressive-loading');
+            if (progEl && (progEl.textContent || progEl.innerText) === 'true') {
+                isProgressive = true;
+            }
+        } catch(e) {}
+        
+        window.receiveUpdate = function(data) {
+            for (var rowId in data) {
+                if (data.hasOwnProperty(rowId)) {
+                    var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                    if (tr) {
+                        var tds = tr.getElementsByTagName('td');
+                        var rowData = data[rowId];
+                        if (tds.length >= 5) {
+                            if (!tds[2].classList.contains('dirty') && rowData.trans) tds[2].textContent = rowData.trans;
+                            if (!tds[3].classList.contains('dirty') && rowData.ipa) tds[3].textContent = rowData.ipa;
+                            if (!tds[4].classList.contains('dirty') && rowData.morph) {
+                                var div = tds[4].querySelector('.scrollable-cell');
+                                if (div) div.innerHTML = rowData.morph;
+                            }
+                        }
+                    }
+                }
+            }
+        };
+
+        if (isProgressive) {
+            var tsvPathStr = document.getElementById('tsv-path').textContent || "";
+            if (tsvPathStr) {
+                var baseName = tsvPathStr.replace(/\.tsv$/i, '');
+                var jsUrl = "file:///" + baseName.replace(/\\/g, '/') + ".update.js";
+                setInterval(function() {
+                    var script = document.createElement('script');
+                    script.src = jsUrl + "?t=" + new Date().getTime();
+                    script.onload = function() { script.parentNode.removeChild(script); };
+                    script.onerror = function() { script.parentNode.removeChild(script); };
+                    document.head.appendChild(script);
+                }, 2000);
+            }
+        }
         
         var sourceContainer = document.getElementById('source-container');
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
@@ -2557,6 +2633,86 @@ def cmd_reprocess_worker(args):
         logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
         run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
 
+def write_update_js(tsv_path, data_rows, headers, role_fields):
+    update_js_path = tsv_path.with_suffix('.update.js')
+    
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
+    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
+    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields else -1
+    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
+    
+    update_data = {}
+    for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
+        morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
+        ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+        
+        if trans_val or ipa_val or morph_val:
+            update_data[row_id] = {
+                "trans": trans_val,
+                "ipa": ipa_val,
+                "morph": morph_val
+            }
+    
+    js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
+    temp_path = update_js_path.with_suffix('.update.js.tmp')
+    with open(temp_path, 'w', encoding='utf-8') as f:
+        f.write(js_content)
+    try:
+        if update_js_path.exists():
+            os.remove(update_js_path)
+        os.rename(temp_path, update_js_path)
+    except Exception:
+        pass
+
+def cmd_progressive_worker(args):
+    logger.info("Progressive-worker subcommand invoked")
+    config, resolved_paths = load_config(args.config)
+    tsv_path = Path(args.tsv)
+    
+    if not tsv_path.exists():
+        return
+        
+    comments, headers, data_rows = load_tsv_rows(tsv_path)
+    mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+    
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
+    
+    word_translations_empty = args.word_empty.lower() == 'true'
+    
+    if args.provider in ('combined', 'google', 'deepl'):
+        if word_translations_empty:
+            lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+            provider = 'combined' if args.provider == 'combined' else args.provider
+            lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
+            
+            for row in data_rows:
+                if col_lemma != -1 and len(row) > col_lemma:
+                    lemma_val = row[col_lemma]
+                    if col_word_dest != -1:
+                        while len(row) <= col_word_dest:
+                            row.append("")
+                        row[col_word_dest] = lemma_translations.get(lemma_val, "")
+            with file_lock(tsv_path):
+                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            write_update_js(tsv_path, data_rows, headers, role_fields)
+                
+        if args.provider == 'combined':
+            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths)
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+            write_update_js(tsv_path, data_rows, headers, role_fields)
+            
+    elif args.provider == 'intellifiller':
+        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths)
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+        write_update_js(tsv_path, data_rows, headers, role_fields)
+
+
 
 
 def cmd_edit_save(args):
@@ -2993,6 +3149,15 @@ def main():
     p_batch_worker.add_argument("--prompt", required=True, help="Prompt name")
     p_batch_worker.add_argument("--rows", required=True, help="Comma-separated list of row indices")
 
+    # progressive-worker
+    p_prog_worker = subparsers.add_parser("progressive-worker")
+    p_prog_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
+    p_prog_worker.add_argument("--language", required=True, help="Language code")
+    p_prog_worker.add_argument("--target-lang", required=True, help="Target language code")
+    p_prog_worker.add_argument("--prompt", required=True, help="Prompt name")
+    p_prog_worker.add_argument("--provider", required=True, help="Lemmas provider")
+    p_prog_worker.add_argument("--word-empty", required=True, help="Word translations empty flag")
+
     # edit-save
     p_edit = subparsers.add_parser("edit-save")
     p_edit.add_argument("--deltas", required=True, help="Deltas JSON file path")
@@ -3033,6 +3198,7 @@ def main():
         "export": cmd_export,
         "reprocess": cmd_reprocess,
         "batch-worker": cmd_reprocess_worker,
+        "progressive-worker": cmd_progressive_worker,
         "edit-save": cmd_edit_save,
         "merge": cmd_merge,
         "restore": cmd_restore,
