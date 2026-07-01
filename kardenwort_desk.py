@@ -458,11 +458,19 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             translated_lines = translated_text.split('\n')
             
             translations = {}
+            trans_idx = 0
             for idx in range(len(lines)):
-                if idx < len(translated_lines):
-                    translations[idx] = translated_lines[idx].strip()
-                else:
+                if not lines[idx].strip():
                     translations[idx] = ""
+                else:
+                    while trans_idx < len(translated_lines) and not translated_lines[trans_idx].strip():
+                        trans_idx += 1
+                    
+                    if trans_idx < len(translated_lines):
+                        translations[idx] = translated_lines[trans_idx].strip()
+                        trans_idx += 1
+                    else:
+                        translations[idx] = ""
             return translations
             
         except Exception as e:
