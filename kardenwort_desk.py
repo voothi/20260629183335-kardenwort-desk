@@ -421,19 +421,54 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             logger.warning(f"Failed to translate main text: {e}")
             return {0: ""}
     else:
-        lines = text.splitlines()
-        translations = {}
-        for idx, line in enumerate(lines):
-            line_clean = line.strip()
-            if line_clean:
-                try:
-                    translations[idx] = translate_text(line_clean, source_lang, target_lang, config, resolved_paths, provider)
-                except Exception as e:
-                    logger.warning(f"Failed to translate line {idx+1}: {e}")
+        # Phase 1: Collision Protection
+        process_text = text.replace("[[S]]", "AHK_ESC_S_")
+        process_text = process_text.replace("[[B]]", "AHK_ESC_B_")
+        process_text = process_text.replace("[[N]]", "AHK_ESC_N_")
+
+        # Phase 2: Tokenization
+        process_text = process_text.replace("  ", " [[S]] ")
+        if provider and provider.lower() == 'deepl':
+            process_text = process_text.replace("\\", " [[B]] ")
+        
+        process_text = process_text.replace("\r\n", "[[N]]")
+        process_text = process_text.replace("\n", "[[N]]")
+        process_text = process_text.replace("\r", "[[N]]")
+        
+        try:
+            import re
+            translated_text = translate_text(process_text, source_lang, target_lang, config, resolved_paths, provider)
+            
+            if provider and provider.lower() == 'deepl':
+                translated_text = re.sub(r'(?i)\s*\[\[\s*B\s*\]\]\s*', '\\\\', translated_text)
+                
+            translated_text = re.sub(r'(?i)\s*\[\[\s*S\s*\]\]\s*', '  ', translated_text)
+            
+            translated_text = translated_text.replace('\r\n', '')
+            translated_text = translated_text.replace('\n', '')
+            translated_text = translated_text.replace('\r', '')
+            
+            translated_text = re.sub(r'(?i)\[\[\s*N\s*\]\]', '\n', translated_text)
+            
+            translated_text = re.sub(r'(?i)AHK_ESC_S_', '[[S]]', translated_text)
+            translated_text = re.sub(r'(?i)AHK_ESC_B_', '[[B]]', translated_text)
+            translated_text = re.sub(r'(?i)AHK_ESC_N_', '[[N]]', translated_text)
+            
+            lines = text.splitlines()
+            translated_lines = translated_text.split('\n')
+            
+            translations = {}
+            for idx in range(len(lines)):
+                if idx < len(translated_lines):
+                    translations[idx] = translated_lines[idx].strip()
+                else:
                     translations[idx] = ""
-            else:
-                translations[idx] = ""
-        return translations
+            return translations
+            
+        except Exception as e:
+            logger.warning(f"Failed to translate multi text block: {e}")
+            lines = text.splitlines()
+            return {idx: "" for idx in range(len(lines))}
 
 def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths):
     python_exe = resolved_paths['kardenwort_python']
