@@ -1261,6 +1261,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         var mousedownTargetSpan = null;
         var isRmbDragFlipping = false;
         var rmbFlipMode = true;
+        var initialFlippedMap = null;
         
         var tokenMap = [];
         try {
@@ -1397,6 +1398,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         dragOccurred = false;
                         mousedownTargetSpan = span;
                         
+                        tokenDragStartIdx = -1;
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            if (tokenSpans[k] === span) {
+                                tokenDragStartIdx = k;
+                                break;
+                            }
+                        }
+                        
+                        initialFlippedMap = [];
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            initialFlippedMap.push(tokenSpans[k].classList.contains('flipped'));
+                        }
+                        
                         rmbFlipMode = !span.classList.contains('flipped');
                         flipWord(span, rmbFlipMode);
                         
@@ -1455,7 +1469,27 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         updateBidirectionalHighlights();
                     } else if (isRmbDragFlipping) {
                         dragOccurred = true;
-                        flipWord(span, rmbFlipMode);
+                        
+                        var currIdx = -1;
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            if (tokenSpans[k] === span) {
+                                currIdx = k;
+                                break;
+                            }
+                        }
+                        if (currIdx === -1 || tokenDragStartIdx === -1) return;
+                        
+                        var minIdx = Math.min(tokenDragStartIdx, currIdx);
+                        var maxIdx = Math.max(tokenDragStartIdx, currIdx);
+                        
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            var s = tokenSpans[k];
+                            var shouldFlip = initialFlippedMap[k];
+                            if (k >= minIdx && k <= maxIdx) {
+                                shouldFlip = rmbFlipMode;
+                            }
+                            flipWord(s, shouldFlip);
+                        }
                     }
                 });
             })(tokenSpans[i]);
