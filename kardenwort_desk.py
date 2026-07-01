@@ -598,8 +598,15 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
     
     logger.info(f"Launching detached import: {' '.join(cmd)}")
     
+    show_window = config.getboolean('settings', 'show_import_window', fallback=False)
     if sys.platform == 'win32':
-        creationflags = 0x00000200 | 0x00000008
+        # CREATE_NEW_PROCESS_GROUP = 0x00000200
+        # DETACHED_PROCESS = 0x00000008
+        # CREATE_NO_WINDOW = 0x08000000
+        if show_window:
+            creationflags = 0x00000200 | 0x00000008
+        else:
+            creationflags = 0x00000200 | 0x08000000
         p = subprocess.Popen(
             cmd,
             stdout=log_file,
@@ -2483,7 +2490,8 @@ def cmd_export(args):
     fav_dir = resolved_paths['favorites_output_dir']
     fav_dir.mkdir(parents=True, exist_ok=True)
     
-    dest_filename = f"favorites-{tsv_path.name}"
+    fav_prefix = config.get('settings', 'favorites_prefix', fallback='')
+    dest_filename = f"{fav_prefix}{tsv_path.name}"
     dest_path = fav_dir / dest_filename
     
     try:
