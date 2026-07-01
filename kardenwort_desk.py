@@ -220,18 +220,26 @@ def generate_slug(text, max_words=4):
     return slug if slug else "untitled"
 
 def load_tsv_rows(tsv_path):
+    import csv
     comments = []
     headers = []
     data_rows = []
+    
+    lines_to_parse = []
     with open(tsv_path, 'r', encoding='utf-8') as f:
         for line in f:
-            line_str = line.rstrip('\r\n')
-            if line_str.startswith('#'):
-                comments.append(line_str)
-            elif not headers:
-                headers = line_str.split('\t')
+            if not headers and not lines_to_parse and line.startswith('#'):
+                comments.append(line.rstrip('\r\n'))
             else:
-                data_rows.append(line_str.split('\t'))
+                lines_to_parse.append(line)
+                
+    reader = csv.reader(lines_to_parse, delimiter='\t')
+    for i, row in enumerate(reader):
+        if i == 0:
+            headers = row
+        else:
+            data_rows.append(row)
+            
     return comments, headers, data_rows
 
 def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
