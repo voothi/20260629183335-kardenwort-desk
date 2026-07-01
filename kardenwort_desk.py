@@ -557,7 +557,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     slug = generate_slug(text)
     working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
-    source_text_path = results_dir / f"{zid}-{slug}.txt"
+    source_text_path = results_dir / f"{zid}-{slug}.{language}.txt"
     
     save_source_text = config.getboolean('settings', 'save_source_text', fallback=True)
     if save_source_text and not source_text_path.exists():
@@ -681,6 +681,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 pass
         if col_sentence_dest != -1 and len(row) > col_sentence_dest:
             sentence_translations[line_idx] = row[col_sentence_dest]
+            
+    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+    if save_translation_text and sentence_translations:
+        translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+        if not translation_text_path.exists():
+            max_idx = max(sentence_translations.keys())
+            translation_lines = [sentence_translations.get(i, "").strip() for i in range(max_idx + 1)]
+            if text_mode == 'single':
+                translation_text_out = " ".join(line for line in translation_lines if line)
+            else:
+                translation_text_out = "\n".join(translation_lines)
+            translation_text_path.write_text(translation_text_out, encoding='utf-8')
             
     word_translations_empty = True
     if col_word_dest != -1:
