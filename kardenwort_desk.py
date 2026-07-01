@@ -1807,7 +1807,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         row.className += ' selected';
                     }
                 } else {
-                    row.className = row.className.replace(/selected/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '');
+                    row.className = row.className.replace(/selected/g, '').replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '');
                 }
                 
                 if (hasHighlightCol) {
