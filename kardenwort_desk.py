@@ -2588,6 +2588,9 @@ def cmd_reprocess(args):
     try:
         with file_lock(tsv_path):
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            
+        role_fields = mapping.get('desk_role_fields', {})
+        write_update_js(tsv_path, data_rows, headers, role_fields)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
         sys.exit(1)
