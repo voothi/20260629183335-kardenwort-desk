@@ -2593,7 +2593,7 @@ def cmd_reprocess(args):
         with file_lock(tsv_path):
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
-        role_fields = mapping.get('desk_role_fields', {})
+        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
         write_update_js(tsv_path, data_rows, headers, role_fields)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
@@ -2657,7 +2657,7 @@ def cmd_reprocess_worker(args):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
             
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-            role_fields = mapping.get('desk_role_fields', {})
+            role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
             col_lemma_name = role_fields.get('lemma', 'WordSource')
             col_word_dest_name = role_fields.get('word_translation', 'WordRussian')
             
@@ -2696,7 +2696,7 @@ def cmd_reprocess_worker(args):
 
     if lemmas_provider in ('intellifiller', 'combined'):
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = mapping.get('desk_role_fields', {})
+        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
         for i in range(0, len(selected_rows), batch_size):
             batch = selected_rows[i:i + batch_size]
             logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
@@ -2736,11 +2736,15 @@ def write_update_js(tsv_path, data_rows, headers, role_fields):
     temp_path = update_js_path.with_suffix('.update.js.tmp')
     with open(temp_path, 'w', encoding='utf-8') as f:
         f.write(js_content)
-    try:
-        os.replace(temp_path, update_js_path)
-    except Exception as e:
-        logger.error(f"Failed to atomically replace update.js: {e}")
-        pass
+    import time
+    for _ in range(10):
+        try:
+            os.replace(temp_path, update_js_path)
+            break
+        except Exception as e:
+            time.sleep(0.1)
+    else:
+        logger.error("Failed to atomically replace update.js after 10 retries.")
 
 def cmd_progressive_worker(args):
     logger.info("Progressive-worker subcommand invoked")
