@@ -1786,6 +1786,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         for (var i = 0; i < tableRows.length; i++) {
             (function(row) {
                 addEvent(row, 'mousedown', function(e) {
+                    if (window.__selectableTextMode) return;
                     e = e || window.event;
                     var target = e.target || e.srcElement;
                     if (target && target.tagName === 'INPUT') {
@@ -1831,6 +1832,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 });
                 
                 addEvent(row, 'mouseover', function(e) {
+                    if (window.__selectableTextMode) return;
                     e = e || window.event;
                     if (isDragSelecting) {
                         if (e.buttons !== undefined && (e.buttons & 1) === 0) {
@@ -1859,9 +1861,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     if (tds[j].className.indexOf('editable') !== -1) {
                         (function(cell) {
                             addEvent(cell, 'click', function(e) {
+                                if (window.__selectableTextMode) return;
                                 lastClickedCell = cell;
                             });
                             addEvent(cell, 'mouseover', function(e) {
+                                if (window.__selectableTextMode) return;
                                 lastHoveredCell = cell;
                             });
                             addEvent(cell, 'mouseout', function(e) {
@@ -1870,6 +1874,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                 }
                             });
                             addEvent(cell, 'dblclick', function() {
+                                if (window.__selectableTextMode) return;
                                 makeEditable(cell);
                             });
                         })(tds[j]);
