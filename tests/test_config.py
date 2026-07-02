@@ -102,17 +102,17 @@ default_target_language = uk
         
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
         
-        assert gd['default_format'] == 'html'
+        assert gd['format'] == 'html'
         assert gd['target_language'] == 'uk'
         assert gd['run_intellifiller'] is False
         assert gd['lookup_ttl_seconds'] == 300
         assert gd['theme'] == 'dark'
         assert gd['emit_meta_comment'] is True
-        assert gd['sections'] == 'translation,lemmas'
+        assert gd['sections'] == ['translation', 'lemmas']
         assert gd['heading_source'] == ''
         assert gd['heading_translation'] == ''
         assert gd['heading_lemmas'] == ''
-        assert gd['lemma_columns'] == 'inflected,lemma,translation'
+        assert gd['lemma_columns'] == ['inflected', 'lemma', 'translation']
 
 def test_goldendict_config_overrides():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -128,7 +128,7 @@ anki_mapping_file = ./anki-mapping.ini
 default_target_language = uk
 
 [goldendict]
-default_format = text
+format = text
 target_language = en
 run_intellifiller = true
 lookup_ttl_seconds = 600
@@ -145,15 +145,15 @@ lemma_columns = lemma,translation
         
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
         
-        assert gd['default_format'] == 'text'
+        assert gd['format'] == 'text'
         assert gd['target_language'] == 'en'
         assert gd['run_intellifiller'] is True
         assert gd['lookup_ttl_seconds'] == 600
         assert gd['theme'] == 'light'
         assert gd['emit_meta_comment'] is False
-        assert gd['sections'] == 'source,translation'
+        assert gd['sections'] == ['source', 'translation']
         assert gd['heading_source'] == '__default__'
         assert gd['heading_translation'] == 'Custom'
         assert gd['heading_lemmas'] == 'None'
-        assert gd['lemma_columns'] == 'lemma,translation'
+        assert gd['lemma_columns'] == ['lemma', 'translation']
 

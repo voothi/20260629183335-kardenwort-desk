@@ -113,7 +113,7 @@ def load_config(config_path=None):
     goldendict = {}
     if 'goldendict' in config:
         gd = config['goldendict']
-        goldendict['default_format'] = gd.get('default_format', 'html')
+        goldendict['format'] = gd.get('format', 'html')
         goldendict['target_language'] = gd.get('target_language', config.get('settings', 'default_target_language', fallback='ru'))
         if not goldendict['target_language']:
             goldendict['target_language'] = config.get('settings', 'default_target_language', fallback='ru')
@@ -121,23 +121,28 @@ def load_config(config_path=None):
         goldendict['lookup_ttl_seconds'] = gd.getint('lookup_ttl_seconds', fallback=300)
         goldendict['theme'] = gd.get('theme', 'dark')
         goldendict['emit_meta_comment'] = gd.getboolean('emit_meta_comment', fallback=True)
-        goldendict['sections'] = gd.get('sections', 'translation,lemmas')
+        
+        raw_sections = gd.get('sections', 'translation,lemmas')
+        goldendict['sections'] = parse_sections_list(raw_sections, ['source', 'translation', 'lemmas'])
+        
         goldendict['heading_source'] = gd.get('heading_source', '')
         goldendict['heading_translation'] = gd.get('heading_translation', '')
         goldendict['heading_lemmas'] = gd.get('heading_lemmas', '')
-        goldendict['lemma_columns'] = gd.get('lemma_columns', 'inflected,lemma,translation')
+        
+        raw_columns = gd.get('lemma_columns', 'inflected,lemma,translation')
+        goldendict['lemma_columns'] = parse_columns_list(raw_columns, ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
     else:
-        goldendict['default_format'] = 'html'
+        goldendict['format'] = 'html'
         goldendict['target_language'] = config.get('settings', 'default_target_language', fallback='ru')
         goldendict['run_intellifiller'] = False
         goldendict['lookup_ttl_seconds'] = 300
         goldendict['theme'] = 'dark'
         goldendict['emit_meta_comment'] = True
-        goldendict['sections'] = 'translation,lemmas'
+        goldendict['sections'] = ['translation', 'lemmas']
         goldendict['heading_source'] = ''
         goldendict['heading_translation'] = ''
         goldendict['heading_lemmas'] = ''
-        goldendict['lemma_columns'] = 'inflected,lemma,translation'
+        goldendict['lemma_columns'] = ['inflected', 'lemma', 'translation']
 
     return config, resolved_paths, goldendict
 
