@@ -2724,17 +2724,9 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
     css = ""
     if theme == 'compact':
         css = """
-        :root {
-            --bg-color: inherit;
-            --text-color: inherit;
-            --section-bg: transparent;
+        .kw-lookup-container {
             --table-th-border: #ccc;
             --table-border: #eee;
-        }
-        body {
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            font-family: inherit;
             margin: 0;
             padding: 2px;
         }
@@ -2764,14 +2756,12 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         }"""
     else:
         css = """
-        :root {
+        .kw-lookup-container {
             --bg-color: #0d0f12;
             --text-color: #e3e6eb;
             --section-bg: rgba(255, 255, 255, 0.03);
             --table-th-border: rgba(255, 255, 255, 0.1);
             --table-border: rgba(255, 255, 255, 0.05);
-        }
-        body {
             background-color: var(--bg-color);
             color: var(--text-color);
             font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
