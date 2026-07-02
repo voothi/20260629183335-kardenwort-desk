@@ -27,6 +27,34 @@ def is_contiguous_subsequence(sub, seq):
 class ConfigError(Exception):
     pass
 
+def parse_sections_list(raw, valid_tokens):
+    if not raw or not raw.strip():
+        return []
+    result = []
+    for token in raw.split(','):
+        t = token.strip()
+        if not t:
+            continue
+        if t in valid_tokens:
+            result.append(t)
+        else:
+            sys.stderr.write(f"Warning: Unknown section token '{t}' ignored.\n")
+    return result
+
+def parse_columns_list(raw, valid_tokens):
+    if not raw or not raw.strip():
+        return []
+    result = []
+    for token in raw.split(','):
+        t = token.strip()
+        if not t:
+            continue
+        if t in valid_tokens:
+            result.append(t)
+        else:
+            sys.stderr.write(f"Warning: Unknown column token '{t}' ignored.\n")
+    return result
+
 def load_config(config_path=None):
     """
     Loads config.ini.
@@ -82,7 +110,36 @@ def load_config(config_path=None):
         if not resolved_paths['anki_mapping_file'].exists():
             raise ConfigError(f"anki_mapping_file path configured for 'anki_mapping_file' does not exist: {resolved_paths['anki_mapping_file']}")
             
-    return config, resolved_paths
+    goldendict = {}
+    if 'goldendict' in config:
+        gd = config['goldendict']
+        goldendict['default_format'] = gd.get('default_format', 'html')
+        goldendict['target_language'] = gd.get('target_language', config.get('settings', 'default_target_language', fallback='ru'))
+        if not goldendict['target_language']:
+            goldendict['target_language'] = config.get('settings', 'default_target_language', fallback='ru')
+        goldendict['run_intellifiller'] = gd.getboolean('run_intellifiller', fallback=False)
+        goldendict['lookup_ttl_seconds'] = gd.getint('lookup_ttl_seconds', fallback=300)
+        goldendict['theme'] = gd.get('theme', 'dark')
+        goldendict['emit_meta_comment'] = gd.getboolean('emit_meta_comment', fallback=True)
+        goldendict['sections'] = gd.get('sections', 'translation,lemmas')
+        goldendict['heading_source'] = gd.get('heading_source', '')
+        goldendict['heading_translation'] = gd.get('heading_translation', '')
+        goldendict['heading_lemmas'] = gd.get('heading_lemmas', '')
+        goldendict['lemma_columns'] = gd.get('lemma_columns', 'inflected,lemma,translation')
+    else:
+        goldendict['default_format'] = 'html'
+        goldendict['target_language'] = config.get('settings', 'default_target_language', fallback='ru')
+        goldendict['run_intellifiller'] = False
+        goldendict['lookup_ttl_seconds'] = 300
+        goldendict['theme'] = 'dark'
+        goldendict['emit_meta_comment'] = True
+        goldendict['sections'] = 'translation,lemmas'
+        goldendict['heading_source'] = ''
+        goldendict['heading_translation'] = ''
+        goldendict['heading_lemmas'] = ''
+        goldendict['lemma_columns'] = 'inflected,lemma,translation'
+
+    return config, resolved_paths, goldendict
 
 def load_kardenwort_config(kardenwort_workspace):
     kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
@@ -2430,7 +2487,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
 def cmd_render(args):
     logger.info("Render subcommand invoked", extra={"zid": args.zid})
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     
     if not args.text:
         if not sys.stdin.isatty():
@@ -2451,7 +2508,7 @@ def cmd_render(args):
 
 def cmd_export(args):
     logger.info("Export subcommand invoked")
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -2578,7 +2635,7 @@ def cmd_export(args):
 
 def cmd_reprocess(args):
     logger.info("Reprocess subcommand invoked")
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -2697,7 +2754,7 @@ def cmd_reprocess(args):
     print(json.dumps({"reprocess_started": True, "rows": cleared_count}))
 
 def cmd_reprocess_worker(args):
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
     tsv_path = Path(args.tsv)
     
@@ -2807,7 +2864,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields):
 
 def cmd_progressive_worker(args):
     logger.info("Progressive-worker subcommand invoked")
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     tsv_path = Path(args.tsv)
     
     if not tsv_path.exists():
@@ -2859,7 +2916,7 @@ def cmd_progressive_worker(args):
 
 def cmd_edit_save(args):
     logger.info("Edit-save subcommand invoked", extra={"zid": args.zid})
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -2945,7 +3002,7 @@ def cmd_edit_save(args):
 
 def cmd_merge(args):
     logger.info("Merge subcommand invoked")
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     
     files = [Path(f).resolve() for f in args.files]
     files.sort(key=extract_zid)
@@ -3138,7 +3195,7 @@ def spawn_ahk(args_list, base_dir):
 
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     
     file_val = args.file[0] if isinstance(args.file, list) else args.file
     input_path = Path(file_val).resolve()
@@ -3213,7 +3270,7 @@ def cmd_restore(args):
 
 def cmd_desk(args):
     logger.info("Desk subcommand invoked")
-    config, resolved_paths = load_config(args.config)
+    config, resolved_paths, goldendict = load_config(args.config)
     
     file_val = args.file[0] if isinstance(args.file, list) else args.file
     file_path = Path(file_val).resolve()
