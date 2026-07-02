@@ -1100,7 +1100,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     for idx in sorted(sentence_translations.keys()):
         trans = sentence_translations[idx]
         if trans:
-            sentence_htmls.append(f"<div>{trans}</div>")
+            safe_trans = htmlescape(trans)
+            sentence_htmls.append(f"<div>{safe_trans}</div>")
         else:
             sentence_htmls.append("<div>&nbsp;</div>")
     sentence_html = "".join(sentence_htmls)
@@ -2656,7 +2657,7 @@ def render_section(token, ctx):
         
     elif token == "translation":
         html += make_heading("translation", "Translation")
-        safe_trans = ctx.get("sentence_translation", "").replace('\r', '')
+        safe_trans = htmlescape(ctx.get("sentence_translation", "").replace('\r', ''))
         html += f'<div class="kw-translation">{safe_trans}</div>\n'
         
     elif token == "lemmas":
