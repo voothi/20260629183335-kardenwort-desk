@@ -3002,7 +3002,8 @@ def cmd_render(args):
         text = args.text
         
     try:
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, args.zoom, args.theme)
+        zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme)
         from b64util import encode
         print(encode(html))
     except Exception as e:
@@ -3844,7 +3845,7 @@ def main():
     p_render.add_argument("--language", required=True, help="Language code")
     p_render.add_argument("--zid", required=True, help="Session ZID")
     p_render.add_argument("--text-mode", choices=["single", "multi"], default="single")
-    p_render.add_argument("--zoom", default="100", help="Zoom level for CSS scaling")
+    p_render.add_argument("--zoom", default=None, help="Zoom level for CSS scaling (falls back to config default_zoom)")
     p_render.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
 
     # export
