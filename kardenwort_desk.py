@@ -560,7 +560,7 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
             close_fds=True
         )
 
-def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty):
+def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False):
     python_exe = sys.executable
     desk_script = Path(__file__).resolve()
     cmd = [
@@ -574,6 +574,8 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
         "--provider", lemmas_provider,
         "--word-empty", str(word_translations_empty)
     ]
+    if skip_intellifiller:
+        cmd.append("--skip-intellifiller")
     logger.info(f"Kicking off background progressive-worker: {' '.join(cmd)}")
     if sys.platform == 'win32':
         creationflags = 0x08000000 | 0x00000200
@@ -748,7 +750,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     progressive_loading = config.getboolean('settings', 'progressive_loading', fallback=False)
-    lazy_processing = config.getboolean('settings', 'lazy_processing', fallback=False)
+    
+    lazy_processing_raw = config.get('settings', 'lazy_processing', fallback='false').lower()
+    if lazy_processing_raw in ('true', 'all'):
+        lazy_processing = 'all'
+    elif lazy_processing_raw == 'llm_only':
+        lazy_processing = 'llm_only'
+    else:
+        lazy_processing = 'none'
+        
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
     main_text_provider = config.get('translation_providers', 'main_text_translation', fallback='combined')
@@ -862,12 +872,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     if not llm_filled:
         prompt_name = config.get('languages', f'{language}_prompt')
         
-        if lazy_processing:
+        if lazy_processing == 'all':
             pass # Skip all automatic translation and IntelliFiller processing
         elif progressive_loading:
             # Stage 2: Offload lemma translation and intellifiller to background
-            run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty)
+            skip_intellifiller = (lazy_processing == 'llm_only')
+            run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller)
         else:
+            if lazy_processing == 'llm_only' and lemmas_provider == 'combined':
+                lemmas_provider = 'google'
+                
             if lemmas_provider == 'intellifiller':
                 run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
@@ -2829,14 +2843,16 @@ def cmd_progressive_worker(args):
             write_update_js(tsv_path, data_rows, headers, role_fields)
                 
         if args.provider == 'combined':
+            if not getattr(args, 'skip_intellifiller', False):
+                run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths)
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+                write_update_js(tsv_path, data_rows, headers, role_fields)
+            
+    elif args.provider == 'intellifiller':
+        if not getattr(args, 'skip_intellifiller', False):
             run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths)
             comments, headers, data_rows = load_tsv_rows(tsv_path)
             write_update_js(tsv_path, data_rows, headers, role_fields)
-            
-    elif args.provider == 'intellifiller':
-        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths)
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
-        write_update_js(tsv_path, data_rows, headers, role_fields)
 
 
 
@@ -3283,6 +3299,7 @@ def main():
     p_prog_worker.add_argument("--prompt", required=True, help="Prompt name")
     p_prog_worker.add_argument("--provider", required=True, help="Lemmas provider")
     p_prog_worker.add_argument("--word-empty", required=True, help="Word translations empty flag")
+    p_prog_worker.add_argument("--skip-intellifiller", action="store_true", help="Skip intellifiller phase")
 
     # edit-save
     p_edit = subparsers.add_parser("edit-save")
