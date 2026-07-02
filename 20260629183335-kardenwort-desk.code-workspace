@@ -1,12 +1,19 @@
 {
 	"folders": [
 		{
-			"name": "Code Base",
-			"path": "."
+			"name": "Kardenwort Desk (Backend)",
+			"path": "U:/voothi/20260629183335-kardenwort-desk"
+		},
+		{
+			"name": "Kardenwort Window (Frontend)",
+			"path": "U:/voothi/20240411110510-autohotkey"
+		},		{
+			"name": "GoldenDict-ng (Frontend)",
+			"path": "U:/voothi/20260113230706-goldendict"
 		},
 		{
 			"name": "Private Vault",
-			"path": "U:\\voothi.vault"
+			"path": "U:/voothi.vault"
 		}
 	]
 }
