@@ -726,9 +726,19 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     working_tsv_path = results_dir / cache_key
     
     import time
-    if working_tsv_path.exists():
-        if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
-            return working_tsv_path
+    import re
+    if ttl_seconds > 0:
+        m = re.match(r'^\d{14}-(.+)', cache_key)
+        if m:
+            slug_part = m.group(1)
+            for cached_file in results_dir.glob(f"*-{slug_part}"):
+                if cached_file.is_file():
+                    if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
+                        return cached_file
+                        
+        if working_tsv_path.exists():
+            if (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
+                return working_tsv_path
             
     # Clean up any leftover update.js from previous sessions to avoid polling stale data
     update_js_path = working_tsv_path.with_suffix('.update.js')
@@ -2522,9 +2532,8 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
     results_dir = (kardenwort_workspace / results_dir_name).resolve()
     
-    normalized_text = " ".join([line.strip() for line in text.splitlines() if line.strip()]).lower()
-    text_hash = hashlib.sha1(normalized_text.encode('utf-8')).hexdigest()
-    cache_key = f"lookup-{language}-{text_hash}.tsv"
+    slug = generate_slug(text)
+    cache_key = f"{zid}-{slug}.{language}.tsv"
     
     working_tsv_path = results_dir / cache_key
     
@@ -2536,12 +2545,26 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     sentence_translation = sentence_translations.get(0, "")
     
     cached = False
-    if working_tsv_path.exists():
-        if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
-            cached = True
+    import re
+    if ttl_seconds > 0:
+        for cached_file in results_dir.glob(f"*-{slug}.{language}.tsv"):
+            if cached_file.is_file():
+                if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
+                    working_tsv_path = cached_file
+                    cached = True
+                    break
             
     if not cached:
-        prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=ttl_seconds, cache_key=cache_key, text_mode='single')
+        working_tsv_path = prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode='single')
+        
+        save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+        if save_translation_text and sentence_translations:
+            translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+            if not translation_text_path.exists():
+                max_idx = max(sentence_translations.keys())
+                translation_lines = [sentence_translations.get(i, "").strip() for i in range(max_idx + 1)]
+                translation_text_out = " ".join(line for line in translation_lines if line)
+                translation_text_path.write_text(translation_text_out, encoding='utf-8')
         
         comments, headers, data_rows = load_tsv_rows(working_tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
