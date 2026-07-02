@@ -1292,9 +1292,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     color: {highlight_purple_active_text} !important;
   }
   .translation-text {
-    font-size: 15px;
-    color: {table_text};
-    font-style: italic;
+    font-size: 16px;
+    color: {text_color};
+    line-height: 1.6;
+    word-break: break-word;
     white-space: {source_white_space};
   }
   table {
