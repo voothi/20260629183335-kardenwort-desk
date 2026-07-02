@@ -710,7 +710,7 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
     except subprocess.CalledProcessError as e:
         return False, e.stderr
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark"):
+def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single'):
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -718,9 +718,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     results_dir = (kardenwort_workspace / results_dir_name).resolve()
     results_dir.mkdir(parents=True, exist_ok=True)
     
-    slug = generate_slug(text)
-    working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
+    working_tsv_path = results_dir / cache_key
     
+    import time
+    if working_tsv_path.exists():
+        if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
+            return working_tsv_path
+            
     # Clean up any leftover update.js from previous sessions to avoid polling stale data
     update_js_path = working_tsv_path.with_suffix('.update.js')
     if update_js_path.exists():
@@ -729,7 +733,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         except OSError:
             pass
             
-    source_text_path = results_dir / f"{zid}-{slug}.{language}.txt"
+    stem = cache_key
+    if stem.endswith('.tsv'):
+        stem = stem[:-4]
+    source_text_path = results_dir / f"{stem}.txt"
     
     save_source_text = config.getboolean('settings', 'save_source_text', fallback=True)
     if save_source_text and not source_text_path.exists():
@@ -739,72 +746,82 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     fields = list(mapping['fields'].keys())
     field_mapping = build_field_mapping(mapping, 'word')
     
-    target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    lemma_index_rel = config.get('languages', f'{language}_lemma_index')
+    lemma_override_rel = config.get('languages', f'{language}_lemma_override')
     
-    if not working_tsv_path.exists():
-        lemma_index_rel = config.get('languages', f'{language}_lemma_index')
-        lemma_override_rel = config.get('languages', f'{language}_lemma_override')
+    lemma_index_file = kardenwort_workspace / lemma_index_rel
+    lemma_override_file = kardenwort_workspace / lemma_override_rel
+    
+    python_exe = resolved_paths['kardenwort_python']
+    kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
+    
+    text_file_to_pass = source_text_path
+    if not save_source_text:
+        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
+        text_to_write = text
+        if text_mode == 'single':
+            text_to_write = " ".join([line.strip() for line in text.splitlines() if line.strip()])
+        temp_file.write(text_to_write)
+        temp_file.close()
+        text_file_to_pass = Path(temp_file.name)
         
-        lemma_index_file = kardenwort_workspace / lemma_index_rel
-        lemma_override_file = kardenwort_workspace / lemma_override_rel
+    cmd = [
+        str(python_exe),
+        str(kardenwort_script),
+        "--type", "word",
+        "--language", language,
+        "--deduplication-scope", "global",
+        "--lemma-index-file", str(lemma_index_file),
+        "--lemma-override-file", str(lemma_override_file),
+        "--sentence-context-size", "0",
+        "--anki-csv-header", json.dumps(fields),
+        "--anki-field-mapping", json.dumps(field_mapping),
+        "--output-file", str(working_tsv_path),
+        "--text1-file", str(text_file_to_pass),
+        "--tts-destination-lang", target_lang
+    ]
+    
+    if language == "de":
+        de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
+        de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
+        cmd.extend([
+            "--de-fix-genitive",
+            "--de-dictionary-file", str(de_dict_path),
+        ])
         
-        python_exe = resolved_paths['kardenwort_python']
-        kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
-        
-        text_file_to_pass = source_text_path
-        if not save_source_text:
-            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
-            text_to_write = text
-            if text_mode == 'single':
-                text_to_write = " ".join([line.strip() for line in text.splitlines() if line.strip()])
-            temp_file.write(text_to_write)
-            temp_file.close()
-            text_file_to_pass = Path(temp_file.name)
-            
-        cmd = [
-            str(python_exe),
-            str(kardenwort_script),
-            "--type", "word",
-            "--language", language,
-            "--deduplication-scope", "global",
-            "--lemma-index-file", str(lemma_index_file),
-            "--lemma-override-file", str(lemma_override_file),
-            "--sentence-context-size", "0",
-            "--anki-csv-header", json.dumps(fields),
-            "--anki-field-mapping", json.dumps(field_mapping),
-            "--output-file", str(working_tsv_path),
-            "--text1-file", str(text_file_to_pass),
-            "--tts-destination-lang", target_lang
-        ]
-        
-        if language == "de":
-            de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
-            de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
-            cmd.extend([
-                "--de-fix-genitive",
-                "--de-dictionary-file", str(de_dict_path),
-            ])
-            
-        kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
-        
-        logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
-        try:
-            subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
-        except subprocess.TimeoutExpired as e:
-            print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
-            sys.exit(1)
-        except subprocess.CalledProcessError as e:
-            print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
-            sys.exit(1)
-        finally:
-            if not save_source_text and 'temp_file' in locals():
-                try:
-                    os.remove(temp_file.name)
-                except OSError:
-                    pass
-                    
+    kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    
+    logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
+    try:
+        subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
+    except subprocess.TimeoutExpired as e:
+        print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
+        sys.exit(1)
+    except subprocess.CalledProcessError as e:
+        print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
+        sys.exit(1)
+    finally:
+        if not save_source_text and 'temp_file' in locals():
+            try:
+                os.remove(temp_file.name)
+            except OSError:
+                pass
+                
+    return working_tsv_path
+
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark"):
+    target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    slug = generate_slug(text)
+    cache_key = f"{zid}-{slug}.{language}.tsv"
+    
+    working_tsv_path = prepare_lookup_tsv(
+        text, language, target_lang, config, resolved_paths, zid,
+        ttl_seconds=0, cache_key=cache_key, text_mode=text_mode
+    )
+    
+    mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     progressive_loading = config.getboolean('settings', 'progressive_loading', fallback=False)
     
@@ -2484,6 +2501,285 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     
     return html_page
+
+def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid):
+    import hashlib
+    import time
+    
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    
+    normalized_text = " ".join([line.strip() for line in text.splitlines() if line.strip()]).lower()
+    text_hash = hashlib.sha1(normalized_text.encode('utf-8')).hexdigest()
+    cache_key = f"lookup-{language}-{text_hash}.tsv"
+    
+    working_tsv_path = results_dir / cache_key
+    
+    ttl_seconds = goldendict['lookup_ttl_seconds']
+    run_intellifiller = goldendict['run_intellifiller']
+    
+    main_text_provider = config.get('translation_providers', 'main_text_translation', fallback='combined')
+    sentence_translations = translate_source_text(text, language, target_lang, 'single', config, resolved_paths, main_text_provider)
+    sentence_translation = sentence_translations.get(0, "")
+    
+    cached = False
+    if working_tsv_path.exists():
+        if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
+            cached = True
+            
+    if not cached:
+        prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode='single')
+        
+        comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+        
+        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
+        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
+        
+        if col_lemma != -1 and col_word_dest != -1:
+            lemmas_provider = config.get('translation_providers', 'lemmas_translation', fallback='combined')
+            lemmas = []
+            for row in data_rows:
+                if len(row) > col_lemma and row[col_lemma].strip():
+                    lemmas.append(row[col_lemma].strip())
+            
+            unique_lemmas = list(dict.fromkeys(lemmas))
+            translations = translate_lemmas_fast_path(unique_lemmas, language, target_lang, config, resolved_paths, lemmas_provider)
+            
+            for row in data_rows:
+                if len(row) > col_lemma and row[col_lemma].strip():
+                    lemma = row[col_lemma].strip()
+                    trans = translations.get(lemma, "")
+                    while len(row) <= col_word_dest:
+                        row.append("")
+                    row[col_word_dest] = trans
+            
+            with file_lock(working_tsv_path):
+                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+
+    if run_intellifiller:
+        prompt_name = config.get('languages', f'{language}_prompt', fallback='')
+        run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+        
+    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+    
+    if not run_intellifiller:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+        
+        cols_to_remove = []
+        if 'morphology' in role_fields:
+            cols_to_remove.append(role_fields['morphology'])
+        elif 'WordSourceMorphologyAI' in headers:
+            cols_to_remove.append('WordSourceMorphologyAI')
+            
+        if 'ipa' in role_fields:
+            cols_to_remove.append(role_fields['ipa'])
+        elif 'WordSourceIPA' in headers:
+            cols_to_remove.append('WordSourceIPA')
+            
+        for col_name in cols_to_remove:
+            if col_name in headers:
+                col_idx = headers.index(col_name)
+                for row in data_rows:
+                    if len(row) > col_idx:
+                        row[col_idx] = ""
+                        
+    return comments, headers, data_rows, sentence_translation
+
+def render_section(token, ctx):
+    import re
+    html = ""
+    
+    def make_heading(heading_key, default_text):
+        h_text = ctx.get('headings', {}).get(heading_key, "")
+        if h_text == '__default__':
+            h_text = default_text
+        if h_text:
+            return f"<h3>{h_text}</h3>\n"
+        return ""
+        
+    if token == "source":
+        html += make_heading("source", "Source Text")
+        html += f'<div class="kw-source-text" style="white-space: pre-wrap; font-family: monospace; padding: 10px; background: var(--section-bg); border-radius: 5px;">{ctx["text"]}</div>\n'
+        
+    elif token == "translation":
+        html += make_heading("translation", "Translation")
+        html += f'<div class="kw-translation" style="padding: 10px; font-weight: bold;">{ctx.get("sentence_translation", "")}</div>\n'
+        
+    elif token == "lemmas":
+        html += make_heading("lemmas", "Lemmas")
+        html += '<table class="kw-lemmas-table" style="width: 100%; border-collapse: collapse; margin-top: 10px;">\n'
+        
+        COLUMN_TOKEN_MAP = {
+            'inflected': 'WordSourceInflectedForm',
+            'lemma': 'WordSource',
+            'ipa': 'WordSourceIPA',
+            'morphology': 'WordSourceMorphologyAI',
+            'translation': 'WordDestination'
+        }
+        
+        valid_tokens = []
+        html += '<thead><tr>'
+        for col_token in ctx.get('column_tokens', []):
+            if col_token not in COLUMN_TOKEN_MAP:
+                logger.warning(f"Unknown lemma_columns token: {col_token}")
+                continue
+            valid_tokens.append(col_token)
+            html += f'<th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--table-th-border);">{col_token.capitalize()}</th>'
+        html += '</tr></thead>\n<tbody>\n'
+        
+        headers = ctx['headers']
+        data_rows = ctx['data_rows']
+        
+        col_indices = {}
+        for t in valid_tokens:
+            field = COLUMN_TOKEN_MAP[t]
+            col_indices[t] = headers.index(field) if field in headers else -1
+            
+        for row in data_rows:
+            html += '<tr style="border-bottom: 1px solid var(--table-border);">'
+            for t in valid_tokens:
+                idx = col_indices[t]
+                val = row[idx] if idx != -1 and len(row) > idx else ""
+                html += f'<td style="padding: 8px;">{val}</td>'
+            html += '</tr>\n'
+            
+        html += '</tbody></table>\n'
+        
+    return html
+
+def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+    sections = goldendict['sections']
+    column_tokens = goldendict['lemma_columns']
+    
+    headings = {
+        'source': goldendict.get('heading_source', ''),
+        'translation': goldendict.get('heading_translation', ''),
+        'lemmas': goldendict.get('heading_lemmas', '')
+    }
+    
+    ctx = {
+        'text': text,
+        'sentence_translation': sentence_translation,
+        'headers': headers,
+        'data_rows': data_rows,
+        'language': language,
+        'target_lang': target_lang,
+        'run_intellifiller': goldendict['run_intellifiller'],
+        'column_tokens': column_tokens,
+        'headings': headings
+    }
+    
+    html = '<div class="kw-lookup-container">\n'
+    for sec in sections:
+        html += render_section(sec, ctx)
+    html += '</div>\n'
+    
+    base_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Kardenwort Lookup</title>
+    <style>
+        :root {{
+            --bg-color: #0d0f12;
+            --text-color: #e3e6eb;
+            --section-bg: rgba(255, 255, 255, 0.03);
+            --table-th-border: rgba(255, 255, 255, 0.1);
+            --table-border: rgba(255, 255, 255, 0.05);
+        }}
+        body {{
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+        }}
+    </style>
+</head>
+<body>
+{html}
+</body>
+</html>"""
+    return base_html
+
+def render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+    import re
+    sections = goldendict['sections']
+    column_tokens = goldendict['lemma_columns']
+    
+    headings = {
+        'source': goldendict.get('heading_source', ''),
+        'translation': goldendict.get('heading_translation', ''),
+        'lemmas': goldendict.get('heading_lemmas', '')
+    }
+    
+    out = []
+    
+    def add_heading(key, default):
+        h = headings.get(key, "")
+        if h == '__default__':
+            h = default
+        if h:
+            out.append(f"=== {h} ===")
+            
+    for sec in sections:
+        if sec == 'source':
+            add_heading("source", "Source Text")
+            out.append(text)
+            out.append("")
+        elif sec == 'translation':
+            add_heading("translation", "Translation")
+            out.append(sentence_translation)
+            out.append("")
+        elif sec == 'lemmas':
+            add_heading("lemmas", "Lemmas")
+            
+            COLUMN_TOKEN_MAP = {
+                'inflected': 'WordSourceInflectedForm',
+                'lemma': 'WordSource',
+                'ipa': 'WordSourceIPA',
+                'morphology': 'WordSourceMorphologyAI',
+                'translation': 'WordDestination'
+            }
+            
+            valid_tokens = []
+            for t in column_tokens:
+                if t in COLUMN_TOKEN_MAP:
+                    valid_tokens.append(t)
+                else:
+                    logger.warning(f"Unknown lemma_columns token: {t}")
+            
+            col_indices = {}
+            for t in valid_tokens:
+                field = COLUMN_TOKEN_MAP[t]
+                col_indices[t] = headers.index(field) if field in headers else -1
+                
+            for row in data_rows:
+                row_vals = []
+                for t in valid_tokens:
+                    idx = col_indices[t]
+                    val = row[idx] if idx != -1 and len(row) > idx else ""
+                    val = re.sub(r'<br\s*/?>', ' ', val, flags=re.IGNORECASE)
+                    val = re.sub(r'<[^>]+>', '', val)
+                    row_vals.append(val.strip())
+                out.append(" | ".join(row_vals))
+            out.append("")
+            
+    return "\n".join(out).strip()
+
+def render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+    import json
+    html_out = render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+    text_out = render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+    return json.dumps({
+        "html": html_out,
+        "text": text_out
+    }, ensure_ascii=False)
 
 def cmd_render(args):
     logger.info("Render subcommand invoked", extra={"zid": args.zid})

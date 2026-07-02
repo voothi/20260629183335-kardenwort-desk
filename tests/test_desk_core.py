@@ -353,7 +353,7 @@ send_to_anki_after_export=false
         "tsv_path": str(working_tsv)
     }))
     
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
     
     class Args:
         config = None
