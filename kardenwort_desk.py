@@ -1589,6 +1589,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         for (var i = 0; i < tokenSpans.length; i++) {
             (function(span) {
                 addEvent(span, 'mousedown', function(e) {
+                    if (window.__selectableTextMode) return;
                     e = e || window.event;
                     
                     if (e.button === 0) { // LMB
@@ -1670,6 +1671,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 });
                 
                 addEvent(span, 'mouseover', function(e) {
+                    if (window.__selectableTextMode) return;
                     e = e || window.event;
                     if (isTokenDragSelecting) {
                         if (e.buttons !== undefined && (e.buttons & 1) === 0) {
