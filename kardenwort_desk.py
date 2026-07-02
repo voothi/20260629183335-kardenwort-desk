@@ -830,7 +830,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 
     return working_tsv_path
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark"):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -841,10 +841,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     slug = generate_slug(text)
     cache_key = f"{zid}-{slug}.{language}.tsv"
     
-    working_tsv_path = prepare_lookup_tsv(
-        text, language, target_lang, config, resolved_paths, zid,
-        ttl_seconds=0, cache_key=cache_key, text_mode=text_mode
-    )
+    if tsv_path and Path(tsv_path).exists():
+        working_tsv_path = Path(tsv_path)
+    else:
+        working_tsv_path = prepare_lookup_tsv(
+            text, language, target_lang, config, resolved_paths, zid,
+            ttl_seconds=0, cache_key=cache_key, text_mode=text_mode
+        )
     
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
@@ -3005,7 +3008,7 @@ def cmd_render(args):
         
     try:
         zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme)
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv)
         from b64util import encode
         print(encode(html))
     except Exception as e:
@@ -3889,6 +3892,7 @@ def main():
     p_render.add_argument("--zid", required=True, help="Session ZID")
     p_render.add_argument("--text-mode", choices=["single", "multi"], default="single")
     p_render.add_argument("--zoom", default=None, help="Zoom level for CSS scaling (falls back to config default_zoom)")
+    p_render.add_argument("--tsv", default=None, help="Path to TSV file to render")
     p_render.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
 
     # export
