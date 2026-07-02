@@ -818,6 +818,12 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark"):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    
     slug = generate_slug(text)
     cache_key = f"{zid}-{slug}.{language}.tsv"
     
