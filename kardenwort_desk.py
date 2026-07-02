@@ -2641,16 +2641,16 @@ def render_section(token, ctx):
     if token == "source":
         html += make_heading("source", "Source Text")
         safe_text = ctx["text"].replace('\r', '')
-        html += f'<div class="kw-source-text" style="white-space: pre-wrap; font-family: monospace; padding: 10px; background: var(--section-bg); border-radius: 5px;">{safe_text}</div>\n'
+        html += f'<div class="kw-source-text">{safe_text}</div>\n'
         
     elif token == "translation":
         html += make_heading("translation", "Translation")
         safe_trans = ctx.get("sentence_translation", "").replace('\r', '')
-        html += f'<div class="kw-translation" style="padding: 10px; font-weight: bold;">{safe_trans}</div>\n'
+        html += f'<div class="kw-translation">{safe_trans}</div>\n'
         
     elif token == "lemmas":
         html += make_heading("lemmas", "Lemmas")
-        html += '<table class="kw-lemmas-table" style="width: 100%; border-collapse: collapse; margin-top: 10px;">\n'
+        html += '<table class="kw-lemmas-table">\n'
         
         COLUMN_TOKEN_MAP = {
             'inflected': 'WordSourceInflectedForm',
@@ -2667,7 +2667,7 @@ def render_section(token, ctx):
                 logger.warning(f"Unknown lemma_columns token: {col_token}")
                 continue
             valid_tokens.append(col_token)
-            html += f'<th style="text-align: left; padding: 8px; border-bottom: 1px solid var(--table-th-border);">{col_token.capitalize()}</th>'
+            html += f'<th>{col_token.capitalize()}</th>'
         html += '</tr></thead>\n<tbody>\n'
         
         headers = ctx['headers']
@@ -2679,13 +2679,13 @@ def render_section(token, ctx):
             col_indices[t] = headers.index(field) if field in headers else -1
             
         for row in data_rows:
-            html += '<tr style="border-bottom: 1px solid var(--table-border);">'
+            html += '<tr>'
             for t in valid_tokens:
                 idx = col_indices[t]
                 val = row[idx] if idx != -1 and len(row) > idx else ""
                 if isinstance(val, str):
                     val = val.replace('\r', '')
-                html += f'<td style="padding: 8px;">{val}</td>'
+                html += f'<td>{val}</td>'
             html += '</tr>\n'
             
         html += '</tbody></table>\n'
@@ -2719,6 +2719,95 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         html += render_section(sec, ctx)
     html += '</div>\n'
     
+    theme = goldendict.get('theme', 'compact')
+    
+    css = ""
+    if theme == 'compact':
+        css = """
+        :root {
+            --bg-color: inherit;
+            --text-color: inherit;
+            --section-bg: transparent;
+            --table-th-border: #ccc;
+            --table-border: #eee;
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: inherit;
+            margin: 0;
+            padding: 2px;
+        }
+        .kw-source-text {
+            white-space: pre-wrap;
+            padding: 2px 0;
+        }
+        .kw-translation {
+            padding: 2px 0;
+            font-weight: normal;
+        }
+        .kw-lemmas-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 4px;
+        }
+        .kw-lemmas-table th {
+            text-align: left;
+            padding: 2px 4px;
+            border-bottom: 1px solid var(--table-th-border);
+        }
+        .kw-lemmas-table td {
+            padding: 2px 4px;
+        }
+        .kw-lemmas-table tr {
+            border-bottom: 1px solid var(--table-border);
+        }"""
+    else:
+        css = """
+        :root {
+            --bg-color: #0d0f12;
+            --text-color: #e3e6eb;
+            --section-bg: rgba(255, 255, 255, 0.03);
+            --table-th-border: rgba(255, 255, 255, 0.1);
+            --table-border: rgba(255, 255, 255, 0.05);
+        }
+        body {
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            margin: 0;
+            padding: 10px;
+        }
+        .kw-source-text {
+            white-space: pre-wrap;
+            font-family: monospace;
+            padding: 10px;
+            background: var(--section-bg);
+            border-radius: 5px;
+        }
+        .kw-translation {
+            padding: 10px;
+            font-weight: bold;
+        }
+        .kw-lemmas-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 10px;
+        }
+        .kw-lemmas-table th {
+            text-align: left;
+            padding: 8px;
+            border-bottom: 1px solid var(--table-th-border);
+        }
+        .kw-lemmas-table td {
+            padding: 8px;
+        }
+        .kw-lemmas-table tr {
+            border-bottom: 1px solid var(--table-border);
+        }"""
+        if theme == 'light':
+            css = css.replace('#0d0f12', '#f6f8fa').replace('#e3e6eb', '#24292f').replace('rgba(255, 255, 255, 0.03)', 'rgba(0, 0, 0, 0.03)').replace('rgba(255, 255, 255, 0.1)', 'rgba(0, 0, 0, 0.1)').replace('rgba(255, 255, 255, 0.05)', 'rgba(0, 0, 0, 0.05)')
+
     if goldendict.get('disable_css', False):
         base_html = f"""<!DOCTYPE html>
 <html>
@@ -2736,21 +2825,7 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
 <head>
     <meta charset="utf-8">
     <title>Kardenwort Lookup</title>
-    <style>
-        :root {{
-            --bg-color: #0d0f12;
-            --text-color: #e3e6eb;
-            --section-bg: rgba(255, 255, 255, 0.03);
-            --table-th-border: rgba(255, 255, 255, 0.1);
-            --table-border: rgba(255, 255, 255, 0.05);
-        }}
-        body {{
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 10px;
-        }}
+    <style>{css}
     </style>
 </head>
 <body>
@@ -3748,7 +3823,7 @@ def main():
     p_lookup.add_argument("--lemma-columns", help="Comma-separated columns for the lemmas table")
     p_lookup.add_argument("--no-headings", action="store_true", help="Disable headings")
     p_lookup.add_argument("--disable-css", action="store_true", help="Disable outputting CSS styles in HTML")
-    p_lookup.add_argument("--theme", choices=["dark", "light"], help="Theme (html format)")
+    p_lookup.add_argument("--theme", choices=["dark", "light", "compact"], help="Theme (html format)")
 
     # render
     p_render = subparsers.add_parser("render")
