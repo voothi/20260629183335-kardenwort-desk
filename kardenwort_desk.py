@@ -3707,9 +3707,16 @@ def cmd_restore(args):
     
     if not args.no_gui:
         ahk_args = []
+        processed_zids = set()
         for file_val in file_list:
             input_path = Path(file_val).resolve()
             if input_path.exists():
+                match = re.match(r"^(\d{14})", input_path.name)
+                if match:
+                    zid = match.group(1)
+                    if zid in processed_zids:
+                        continue
+                    processed_zids.add(zid)
                 ahk_args.extend(["--restore", str(input_path)])
             else:
                 print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
@@ -3791,14 +3798,22 @@ def cmd_desk(args):
     
     if not args.no_gui:
         ahk_args = []
+        processed_zids = set()
         for file_val in file_list:
             file_path = Path(file_val).resolve()
             if not file_path.exists():
                 print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
                 continue
                 
+            match = re.match(r"^(\d{14})", file_path.name)
+            if match:
+                zid = match.group(1)
+                if zid in processed_zids:
+                    continue
+                processed_zids.add(zid)
+                
             is_tsv = file_path.suffix == '.tsv'
-            has_zid = bool(re.match(r"^\d{14}-", file_path.name))
+            has_zid = bool(match)
             if is_tsv or has_zid:
                 logger.info(f"File '{file_path.name}' is recognized as an existing session. Delegating to restore...")
                 ahk_args.extend(["--restore", str(file_path)])
