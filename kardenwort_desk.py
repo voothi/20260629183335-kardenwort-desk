@@ -2729,16 +2729,26 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
             --table-border: #eee;
             margin: 0;
             padding: 2px;
+            font-family: inherit;
+            font-size: inherit;
+            line-height: inherit;
+            font-style: normal;
+            font-weight: normal;
         }
         .kw-source-text {
             white-space: pre-wrap;
             padding: 2px 0;
             margin-bottom: 1em;
+            font-family: inherit;
+            font-style: normal;
+            font-weight: normal;
         }
         .kw-translation {
             padding: 2px 0;
-            font-weight: normal;
             margin-bottom: 1em;
+            font-family: inherit;
+            font-style: normal;
+            font-weight: normal;
         }
         .kw-lemmas-table {
             width: 100%;
