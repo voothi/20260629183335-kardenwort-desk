@@ -2733,10 +2733,12 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         .kw-source-text {
             white-space: pre-wrap;
             padding: 2px 0;
+            margin-bottom: 1em;
         }
         .kw-translation {
             padding: 2px 0;
             font-weight: normal;
+            margin-bottom: 1em;
         }
         .kw-lemmas-table {
             width: 100%;
