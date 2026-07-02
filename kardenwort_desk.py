@@ -2781,6 +2781,70 @@ def render_lookup_combined(text, language, target_lang, config, resolved_paths, 
         "text": text_out
     }, ensure_ascii=False)
 
+def cmd_lookup(args):
+    import datetime, sys, subprocess, configparser
+    setup_logging(args.verbose, args.debug)
+    zid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    logger.info("Lookup subcommand invoked", extra={"zid": zid})
+    
+    try:
+        config, resolved_paths, goldendict = load_config(args.config)
+        
+        if args.format:
+            goldendict['format'] = args.format
+        if args.sections:
+            goldendict['sections'] = parse_sections_list(args.sections, ['source', 'translation', 'lemmas'])
+        if args.lemma_columns:
+            goldendict['lemma_columns'] = parse_columns_list(args.lemma_columns, ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+        if args.no_headings:
+            goldendict['heading_source'] = ""
+            goldendict['heading_translation'] = ""
+            goldendict['heading_lemmas'] = ""
+            
+        target_lang = args.target_lang if args.target_lang else config.get('settings', 'default_target_language', fallback='ru')
+        
+        if f"{args.language}_prompt" not in config['languages']:
+            raise KeyError(f"Missing {args.language}_prompt in [languages]")
+            
+        if hasattr(sys.stdout, 'reconfigure'):
+            sys.stdout.reconfigure(encoding='utf-8')
+            
+        comments, headers, data_rows, sentence_translation = run_lookup_flow(
+            args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid
+        )
+        
+        fmt = goldendict['format']
+        if fmt == 'html':
+            out = render_lookup_html(args.text, args.language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+        elif fmt == 'text':
+            out = render_lookup_text(args.text, args.language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+        else:
+            out = render_lookup_combined(args.text, args.language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+            
+        print(out)
+        sys.exit(0)
+    except (configparser.Error, KeyError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
+        if isinstance(e, subprocess.CalledProcessError):
+            print_structured_error("LOOKUP_FAILED", f"Lookup failed with exit code {e.returncode}", {"stderr": getattr(e, 'stderr', str(e))})
+        elif isinstance(e, subprocess.TimeoutExpired):
+            print_structured_error("LOOKUP_TIMEOUT", f"Lookup timed out after {e.timeout} seconds")
+        else:
+            print_structured_error("LOOKUP_CONFIG_ERROR", f"Configuration error: {str(e)}")
+            
+        fmt = getattr(args, 'format', 'html')
+        try:
+            if 'goldendict' in locals() and 'format' in goldendict:
+                fmt = goldendict['format']
+        except Exception:
+            pass
+            
+        err_msg = str(e)
+        if fmt == 'text':
+            print(f"Error: {err_msg}")
+        else:
+            print(f'<div style="color: red; padding: 10px; font-family: sans-serif;">Error: {err_msg}</div>')
+        sys.exit(1)
+
 def cmd_render(args):
     logger.info("Render subcommand invoked", extra={"zid": args.zid})
     config, resolved_paths, goldendict = load_config(args.config)
@@ -3619,6 +3683,17 @@ def main():
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
+    # lookup
+    p_lookup = subparsers.add_parser("lookup")
+    p_lookup.add_argument("--text", required=True, help="Text to lookup")
+    p_lookup.add_argument("--language", help="Source language code")
+    p_lookup.add_argument("--target-lang", help="Target language code")
+    p_lookup.add_argument("--format", choices=["html", "text", "combined"], help="Output format")
+    p_lookup.add_argument("--sections", help="Comma-separated sections to render")
+    p_lookup.add_argument("--lemma-columns", help="Comma-separated columns for the lemmas table")
+    p_lookup.add_argument("--no-headings", action="store_true", help="Disable headings")
+    p_lookup.add_argument("--theme", choices=["dark", "light"], help="Theme (html format)")
+
     # render
     p_render = subparsers.add_parser("render")
     p_render.add_argument("--text", help="Selected text")
@@ -3690,6 +3765,7 @@ def main():
     setup_logging(verbose=args.verbose, debug=args.debug)
 
     commands = {
+        "lookup": cmd_lookup,
         "render": cmd_render,
         "export": cmd_export,
         "reprocess": cmd_reprocess,
