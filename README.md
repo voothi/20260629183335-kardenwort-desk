@@ -299,3 +299,24 @@ For exporting favorites, the frontend creates a JSON file containing the selecte
 }
 ```
 The desk core reads this manifest, extracts the matching lines from the session's working TSV, and outputs a subset TSV into the favorites directory.
+
+## Hover-highlight MVP (proof-of-concept)
+
+This is an opt-in, client-side-only proof of concept to validate bidirectional word hover highlighting and click bookmarks before adopting the full server-side tokenization and theme-color integration.
+
+### Configuration
+In `kardenwort-window/config.ini`, under `[Settings]`:
+- `HoverHighlightMvp = 1` (default `0`) — Enables the WebView overlay injection. Set to `0` to completely disable and revert to standard rendering.
+- `HoverHighlightMvpBookmarks = N` (default `3`) — The capacity of the rotating bookmark click-to-pin ring buffer.
+
+### Interaction Model
+- **Word Hover**: Hovering over a word in either the source text or the translation block will highlight matching tokens on the other side using **cyan** (`#39c5ff` on dark/white themes, `#0969da` on light themes).
+- **Word Bookmark Pin**: Clicking a word pins it with an **amber** highlight (`#f0883e` dark, `#bf8700` light). Up to `N` bookmarks can be active; the `N+1`-th click evicts the oldest pin. Clicking a pinned word unpins it.
+- **Escape Key**: Pressing `Esc` clears all currently pinned bookmarks.
+
+### Known Limitations (MVP Overlay)
+- **Tokenization Drift**: Client-side JavaScript tokenization using a simple regex (`\p{L}`) may occasionally drift from the desk's server-side `text_tokenizer.py` on exotic Unicode boundaries.
+- **Fixed Colors**: Unlike the main plan which supports dynamic themes via `theme_colors` from the desk, this MVP uses fixed cyan/amber colors with branches on dark/light/white `body` classes.
+
+### Retirement
+This MVP overlay is designed as a host-side overlay. When the full `20260702154120-translation-source-highlight` change is implemented, you can retire this MVP by setting `HoverHighlightMvp = 0` in `config.ini`. No code reverts are needed on the backend.
