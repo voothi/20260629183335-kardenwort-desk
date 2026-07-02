@@ -1926,6 +1926,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (window.redo) window.redo();
                 return;
+            } else if (e.ctrlKey && (keyCode === 67 || keyCode === 88)) { // Ctrl+C or Ctrl+X
+                try {
+                    document.execCommand(keyCode === 67 ? "copy" : "cut");
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                } catch(err) {}
+                return;
             }
             if (keyCode === 27) { // Escape key
                 clearAllSelections();
