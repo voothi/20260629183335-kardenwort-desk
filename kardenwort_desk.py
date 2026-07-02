@@ -3703,15 +3703,21 @@ def cmd_restore(args):
     logger.info("Restore subcommand invoked")
     config, resolved_paths, goldendict = load_config(args.config)
     
-    file_val = args.file[0] if isinstance(args.file, list) else args.file
-    input_path = Path(file_val).resolve()
+    file_list = args.file if isinstance(args.file, list) else [args.file]
+    
+    if not args.no_gui:
+        for file_val in file_list:
+            input_path = Path(file_val).resolve()
+            if input_path.exists():
+                spawn_ahk(["--restore", str(input_path)], resolved_paths['base_dir'])
+            else:
+                print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
+        return
+
+    input_path = Path(file_list[0]).resolve()
     if not input_path.exists():
         print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
         sys.exit(1)
-        
-    if not args.no_gui:
-        spawn_ahk(["--restore", str(input_path)], resolved_paths['base_dir'])
-        return
         
     zid = extract_zid(input_path)
     parent_dir = input_path.parent
@@ -3778,8 +3784,25 @@ def cmd_desk(args):
     logger.info("Desk subcommand invoked")
     config, resolved_paths, goldendict = load_config(args.config)
     
-    file_val = args.file[0] if isinstance(args.file, list) else args.file
-    file_path = Path(file_val).resolve()
+    file_list = args.file if isinstance(args.file, list) else [args.file]
+    
+    if not args.no_gui:
+        for file_val in file_list:
+            file_path = Path(file_val).resolve()
+            if not file_path.exists():
+                print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
+                continue
+                
+            is_tsv = file_path.suffix == '.tsv'
+            has_zid = bool(re.match(r"^\d{14}-", file_path.name))
+            if is_tsv or has_zid:
+                logger.info(f"File '{file_path.name}' is recognized as an existing session. Delegating to restore...")
+                spawn_ahk(["--restore", str(file_path)], resolved_paths['base_dir'])
+            else:
+                spawn_ahk(["--desk", str(file_path), "--text-mode", args.text_mode], resolved_paths['base_dir'])
+        return
+        
+    file_path = Path(file_list[0]).resolve()
     if not file_path.exists():
         print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
         sys.exit(1)
@@ -3789,11 +3812,8 @@ def cmd_desk(args):
     has_zid = bool(re.match(r"^\d{14}-", file_path.name))
     if is_tsv or has_zid:
         logger.info(f"File '{file_path.name}' is recognized as an existing session. Delegating to restore...")
+        args.file = [str(file_path)]
         cmd_restore(args)
-        return
-        
-    if not args.no_gui:
-        spawn_ahk(["--desk", str(file_path), "--text-mode", args.text_mode], resolved_paths['base_dir'])
         return
         
     try:
