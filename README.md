@@ -231,6 +231,45 @@ and reconstitutes the desk window's working state (source text + lemma table +
 translations + edit state) for continued work. If the sibling file is missing,
 it opens with what's available and warns.
 
+## GoldenDict Integration
+
+Kardenwort Desk provides a `lookup` subcommand that integrates directly with GoldenDict as an external program. It extracts, translates, and formats the given text on the fly.
+
+### Configuration
+The `[goldendict]` section in `config.ini` controls the lookup behavior:
+- `lookup_ttl_seconds = 3600`: How long to cache lookups (based on a SHA1 hash of the input text). The cache file is saved as `lookup-<lang>-<hash>.tsv` in the configured `generated_results_dir`.
+- `run_intellifiller = false`: Whether to run Headless IntelliFiller to populate IPA and Morphology. Enabling this adds significant latency but provides richer data.
+- `sections = source,translation,lemmas`: Comma-separated list of sections to render in order.
+- `heading_source = Source Text`: Heading label for the source text section.
+- `lemma_columns = inflected,lemma,ipa,morphology,translation`: Columns to include in the lemma table.
+
+### GoldenDict Program Setup
+Add these command lines as "Programs" in GoldenDict (Edit > Dictionaries > Programs).
+
+**English (HTML format, dark theme):**
+```bash
+python "U:/voothi/20260629183335-kardenwort-desk/kardenwort_desk.py" lookup --text "%GDWORD%" --language en --format html --theme dark
+```
+*(This replaces the current `En kW` program)*
+
+**English (Plain Text format):**
+```bash
+python "U:/voothi/20260629183335-kardenwort-desk/kardenwort_desk.py" lookup --text "%GDWORD%" --language en --format text
+```
+*(This replaces the current `dT-g En-Ru` text program)*
+
+**German (Combined format, light theme):**
+```bash
+python "U:/voothi/20260629183335-kardenwort-desk/kardenwort_desk.py" lookup --text "%GDWORD%" --language de --format combined --theme light
+```
+*(This replaces the current German program)*
+
+### Cache and Latency
+The `lookup-<lang>-<hash>.tsv` cache files are stored in your `generated_results_dir`. They skip the extraction and provider lookup phases completely if the requested text hits the cache (TTL expires after `lookup_ttl_seconds`). You can clear the cache by deleting these files. Setting `run_intellifiller = true` will synchronously block the lookup until IntelliFiller completes, which can add a few seconds of latency; consider keeping it `false` for instant lookups if IPA/morphology are not strictly needed.
+
+### Migration Note
+If you encounter issues with the new `lookup` command, the revert path is to swap the GoldenDict Program commands back to their previous raw scripts (`En kW`, `dT-g En-Ru`, or German scripts). The desk change is strictly additive and doesn't break or replace the underlying standalone extraction scripts.
+
 ## Integration Contracts & Formats
 
 ### 1. Desk Core ↔ Headless IntelliFiller Contract (Task 2.2)

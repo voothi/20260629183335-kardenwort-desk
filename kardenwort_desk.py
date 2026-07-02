@@ -2530,7 +2530,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
             cached = True
             
     if not cached:
-        prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode='single')
+        prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=ttl_seconds, cache_key=cache_key, text_mode='single')
         
         comments, headers, data_rows = load_tsv_rows(working_tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
