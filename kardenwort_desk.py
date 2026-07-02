@@ -729,6 +729,11 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     
     import time
     import re
+    
+    if working_tsv_path.exists():
+        if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
+            return working_tsv_path
+            
     if ttl_seconds > 0:
         m = re.match(r'^\d{14}-(.+)', cache_key)
         if m:
@@ -737,10 +742,6 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 if cached_file.is_file():
                     if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
                         return cached_file
-                        
-        if working_tsv_path.exists():
-            if (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
-                return working_tsv_path
             
     # Clean up any leftover update.js from previous sessions to avoid polling stale data
     update_js_path = working_tsv_path.with_suffix('.update.js')
