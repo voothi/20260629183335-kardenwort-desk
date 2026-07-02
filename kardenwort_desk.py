@@ -1198,8 +1198,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     padding: 0;
     font-size: 14px;
     line-height: 1.5;
-    zoom: {zoom_level};
-    width: {inverse_zoom_width};
     /* For IE11 / Shell.Explorer emulation scrollbar styling */
     scrollbar-face-color: {scrollbar_thumb};
     scrollbar-track-color: {scrollbar_track};
@@ -1485,6 +1483,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         }
                     }
                 }
+            }
+            
+            // Force IE11 layout reflow to fix table rendering glitches
+            var table = document.getElementById('lemma-table');
+            if (table) {
+                var disp = table.style.display;
+                table.style.display = 'none';
+                table.offsetHeight; // trigger reflow
+                table.style.display = disp;
             }
         };
 
@@ -2486,19 +2493,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 </body>
 </html>
 """
-    # zoom_level is now passed as an argument
+    # zoom_level is now passed as an argument but handled natively by AHK optical zoom
     
-    try:
-        numeric_zoom = float(zoom_level.replace('%', ''))
-        inverse_width = f"{10000 / numeric_zoom:.3f}%"
-    except Exception:
-        inverse_width = "100%"
-
-    if zoom_level.isdigit():
-        zoom_level = f"{zoom_level}%"
-        
-    html_page = html_page.replace("{zoom_level}", zoom_level)
-    html_page = html_page.replace("{inverse_zoom_width}", inverse_width)
     html_page = html_page.replace("{source_html}", source_html)
     html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{table_header_html}", table_header_html)
