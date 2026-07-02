@@ -9,6 +9,7 @@ import subprocess
 import tempfile
 import shutil
 import contextlib
+import html
 from pathlib import Path
 from datetime import datetime
 
@@ -1100,7 +1101,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     for idx in sorted(sentence_translations.keys()):
         trans = sentence_translations[idx]
         if trans:
-            safe_trans = htmlescape(trans)
+            safe_trans = html.escape(trans)
             sentence_htmls.append(f"<div>{safe_trans}</div>")
         else:
             sentence_htmls.append("<div>&nbsp;</div>")
@@ -2657,7 +2658,7 @@ def render_section(token, ctx):
         
     elif token == "translation":
         html += make_heading("translation", "Translation")
-        safe_trans = htmlescape(ctx.get("sentence_translation", "").replace('\r', ''))
+        safe_trans = html.escape(ctx.get("sentence_translation", "").replace('\r', ''))
         html += f'<div class="kw-translation">{safe_trans}</div>\n'
         
     elif token == "lemmas":
