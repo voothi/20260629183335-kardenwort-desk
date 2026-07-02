@@ -121,6 +121,7 @@ def load_config(config_path=None):
         goldendict['lookup_ttl_seconds'] = gd.getint('lookup_ttl_seconds', fallback=300)
         goldendict['theme'] = gd.get('theme', 'dark')
         goldendict['emit_meta_comment'] = gd.getboolean('emit_meta_comment', fallback=True)
+        goldendict['disable_css'] = gd.getboolean('disable_css', fallback=False)
         
         raw_sections = gd.get('sections', 'translation,lemmas')
         goldendict['sections'] = parse_sections_list(raw_sections, ['source', 'translation', 'lemmas'])
@@ -138,6 +139,7 @@ def load_config(config_path=None):
         goldendict['lookup_ttl_seconds'] = 300
         goldendict['theme'] = 'dark'
         goldendict['emit_meta_comment'] = True
+        goldendict['disable_css'] = False
         goldendict['sections'] = ['translation', 'lemmas']
         goldendict['heading_source'] = ''
         goldendict['heading_translation'] = ''
@@ -2717,7 +2719,19 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         html += render_section(sec, ctx)
     html += '</div>\n'
     
-    base_html = f"""<!DOCTYPE html>
+    if goldendict.get('disable_css', False):
+        base_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Kardenwort Lookup</title>
+</head>
+<body>
+{html}
+</body>
+</html>"""
+    else:
+        base_html = f"""<!DOCTYPE html>
 <html>
 <head>
     <meta charset="utf-8">
@@ -2805,7 +2819,7 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
                     val = re.sub(r'<br\s*/?>', ' ', val, flags=re.IGNORECASE)
                     val = re.sub(r'<[^>]+>', '', val)
                     row_vals.append(val.strip())
-                out.append(" | ".join(row_vals))
+                out.append("\t".join(row_vals))
             out.append("")
             
     return "\n".join(out).strip()
@@ -2838,6 +2852,9 @@ def cmd_lookup(args):
             goldendict['heading_source'] = ""
             goldendict['heading_translation'] = ""
             goldendict['heading_lemmas'] = ""
+            
+        if args.disable_css:
+            goldendict['disable_css'] = True
             
         target_lang = args.target_lang if args.target_lang else config.get('settings', 'default_target_language', fallback='ru')
         
@@ -3730,6 +3747,7 @@ def main():
     p_lookup.add_argument("--sections", help="Comma-separated sections to render")
     p_lookup.add_argument("--lemma-columns", help="Comma-separated columns for the lemmas table")
     p_lookup.add_argument("--no-headings", action="store_true", help="Disable headings")
+    p_lookup.add_argument("--disable-css", action="store_true", help="Disable outputting CSS styles in HTML")
     p_lookup.add_argument("--theme", choices=["dark", "light"], help="Theme (html format)")
 
     # render
