@@ -2609,11 +2609,13 @@ def render_section(token, ctx):
         
     if token == "source":
         html += make_heading("source", "Source Text")
-        html += f'<div class="kw-source-text" style="white-space: pre-wrap; font-family: monospace; padding: 10px; background: var(--section-bg); border-radius: 5px;">{ctx["text"]}</div>\n'
+        safe_text = ctx["text"].replace('\r', '')
+        html += f'<div class="kw-source-text" style="white-space: pre-wrap; font-family: monospace; padding: 10px; background: var(--section-bg); border-radius: 5px;">{safe_text}</div>\n'
         
     elif token == "translation":
         html += make_heading("translation", "Translation")
-        html += f'<div class="kw-translation" style="padding: 10px; font-weight: bold;">{ctx.get("sentence_translation", "")}</div>\n'
+        safe_trans = ctx.get("sentence_translation", "").replace('\r', '')
+        html += f'<div class="kw-translation" style="padding: 10px; font-weight: bold;">{safe_trans}</div>\n'
         
     elif token == "lemmas":
         html += make_heading("lemmas", "Lemmas")
@@ -2650,6 +2652,8 @@ def render_section(token, ctx):
             for t in valid_tokens:
                 idx = col_indices[t]
                 val = row[idx] if idx != -1 and len(row) > idx else ""
+                if isinstance(val, str):
+                    val = val.replace('\r', '')
                 html += f'<td style="padding: 8px;">{val}</td>'
             html += '</tr>\n'
             
