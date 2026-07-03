@@ -123,7 +123,7 @@ def test_lookup_translation_failure(monkeypatch, capsys, tmp_path):
     
     # Should still succeed and exit 0
     comments, headers, data_rows, sent_trans = kardenwort_desk.run_lookup_flow("test text", "en", "ru", "text", config, resolved_paths, goldendict, "zid1")
-    assert sent_trans == ""
+    assert sent_trans.startswith("[Translation Error:")
     assert data_rows[0][headers.index('WordDestination')] == ""
 
 def test_lookup_intellifiller(monkeypatch, tmp_path):

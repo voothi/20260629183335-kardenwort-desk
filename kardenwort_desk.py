@@ -4024,15 +4024,10 @@ def cmd_restore(args):
         if tsv_files:
             tsv_path = tsv_files[0]
         else:
-            lang = config.get('settings', 'default_language', fallback='en')
-            matches = list(parent_dir.glob(f"{zid}-*.tsv"))
-            if matches:
-                tsv_path = matches[0]
-            else:
-                tsv_path = input_path.with_suffix('.tsv')
-                if not tsv_path.exists():
-                    tsv_path = None
-                    warnings.append("Sibling TSV file not found.")
+            tsv_path = input_path.with_suffix('.tsv')
+            if not tsv_path.exists():
+                tsv_path = None
+                warnings.append("Sibling TSV file not found.")
                     
     source_text = ""
     if txt_path and txt_path.exists():
