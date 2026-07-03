@@ -2763,10 +2763,10 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         'headings': headings
     }
     
-    html = '<div class="kw-lookup-container">\n'
+    html_output = '<div class="kw-lookup-container">\n'
     for sec in sections:
-        html += render_section(sec, ctx)
-    html += '</div>\n'
+        html_output += render_section(sec, ctx)
+    html_output += '</div>\n'
     
     theme = goldendict.get('theme', 'compact')
     
@@ -2867,7 +2867,7 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
     <title>Kardenwort Lookup</title>
 </head>
 <body>
-{html}
+{html_output}
 </body>
 </html>"""
     else:
@@ -2880,7 +2880,7 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
     </style>
 </head>
 <body>
-{html}
+{html_output}
 </body>
 </html>"""
     return base_html
