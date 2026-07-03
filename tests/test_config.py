@@ -225,6 +225,30 @@ lemmas_translation = combined
         assert config.get('pipeline', 'base_provider') == 'deepl'
         assert config.get('pipeline', 'enrichment_provider') == 'intellifiller'
 
+def test_orthogonal_config_migration_d7():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        desk_dir = tmp_path / "kardenwort-desk"
+        desk_dir.mkdir()
+        anki_mapping = desk_dir / "anki-mapping.ini"
+        anki_mapping.write_text("")
+        
+        config_content = """[settings]
+anki_mapping_file = ./anki-mapping.ini
+default_target_language = ru
+
+[translation_providers]
+main_text_translation = deepl
+lemmas_translation = intellifiller
+"""
+        config_file = desk_dir / "config.ini"
+        config_file.write_text(config_content)
+        
+        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        
+        assert config.get('pipeline', 'base_provider') == 'deepl'
+        assert config.get('pipeline', 'enrichment_provider') == 'intellifiller'
+
 def test_backward_compatibility_rendering():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)

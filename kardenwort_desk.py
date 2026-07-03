@@ -85,7 +85,7 @@ def _migrate_config(config):
                 mapped_base = 'deepl'
                 mapped_enrichment = 'none'
             elif legacy_lemmas == 'intellifiller':
-                mapped_base = 'google'
+                mapped_base = legacy_main if legacy_main else 'google'
                 mapped_enrichment = 'intellifiller'
             elif legacy_main == 'deepl':
                 mapped_base = 'deepl'
@@ -730,7 +730,7 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
             close_fds=True
         )
 
-def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False):
+def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False, text_mode='single'):
     python_exe = sys.executable
     desk_script = Path(__file__).resolve()
     cmd = [
@@ -742,7 +742,8 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
         "--target-lang", target_lang,
         "--prompt", prompt_name,
         "--provider", lemmas_provider,
-        "--word-empty", str(word_translations_empty)
+        "--word-empty", str(word_translations_empty),
+        "--text-mode", text_mode
     ]
     if skip_intellifiller:
         cmd.append("--skip-intellifiller")
@@ -1107,9 +1108,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         prompt_name = config.get('languages', f'{language}_prompt')
         
         if is_progressive:
-            if (run_base == 'auto' and not sentence_translated) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
+            if (run_base == 'auto' and (not sentence_translated or word_translations_empty)) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
-                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller)
+                text_mode = config.get('settings', 'text_mode', fallback='single')
+                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller, text_mode)
         else:
             # Monolithic mode enrichment
             if run_enrich == 'auto' and enrich_provider == 'intellifiller':
@@ -1198,7 +1200,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     sentence_htmls = []
     if is_progressive and run_base == 'auto' and not sentence_translated:
-        sentence_html = '<div class="skeleton-loader" style="width: 100%; max-width: 500px;"></div>'
+        sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
     else:
         for idx in sorted(sentence_translations.keys()):
             trans = sentence_translations[idx]
@@ -1555,8 +1557,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="llm-filled" type="text/plain">{llm_filled_js}</script>
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
-<script id="progressive-loading" type="text/plain">{str(progressive_loading).lower()}</script>
-<script id="lazy-processing" type="text/plain">{str(lazy_processing).lower()}</script>
+<script id="display-mode" type="text/plain">{display_mode_js}</script>
+<script id="progressive-loading" type="text/plain">{progressive_loading_js}</script>
+<script id="lazy-processing" type="text/plain">{lazy_processing_js}</script>
 
 <script type="text/javascript">
 (function() {
@@ -1604,8 +1607,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
         var isProgressive = false;
         try {
-            var progEl = document.getElementById('progressive-loading');
-            if (progEl && (progEl.textContent || progEl.innerText) === 'true') {
+            var progEl = document.getElementById('display-mode');
+            if (progEl && (progEl.textContent || progEl.innerText).trim() === 'progressive') {
                 isProgressive = true;
             }
         } catch(e) {}
@@ -1623,16 +1626,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             if (data.stage === 'source' || data.stage === 'translated') {
                 if (data.stage === 'source' && data.sourceText) {
                     var container = document.getElementById('source-container');
-                    if (container) {
-                        if (container.querySelector('.skeleton-loader') || !container.querySelector('span')) {
-                            container.textContent = data.sourceText;
-                        }
+                    if (container && container.querySelector('[data-pending="true"]')) {
+                        container.textContent = data.sourceText;
                     }
                 }
                 if (data.stage === 'translated' && data.translatedText) {
                     var container = document.getElementById('translation-container');
-                    if (container) {
-                        container.textContent = data.translatedText;
+                    if (container && container.querySelector('[data-pending="true"]')) {
+                        container.innerHTML = data.translatedText;
                     }
                 }
             }
@@ -2717,6 +2718,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{working_tsv_path}", str(working_tsv_path))
     html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
     html_page = html_page.replace("{zid}", zid)
+    html_page = html_page.replace("{display_mode_js}", "progressive" if is_progressive else "monolithic")
+    html_page = html_page.replace("{progressive_loading_js}", str(progressive_loading).lower())
+    html_page = html_page.replace("{lazy_processing_js}", str(lazy_processing).lower())
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if text_mode == "multi" else "normal")
@@ -3585,15 +3589,16 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                         s = row[col_sentence_dest].strip()
                         if s and s not in sentences:
                             sentences.append(s)
-                translated_text = " ".join(sentences)
+                translated_text = "<br/>".join(html.escape(s) for s in sentences)
                 
         update_data = {
             "stage": stage,
             "status": status,
             "sourceText": source_text or "",
-            "translatedText": translated_text or "",
-            "rows": rows_data
+            "translatedText": translated_text or ""
         }
+        if stage != "source":
+            update_data["rows"] = rows_data
         
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
@@ -3648,7 +3653,7 @@ def cmd_progressive_worker(args):
                 if source_txt_path.exists():
                     text = source_txt_path.read_text(encoding='utf-8')
                     main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
-                    sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, 'single', config, resolved_paths, main_text_provider)
+                    sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
                     
                     col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
                     with file_lock(tsv_path):
@@ -4214,6 +4219,7 @@ def main():
     p_prog_worker.add_argument("--prompt", required=True, help="Prompt name")
     p_prog_worker.add_argument("--provider", required=True, help="Lemmas provider")
     p_prog_worker.add_argument("--word-empty", required=True, help="Word translations empty flag")
+    p_prog_worker.add_argument("--text-mode", default="single", help="Text chunking mode")
     p_prog_worker.add_argument("--skip-intellifiller", action="store_true", help="Skip intellifiller phase")
 
     # edit-save

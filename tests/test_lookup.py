@@ -272,6 +272,7 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
         prompt = "en_prompt"
         provider = "google"
         word_empty = "true"
+        text_mode = "single"
         skip_intellifiller = False
         
     kardenwort_desk.cmd_progressive_worker(Args())
@@ -330,6 +331,7 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
         prompt = "en_prompt"
         provider = "google"
         word_empty = "true"
+        text_mode = "single"
         skip_intellifiller = False
         
     kardenwort_desk.cmd_progressive_worker(Args())
@@ -340,3 +342,82 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     assert write_calls[1] == ('translated', 'failed')
     assert write_calls[2] == ('enrichment', 'success')
     assert write_calls[3] == ('finished', 'success')
+
+def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
+    config, resolved_paths, goldendict = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
+    
+    config.add_section('pipeline')
+    config.set('pipeline', 'base_provider', 'google')
+    config.set('pipeline', 'enrichment_provider', 'intellifiller')
+    config.add_section('triggers')
+    config.set('triggers', 'run_base_translation', 'manual')
+    config.set('triggers', 'run_enrichment', 'auto')
+    
+    tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\nword1\t\t\t\n", encoding='utf-8')
+    tsv_path.with_suffix('.txt').write_text("word1", encoding='utf-8')
+    
+    write_calls = []
+    def mock_write_update_js(tsv_p, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
+        write_calls.append(stage)
+        
+    monkeypatch.setattr(kardenwort_desk, 'write_update_js', mock_write_update_js)
+    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', lambda *a, **kw: {})
+    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {})
+    monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', lambda *a, **kw: None)
+    
+    args = MagicMock()
+    args.tsv = str(tsv_path)
+    args.language = 'en'
+    args.target_lang = 'ru'
+    args.prompt = 'default'
+    args.provider = 'google'
+    args.word_empty = 'True'
+    args.text_mode = 'single'
+    args.skip_intellifiller = False
+    
+    kardenwort_desk.cmd_progressive_worker(args)
+    
+    assert "translated" not in write_calls
+    assert "enrichment" in write_calls
+
+def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
+    config, resolved_paths, goldendict = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
+    
+    config.add_section('pipeline')
+    config.set('pipeline', 'base_provider', 'google')
+    config.set('pipeline', 'enrichment_provider', 'intellifiller')
+    config.add_section('triggers')
+    config.set('triggers', 'run_base_translation', 'auto')
+    
+    tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\nword1\t\t\t\n", encoding='utf-8')
+    tsv_path.with_suffix('.txt').write_text("word1", encoding='utf-8')
+    
+    passed_text_mode = None
+    def mock_translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider):
+        nonlocal passed_text_mode
+        passed_text_mode = text_mode
+        return {}
+        
+    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', mock_translate_source_text)
+    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {})
+    monkeypatch.setattr(kardenwort_desk, 'write_update_js', MagicMock())
+    
+    args = MagicMock()
+    args.tsv = str(tsv_path)
+    args.language = 'en'
+    args.target_lang = 'ru'
+    args.prompt = 'default'
+    args.provider = 'google'
+    args.word_empty = 'True'
+    args.text_mode = 'multi_line'
+    args.skip_intellifiller = True
+    
+    kardenwort_desk.cmd_progressive_worker(args)
+    
+    assert passed_text_mode == 'multi_line'
