@@ -1138,10 +1138,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
         table_rows.append(
             f'<tr data-row-id="{row_id}" data-selected="{is_selected}" class="{row_highlight_class}">'
-            f'<td class="{inflected_class}" data-col="WordSourceInflectedForm">{inflected_val}</td>'
-            f'<td class="{lemma_class}" data-col="WordSource">{lemma_val}</td>'
-            f'<td class="{trans_class}" data-col="WordDestination">{trans_val}</td>'
-            f'<td>{ipa_val}</td>'
+            f'<td class="{inflected_class}" data-col="WordSourceInflectedForm"><div class="scrollable-cell">{inflected_val}</div></td>'
+            f'<td class="{lemma_class}" data-col="WordSource"><div class="scrollable-cell">{lemma_val}</div></td>'
+            f'<td class="{trans_class}" data-col="WordDestination"><div class="scrollable-cell">{trans_val}</div></td>'
+            f'<td><div class="scrollable-cell">{ipa_val}</div></td>'
             f'<td><div class="scrollable-cell">{morph_val}</div></td>'
             f'</tr>'
         )
@@ -1341,10 +1341,24 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   body:not(.maximized) .section {
     max-width: 100%;
   }
+  body:not(.maximized) #lemma-table {
+    table-layout: fixed;
+    width: 100%;
+  }
+  body:not(.maximized) #lemma-table th,
+  body:not(.maximized) #lemma-table td {
+    width: 18%;
+    padding-right: 12px;
+  }
+  body:not(.maximized) #lemma-table th:last-child,
+  body:not(.maximized) #lemma-table td:last-child {
+    width: 28%;
+    padding-right: 12px;
+  }
   body:not(.maximized) .scrollable-cell {
     overflow-x: auto;
     white-space: nowrap;
-    max-width: 250px;
+    max-width: 100%;
   }
   /* When maximized */
   body.maximized .scrollable-cell {
@@ -1481,8 +1495,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         var tds = tr.getElementsByTagName('td');
                         var rowData = data[rowId];
                         if (tds.length >= 5) {
-                            if (!tds[2].classList.contains('dirty') && rowData.trans) tds[2].textContent = rowData.trans;
-                            if (!tds[3].classList.contains('dirty') && rowData.ipa) tds[3].textContent = rowData.ipa;
+                            if (!tds[2].classList.contains('dirty') && rowData.trans) {
+                                var div = tds[2].querySelector('.scrollable-cell');
+                                if (div) div.textContent = rowData.trans;
+                                else tds[2].textContent = rowData.trans;
+                            }
+                            if (!tds[3].classList.contains('dirty') && rowData.ipa) {
+                                var div = tds[3].querySelector('.scrollable-cell');
+                                if (div) div.textContent = rowData.ipa;
+                                else tds[3].textContent = rowData.ipa;
+                            }
                             if (!tds[4].classList.contains('dirty') && rowData.morph) {
                                 var div = tds[4].querySelector('.scrollable-cell');
                                 if (div) div.innerHTML = rowData.morph;
@@ -2122,7 +2144,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         function makeEditable(cell) {
             if (cell.getElementsByTagName('input').length > 0) return;
             
-            var originalValue = cell.textContent || cell.innerText || "";
+            var scrollDiv = cell.querySelector('.scrollable-cell');
+            var originalValue = scrollDiv ? (scrollDiv.textContent || scrollDiv.innerText) : (cell.textContent || cell.innerText || "");
             var colName = cell.getAttribute('data-col');
             var rowId = cell.parentElement.getAttribute('data-row-id');
             
@@ -2147,16 +2170,22 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             
             window.cancelActiveEdit = function() {
                 cell.innerHTML = '';
-                cell.appendChild(document.createTextNode(originalValue));
-                cell.className = cell.className.replace(/\\s*editing\\b/g, '');
+                var div = document.createElement('div');
+                div.className = 'scrollable-cell';
+                div.appendChild(document.createTextNode(originalValue));
+                cell.appendChild(div);
+                cell.className = cell.className.replace(/\s*editing\b/g, '');
                 window.cancelActiveEdit = null;
             };
             
             function commit() {
                 var newValue = input.value;
                 cell.innerHTML = '';
-                cell.appendChild(document.createTextNode(newValue));
-                cell.className = cell.className.replace(/\\s*editing\\b/g, '');
+                var div = document.createElement('div');
+                div.className = 'scrollable-cell';
+                div.appendChild(document.createTextNode(newValue));
+                cell.appendChild(div);
+                cell.className = cell.className.replace(/\s*editing\b/g, '');
                 window.cancelActiveEdit = null;
                 if (newValue !== originalValue) {
                     var action = {
@@ -2254,7 +2283,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         function applyAction(action) {
             if (action.type === 'edit') {
                 action.cell.innerHTML = '';
-                action.cell.appendChild(document.createTextNode(action.newValue));
+                var div = document.createElement('div');
+                div.className = 'scrollable-cell';
+                div.appendChild(document.createTextNode(action.newValue));
+                action.cell.appendChild(div);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
@@ -2272,7 +2304,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         function revertAction(action) {
             if (action.type === 'edit') {
                 action.cell.innerHTML = '';
-                action.cell.appendChild(document.createTextNode(action.oldValue));
+                var div = document.createElement('div');
+                div.className = 'scrollable-cell';
+                div.appendChild(document.createTextNode(action.oldValue));
+                action.cell.appendChild(div);
             } else if (action.type === 'delete') {
                 for (var j = 0; j < action.rowIds.length; j++) {
                     var rId = action.rowIds[j];
