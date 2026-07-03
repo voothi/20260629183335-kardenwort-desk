@@ -202,8 +202,13 @@ def test_orthogonal_config_migration():
         config_content = """[settings]
 anki_mapping_file = ./anki-mapping.ini
 default_target_language = ru
-lazy_processing = llm_only
-progressive_loading = true
+
+[triggers]
+run_base_translation = auto
+run_enrichment = manual
+
+[rendering]
+display_mode = progressive
 
 [pipeline]
 base_provider = deepl
@@ -214,11 +219,9 @@ enrichment_provider = combined
         
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
         
-        # Mapped triggers: lazy_processing = llm_only -> base = auto, enrichment = manual
         assert config.get('triggers', 'run_base_translation') == 'auto'
         assert config.get('triggers', 'run_enrichment') == 'manual'
         
-        # Mapped rendering: progressive_loading = true -> display_mode = progressive
         assert config.get('rendering', 'display_mode') == 'progressive'
         
         assert config.get('pipeline', 'base_provider') == 'deepl'
@@ -248,19 +251,20 @@ enrichment_provider = intellifiller
         assert config.get('pipeline', 'base_provider') == 'deepl'
         assert config.get('pipeline', 'enrichment_provider') == 'intellifiller'
 
-def test_backward_compatibility_rendering():
+def test_default_rendering_and_triggers():
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp_path = Path(tmpdir)
         desk_dir = tmp_path / "kardenwort-desk"
         desk_dir.mkdir()
         anki_mapping = desk_dir / "anki-mapping.ini"
         anki_mapping.write_text("")
-        
+
         config_content = """[settings]
 anki_mapping_file = ./anki-mapping.ini
 default_target_language = ru
-lazy_processing = false
-progressive_loading = false
+
+[rendering]
+display_mode = monolithic
 
 [pipeline]
 base_provider = google
@@ -268,9 +272,9 @@ enrichment_provider = combined
 """
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
-        
+
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
-        
+
         assert config.get('rendering', 'display_mode') == 'monolithic'
         assert config.get('triggers', 'run_base_translation') == 'auto'
         assert config.get('triggers', 'run_enrichment') == 'auto'

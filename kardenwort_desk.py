@@ -85,27 +85,6 @@ def _migrate_config(config):
     run_base = config.get('triggers', 'run_base_translation', fallback=None)
     run_enrichment = config.get('triggers', 'run_enrichment', fallback=None)
     
-    if run_base is None or run_enrichment is None:
-        legacy_lazy = config.get('settings', 'lazy_processing', fallback=None) if config.has_section('settings') else None
-        if legacy_lazy is not None:
-            lazy_val = legacy_lazy.lower()
-            if lazy_val in ('true', 'all'):
-                mapped_base = 'manual'
-                mapped_enrichment = 'manual'
-            elif lazy_val == 'llm_only':
-                mapped_base = 'auto'
-                mapped_enrichment = 'manual'
-            else:
-                mapped_base = 'auto'
-                mapped_enrichment = 'auto'
-                
-            if run_base is None:
-                run_base = mapped_base
-                _warn_deprecated('lazy_processing', "lazy_processing is deprecated; map it to triggers.run_base_translation and triggers.run_enrichment.")
-            if run_enrichment is None:
-                run_enrichment = mapped_enrichment
-                _warn_deprecated('lazy_processing', "lazy_processing is deprecated; map it to triggers.run_base_translation and triggers.run_enrichment.")
-                
     if run_base is None:
         run_base = 'auto'
     if run_enrichment is None:
@@ -119,15 +98,6 @@ def _migrate_config(config):
         config.add_section('rendering')
         
     display_mode = config.get('rendering', 'display_mode', fallback=None)
-    if display_mode is None:
-        legacy_prog = config.get('settings', 'progressive_loading', fallback=None) if config.has_section('settings') else None
-        if legacy_prog is not None:
-            if legacy_prog.lower() == 'true':
-                display_mode = 'progressive'
-            else:
-                display_mode = 'monolithic'
-            _warn_deprecated('progressive_loading', "progressive_loading is deprecated; map it to rendering.display_mode.")
-            
     if display_mode is None:
         display_mode = 'progressive'
         
@@ -930,16 +900,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-    progressive_loading = config.getboolean('settings', 'progressive_loading', fallback=False)
-    
-    lazy_processing_raw = config.get('settings', 'lazy_processing', fallback='false').lower()
-    if lazy_processing_raw in ('true', 'all'):
-        lazy_processing = 'all'
-    elif lazy_processing_raw == 'llm_only':
-        lazy_processing = 'llm_only'
-    else:
-        lazy_processing = 'none'
-        
+
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
     main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
@@ -1531,8 +1492,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
 <script id="display-mode" type="text/plain">{display_mode_js}</script>
-<script id="progressive-loading" type="text/plain">{progressive_loading_js}</script>
-<script id="lazy-processing" type="text/plain">{lazy_processing_js}</script>
+
 
 <script type="text/javascript">
 (function() {
@@ -2692,8 +2652,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{display_mode_js}", "progressive" if is_progressive else "monolithic")
-    html_page = html_page.replace("{progressive_loading_js}", str(progressive_loading).lower())
-    html_page = html_page.replace("{lazy_processing_js}", str(lazy_processing).lower())
+
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if text_mode == "multi" else "normal")
