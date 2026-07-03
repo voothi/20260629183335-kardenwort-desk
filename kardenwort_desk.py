@@ -3462,9 +3462,58 @@ def cmd_reprocess(args):
         )
     print(json.dumps({"reprocess_started": True, "rows": cleared_count}))
 
+def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang):
+    col_lemma_name = role_fields.get('lemma', 'WordSource')
+    col_word_dest_name = role_fields.get('word_translation', 'WordRussian')
+    
+    col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
+    col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
+    
+    if col_lemma != -1 and col_word_dest != -1:
+        lemmas_to_translate = []
+        for row_id in selected_rows:
+            if 0 <= row_id < len(data_rows):
+                row = data_rows[row_id]
+                if len(row) > col_lemma and row[col_lemma].strip():
+                    lemmas_to_translate.append(row[col_lemma].strip())
+        
+        if lemmas_to_translate:
+            lemmas_to_translate = list(set(lemmas_to_translate))
+            provider_to_use = 'combined' if lemmas_provider == 'combined' else lemmas_provider
+            lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, provider_to_use)
+            
+            with file_lock(tsv_path):
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+                for row_id in selected_rows:
+                    if 0 <= row_id < len(data_rows):
+                        row = data_rows[row_id]
+                        if len(row) > col_lemma:
+                            lemma_val = row[col_lemma].strip()
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            if lemma_val in lemma_translations:
+                                row[col_word_dest] = lemma_translations[lemma_val]
+                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                
+            write_update_js(tsv_path, data_rows, headers, role_fields)
+    return data_rows
+
+def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows):
+    batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
+    for i in range(0, len(selected_rows), batch_size):
+        batch = selected_rows[i:i + batch_size]
+        logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
+        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+        
+        try:
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+            write_update_js(tsv_path, data_rows, headers, role_fields)
+        except Exception as e:
+            logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
+    return data_rows
+
 def cmd_reprocess_worker(args):
     config, resolved_paths, goldendict = load_config(args.config)
-    batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
     tsv_path = Path(args.tsv)
     
     rows_str = args.rows
@@ -3476,62 +3525,34 @@ def cmd_reprocess_worker(args):
     language = config.get('settings', 'default_language', fallback='en')
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
-    if lemmas_provider in ('combined', 'google', 'deepl'):
-        try:
-            with file_lock(tsv_path):
-                comments, headers, data_rows = load_tsv_rows(tsv_path)
+    data_rows, headers, role_fields = [], [], {}
+    
+    try:
+        with file_lock(tsv_path):
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
             
-            mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-            role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
-            col_lemma_name = role_fields.get('lemma', 'WordSource')
-            col_word_dest_name = role_fields.get('word_translation', 'WordRussian')
-            
-            col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
-            col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
-            
-            if col_lemma != -1 and col_word_dest != -1:
-                lemmas_to_translate = []
-                for row_id in selected_rows:
-                    if 0 <= row_id < len(data_rows):
-                        row = data_rows[row_id]
-                        if len(row) > col_lemma and row[col_lemma].strip():
-                            lemmas_to_translate.append(row[col_lemma].strip())
-                
-                if lemmas_to_translate:
-                    lemmas_to_translate = list(set(lemmas_to_translate))
-                    provider_to_use = 'combined' if lemmas_provider == 'combined' else lemmas_provider
-                    lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, provider_to_use)
-                    
-                    with file_lock(tsv_path):
-                        comments, headers, data_rows = load_tsv_rows(tsv_path)
-                        for row_id in selected_rows:
-                            if 0 <= row_id < len(data_rows):
-                                row = data_rows[row_id]
-                                if len(row) > col_lemma:
-                                    lemma_val = row[col_lemma].strip()
-                                    while len(row) <= col_word_dest:
-                                        row.append("")
-                                    if lemma_val in lemma_translations:
-                                        row[col_word_dest] = lemma_translations[lemma_val]
-                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                        
-                    write_update_js(tsv_path, data_rows, headers, role_fields)
-        except Exception as e:
-            logger.error(f"Failed fast-path translation during reprocess: {e}")
-
-    if lemmas_provider in ('intellifiller', 'combined'):
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
-        for i in range(0, len(selected_rows), batch_size):
-            batch = selected_rows[i:i + batch_size]
-            logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
-            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
-            
+        
+        if lemmas_provider in ('combined', 'google', 'deepl'):
             try:
-                comments, headers, data_rows = load_tsv_rows(tsv_path)
-                write_update_js(tsv_path, data_rows, headers, role_fields)
+                data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang)
             except Exception as e:
-                logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
+                logger.error(f"Failed fast-path translation during reprocess: {e}")
+
+        if lemmas_provider in ('intellifiller', 'combined'):
+            try:
+                data_rows = _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows)
+            except Exception as e:
+                logger.error(f"Failed IntelliFiller stage during reprocess: {e}")
+                
+    except Exception as e:
+        logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
+    finally:
+        try:
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+        except Exception as e:
+            logger.error(f"Failed to write finished event in reprocess: {e}")
 
 def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
     update_js_path = tsv_path.with_suffix('.update.js')
