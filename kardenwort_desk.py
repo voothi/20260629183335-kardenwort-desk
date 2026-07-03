@@ -56,6 +56,110 @@ def parse_columns_list(raw, valid_tokens):
             sys.stderr.write(f"Warning: Unknown column token '{t}' ignored.\n")
     return result
 
+_warned_keys = set()
+def _warn_deprecated(key, msg):
+    if key not in _warned_keys:
+        _warned_keys.add(key)
+        logger.warning(msg)
+
+def _migrate_config(config):
+    # Ensure pipeline section
+    if not config.has_section('pipeline'):
+        config.add_section('pipeline')
+    
+    base_provider = config.get('pipeline', 'base_provider', fallback=None)
+    enrichment_provider = config.get('pipeline', 'enrichment_provider', fallback=None)
+    
+    if base_provider is None or enrichment_provider is None:
+        legacy_main = config.get('translation_providers', 'main_text_translation', fallback=None) if config.has_section('translation_providers') else None
+        legacy_lemmas = config.get('translation_providers', 'lemmas_translation', fallback=None) if config.has_section('translation_providers') else None
+        
+        if legacy_main is not None or legacy_lemmas is not None:
+            mapped_base = 'google'
+            mapped_enrichment = 'intellifiller'
+            
+            if legacy_lemmas == 'google':
+                mapped_base = 'google'
+                mapped_enrichment = 'none'
+            elif legacy_lemmas == 'deepl':
+                mapped_base = 'deepl'
+                mapped_enrichment = 'none'
+            elif legacy_lemmas == 'intellifiller':
+                mapped_base = 'google'
+                mapped_enrichment = 'intellifiller'
+            elif legacy_main == 'deepl':
+                mapped_base = 'deepl'
+                
+            if base_provider is None:
+                base_provider = mapped_base
+                _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
+            if enrichment_provider is None:
+                enrichment_provider = mapped_enrichment
+                _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
+                
+    if base_provider is None:
+        base_provider = 'google'
+    if enrichment_provider is None:
+        enrichment_provider = 'intellifiller'
+        
+    config.set('pipeline', 'base_provider', base_provider)
+    config.set('pipeline', 'enrichment_provider', enrichment_provider)
+    
+    # Ensure triggers section
+    if not config.has_section('triggers'):
+        config.add_section('triggers')
+        
+    run_base = config.get('triggers', 'run_base_translation', fallback=None)
+    run_enrichment = config.get('triggers', 'run_enrichment', fallback=None)
+    
+    if run_base is None or run_enrichment is None:
+        legacy_lazy = config.get('settings', 'lazy_processing', fallback=None) if config.has_section('settings') else None
+        if legacy_lazy is not None:
+            lazy_val = legacy_lazy.lower()
+            if lazy_val in ('true', 'all'):
+                mapped_base = 'manual'
+                mapped_enrichment = 'manual'
+            elif lazy_val == 'llm_only':
+                mapped_base = 'auto'
+                mapped_enrichment = 'manual'
+            else:
+                mapped_base = 'auto'
+                mapped_enrichment = 'auto'
+                
+            if run_base is None:
+                run_base = mapped_base
+                _warn_deprecated('lazy_processing', "lazy_processing is deprecated; map it to triggers.run_base_translation and triggers.run_enrichment.")
+            if run_enrichment is None:
+                run_enrichment = mapped_enrichment
+                _warn_deprecated('lazy_processing', "lazy_processing is deprecated; map it to triggers.run_base_translation and triggers.run_enrichment.")
+                
+    if run_base is None:
+        run_base = 'auto'
+    if run_enrichment is None:
+        run_enrichment = 'auto'
+        
+    config.set('triggers', 'run_base_translation', run_base)
+    config.set('triggers', 'run_enrichment', run_enrichment)
+    
+    # Ensure rendering section
+    if not config.has_section('rendering'):
+        config.add_section('rendering')
+        
+    display_mode = config.get('rendering', 'display_mode', fallback=None)
+    if display_mode is None:
+        legacy_prog = config.get('settings', 'progressive_loading', fallback=None) if config.has_section('settings') else None
+        if legacy_prog is not None:
+            if legacy_prog.lower() == 'true':
+                display_mode = 'progressive'
+            else:
+                display_mode = 'monolithic'
+            _warn_deprecated('progressive_loading', "progressive_loading is deprecated; map it to rendering.display_mode.")
+            
+    if display_mode is None:
+        display_mode = 'progressive'
+        
+    config.set('rendering', 'display_mode', display_mode)
+
 def load_config(config_path=None):
     """
     Loads config.ini.
@@ -147,6 +251,7 @@ def load_config(config_path=None):
         goldendict['heading_lemmas'] = ''
         goldendict['lemma_columns'] = ['inflected', 'lemma', 'translation']
 
+    _migrate_config(config)
     return config, resolved_paths, goldendict
 
 def load_kardenwort_config(kardenwort_workspace):
@@ -880,40 +985,72 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields else -1
     
+    is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
+    run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+    run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+    base_provider = config.get('pipeline', 'base_provider', fallback='google')
+    enrich_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
+    
+    if is_progressive:
+        source_text_path = working_tsv_path.with_suffix('.txt')
+        if not source_text_path.exists():
+            source_text_path.write_text(text, encoding='utf-8')
+            
     sentence_translated = False
     if col_sentence_dest != -1:
         if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
             sentence_translated = True
             
-    if not sentence_translated:
-        sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
-        col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-        
-        content_to_absolute = {}
-        if text_mode != 'single':
-            c_idx = 0
-            for a_idx, ln in enumerate(text.splitlines()):
-                if ln.strip():
-                    content_to_absolute[c_idx] = a_idx
-                    c_idx += 1
-                    
-        for row in data_rows:
-            content_line_idx = 0
-            if col_index != -1 and len(row) > col_index:
-                try:
-                    content_line_idx = int(row[col_index]) - 1
-                except ValueError:
-                    pass
+    word_translations_empty = True
+    if col_word_dest != -1:
+        if any(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows):
+            word_translations_empty = False
             
-            abs_idx = content_to_absolute.get(content_line_idx, 0) if text_mode != 'single' else 0
+    # If monolithic mode and run_base is auto, run base translation synchronously
+    if not is_progressive and run_base == 'auto':
+        if not sentence_translated:
+            sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, base_provider)
+            col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
             
-            if col_sentence_dest != -1:
-                while len(row) <= col_sentence_dest:
-                    row.append("")
-                row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
-        with file_lock(working_tsv_path):
-            save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            content_to_absolute = {}
+            if text_mode != 'single':
+                c_idx = 0
+                for a_idx, ln in enumerate(text.splitlines()):
+                    if ln.strip():
+                        content_to_absolute[c_idx] = a_idx
+                        c_idx += 1
+                        
+            for row in data_rows:
+                content_line_idx = 0
+                if col_index != -1 and len(row) > col_index:
+                    try:
+                        content_line_idx = int(row[col_index]) - 1
+                    except ValueError:
+                        pass
+                
+                abs_idx = content_to_absolute.get(content_line_idx, 0) if text_mode != 'single' else 0
+                
+                if col_sentence_dest != -1:
+                    while len(row) <= col_sentence_dest:
+                        row.append("")
+                    row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
+            with file_lock(working_tsv_path):
+                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                
+        if word_translations_empty:
+            lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+            lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
             
+            for row in data_rows:
+                if col_lemma != -1 and len(row) > col_lemma:
+                    lemma_val = row[col_lemma]
+                    if col_word_dest != -1:
+                        while len(row) <= col_word_dest:
+                            row.append("")
+                        row[col_word_dest] = lemma_translations.get(lemma_val, "")
+            with file_lock(working_tsv_path):
+                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                
     translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
     
     extracted_translations = {}
@@ -966,59 +1103,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 translation_text_out = "\n".join(translation_lines)
             translation_text_path.write_text(translation_text_out, encoding='utf-8')
             
-    word_translations_empty = True
-    if col_word_dest != -1:
-        if any(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows):
-            word_translations_empty = False
-            
     if not llm_filled:
         prompt_name = config.get('languages', f'{language}_prompt')
         
-        if lazy_processing == 'all':
-            pass # Skip all automatic translation and IntelliFiller processing
-        elif progressive_loading:
-            # Stage 2: Offload lemma translation and intellifiller to background
-            skip_intellifiller = (lazy_processing == 'llm_only')
-            run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller)
+        if is_progressive:
+            if (run_base == 'auto' and not sentence_translated) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
+                skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
+                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller)
         else:
-            if lazy_processing == 'llm_only' and lemmas_provider == 'combined':
-                lemmas_provider = 'google'
-                
-            if lemmas_provider == 'intellifiller':
+            # Monolithic mode enrichment
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller':
                 run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-                
-            elif lemmas_provider == 'combined':
-                if word_translations_empty:
-                    lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
-                    lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, 'combined')
-                    
-                    for row in data_rows:
-                        if col_lemma != -1 and len(row) > col_lemma:
-                            lemma_val = row[col_lemma]
-                            if col_word_dest != -1:
-                                while len(row) <= col_word_dest:
-                                    row.append("")
-                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                    with file_lock(working_tsv_path):
-                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
-                        
-                run_headless_intellifiller_async(working_tsv_path, prompt_name, config, resolved_paths)
-                
-            elif lemmas_provider in ('google', 'deepl'):
-                if word_translations_empty:
-                    lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
-                    lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, lemmas_provider)
-                    
-                    for row in data_rows:
-                        if col_lemma != -1 and len(row) > col_lemma:
-                            lemma_val = row[col_lemma]
-                            if col_word_dest != -1:
-                                while len(row) <= col_word_dest:
-                                    row.append("")
-                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                    with file_lock(working_tsv_path):
-                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                     
     token_to_rows = {}
     row_candidates = {}
@@ -1101,14 +1197,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     source_html = "".join(span_htmls)
     
     sentence_htmls = []
-    for idx in sorted(sentence_translations.keys()):
-        trans = sentence_translations[idx]
-        if trans:
-            safe_trans = html.escape(trans)
-            sentence_htmls.append(f"<div>{safe_trans}</div>")
-        else:
-            sentence_htmls.append("<div>&nbsp;</div>")
-    sentence_html = "".join(sentence_htmls)
+    if is_progressive and run_base == 'auto' and not sentence_translated:
+        sentence_html = '<div class="skeleton-loader" style="width: 100%; max-width: 500px;"></div>'
+    else:
+        for idx in sorted(sentence_translations.keys()):
+            trans = sentence_translations[idx]
+            if trans:
+                safe_trans = html.escape(trans)
+                sentence_htmls.append(f"<div>{safe_trans}</div>")
+            else:
+                sentence_htmls.append("<div>&nbsp;</div>")
+        sentence_html = "".join(sentence_htmls)
     
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
@@ -1123,6 +1222,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+        
+        # Skeleton loaders for cells if they are pending in progressive mode:
+        if is_progressive:
+            if run_base == 'auto' and not trans_val.strip() and word_translations_empty:
+                trans_val = '<span class="skeleton-loader" style="width: 60px;"></span>'
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
+                ipa_val = '<span class="skeleton-loader" style="width: 50px;"></span>'
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
+                morph_val = '<span class="skeleton-loader" style="width: 80px;"></span>'
         
         lemma_class = "editable" if 'WordSource' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         trans_class = "editable" if 'WordDestination' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
@@ -1399,6 +1507,21 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   td.dirty {
     border-left: 3px solid #ff7b72;
   }
+  .skeleton-loader {
+    display: inline-block;
+    height: 1.2em;
+    width: 100%;
+    background: linear-gradient(-90deg, {table_border} 0%, {table_th_border} 50%, {table_border} 100%);
+    background-size: 400% 400%;
+    animation: pulse-skeleton 1.5s ease infinite;
+    border-radius: 4px;
+    vertical-align: middle;
+  }
+  @keyframes pulse-skeleton {
+    0% { background-position: 0% 50% }
+    50% { background-position: 100% 50% }
+    100% { background-position: 0% 50% }
+  }
 </style>
 </head>
 <body class="{theme_class}">
@@ -1488,27 +1611,67 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         } catch(e) {}
         
         window.receiveUpdate = function(data) {
-            for (var rowId in data) {
-                if (data.hasOwnProperty(rowId)) {
-                    var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
-                    if (tr) {
-                        var tds = tr.getElementsByTagName('td');
-                        var rowData = data[rowId];
-                        if (tds.length >= 5) {
-                            if (!tds[2].classList.contains('dirty') && rowData.trans) {
-                                var div = tds[2].querySelector('.scrollable-cell');
-                                if (div) div.textContent = rowData.trans;
-                                else if (!tds[2].classList.contains('editing')) tds[2].textContent = rowData.trans;
-                            }
-                            if (!tds[3].classList.contains('dirty') && rowData.ipa) {
-                                var div = tds[3].querySelector('.scrollable-cell');
-                                if (div) div.textContent = rowData.ipa;
-                                else if (!tds[3].classList.contains('editing')) tds[3].textContent = rowData.ipa;
-                            }
-                            if (!tds[4].classList.contains('dirty') && rowData.morph) {
-                                var div = tds[4].querySelector('.scrollable-cell');
-                                if (div) div.innerHTML = rowData.morph;
-                                else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = rowData.morph;
+            if (!data) return;
+            
+            if (data.stage === 'finished') {
+                if (window.pollInterval) {
+                    clearInterval(window.pollInterval);
+                    window.pollInterval = null;
+                }
+            }
+            
+            if (data.stage === 'source' || data.stage === 'translated') {
+                if (data.stage === 'source' && data.sourceText) {
+                    var container = document.getElementById('source-container');
+                    if (container) {
+                        if (container.querySelector('.skeleton-loader') || !container.querySelector('span')) {
+                            container.textContent = data.sourceText;
+                        }
+                    }
+                }
+                if (data.stage === 'translated' && data.translatedText) {
+                    var container = document.getElementById('translation-container');
+                    if (container) {
+                        container.textContent = data.translatedText;
+                    }
+                }
+            }
+            
+            var rowsData = null;
+            if (data.stage) {
+                if (data.rows) {
+                    rowsData = data.rows;
+                }
+            } else {
+                rowsData = data;
+            }
+            
+            if (rowsData) {
+                for (var rowId in rowsData) {
+                    if (rowsData.hasOwnProperty(rowId)) {
+                        var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                        if (tr) {
+                            var tds = tr.getElementsByTagName('td');
+                            var rowData = rowsData[rowId];
+                            if (tds.length >= 5) {
+                                if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
+                                    var div = tds[2].querySelector('.scrollable-cell');
+                                    var val = rowData.trans || "";
+                                    if (div) div.textContent = val;
+                                    else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
+                                }
+                                if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
+                                    var div = tds[3].querySelector('.scrollable-cell');
+                                    var val = rowData.ipa || "";
+                                    if (div) div.textContent = val;
+                                    else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
+                                }
+                                if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
+                                    var div = tds[4].querySelector('.scrollable-cell');
+                                    var val = rowData.morph || "";
+                                    if (div) div.innerHTML = val;
+                                    else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
+                                }
                             }
                         }
                     }
@@ -1530,13 +1693,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             if (tsvPathStr) {
                 var baseName = tsvPathStr.replace(/\\.tsv$/i, '');
                 var jsUrl = "file:///" + baseName.replace(/\\\\/g, '/') + ".update.js";
-                setInterval(function() {
+                window.pollInterval = setInterval(function() {
                     var script = document.createElement('script');
                     script.src = jsUrl + "?t=" + new Date().getTime();
                     script.onload = function() { script.parentNode.removeChild(script); };
                     script.onerror = function() { script.parentNode.removeChild(script); };
                     document.head.appendChild(script);
-                }, 2000);
+                }, 200);
             }
         }
         
@@ -3366,7 +3529,7 @@ def cmd_reprocess_worker(args):
             except Exception as e:
                 logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
 
-def write_update_js(tsv_path, data_rows, headers, role_fields):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
     update_js_path = tsv_path.with_suffix('.update.js')
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
@@ -3375,7 +3538,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields):
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
     
-    update_data = {}
+    rows_data = {}
     for row_id, row in enumerate(data_rows):
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
@@ -3383,26 +3546,70 @@ def write_update_js(tsv_path, data_rows, headers, role_fields):
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
         
-        if trans_val or ipa_val or morph_val:
-            update_data[row_id] = {
-                "trans": trans_val,
-                "ipa": ipa_val,
-                "morph": morph_val
-            }
-    
-    js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
-    temp_path = update_js_path.with_suffix('.update.js.tmp')
-    with open(temp_path, 'w', encoding='utf-8') as f:
-        f.write(js_content)
-    import time
-    for _ in range(10):
-        try:
-            os.replace(temp_path, update_js_path)
-            break
-        except Exception as e:
-            time.sleep(0.1)
+        rows_data[row_id] = {
+            "trans": trans_val,
+            "ipa": ipa_val,
+            "morph": morph_val
+        }
+        
+    if stage is None:
+        update_data = {}
+        for row_id, row in enumerate(data_rows):
+            lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+            inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+            trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
+            morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
+            ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+            
+            if trans_val or ipa_val or morph_val:
+                update_data[row_id] = {
+                    "trans": trans_val,
+                    "ipa": ipa_val,
+                    "morph": morph_val
+                }
     else:
-        logger.error("Failed to atomically replace update.js after 10 retries.")
+        if source_text is None:
+            source_txt_path = tsv_path.with_suffix('.txt')
+            if source_txt_path.exists():
+                try:
+                    source_text = source_txt_path.read_text(encoding='utf-8')
+                except Exception:
+                    pass
+                    
+        if translated_text is None:
+            col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+            if col_sentence_dest != -1:
+                sentences = []
+                for row in data_rows:
+                    if len(row) > col_sentence_dest:
+                        s = row[col_sentence_dest].strip()
+                        if s and s not in sentences:
+                            sentences.append(s)
+                translated_text = " ".join(sentences)
+                
+        update_data = {
+            "stage": stage,
+            "status": status,
+            "sourceText": source_text or "",
+            "translatedText": translated_text or "",
+            "rows": rows_data
+        }
+        
+    js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
+    
+    with file_lock(update_js_path):
+        temp_path = update_js_path.with_suffix('.update.js.tmp')
+        with open(temp_path, 'w', encoding='utf-8') as f:
+            f.write(js_content)
+        import time
+        for _ in range(10):
+            try:
+                os.replace(temp_path, update_js_path)
+                break
+            except Exception as e:
+                time.sleep(0.1)
+        else:
+            logger.error("Failed to atomically replace update.js after 10 retries.")
 
 def cmd_progressive_worker(args):
     logger.info("Progressive-worker subcommand invoked")
@@ -3414,44 +3621,97 @@ def cmd_progressive_worker(args):
         
     comments, headers, data_rows = load_tsv_rows(tsv_path)
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
+    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields else -1
     
-    word_translations_empty = args.word_empty.lower() == 'true'
+    run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+    run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+    enrich_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
     
-    if args.provider in ('combined', 'google', 'deepl'):
-        if word_translations_empty:
-            lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
-            provider = 'combined' if args.provider == 'combined' else args.provider
-            lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
+    # Write initial source stage
+    write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
+    
+    # 1. Base Translation Stage
+    if run_base == 'auto':
+        try:
+            # check if sentence needs translation
+            sentence_translated = False
+            if col_sentence_dest != -1:
+                if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
+                    sentence_translated = True
+                    
+            if not sentence_translated:
+                source_txt_path = tsv_path.with_suffix('.txt')
+                if source_txt_path.exists():
+                    text = source_txt_path.read_text(encoding='utf-8')
+                    main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
+                    sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, 'single', config, resolved_paths, main_text_provider)
+                    
+                    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+                    with file_lock(tsv_path):
+                        comments, headers, current_rows = load_tsv_rows(tsv_path)
+                        for row in current_rows:
+                            content_line_idx = 0
+                            if col_index != -1 and len(row) > col_index:
+                                try:
+                                    content_line_idx = int(row[col_index]) - 1
+                                except ValueError:
+                                    pass
+                            if col_sentence_dest != -1:
+                                while len(row) <= col_sentence_dest:
+                                    row.append("")
+                                row[col_sentence_dest] = sentence_translations_raw.get(content_line_idx, "")
+                        save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                        data_rows = current_rows
             
-            with file_lock(tsv_path):
-                comments, headers, current_rows = load_tsv_rows(tsv_path)
-                for row in current_rows:
-                    if col_lemma != -1 and len(row) > col_lemma:
-                        lemma_val = row[col_lemma]
-                        if col_word_dest != -1:
-                            while len(row) <= col_word_dest:
-                                row.append("")
-                            if not row[col_word_dest].strip():
-                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
-                data_rows = current_rows
-            write_update_js(tsv_path, data_rows, headers, role_fields)
+            # check if lemmas need translation
+            word_translations_empty = args.word_empty.lower() == 'true'
+            if word_translations_empty:
+                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+                provider = config.get('pipeline', 'base_provider', fallback='google')
+                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
                 
-        if args.provider == 'combined':
-            if not getattr(args, 'skip_intellifiller', False):
-                run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths)
-                comments, headers, data_rows = load_tsv_rows(tsv_path)
-                write_update_js(tsv_path, data_rows, headers, role_fields)
+                with file_lock(tsv_path):
+                    comments, headers, current_rows = load_tsv_rows(tsv_path)
+                    for row in current_rows:
+                        if col_lemma != -1 and len(row) > col_lemma:
+                            lemma_val = row[col_lemma]
+                            if col_word_dest != -1:
+                                while len(row) <= col_word_dest:
+                                    row.append("")
+                                if not row[col_word_dest].strip():
+                                    row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                    save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                    data_rows = current_rows
             
-    elif args.provider == 'intellifiller':
-        if not getattr(args, 'skip_intellifiller', False):
-            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths)
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
-            write_update_js(tsv_path, data_rows, headers, role_fields)
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+        except Exception as e:
+            logger.error(f"Failing in translated stage: {e}")
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
+            
+    # 2. Enrichment Stage
+    skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
+    if not skip_intellifiller:
+        try:
+            batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
+            selected_rows = list(range(len(data_rows)))
+            for i in range(0, len(selected_rows), batch_size):
+                batch = selected_rows[i:i + batch_size]
+                logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
+                run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+                
+                # reload data rows after each batch
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+                write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment")
+        except Exception as e:
+            logger.error(f"Failing in enrichment stage: {e}")
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment", status="failed")
+            
+    # 3. Finished Event
+    write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
 
 
 

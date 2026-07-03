@@ -90,3 +90,65 @@ def test_render_lookup_html():
     assert '<h3>Source Text</h3>' in html_out
     assert '<h3>Lemmas</h3>' not in html_out
     assert 'laufen' in html_out
+
+def test_run_render_flow_regions(tmp_path):
+    import configparser
+    from kardenwort_desk import run_render_flow
+    
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'default_target_language', 'ru')
+    config.set('settings', 'anki_mapping_file', './anki-mapping.ini')
+    config.set('settings', 'progressive_loading', 'true')
+    config.set('settings', 'lazy_processing', 'none')
+    
+    config.add_section('environment')
+    config.set('environment', 'kardenwort_workspace', str(tmp_path))
+    
+    config.add_section('languages')
+    config.set('languages', 'en_prompt', 'English prompt')
+    config.set('languages', 'en_lemma_index', 'en_idx')
+    config.set('languages', 'en_lemma_override', 'en_over')
+    
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(tmp_path / "anki_mapping.ini")
+    }
+    
+    mapping = configparser.ConfigParser()
+    mapping.add_section('fields')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+    with open(tmp_path / "anki_mapping.ini", 'w') as f:
+        mapping.write(f)
+        
+    # We create results directory and mock working tsv file
+    res_dir = tmp_path / "results"
+    res_dir.mkdir()
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\nword1\t\t\t\n", encoding='utf-8')
+    
+    html_out = run_render_flow(
+        text="word1",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+    
+    # Assert regions are present in HTML
+    assert 'id="source-container"' in html_out
+    assert 'id="translation-container"' in html_out
+    assert 'id="lemma-table"' in html_out
+    
+    # Assert skeleton loader CSS is in styles
+    assert '.skeleton-loader' in html_out
+    
+    # Assert window.receiveUpdate routes data to source-container, translation-container, and lemma-table
+    assert 'source-container' in html_out
+    assert 'translation-container' in html_out
+    assert 'lemma-table' in html_out
+

@@ -102,15 +102,36 @@ deepl_settings_file = ../20240411110510-autohotkey/translate-selection/settings.
 intellifiller_headless = ../20251206123938-intellifiller-ai-addon-for-anki/IntelliFiller/headless_entrypoint.py
 
 [translation_providers]
+; [DEPRECATED] Use [pipeline] section instead.
 ; Each slot: google | intellifiller | deepl | combined
 main_text_translation = combined
 lemmas_translation = combined
 ; Pass --use-local-fork to translate scripts (default: true)
 use_local_fork = true
 
+[pipeline]
+; The base translation provider (google, deepl)
+base_provider = google
+; The enrichment provider (intellifiller, none)
+enrichment_provider = intellifiller
+
+[triggers]
+; Trigger for base translation. Options: auto (on load), manual (user must trigger)
+run_base_translation = auto
+; Trigger for enrichment. Options: auto (on load), manual (user must trigger)
+run_enrichment = manual
+
+[rendering]
+; UI rendering mode. Options: progressive (stream stages as ready), monolithic (wait for all stages)
+display_mode = progressive
+
 [settings]
 default_language = en
 default_target_language = ru
+; [DEPRECATED] Use [rendering] display_mode instead.
+progressive_loading = true
+; [DEPRECATED] Use [triggers] instead.
+lazy_processing = llm_only
 ; Favorites TSV output directory (relative or absolute)
 favorites_output_dir = ./favorites
 ; Standalone schema-mapping file (same pattern as kardenwort-mpv's anki-mapping.ini)
