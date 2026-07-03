@@ -3616,6 +3616,85 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         else:
             logger.error("Failed to atomically replace update.js after 10 retries.")
 
+def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+    
+    try:
+        # check if sentence needs translation
+        sentence_translated = False
+        if col_sentence_dest != -1:
+            if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
+                sentence_translated = True
+                
+        if not sentence_translated:
+            source_txt_path = tsv_path.with_suffix('.txt')
+            if source_txt_path.exists():
+                text = source_txt_path.read_text(encoding='utf-8')
+                main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
+                sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
+                
+                col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+                with file_lock(tsv_path):
+                    comments, headers, current_rows = load_tsv_rows(tsv_path)
+                    for row in current_rows:
+                        content_line_idx = 0
+                        if col_index != -1 and len(row) > col_index:
+                            try:
+                                content_line_idx = int(row[col_index]) - 1
+                            except ValueError:
+                                pass
+                        if col_sentence_dest != -1:
+                            while len(row) <= col_sentence_dest:
+                                row.append("")
+                            row[col_sentence_dest] = sentence_translations_raw.get(content_line_idx, "")
+                    save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                    data_rows = current_rows
+        
+        # check if lemmas need translation
+        word_translations_empty = args.word_empty.lower() == 'true'
+        if word_translations_empty and col_lemma != -1:
+            lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip()))
+            provider = config.get('pipeline', 'base_provider', fallback='google')
+            lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
+            
+            with file_lock(tsv_path):
+                comments, headers, current_rows = load_tsv_rows(tsv_path)
+                for row in current_rows:
+                    if col_lemma != -1 and len(row) > col_lemma:
+                        lemma_val = row[col_lemma]
+                        if col_word_dest != -1:
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            if not row[col_word_dest].strip():
+                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                data_rows = current_rows
+        
+        write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+    except Exception as e:
+        logger.error(f"Failing in translated stage: {e}")
+        write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
+    return data_rows
+
+def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+    try:
+        batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
+        selected_rows = list(range(len(data_rows)))
+        for i in range(0, len(selected_rows), batch_size):
+            batch = selected_rows[i:i + batch_size]
+            logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
+            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+            
+            # reload data rows after each batch
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment")
+    except Exception as e:
+        logger.error(f"Failing in enrichment stage: {e}")
+        write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment", status="failed")
+    return data_rows
+
 def cmd_progressive_worker(args):
     logger.info("Progressive-worker subcommand invoked")
     config, resolved_paths, goldendict = load_config(args.config)
@@ -3632,10 +3711,6 @@ def cmd_progressive_worker(args):
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
         
-        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
-        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-        col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
-        
         run_base = config.get('triggers', 'run_base_translation', fallback='auto')
         run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
         enrich_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
@@ -3645,79 +3720,12 @@ def cmd_progressive_worker(args):
         
         # 1. Base Translation Stage
         if run_base == 'auto':
-            try:
-                # check if sentence needs translation
-                sentence_translated = False
-                if col_sentence_dest != -1:
-                    if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
-                        sentence_translated = True
-                        
-                if not sentence_translated:
-                    source_txt_path = tsv_path.with_suffix('.txt')
-                    if source_txt_path.exists():
-                        text = source_txt_path.read_text(encoding='utf-8')
-                        main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
-                        sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
-                        
-                        col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-                        with file_lock(tsv_path):
-                            comments, headers, current_rows = load_tsv_rows(tsv_path)
-                            for row in current_rows:
-                                content_line_idx = 0
-                                if col_index != -1 and len(row) > col_index:
-                                    try:
-                                        content_line_idx = int(row[col_index]) - 1
-                                    except ValueError:
-                                        pass
-                                if col_sentence_dest != -1:
-                                    while len(row) <= col_sentence_dest:
-                                        row.append("")
-                                    row[col_sentence_dest] = sentence_translations_raw.get(content_line_idx, "")
-                            save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
-                            data_rows = current_rows
-                
-                # check if lemmas need translation
-                word_translations_empty = args.word_empty.lower() == 'true'
-                if word_translations_empty and col_lemma != -1:
-                    lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip()))
-                    provider = config.get('pipeline', 'base_provider', fallback='google')
-                    lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
-                    
-                    with file_lock(tsv_path):
-                        comments, headers, current_rows = load_tsv_rows(tsv_path)
-                        for row in current_rows:
-                            if col_lemma != -1 and len(row) > col_lemma:
-                                lemma_val = row[col_lemma]
-                                if col_word_dest != -1:
-                                    while len(row) <= col_word_dest:
-                                        row.append("")
-                                    if not row[col_word_dest].strip():
-                                        row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                        save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
-                        data_rows = current_rows
-                
-                write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
-            except Exception as e:
-                logger.error(f"Failing in translated stage: {e}")
-                write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
+            data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                 
         # 2. Enrichment Stage
         skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
         if not skip_intellifiller:
-            try:
-                batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
-                selected_rows = list(range(len(data_rows)))
-                for i in range(0, len(selected_rows), batch_size):
-                    batch = selected_rows[i:i + batch_size]
-                    logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
-                    run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
-                    
-                    # reload data rows after each batch
-                    comments, headers, data_rows = load_tsv_rows(tsv_path)
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment")
-            except Exception as e:
-                logger.error(f"Failing in enrichment stage: {e}")
-                write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment", status="failed")
+            data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                 
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
