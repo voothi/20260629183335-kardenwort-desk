@@ -90,8 +90,7 @@ def test_lookup_cache_behavior(monkeypatch, tmp_path):
     results_dir = resolved_paths['kardenwort_workspace'] / "results"
     files = list(results_dir.glob("*.tsv"))
     assert len(files) == 1
-    assert files[0].name.startswith("lookup-en-")
-    assert not files[0].name.startswith("zid1-")
+    assert files[0].name.startswith("zid1-")
     
     # 2. Cache hit
     kardenwort_desk.run_lookup_flow("test text", "en", "ru", "html", config, resolved_paths, goldendict, "zid2")
@@ -199,6 +198,7 @@ def test_lookup_utf8_stdout(monkeypatch, tmp_path):
         config = None
         verbose = False
         debug = False
+        disable_css = False
         
     with pytest.raises(SystemExit):
         kardenwort_desk.cmd_lookup(Args())

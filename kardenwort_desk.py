@@ -980,10 +980,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         role_fields['selected'] = 'DeskSelected'
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
-    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields else -1
-    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
-    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
-    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields else -1
+    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
     run_base = config.get('triggers', 'run_base_translation', fallback='auto')
@@ -3623,9 +3623,9 @@ def cmd_progressive_worker(args):
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
     
-    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
-    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
-    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields else -1
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     
     run_base = config.get('triggers', 'run_base_translation', fallback='auto')
     run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
@@ -3669,8 +3669,8 @@ def cmd_progressive_worker(args):
             
             # check if lemmas need translation
             word_translations_empty = args.word_empty.lower() == 'true'
-            if word_translations_empty:
-                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+            if word_translations_empty and col_lemma != -1:
+                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip()))
                 provider = config.get('pipeline', 'base_provider', fallback='google')
                 lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
                 

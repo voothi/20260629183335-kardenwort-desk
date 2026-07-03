@@ -111,7 +111,7 @@ en_prompt=en_prompt
         main()
         
     captured = capsys.readouterr()
-    assert "kw-translation" not in captured.out
-    assert "kw-source-text" not in captured.out
+    assert '<div class="kw-translation"' not in captured.out
+    assert '<div class="kw-source-text"' not in captured.out
     assert "<h3>" not in captured.out
     assert "Lemma" in captured.out

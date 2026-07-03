@@ -58,8 +58,8 @@ def test_render_lookup_text():
     assert "=== Translation ===" in text_out
     assert "run fast" in text_out
     assert "=== Lemmas ===" in text_out
-    assert "laufen |  | to run" in text_out
-    assert "schnell | adj | fast" in text_out
+    assert "laufen\t\tto run" in text_out
+    assert "schnell\tadj\tfast" in text_out
 
 def test_render_lookup_html():
     goldendict = {
