@@ -11,7 +11,7 @@ import shutil
 import contextlib
 import html
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timezone
 
 import text_tokenizer as tok
 
@@ -275,7 +275,7 @@ def build_field_mapping(mapping, mode):
 class JSONFormatter(logging.Formatter):
     def format(self, record):
         log_data = {
-            "timestamp": datetime.utcnow().isoformat() + "Z",
+            "timestamp": datetime.now(timezone.utc).replace(tzinfo=None).isoformat() + "Z",
             "level": record.levelname,
             "message": record.getMessage(),
             "module": record.module,
@@ -3752,54 +3752,56 @@ def cmd_edit_save(args):
         sys.exit(1)
         
     try:
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
-    except Exception as e:
-        print_structured_error("DESK_FAILED", f"Failed to load working TSV: {e}")
-        sys.exit(1)
-        
-    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
-    selected_col_name = role_fields.get('selected', 'DeskSelected')
-    if selected_col_name not in editable_cols:
-        editable_cols.append(selected_col_name)
-        
-    for delta in deltas:
-        row_id = delta.get("row_id")
-        col_name = delta.get("column")
-        val = delta.get("value")
-        
-        if row_id is None or col_name is None or val is None:
-            print_structured_error("INVALID_ARGS", "Each delta must have 'row_id', 'column', and 'value'")
-            sys.exit(1)
-            
-        if col_name == "_delete":
-            if 0 <= row_id < len(data_rows):
-                data_rows[row_id] = None
-            continue
-            
-        if col_name not in editable_cols:
-            print_structured_error("DESK_FAILED", f"Column '{col_name}' is not inline-editable.")
-            sys.exit(1)
-            
-        if col_name not in headers:
-            print_structured_error("DESK_FAILED", f"Column '{col_name}' not found in TSV headers.")
-            sys.exit(1)
-            
-        col_idx = headers.index(col_name)
-        if 0 <= row_id < len(data_rows):
-            if data_rows[row_id] is not None:
-                data_rows[row_id][col_idx] = val
-        else:
-            print_structured_error("DESK_FAILED", f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
-            sys.exit(1)
-            
-    data_rows = [r for r in data_rows if r is not None]
-            
-    try:
         with file_lock(tsv_path):
+            try:
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+            except Exception as e:
+                print_structured_error("DESK_FAILED", f"Failed to load working TSV: {e}")
+                sys.exit(1)
+                
+            role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+            selected_col_name = role_fields.get('selected', 'DeskSelected')
+            if selected_col_name not in editable_cols:
+                editable_cols.append(selected_col_name)
+                
+            for delta in deltas:
+                row_id = delta.get("row_id")
+                col_name = delta.get("column")
+                val = delta.get("value")
+                
+                if row_id is None or col_name is None or val is None:
+                    print_structured_error("INVALID_ARGS", "Each delta must have 'row_id', 'column', and 'value'")
+                    sys.exit(1)
+                    
+                if col_name == "_delete":
+                    if 0 <= row_id < len(data_rows):
+                        data_rows[row_id] = None
+                    continue
+                    
+                if col_name not in editable_cols:
+                    print_structured_error("DESK_FAILED", f"Column '{col_name}' is not inline-editable.")
+                    sys.exit(1)
+                    
+                if col_name not in headers:
+                    print_structured_error("DESK_FAILED", f"Column '{col_name}' not found in TSV headers.")
+                    sys.exit(1)
+                    
+                col_idx = headers.index(col_name)
+                if 0 <= row_id < len(data_rows):
+                    if data_rows[row_id] is not None:
+                        data_rows[row_id][col_idx] = val
+                else:
+                    print_structured_error("DESK_FAILED", f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
+                    sys.exit(1)
+                    
+            data_rows = [r for r in data_rows if r is not None]
+            
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
         print("SUCCESS")
+    except SystemExit:
+        raise
     except Exception as e:
-        print_structured_error("DESK_FAILED", f"Failed to save working TSV: {e}")
+        print_structured_error("DESK_FAILED", f"Failed to process and save working TSV: {e}")
         sys.exit(1)
 
 def cmd_merge(args):
