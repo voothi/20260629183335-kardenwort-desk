@@ -63,44 +63,86 @@ def _warn_deprecated(key, msg):
         logger.warning(msg)
 
 def _migrate_config(config):
-    # Ensure pipeline section
+    # Ensure sections exist
     if not config.has_section('pipeline'):
         config.add_section('pipeline')
-    
-    base_provider = config.get('pipeline', 'base_provider', fallback='google')
-    enrichment_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
-    
-    if base_provider is None:
-        base_provider = 'google'
-    if enrichment_provider is None:
-        enrichment_provider = 'intellifiller'
-        
-    config.set('pipeline', 'base_provider', base_provider)
-    config.set('pipeline', 'enrichment_provider', enrichment_provider)
-    
-    # Ensure triggers section
     if not config.has_section('triggers'):
         config.add_section('triggers')
-        
-    run_base = config.get('triggers', 'run_base_translation', fallback=None)
-    run_enrichment = config.get('triggers', 'run_enrichment', fallback=None)
-    
-    if run_base is None:
-        run_base = 'auto'
-    if run_enrichment is None:
-        run_enrichment = 'auto'
-        
-    config.set('triggers', 'run_base_translation', run_base)
-    config.set('triggers', 'run_enrichment', run_enrichment)
-    
-    # Ensure rendering section
     if not config.has_section('rendering'):
         config.add_section('rendering')
-        
+
+    # Read legacy providers
+    legacy_main = config.get('translation_providers', 'main_text_translation', fallback=None) if config.has_section('translation_providers') else None
+    legacy_lemmas = config.get('translation_providers', 'lemmas_translation', fallback=None) if config.has_section('translation_providers') else None
+
+    # Resolve base_provider
+    base_provider = config.get('pipeline', 'base_provider', fallback=None)
+    if base_provider is None:
+        if legacy_main is not None or legacy_lemmas is not None:
+            _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
+        if legacy_main == 'deepl':
+            base_provider = 'deepl'
+        else:
+            base_provider = 'google'
+    config.set('pipeline', 'base_provider', base_provider)
+
+    # Resolve enrichment_provider
+    enrichment_provider = config.get('pipeline', 'enrichment_provider', fallback=None)
+    if enrichment_provider is None:
+        if legacy_main is not None or legacy_lemmas is not None:
+            _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
+        if legacy_lemmas in ('google', 'deepl'):
+            enrichment_provider = 'none'
+        elif legacy_lemmas in ('intellifiller', 'combined'):
+            enrichment_provider = 'intellifiller'
+        else:
+            enrichment_provider = 'intellifiller'
+    config.set('pipeline', 'enrichment_provider', enrichment_provider)
+
+    # Read legacy triggers
+    legacy_lazy = config.get('settings', 'lazy_processing', fallback=None) if config.has_section('settings') else None
+
+    # Resolve triggers
+    run_base = config.get('triggers', 'run_base_translation', fallback=None)
+    run_enrichment = config.get('triggers', 'run_enrichment', fallback=None)
+
+    if run_base is None or run_enrichment is None:
+        mapped_base = 'auto'
+        mapped_enrich = 'auto'
+        if legacy_lazy is not None:
+            _warn_deprecated('lazy_processing', "lazy_processing is deprecated; map it to triggers.run_base_translation and triggers.run_enrichment.")
+            lazy_val = legacy_lazy.lower()
+            if lazy_val in ('true', 'all'):
+                mapped_base = 'manual'
+                mapped_enrich = 'manual'
+            elif lazy_val == 'llm_only':
+                mapped_base = 'auto'
+                mapped_enrich = 'manual'
+            else:
+                mapped_base = 'auto'
+                mapped_enrich = 'auto'
+        if run_base is None:
+            run_base = mapped_base
+        if run_enrichment is None:
+            run_enrichment = mapped_enrich
+    
+    config.set('triggers', 'run_base_translation', run_base)
+    config.set('triggers', 'run_enrichment', run_enrichment)
+
+    # Read legacy rendering
+    legacy_prog = config.get('settings', 'progressive_loading', fallback=None) if config.has_section('settings') else None
+
+    # Resolve rendering
     display_mode = config.get('rendering', 'display_mode', fallback=None)
     if display_mode is None:
-        display_mode = 'progressive'
-        
+        if legacy_prog is not None:
+            _warn_deprecated('progressive_loading', "progressive_loading is deprecated; map it to rendering.display_mode.")
+            if legacy_prog.lower() == 'true':
+                display_mode = 'progressive'
+            else:
+                display_mode = 'monolithic'
+        else:
+            display_mode = 'progressive'
     config.set('rendering', 'display_mode', display_mode)
 
 def load_config(config_path=None):
@@ -1556,18 +1598,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 }
             }
             
-            if (data.stage === 'source' || data.stage === 'translated') {
-                if (data.stage === 'source' && data.sourceText) {
-                    var container = document.getElementById('source-container');
-                    if (container && container.querySelector('[data-pending="true"]')) {
-                        container.textContent = data.sourceText;
-                    }
+            if (data.sourceText) {
+                var container = document.getElementById('source-container');
+                if (container && container.querySelector('[data-pending="true"]')) {
+                    container.textContent = data.sourceText;
                 }
-                if (data.stage === 'translated' && data.translatedText) {
-                    var container = document.getElementById('translation-container');
-                    if (container && container.querySelector('[data-pending="true"]')) {
-                        container.innerHTML = data.translatedText;
-                    }
+            }
+            if (data.translatedText) {
+                var container = document.getElementById('translation-container');
+                if (container && container.querySelector('[data-pending="true"]')) {
+                    container.innerHTML = data.translatedText;
                 }
             }
             

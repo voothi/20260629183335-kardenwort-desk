@@ -198,21 +198,15 @@ def test_orthogonal_config_migration():
         desk_dir.mkdir()
         anki_mapping = desk_dir / "anki-mapping.ini"
         anki_mapping.write_text("")
-        
         config_content = """[settings]
 anki_mapping_file = ./anki-mapping.ini
 default_target_language = ru
+lazy_processing = llm_only
+progressive_loading = true
 
-[triggers]
-run_base_translation = auto
-run_enrichment = manual
-
-[rendering]
-display_mode = progressive
-
-[pipeline]
-base_provider = deepl
-enrichment_provider = combined
+[translation_providers]
+main_text_translation = deepl
+lemmas_translation = combined
 """
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
@@ -225,7 +219,7 @@ enrichment_provider = combined
         assert config.get('rendering', 'display_mode') == 'progressive'
         
         assert config.get('pipeline', 'base_provider') == 'deepl'
-        assert config.get('pipeline', 'enrichment_provider') == 'combined'
+        assert config.get('pipeline', 'enrichment_provider') == 'intellifiller'
 
 def test_orthogonal_config_migration_d7():
     with tempfile.TemporaryDirectory() as tmpdir:
