@@ -2345,9 +2345,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             deltas = [];
             var tds = document.getElementsByTagName('td');
             for (var k = 0; k < tds.length; k++) {
-                if (tds[k].className.indexOf('dirty') !== -1) {
-                    tds[k].className = tds[k].className.replace(/\bdirty\b/g, '');
-                }
+                tds[k].classList.remove('dirty');
             }
             
             for (var i = 0; i <= historyIndex; i++) {
@@ -2379,8 +2377,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                             var tdst = tableRows[j].getElementsByTagName('td');
                             for (var m = 0; m < tdst.length; m++) {
                                 if (tdst[m].getAttribute('data-col') === d.column) {
-                                    if (tdst[m].className.indexOf('dirty') === -1) {
-                                        tdst[m].className += ' dirty';
+                                    if (!tdst[m].classList.contains('dirty')) {
+                                        tdst[m].classList.add('dirty');
                                     }
                                     break;
                                 }
@@ -2432,9 +2430,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
             var tds = document.getElementsByTagName('td');
             for (var k = 0; k < tds.length; k++) {
-                if (tds[k].className.indexOf('dirty') !== -1) {
-                    tds[k].className = tds[k].className.replace(/\bdirty\b/g, '');
-                }
+                tds[k].classList.remove('dirty');
             }
             if (window.ahkCall) {
                 window.ahkCall('dirty', 'false');
