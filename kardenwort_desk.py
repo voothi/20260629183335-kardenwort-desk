@@ -542,8 +542,8 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
         try:
             return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider)}
         except Exception as e:
-            logger.warning(f"Failed to translate main text: {e}")
-            return {0: ""}
+            logger.error(f"Failed to translate main text: {e}")
+            return {0: f"[Translation Error: {e}]"}
     else:
         # Phase 1: Collision Protection
         process_text = text.replace("[[S]]", "AHK_ESC_S_")
@@ -598,9 +598,9 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             return translations
             
         except Exception as e:
-            logger.warning(f"Failed to translate multi text block: {e}")
+            logger.error(f"Failed to translate multi-line text: {e}")
             lines = text.splitlines()
-            return {idx: "" for idx in range(len(lines))}
+            return {idx: f"[Translation Error: {e}]" for idx in range(len(lines))}
 
 def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
     python_exe = resolved_paths['kardenwort_python']
@@ -2673,7 +2673,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     return html_page
 
-def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid):
+def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid, text_mode='single'):
     import hashlib
     import time
     
@@ -2691,7 +2691,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     run_intellifiller = goldendict['run_intellifiller']
     
     main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
-    sentence_translations = translate_source_text(text, language, target_lang, 'single', config, resolved_paths, main_text_provider)
+    sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
     sentence_translation = sentence_translations.get(0, "")
     
     cached = False
@@ -2705,7 +2705,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                     break
             
     if not cached:
-        working_tsv_path = prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode='single')
+        working_tsv_path = prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode=text_mode)
         
         save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
         if save_translation_text and sentence_translations:
@@ -2715,31 +2715,34 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                 translation_lines = [sentence_translations.get(i, "").strip() for i in range(max_idx + 1)]
                 translation_text_out = " ".join(line for line in translation_lines if line)
                 translation_text_path.write_text(translation_text_out, encoding='utf-8')
+
+    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+    mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+    
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
+    
+    if col_lemma != -1 and col_word_dest != -1:
+        lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
+        lemmas_to_translate = []
+        for row in data_rows:
+            if len(row) > col_lemma and row[col_lemma].strip():
+                if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                    lemmas_to_translate.append(row[col_lemma].strip())
         
-        comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
-        
-        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
-        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
-        
-        if col_lemma != -1 and col_word_dest != -1:
-            lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
-            lemmas = []
-            for row in data_rows:
-                if len(row) > col_lemma and row[col_lemma].strip():
-                    lemmas.append(row[col_lemma].strip())
-            
-            unique_lemmas = list(dict.fromkeys(lemmas))
+        if lemmas_to_translate:
+            unique_lemmas = list(dict.fromkeys(lemmas_to_translate))
             translations = translate_lemmas_fast_path(unique_lemmas, language, target_lang, config, resolved_paths, lemmas_provider)
             
             for row in data_rows:
                 if len(row) > col_lemma and row[col_lemma].strip():
                     lemma = row[col_lemma].strip()
-                    trans = translations.get(lemma, "")
-                    while len(row) <= col_word_dest:
-                        row.append("")
-                    row[col_word_dest] = trans
+                    if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                        trans = translations.get(lemma, "")
+                        while len(row) <= col_word_dest:
+                            row.append("")
+                        row[col_word_dest] = trans
             
             with file_lock(working_tsv_path):
                 save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
@@ -3089,8 +3092,12 @@ def cmd_lookup(args):
         if hasattr(sys.stdout, 'reconfigure'):
             sys.stdout.reconfigure(encoding='utf-8')
             
+        text_mode = getattr(args, 'text_mode', 'single')
+        if text_mode == 'single' and '\n' in args.text.strip():
+            text_mode = 'multi'
+            
         comments, headers, data_rows, sentence_translation = run_lookup_flow(
-            args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid
+            args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode
         )
         
         fmt = goldendict['format']
@@ -3487,6 +3494,7 @@ def cmd_reprocess_worker(args):
             logger.error(f"Failed to write finished event in reprocess: {e}")
 
 def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
+    import time
     update_js_path = tsv_path.with_suffix('.update.js')
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
@@ -3497,12 +3505,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     
     rows_data = {}
     for row_id, row in enumerate(data_rows):
-        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
-        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
-        
         rows_data[row_id] = {
             "trans": trans_val,
             "ipa": ipa_val,
@@ -3510,20 +3515,11 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         }
         
     if stage is None:
-        update_data = {}
-        for row_id, row in enumerate(data_rows):
-            lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
-            inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
-            trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
-            morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
-            ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
-            
-            if trans_val or ipa_val or morph_val:
-                update_data[row_id] = {
-                    "trans": trans_val,
-                    "ipa": ipa_val,
-                    "morph": morph_val
-                }
+        # Inline snapshot — only emit rows that have at least one non-empty field
+        update_data = {
+            row_id: d for row_id, d in rows_data.items()
+            if d["trans"] or d["ipa"] or d["morph"]
+        }
     else:
         if source_text is None:
             source_txt_path = tsv_path.with_suffix('.txt')
@@ -3555,19 +3551,21 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
+    temp_path = update_js_path.with_name(update_js_path.name + '.tmp')
     with file_lock(update_js_path):
-        temp_path = update_js_path.with_suffix('.update.js.tmp')
         with open(temp_path, 'w', encoding='utf-8') as f:
             f.write(js_content)
-        import time
-        for _ in range(10):
+        for attempt in range(10):
             try:
                 os.replace(temp_path, update_js_path)
                 break
+            except PermissionError:
+                time.sleep(0.1)
             except Exception as e:
+                logger.error(f"Failed to replace update.js (attempt {attempt + 1}): {e}")
                 time.sleep(0.1)
         else:
-            logger.error("Failed to atomically replace update.js after 10 retries.")
+            logger.error(f"Failed to atomically replace update.js after 10 retries: {update_js_path}")
 
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
@@ -4150,6 +4148,7 @@ def main():
     p_lookup.add_argument("--language", help="Source language code")
     p_lookup.add_argument("--target-lang", help="Target language code")
     p_lookup.add_argument("--format", choices=["html", "text", "combined"], help="Output format")
+    p_lookup.add_argument("--text-mode", choices=["single", "multi", "auto", "sentence"], default="single", help="Text translation mode")
     p_lookup.add_argument("--sections", help="Comma-separated sections to render")
     p_lookup.add_argument("--lemma-columns", help="Comma-separated columns for the lemmas table")
     p_lookup.add_argument("--no-headings", action="store_true", help="Disable headings")
