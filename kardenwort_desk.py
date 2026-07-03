@@ -2677,7 +2677,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
 
 def render_section(token, ctx):
     import re
-    html = ""
+    html_output = ""
     
     def make_heading(heading_key, default_text):
         h_text = ctx.get('headings', {}).get(heading_key, "")
@@ -2688,18 +2688,18 @@ def render_section(token, ctx):
         return ""
         
     if token == "source":
-        html += make_heading("source", "Source Text")
+        html_output += make_heading("source", "Source Text")
         safe_text = ctx["text"].replace('\r', '')
-        html += f'<div class="kw-source-text">{safe_text}</div>\n'
+        html_output += f'<div class="kw-source-text">{safe_text}</div>\n'
         
     elif token == "translation":
-        html += make_heading("translation", "Translation")
+        html_output += make_heading("translation", "Translation")
         safe_trans = html.escape(ctx.get("sentence_translation", "").replace('\r', ''))
-        html += f'<div class="kw-translation">{safe_trans}</div>\n'
+        html_output += f'<div class="kw-translation">{safe_trans}</div>\n'
         
     elif token == "lemmas":
-        html += make_heading("lemmas", "Lemmas")
-        html += '<table class="kw-lemmas-table">\n'
+        html_output += make_heading("lemmas", "Lemmas")
+        html_output += '<table class="kw-lemmas-table">\n'
         
         COLUMN_TOKEN_MAP = {
             'inflected': 'WordSourceInflectedForm',
@@ -2710,14 +2710,14 @@ def render_section(token, ctx):
         }
         
         valid_tokens = []
-        html += '<thead><tr>'
+        html_output += '<thead><tr>'
         for col_token in ctx.get('column_tokens', []):
             if col_token not in COLUMN_TOKEN_MAP:
                 logger.warning(f"Unknown lemma_columns token: {col_token}")
                 continue
             valid_tokens.append(col_token)
-            html += f'<th>{col_token.capitalize()}</th>'
-        html += '</tr></thead>\n<tbody>\n'
+            html_output += f'<th>{col_token.capitalize()}</th>'
+        html_output += '</tr></thead>\n<tbody>\n'
         
         headers = ctx['headers']
         data_rows = ctx['data_rows']
@@ -2728,18 +2728,18 @@ def render_section(token, ctx):
             col_indices[t] = headers.index(field) if field in headers else -1
             
         for row in data_rows:
-            html += '<tr>'
+            html_output += '<tr>'
             for t in valid_tokens:
                 idx = col_indices[t]
                 val = row[idx] if idx != -1 and len(row) > idx else ""
                 if isinstance(val, str):
                     val = val.replace('\r', '')
-                html += f'<td>{val}</td>'
-            html += '</tr>\n'
+                html_output += f'<td>{val}</td>'
+            html_output += '</tr>\n'
             
-        html += '</tbody></table>\n'
+        html_output += '</tbody></table>\n'
         
-    return html
+    return html_output
 
 def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
     sections = goldendict['sections']
