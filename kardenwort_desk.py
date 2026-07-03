@@ -1544,7 +1544,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
         var tokenSpans = [];
         for (var i = 0; i < spans.length; i++) {
-            if (spans[i].className.indexOf('word') !== -1) {
+            if (spans[i].classList.contains('word')) {
                 tokenSpans.push(spans[i]);
             }
         }
@@ -1881,7 +1881,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 
                 var tds = row.getElementsByTagName('td');
                 for (var j = 0; j < tds.length; j++) {
-                    if (tds[j].className.indexOf('editable') !== -1) {
+                    if (tds[j].classList.contains('editable')) {
                         (function(cell) {
                             addEvent(cell, 'click', function(e) {
                                 if (window.__selectableTextMode) return;
@@ -2013,7 +2013,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     if (activeRow) {
                         var tds = activeRow.getElementsByTagName('td');
                         for (var k = 0; k < tds.length; k++) {
-                            if (tds[k].className.indexOf('editable') !== -1) {
+                            if (tds[k].classList.contains('editable')) {
                                 cellToEdit = tds[k];
                                 break;
                             }
@@ -2063,13 +2063,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
-                var isSelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
-                if (isSelected) {
-                    if (row.className.indexOf('selected') === -1) {
-                        row.className += ' selected';
-                    }
+                if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
+                    row.classList.add('selected');
                 } else {
-                    row.className = row.className.replace(/selected/g, '').replace(/\\s+/g, ' ').replace(/^\\s+|\\s+$/g, '');
+                    row.classList.remove('selected');
                 }
             }
         }
@@ -2090,10 +2087,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         function updateBidirectionalHighlights() {
             for (var i = 0; i < tokenSpans.length; i++) {
                 var span = tokenSpans[i];
-                span.className = span.className.replace(/highlight-orange-active/g, '')
-                                               .replace(/highlight-purple-active/g, '')
-                                               .replace(/\\s+/g, ' ')
-                                               .replace(/^\\s+|\\s+$/g, '');
+                span.classList.remove('highlight-orange-active');
+                span.classList.remove('highlight-purple-active');
             }
             
             for (var rId in selectedRowIdsMap) {
@@ -2110,14 +2105,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                             }
                         }
                         if (span) {
-                            if (span.className.indexOf('highlight-purple') !== -1) {
-                                if (span.className.indexOf('highlight-purple-active') === -1) {
-                                    span.className += ' highlight-purple-active';
-                                }
-                            } else if (span.className.indexOf('highlight-orange') !== -1) {
-                                if (span.className.indexOf('highlight-orange-active') === -1) {
-                                    span.className += ' highlight-orange-active';
-                                }
+                            if (span.classList.contains('highlight-purple')) {
+                                span.classList.add('highlight-purple-active');
+                            } else if (span.classList.contains('highlight-orange')) {
+                                span.classList.add('highlight-orange-active');
                             }
                         }
                     }
@@ -2226,7 +2217,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     var tds = document.getElementsByTagName('td');
                     var editables = [];
                     for (var k = 0; k < tds.length; k++) {
-                        if (tds[k].className.indexOf('editable') !== -1) {
+                        if (tds[k].classList.contains('editable')) {
                             editables.push(tds[k]);
                         }
                     }
@@ -2472,7 +2463,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     if (tableRows[k].getAttribute('data-row-id') == focusedRowId) {
                         var tds = tableRows[k].getElementsByTagName('td');
                         for (var j = 0; j < tds.length; j++) {
-                            if (tds[j].className.indexOf('editable') !== -1) {
+                            if (tds[j].classList.contains('editable')) {
                                 cellToEdit = tds[j];
                                 break;
                             }
@@ -2509,7 +2500,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             var scrollCell = null;
             var curr = target;
             while (curr) {
-                if (curr.className && curr.className.indexOf('scrollable-cell') !== -1) {
+                if (curr.classList && curr.classList.contains('scrollable-cell')) {
                     scrollCell = curr;
                     break;
                 }
