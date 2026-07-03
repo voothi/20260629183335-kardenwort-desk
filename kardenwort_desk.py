@@ -2178,7 +2178,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 div.className = 'scrollable-cell';
                 div.appendChild(document.createTextNode(originalValue));
                 cell.appendChild(div);
-                cell.className = cell.className.replace(/\s*editing\b/g, '');
+                cell.classList.remove('editing');
                 window.cancelActiveEdit = null;
             };
             
@@ -2189,7 +2189,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 div.className = 'scrollable-cell';
                 div.appendChild(document.createTextNode(newValue));
                 cell.appendChild(div);
-                cell.className = cell.className.replace(/\s*editing\b/g, '');
+                cell.classList.remove('editing');
                 window.cancelActiveEdit = null;
                 if (newValue !== originalValue) {
                     var action = {
