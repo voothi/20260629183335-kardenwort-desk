@@ -1495,20 +1495,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         var tds = tr.getElementsByTagName('td');
                         var rowData = data[rowId];
                         if (tds.length >= 5) {
-                            if (tds[2].className.indexOf('dirty') === -1 && rowData.trans) {
+                            if (!tds[2].classList.contains('dirty') && rowData.trans) {
                                 var div = tds[2].querySelector('.scrollable-cell');
                                 if (div) div.textContent = rowData.trans;
-                                else if (tds[2].className.indexOf('editing') === -1) tds[2].textContent = rowData.trans;
+                                else if (!tds[2].classList.contains('editing')) tds[2].textContent = rowData.trans;
                             }
-                            if (tds[3].className.indexOf('dirty') === -1 && rowData.ipa) {
+                            if (!tds[3].classList.contains('dirty') && rowData.ipa) {
                                 var div = tds[3].querySelector('.scrollable-cell');
                                 if (div) div.textContent = rowData.ipa;
-                                else if (tds[3].className.indexOf('editing') === -1) tds[3].textContent = rowData.ipa;
+                                else if (!tds[3].classList.contains('editing')) tds[3].textContent = rowData.ipa;
                             }
-                            if (tds[4].className.indexOf('dirty') === -1 && rowData.morph) {
+                            if (!tds[4].classList.contains('dirty') && rowData.morph) {
                                 var div = tds[4].querySelector('.scrollable-cell');
                                 if (div) div.innerHTML = rowData.morph;
-                                else if (tds[4].className.indexOf('editing') === -1) tds[4].innerHTML = rowData.morph;
+                                else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = rowData.morph;
                             }
                         }
                     }
@@ -2163,8 +2163,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             input.style.padding = '4px';
             
             cell.innerHTML = '';
-            if (cell.className.indexOf('editing') === -1) {
-                cell.className += ' editing';
+            if (!cell.classList.contains('editing')) {
+                cell.classList.add('editing');
             }
             cell.appendChild(input);
             input.focus();
