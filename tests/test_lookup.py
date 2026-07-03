@@ -20,9 +20,9 @@ generated_results_dir=results
 en_prompt=en_prompt
 en_lemma_index=en_idx
 en_lemma_override=en_over
-[translation_providers]
-main_text_translation=combined
-lemmas_translation=combined
+[pipeline]
+base_provider=combined
+enrichment_provider=combined
 [goldendict]
 """)
     
@@ -218,7 +218,6 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
     # Enable new triggers
-    config.add_section('pipeline')
     config.set('pipeline', 'base_provider', 'google')
     config.set('pipeline', 'enrichment_provider', 'intellifiller')
     
@@ -294,7 +293,6 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
-    config.add_section('pipeline')
     config.set('pipeline', 'base_provider', 'google')
     config.set('pipeline', 'enrichment_provider', 'intellifiller')
     config.add_section('triggers')
@@ -347,7 +345,6 @@ def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
-    config.add_section('pipeline')
     config.set('pipeline', 'base_provider', 'google')
     config.set('pipeline', 'enrichment_provider', 'intellifiller')
     config.add_section('triggers')
@@ -387,7 +384,6 @@ def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
-    config.add_section('pipeline')
     config.set('pipeline', 'base_provider', 'google')
     config.set('pipeline', 'enrichment_provider', 'intellifiller')
     config.add_section('triggers')

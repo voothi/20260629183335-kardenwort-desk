@@ -67,36 +67,9 @@ def _migrate_config(config):
     if not config.has_section('pipeline'):
         config.add_section('pipeline')
     
-    base_provider = config.get('pipeline', 'base_provider', fallback=None)
-    enrichment_provider = config.get('pipeline', 'enrichment_provider', fallback=None)
+    base_provider = config.get('pipeline', 'base_provider', fallback='google')
+    enrichment_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
     
-    if base_provider is None or enrichment_provider is None:
-        legacy_main = config.get('translation_providers', 'main_text_translation', fallback=None) if config.has_section('translation_providers') else None
-        legacy_lemmas = config.get('translation_providers', 'lemmas_translation', fallback=None) if config.has_section('translation_providers') else None
-        
-        if legacy_main is not None or legacy_lemmas is not None:
-            mapped_base = 'google'
-            mapped_enrichment = 'intellifiller'
-            
-            if legacy_lemmas == 'google':
-                mapped_base = 'google'
-                mapped_enrichment = 'none'
-            elif legacy_lemmas == 'deepl':
-                mapped_base = 'deepl'
-                mapped_enrichment = 'none'
-            elif legacy_lemmas == 'intellifiller':
-                mapped_base = legacy_main if legacy_main else 'google'
-                mapped_enrichment = 'intellifiller'
-            elif legacy_main == 'deepl':
-                mapped_base = 'deepl'
-                
-            if base_provider is None:
-                base_provider = mapped_base
-                _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
-            if enrichment_provider is None:
-                enrichment_provider = mapped_enrichment
-                _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
-                
     if base_provider is None:
         base_provider = 'google'
     if enrichment_provider is None:
@@ -500,7 +473,7 @@ def run_google_translation(text, source, target, config, resolved_paths):
         "--source", source,
         "--target", target,
     ]
-    if config.getboolean('translation_providers', 'use_local_fork', fallback=True):
+    if config.getboolean('pipeline', 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
     timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
@@ -528,7 +501,7 @@ def run_deepl_translation(text, source, target, config, resolved_paths):
         "--target", target,
         "--deepl-api-key", deepl_key,
     ]
-    if config.getboolean('translation_providers', 'use_local_fork', fallback=True):
+    if config.getboolean('pipeline', 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
     timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
@@ -969,8 +942,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    main_text_provider = config.get('translation_providers', 'main_text_translation', fallback='combined')
-    lemmas_provider = config.get('translation_providers', 'lemmas_translation', fallback='combined')
+    main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
+    lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
     
     role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
     if 'WordSourceMorphologyAI' in headers and 'morphology' not in role_fields:
@@ -2758,7 +2731,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     ttl_seconds = goldendict['lookup_ttl_seconds']
     run_intellifiller = goldendict['run_intellifiller']
     
-    main_text_provider = config.get('translation_providers', 'main_text_translation', fallback='combined')
+    main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
     sentence_translations = translate_source_text(text, language, target_lang, 'single', config, resolved_paths, main_text_provider)
     sentence_translation = sentence_translations.get(0, "")
     
@@ -2792,7 +2765,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
         
         if col_lemma != -1 and col_word_dest != -1:
-            lemmas_provider = config.get('translation_providers', 'lemmas_translation', fallback='combined')
+            lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
             lemmas = []
             for row in data_rows:
                 if len(row) > col_lemma and row[col_lemma].strip():
@@ -3521,7 +3494,7 @@ def cmd_reprocess_worker(args):
         return
         
     selected_rows = [int(r.strip()) for r in rows_str.split(',') if r.strip()]
-    lemmas_provider = config.get('translation_providers', 'lemmas_translation', fallback='intellifiller')
+    lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
     language = config.get('settings', 'default_language', fallback='en')
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
