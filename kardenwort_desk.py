@@ -1663,16 +1663,22 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             var updated = false;
             if (data.sourceText) {
                 var container = document.getElementById('source-container');
-                if (container && container.querySelector('[data-pending="true"]')) {
-                    container.textContent = data.sourceText;
-                    updated = true;
+                if (container) {
+                    var pendingNode = container.querySelector('[data-pending="true"]');
+                    if (pendingNode || container.textContent !== data.sourceText) {
+                        container.textContent = data.sourceText;
+                        updated = true;
+                    }
                 }
             }
             if (data.translatedText) {
                 var container = document.getElementById('translation-container');
-                if (container && container.querySelector('[data-pending="true"]')) {
-                    container.innerHTML = data.translatedText;
-                    updated = true;
+                if (container) {
+                    var pendingNode = container.querySelector('[data-pending="true"]');
+                    if (pendingNode || container.innerHTML !== data.translatedText) {
+                        container.innerHTML = data.translatedText;
+                        updated = true;
+                    }
                 }
             }
             
