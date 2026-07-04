@@ -1,4 +1,7 @@
-# kardenwort-desk
+# Kardenwort Desk
+
+[![Version](https://img.shields.io/badge/version-v1.0.0-blue)](https://github.com/voothi/20260629183335-kardenwort-desk)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 Python orchestration core for the Kardenwort desktop window. It runs
 [kardenwort](../20241223170748-kardenwort) to extract lemmas and sentence
@@ -19,6 +22,60 @@ hotkey/intent), renders the HTML this core emits, lets the user mark rows as
 favorites / edit cells, and forwards selections/deltas back here. It contains
 no linguistic logic.
 
+## Table of Contents
+
+- [Visual Showcase](#visual-showcase)
+- [Single Architectural Contract (portability anchor)](#single-architectural-contract-portability-anchor)
+- [CLI contract (called by the AHK shell / SendTo)](#cli-contract-called-by-the-ahk-shell--sendto)
+- [Configuration (`config.ini`)](#configuration-configini)
+- [Related](#related)
+- [Processing pipeline (file-on-disk, SendTo per-stage)](#processing-pipeline-file-on-disk-sendto-per-stage)
+- [Inflection → lemma link & bidirectional selection](#inflection--lemma-link--bidirectional-selection)
+- [Multi-session reliability](#multi-session-reliability)
+- [TSV merge utility (SendTo "Kardenwort Merge")](#tsv-merge-utility-sendto-kardenwort-merge)
+- [Source text saving & session restore](#source-text-saving--session-restore)
+- [GoldenDict Integration](#goldendict-integration)
+- [Integration Contracts & Formats](#integration-contracts--formats)
+- [Hover-highlight MVP (proof-of-concept)](#hover-highlight-mvp-proof-of-concept)
+- [Project Structure](#project-structure)
+- [License](#license)
+
+## Visual Showcase
+
+#### **Launch and Language Selection**
+I press Ctrl+Alt+Shift+F2 for En.
+![Language Selection](assets/20260704224520-pasted-image.png)
+
+#### **Bidirectional Link & Bookmarks**
+I select words in the Source Text or in the tabular part of the lemmas. A convenient mode of bookmarks (pointers) is supported, which allows you to quickly find the place of a word in translation and back.
+![Bidirectional Link & Bookmarks](assets/20260704224707-pasted-image.png)
+
+#### **Favorites Export**
+Favorites are supported, a separate file with highlighted lemmas is created and sent to Anki.
+![Favorites Export](assets/20260704224803-pasted-image.png)
+
+#### **Anki Synchronization**
+To Anki A deck is created with the name of the TSV file. You can also download this TSV file yourself via Ctrl+Shift+I in a few clicks.
+![Anki Synchronization](assets/20260704224846-pasted-image.png)
+
+#### **Added Deck Preview**
+This is what the card looks like in Anki from the added deck (file).
+![Added Deck Preview](assets/20260704225032-pasted-image.png)
+
+#### **Uploads Directory**
+This is what the directory with uploads looks like, with files created for each new launch in an open and understandable format, which can be edited and loaded into Anki.
+![Uploads Directory](assets/20260704225142-pasted-image.png)
+
+#### **Session Restore**
+It is possible to restore a session in Kardenwort Desk (expand your desk) via Sent to.
+![Session Restore](assets/20260704225204-pasted-image.png)
+
+#### **Cascaded & Numbered Windows**
+Supports restoring multiple groups of files in a directory, then these windows open in a cascade, numbered in their Title Bar and Taskbar Icon.
+![Cascaded & Numbered Windows](assets/20260704225224-pasted-image.png)
+
+[Return to Top](#table-of-contents)
+
 ## Single Architectural Contract (portability anchor)
 
 The boundary between frontend and backend is a **stable, transport-agnostic
@@ -32,6 +89,8 @@ HTML rendering) is rewritten per platform.
 For command line transport, multi-line payloads (like render mode's HTML output)
 are Base64-encoded to avoid shell quoting and UTF-8 encoding issues. This uses the
 Base64 transport helper [b64util.py](file:///U:/voothi/20260629183335-kardenwort-desk/b64util.py) on the backend and [Lib/B64Util.ahk](file:///U:/voothi/20240411110510-autohotkey/Lib/B64Util.ahk) on the frontend (mirroring `ftca`'s `s_b64` pattern).
+
+[Return to Top](#table-of-contents)
 
 ## CLI contract (called by the AHK shell / SendTo)
 
@@ -74,6 +133,8 @@ python kardenwort_desk.py restore --file <ZID>-<slug>.txt [--config <path>]
 All modes accept `--config <path>` (default: `config.ini` next to `kardenwort_desk.py`).
 All paths, the favorites output directory, the headless IntelliFiller entrypoint
 path, provider slots, and schema mapping are read from `config.ini`.
+
+[Return to Top](#table-of-contents)
 
 ## Configuration (`config.ini`)
 
@@ -163,12 +224,16 @@ intellifiller_timeout = 120
 Paths are validated at startup; a missing path produces a clear error naming
 the offending key.
 
+[Return to Top](#table-of-contents)
+
 ## Related
 
 - Kardenwort (lemma/sentence extraction + import): `U:/voothi/20241223170748-kardenwort`
 - IntelliFiller (headless LLM field-filling): `U:/voothi/20251206123938-intellifiller-ai-addon-for-anki`
 - AHK display frontend: `U:/voothi/20240411110510-autohotkey`
 - OpenSpec change: `autohotkey/openspec/changes/20260629172653-kardenwort-window`
+
+[Return to Top](#table-of-contents)
 
 ## Processing pipeline (file-on-disk, SendTo per-stage)
 
@@ -194,6 +259,8 @@ lemma/translation edits are held in-memory until an explicit Save (button /
 Ctrl+S), then written atomically by this core so a crash never corrupts the
 TSV.
 
+[Return to Top](#table-of-contents)
+
 ## Inflection → lemma link & bidirectional selection
 
 The core tokenizes the original text (Python port of the kardenwort-mpv
@@ -212,6 +279,8 @@ Translation of the original text.    ← sentence translation
 Table with lemmas and their translation.  ← frequency-ordered, editable, bidirectional link
 ```
 
+[Return to Top](#table-of-contents)
+
 ## Multi-session reliability
 
 Many desk windows can run simultaneously, each with its own text and
@@ -222,6 +291,8 @@ All TSV writes are **atomic** (temp → backup-rename → atomic promote →
 rollback-on-failure, per kardenwort-quiz's `save_tsv`), and an stdlib
 **advisory file lock** guards the rare same-file case. The session ZID is the
 end-to-end trace key across window, working TSV, temp/backup files, and logs.
+
+[Return to Top](#table-of-contents)
 
 ## TSV merge utility (SendTo "Kardenwort Merge")
 
@@ -239,6 +310,8 @@ Source files are kept by default (non-destructive); `merge_delete_sources`
 in config enables deletion after a verified merge. The merged file is written
 atomically; mismatched schemas are refused.
 
+[Return to Top](#table-of-contents)
+
 ## Source text saving & session restore
 
 When a session produces its working TSV, the desk core also saves the original
@@ -251,6 +324,8 @@ a `.txt` or `.tsv` file, finds its sibling (same ZID prefix, other extension),
 and reconstitutes the desk window's working state (source text + lemma table +
 translations + edit state) for continued work. If the sibling file is missing,
 it opens with what's available and warns.
+
+[Return to Top](#table-of-contents)
 
 ## GoldenDict Integration
 
@@ -291,6 +366,8 @@ The `lookup-<lang>-<hash>.tsv` cache files are stored in your `generated_results
 ### Migration Note
 If you encounter issues with the new `lookup` command, the revert path is to swap the GoldenDict Program commands back to their previous raw scripts (`En kW`, `dT-g En-Ru`, or German scripts). The desk change is strictly additive and doesn't break or replace the underlying standalone extraction scripts.
 
+[Return to Top](#table-of-contents)
+
 ## Integration Contracts & Formats
 
 ### 1. Desk Core ↔ Headless IntelliFiller Contract (Task 2.2)
@@ -321,6 +398,8 @@ For exporting favorites, the frontend creates a JSON file containing the selecte
 ```
 The desk core reads this manifest, extracts the matching lines from the session's working TSV, and outputs a subset TSV into the favorites directory.
 
+[Return to Top](#table-of-contents)
+
 ## Hover-highlight MVP (proof-of-concept)
 
 This is an opt-in, client-side-only proof of concept to validate bidirectional word hover highlighting and click bookmarks before adopting the full server-side tokenization and theme-color integration.
@@ -341,3 +420,26 @@ In `kardenwort-window/config.ini`, under `[Settings]`:
 
 ### Retirement
 This MVP overlay is designed as a host-side overlay. When the full `20260702154120-translation-source-highlight` change is implemented, you can retire this MVP by setting `HoverHighlightMvp = 0` in `config.ini`. No code reverts are needed on the backend.
+
+[Return to Top](#table-of-contents)
+
+## Project Structure
+
+```text
+.
+├── .agent/                 # Agentic configurations and workflows
+├── docs/                   # Documentation and conversation logs
+├── kardenwort_desk.py      # Main CLI entrypoint
+├── b64util.py              # Base64 transport utility
+├── requirements.txt        # Python dependencies
+├── config.ini.template     # Configuration template
+└── README.md               # Project documentation
+```
+
+[Return to Top](#table-of-contents)
+
+## License
+
+This project is licensed under the **MIT License**. See the [LICENSE.txt](LICENSE.txt) file for details.
+
+[Return to Top](#table-of-contents)
