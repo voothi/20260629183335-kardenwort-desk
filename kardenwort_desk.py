@@ -1665,7 +1665,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 var container = document.getElementById('source-container');
                 if (container) {
                     var pendingNode = container.querySelector('[data-pending="true"]');
-                    if (pendingNode || container.textContent !== data.sourceText) {
+                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                    var newText = data.sourceText.trim().replace(/\s+/g, ' ');
+                    if (pendingNode || currentText !== newText) {
                         container.textContent = data.sourceText;
                         updated = true;
                     }
