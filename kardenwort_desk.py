@@ -1605,6 +1605,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         var lastClickedCell = null;
         var lastHoveredCell = null;
         var isDragSelecting = false;
+        var dragStartRowId = null;
         var dragSelectMode = true;
         var isTokenDragSelecting = false;
         var tokenDragMode = true;
@@ -2049,7 +2050,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     dragOccurred = false;
                     
                     if (e.shiftKey && lastClickedRowId !== null) {
+                        dragStartRowId = lastClickedRowId;
                         dragSelectMode = true;
+                        
+                        initialSelectedMap = {};
+                        for (var key in selectedRowIdsMap) {
+                            if (selectedRowIdsMap.hasOwnProperty(key)) {
+                                initialSelectedMap[key] = selectedRowIdsMap[key];
+                            }
+                        }
+                        
                         var start = Math.min(parseInt(lastClickedRowId), parseInt(rowId));
                         var end = Math.max(parseInt(lastClickedRowId), parseInt(rowId));
                         for (var j = start; j <= end; j++) {
@@ -2057,6 +2067,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         }
                         lastClickedRowId = rowId;
                     } else {
+                        dragStartRowId = rowId;
+                        
+                        initialSelectedMap = {};
+                        for (var key in selectedRowIdsMap) {
+                            if (selectedRowIdsMap.hasOwnProperty(key)) {
+                                initialSelectedMap[key] = selectedRowIdsMap[key];
+                            }
+                        }
+                        
                         if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
                             delete selectedRowIdsMap[rowIdStr];
                             dragSelectMode = false;
@@ -2089,12 +2108,25 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         }
                         dragOccurred = true;
                         var rowId = parseInt(row.getAttribute('data-row-id'));
-                        var rowIdStr = String(rowId);
                         
-                        if (dragSelectMode) {
-                            selectedRowIdsMap[rowIdStr] = true;
-                        } else {
-                            delete selectedRowIdsMap[rowIdStr];
+                        // Reset to the state before the current drag gesture started
+                        selectedRowIdsMap = {};
+                        for (var key in initialSelectedMap) {
+                            if (initialSelectedMap.hasOwnProperty(key)) {
+                                selectedRowIdsMap[key] = initialSelectedMap[key];
+                            }
+                        }
+                        
+                        // Apply the drag selection range from dragStartRowId to current rowId
+                        var start = Math.min(dragStartRowId, rowId);
+                        var end = Math.max(dragStartRowId, rowId);
+                        for (var j = start; j <= end; j++) {
+                            var rIdStr = String(j);
+                            if (dragSelectMode) {
+                                selectedRowIdsMap[rIdStr] = true;
+                            } else {
+                                delete selectedRowIdsMap[rIdStr];
+                            }
                         }
                         
                         focusedRowId = rowId;
