@@ -2293,11 +2293,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             selectedRowIdsMap = {};
             lastClickedRowId = null;
             updateRowStyles();
+            updateBidirectionalHighlights();
         }
         
         window.clearAllSelectionsAndNotify = function() {
             clearAllSelections();
-            updateBidirectionalHighlights();
             notifyAHKSelection();
         };
         
