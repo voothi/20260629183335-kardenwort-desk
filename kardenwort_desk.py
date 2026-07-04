@@ -477,7 +477,6 @@ def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
     
     try:
         with open(temp_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv_writer = re.sub(r'\r', '', '') # placeholder logic, use standard csv
             import csv
             writer = csv.writer(f, delimiter='\t', lineterminator='\n')
             for comment in comments:
