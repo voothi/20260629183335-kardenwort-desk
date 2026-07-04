@@ -1665,14 +1665,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 var container = document.getElementById('source-container');
                 if (container) {
                     var pendingNode = container.querySelector('[data-pending="true"]');
-                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
-                    var newText = data.sourceText.trim().replace(/\s+/g, ' ');
-                    if (pendingNode || currentText !== newText) {
-                        container.textContent = data.sourceText;
-                        if (typeof tokenSpans !== 'undefined') {
-                            tokenSpans = [];
+                    var hasSpans = container.querySelector('span.word') !== null;
+                    if (pendingNode || !hasSpans) {
+                        // Only apply when in skeleton/pending state or no spans rendered yet.
+                        // Do NOT replace if spans already exist — wiping textContent destroys
+                        // all span DOM nodes that MVPBookmark holds live references to.
+                        var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                        var newText = data.sourceText.trim().replace(/\s+/g, ' ');
+                        if (pendingNode || currentText !== newText) {
+                            container.textContent = data.sourceText;
+                            if (typeof tokenSpans !== 'undefined') {
+                                tokenSpans = [];
+                            }
+                            updated = true;
                         }
-                        updated = true;
                     }
                 }
             }
@@ -3939,7 +3945,9 @@ def cmd_retext_worker(args):
                         row[col_sentence_dest] = translation_text_out
                 save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+            # source_text="" because retext never changes the source text;
+            # sending it would cause receiveUpdate to wipe the span DOM.
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_retext_worker: {e}")
         try:
@@ -3947,7 +3955,7 @@ def cmd_retext_worker(args):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
         except Exception:
             pass
 def cmd_progressive_worker(args):
