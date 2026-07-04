@@ -473,7 +473,6 @@ def load_tsv_rows(tsv_path):
 
 def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
     temp_path = tsv_path.with_suffix('.tsv.tmp')
-    bak_path = tsv_path.with_suffix('.tsv.bak')
     
     try:
         with open(temp_path, 'w', encoding='utf-8', newline='') as f:
@@ -485,23 +484,7 @@ def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
             for row in data_rows:
                 writer.writerow(row)
                 
-        if tsv_path.exists():
-            if bak_path.exists():
-                os.remove(bak_path)
-            os.rename(tsv_path, bak_path)
-            
-        try:
-            os.rename(temp_path, tsv_path)
-        except Exception as e:
-            if bak_path.exists():
-                os.rename(bak_path, tsv_path)
-            raise e
-            
-        if bak_path.exists():
-            try:
-                os.remove(bak_path)
-            except OSError:
-                pass
+        os.replace(temp_path, tsv_path)
     except Exception as e:
         if temp_path.exists():
             try:
