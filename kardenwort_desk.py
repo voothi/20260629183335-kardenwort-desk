@@ -1611,16 +1611,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 }
             }
             
+            var updated = false;
             if (data.sourceText) {
                 var container = document.getElementById('source-container');
                 if (container && container.querySelector('[data-pending="true"]')) {
                     container.textContent = data.sourceText;
+                    updated = true;
                 }
             }
             if (data.translatedText) {
                 var container = document.getElementById('translation-container');
                 if (container && container.querySelector('[data-pending="true"]')) {
                     container.innerHTML = data.translatedText;
+                    updated = true;
                 }
             }
             
@@ -1644,20 +1647,32 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                 if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
                                     var div = tds[2].querySelector('.scrollable-cell');
                                     var val = rowData.trans || "";
-                                    if (div) div.textContent = val;
-                                    else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
+                                    var oldVal = div ? div.textContent : (tds[2].classList.contains('editing') ? null : tds[2].textContent);
+                                    if (oldVal !== val) {
+                                        if (div) div.textContent = val;
+                                        else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
+                                        updated = true;
+                                    }
                                 }
                                 if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
                                     var div = tds[3].querySelector('.scrollable-cell');
                                     var val = rowData.ipa || "";
-                                    if (div) div.textContent = val;
-                                    else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
+                                    var oldVal = div ? div.textContent : (tds[3].classList.contains('editing') ? null : tds[3].textContent);
+                                    if (oldVal !== val) {
+                                        if (div) div.textContent = val;
+                                        else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
+                                        updated = true;
+                                    }
                                 }
                                 if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
                                     var div = tds[4].querySelector('.scrollable-cell');
                                     var val = rowData.morph || "";
-                                    if (div) div.innerHTML = val;
-                                    else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
+                                    var oldVal = div ? div.innerHTML : (tds[4].classList.contains('editing') ? null : tds[4].innerHTML);
+                                    if (oldVal !== val) {
+                                        if (div) div.innerHTML = val;
+                                        else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
+                                        updated = true;
+                                    }
                                 }
                             }
                         }
@@ -1666,12 +1681,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
             
             // Force IE11 layout reflow to fix table rendering glitches
-            var table = document.getElementById('lemma-table');
-            if (table) {
-                var disp = table.style.display;
-                table.style.display = 'none';
-                table.offsetHeight; // trigger reflow
-                table.style.display = disp;
+            if (updated) {
+                var table = document.getElementById('lemma-table');
+                if (table) {
+                    var scrollY = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop;
+                    var disp = table.style.display;
+                    table.style.display = 'none';
+                    table.offsetHeight; // trigger reflow
+                    table.style.display = disp;
+                    window.scrollTo(0, scrollY);
+                }
             }
         };
 
