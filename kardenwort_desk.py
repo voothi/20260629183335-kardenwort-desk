@@ -345,7 +345,17 @@ def get_deepl_key(config, base_dir):
         return None
         
     settings = configparser.ConfigParser()
-    settings.read(settings_path, encoding='utf-8')
+    read_success = False
+    for enc in ('utf-8', 'utf-8-sig', 'utf-16', 'utf-16le', 'cp1252'):
+        try:
+            settings.read(settings_path, encoding=enc)
+            read_success = True
+            break
+        except UnicodeDecodeError:
+            continue
+    if not read_success:
+        logger.error(f"Failed to decode DeepL settings file {settings_path}")
+        return None
     
     salt = settings.get('Security', 'Salt', fallback='')
     secrets_path_val = settings.get('Security', 'SecretsPath', fallback='')
@@ -358,7 +368,17 @@ def get_deepl_key(config, base_dir):
         return None
         
     secrets = configparser.ConfigParser()
-    secrets.read(secrets_path, encoding='utf-8')
+    read_success = False
+    for enc in ('utf-8', 'utf-8-sig', 'utf-16', 'utf-16le', 'cp1252'):
+        try:
+            secrets.read(secrets_path, encoding=enc)
+            read_success = True
+            break
+        except UnicodeDecodeError:
+            continue
+    if not read_success:
+        logger.error(f"Failed to decode DeepL secrets file {secrets_path}")
+        return None
     
     obfuscated_key = secrets.get('DeepL', 'Key', fallback='')
     if not obfuscated_key:
