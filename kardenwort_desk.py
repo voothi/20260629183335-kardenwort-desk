@@ -3567,13 +3567,19 @@ def cmd_reprocess(args):
     if args.config:
         cmd.extend(["--config", args.config])
         
+    log_path = tsv_path.with_suffix('.log')
+    try:
+        log_file = open(log_path, 'a', encoding='utf-8')
+    except Exception:
+        log_file = subprocess.DEVNULL
+        
     if sys.platform == 'win32':
         creationflags = 0x08000000 | 0x00000200
         subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
             creationflags=creationflags,
             close_fds=True
         )
@@ -3581,8 +3587,8 @@ def cmd_reprocess(args):
         subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
             close_fds=True
         )
     print(json.dumps({"reprocess_started": True, "rows": cleared_count}))
@@ -3910,13 +3916,19 @@ def cmd_retext(args):
     if args.config:
         cmd.extend(["--config", args.config])
         
+    log_path = tsv_path.with_suffix('.log')
+    try:
+        log_file = open(log_path, 'a', encoding='utf-8')
+    except Exception:
+        log_file = subprocess.DEVNULL
+        
     if sys.platform == 'win32':
         creationflags = 0x08000000 | 0x00000200
         subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
             creationflags=creationflags,
             close_fds=True
         )
@@ -3924,8 +3936,8 @@ def cmd_retext(args):
         subprocess.Popen(
             cmd,
             stdin=subprocess.DEVNULL,
-            stdout=subprocess.DEVNULL,
-            stderr=subprocess.DEVNULL,
+            stdout=log_file,
+            stderr=log_file,
             close_fds=True
         )
     print(json.dumps({"retext_started": True}))
