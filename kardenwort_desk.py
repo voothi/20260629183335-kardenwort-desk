@@ -1670,8 +1670,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         // Only apply when in skeleton/pending state or no spans rendered yet.
                         // Do NOT replace if spans already exist — wiping textContent destroys
                         // all span DOM nodes that MVPBookmark holds live references to.
-                        var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
-                        var newText = data.sourceText.trim().replace(/\s+/g, ' ');
+                        var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
+                        var newText = data.sourceText.trim().replace(/\\s+/g, ' ');
                         if (pendingNode || currentText !== newText) {
                             container.textContent = data.sourceText;
                             if (typeof tokenSpans !== 'undefined') {
@@ -1686,10 +1686,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 var container = document.getElementById('translation-container');
                 if (container) {
                     var pendingNode = container.querySelector('[data-pending="true"]');
-                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                     var tempDiv = document.createElement('div');
                     tempDiv.innerHTML = data.translatedText;
-                    var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
+                    var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
                     if (pendingNode || currentText !== newText) {
                         container.innerHTML = data.translatedText;
                         updated = true;
