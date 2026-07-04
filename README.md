@@ -38,7 +38,8 @@ no linguistic logic.
 - [Integration Contracts & Formats](#integration-contracts--formats)
 - [Hover-highlight MVP (proof-of-concept)](#hover-highlight-mvp-proof-of-concept)
 - [Project Structure](#project-structure)
-- [License](#license)
+- [Kardenwort Ecosystem](#kardenwort-ecosystem)
+- [License and Acknowledgements](#license-and-acknowledgements)
 
 ## Visual Showcase
 
@@ -438,8 +439,16 @@ This MVP overlay is designed as a host-side overlay. When the full `202607021541
 
 [Return to Top](#table-of-contents)
 
-## License
+## Kardenwort Ecosystem
 
-This project is licensed under the **MIT License**. See the [LICENSE.txt](LICENSE.txt) file for details.
+This project is part of the **[Kardenwort](https://github.com/kardenwort)** environment, designed to create a focused and efficient learning ecosystem.
+
+[Return to Top](#table-of-contents)
+
+## License and Acknowledgements
+
+This project was created by and is maintained by **Denis Novikov (voothi)**.
+
+It is licensed under the **MIT License**. See the `LICENSE` file for details.
 
 [Return to Top](#table-of-contents)
