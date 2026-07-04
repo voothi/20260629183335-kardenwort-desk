@@ -3768,7 +3768,6 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                 save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
                 if save_translation_text and sentence_translations_raw:
                     slug = generate_slug(text)
-                    import re
                     m = re.match(r"^(\d{14})", tsv_path.name)
                     zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
