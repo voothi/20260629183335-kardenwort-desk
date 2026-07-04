@@ -1641,6 +1641,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     clearInterval(window.pollInterval);
                     window.pollInterval = null;
                 }
+                if (window.ahkCall) {
+                    window.ahkCall('finished', '');
+                }
             }
             
             var updated = false;
