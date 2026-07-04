@@ -1759,11 +1759,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 var baseName = tsvPathStr.replace(/\\.tsv$/i, '');
                 var jsUrl = "file:///" + baseName.replace(/\\\\/g, '/') + ".update.js";
                 window.pollInterval = setInterval(function() {
-                    var script = document.createElement('script');
-                    script.src = jsUrl + "?t=" + new Date().getTime();
-                    script.onload = function() { script.parentNode.removeChild(script); };
-                    script.onerror = function() { script.parentNode.removeChild(script); };
-                    document.head.appendChild(script);
+                    var xhr = new XMLHttpRequest();
+                    xhr.open('GET', jsUrl + "?t=" + new Date().getTime(), true);
+                    xhr.onreadystatechange = function() {
+                        if (xhr.readyState === 4 && (xhr.status === 200 || xhr.status === 0) && xhr.responseText) {
+                            try { eval(xhr.responseText); } catch(e) {}
+                        }
+                    };
+                    try { xhr.send(null); } catch(e) {}
                 }, 200);
             }
         };
