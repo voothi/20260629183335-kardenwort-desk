@@ -3677,7 +3677,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                         s = row[col_sentence_dest].strip()
                         if s and s not in sentences:
                             sentences.append(s)
-                translated_text = "<br/>".join(html.escape(s) for s in sentences)
+                translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
                 
         update_data = {
             "stage": stage,
