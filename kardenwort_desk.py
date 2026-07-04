@@ -1015,6 +1015,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
+    auto_inject_updates = config.getboolean('rendering', 'auto_inject_updates', fallback=True)
     run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
     run_text = config.get('triggers', 'run_text_translation', fallback='auto')
     run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
@@ -1589,6 +1590,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
 <script id="display-mode" type="text/plain">{display_mode_js}</script>
+<script id="auto-inject-updates" type="text/plain">{auto_inject_updates_js}</script>
 <script id="run-enrichment" type="text/plain">{run_enrichment_js}</script>
 <script id="worker-launched" type="text/plain">{worker_launched_js}</script>
 
@@ -2831,6 +2833,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{display_mode_js}", "progressive" if is_progressive else "monolithic")
+    html_page = html_page.replace("{auto_inject_updates_js}", "true" if auto_inject_updates else "false")
     html_page = html_page.replace("{run_enrichment_js}", run_enrich)
     html_page = html_page.replace("{worker_launched_js}", "true" if worker_launched else "false")
 
