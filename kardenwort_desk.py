@@ -1547,6 +1547,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
 <script id="display-mode" type="text/plain">{display_mode_js}</script>
+<script id="run-enrichment" type="text/plain">{run_enrichment_js}</script>
 
 
 <script type="text/javascript">
@@ -2732,6 +2733,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{display_mode_js}", "progressive" if is_progressive else "monolithic")
+    html_page = html_page.replace("{run_enrichment_js}", run_enrich)
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
@@ -3438,7 +3440,9 @@ def cmd_reprocess(args):
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
         role_fields = get_role_fields(mapping, headers)
-        write_update_js(tsv_path, data_rows, headers, role_fields)
+        run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+        if run_enrich == 'auto':
+            write_update_js(tsv_path, data_rows, headers, role_fields)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
         sys.exit(1)
@@ -3514,7 +3518,9 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                                 row[col_word_dest] = lemma_translations[lemma_val]
                 save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 
-            write_update_js(tsv_path, data_rows, headers, role_fields)
+            run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+            if run_enrich == 'auto':
+                write_update_js(tsv_path, data_rows, headers, role_fields)
     return data_rows
 
 def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows):
@@ -3526,7 +3532,9 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         
         try:
             comments, headers, data_rows = load_tsv_rows(tsv_path)
-            write_update_js(tsv_path, data_rows, headers, role_fields)
+            run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+            if run_enrich == 'auto':
+                write_update_js(tsv_path, data_rows, headers, role_fields)
         except Exception as e:
             logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
     return data_rows
@@ -3569,7 +3577,9 @@ def cmd_reprocess_worker(args):
         logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
     finally:
         try:
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+            run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+            if run_enrich == 'auto':
+                write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
         except Exception as e:
             logger.error(f"Failed to write finished event in reprocess: {e}")
 
