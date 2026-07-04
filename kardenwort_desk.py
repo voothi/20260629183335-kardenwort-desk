@@ -1750,25 +1750,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         };
 
         window.startPolling = function() {
-            if (window.pollInterval) {
-                clearInterval(window.pollInterval);
-                window.pollInterval = null;
-            }
-            var tsvPathStr = document.getElementById('tsv-path').textContent || "";
-            if (tsvPathStr) {
-                var baseName = tsvPathStr.replace(/\\.tsv$/i, '');
-                var jsUrl = "file:///" + baseName.replace(/\\\\/g, '/') + ".update.js";
-                window.pollInterval = setInterval(function() {
-                    var xhr = new XMLHttpRequest();
-                    xhr.open('GET', jsUrl + "?t=" + new Date().getTime(), true);
-                    xhr.onreadystatechange = function() {
-                        if (xhr.readyState === 4 && (xhr.status === 200 || xhr.status === 0) && xhr.responseText) {
-                            try { eval(xhr.responseText); } catch(e) {}
-                        }
-                    };
-                    try { xhr.send(null); } catch(e) {}
-                }, 200);
-            }
+            // Polling is now handled natively by AutoHotkey to prevent cursor flickering
+            // and cross-drive 'Access is denied' errors in the MSHTML engine.
         };
 
         var workerLaunched = false;
@@ -1778,10 +1761,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 workerLaunched = true;
             }
         } catch(e) {}
-
-        if (isProgressive && workerLaunched) {
-            window.startPolling();
-        }
         
         var sourceContainer = document.getElementById('source-container');
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
