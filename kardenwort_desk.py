@@ -3840,7 +3840,8 @@ def cmd_retext(args):
         str(desk_script),
         "retext-worker",
         "--tsv", str(tsv_path),
-        "--language", lang
+        "--language", lang,
+        "--text-mode", args.text_mode
     ]
     if args.config:
         cmd.extend(["--config", args.config])
@@ -3869,6 +3870,7 @@ def cmd_retext_worker(args):
     config, resolved_paths, goldendict = load_config(args.config)
     tsv_path = Path(args.tsv)
     language = args.language
+    text_mode = args.text_mode
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
     try:
@@ -3887,11 +3889,20 @@ def cmd_retext_worker(args):
         text_reprocess_provider = config.get('pipeline', 'text_reprocess_provider', fallback='deepl')
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
         
-        sentence_translations = translate_source_text(text, language, target_lang, 'single', config, resolved_paths, text_reprocess_provider)
+        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider)
         
         if sentence_translations and any(v.strip() for v in sentence_translations.values()):
             target_text_path = source_text_path.with_suffix(f'.{target_lang}.txt')
-            target_text_path.write_text(sentence_translations.get(0, ''), encoding='utf-8')
+            
+            if text_mode == 'single':
+                translation_text_out = sentence_translations.get(0, '')
+            else:
+                translation_text_out = "\n".join(
+                    sentence_translations.get(i, "") 
+                    for i in range(len(text.splitlines()))
+                )
+                
+            target_text_path.write_text(translation_text_out, encoding='utf-8')
             
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
@@ -3900,7 +3911,7 @@ def cmd_retext_worker(args):
                     for row in data_rows:
                         if len(row) <= col_sentence_dest:
                             row.extend([""] * (col_sentence_dest - len(row) + 1))
-                        row[col_sentence_dest] = sentence_translations.get(0, '')
+                        row[col_sentence_dest] = translation_text_out
                 save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
@@ -4443,6 +4454,7 @@ def main():
     p_retext = subparsers.add_parser("retext")
     p_retext.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_retext.add_argument("--language", required=True, help="Language code")
+    p_retext.add_argument("--text-mode", default="single", choices=["single", "multi"], help="Text mode (single or multi)")
 
     # batch-worker
     p_batch_worker = subparsers.add_parser("batch-worker")
@@ -4454,6 +4466,7 @@ def main():
     p_retext_worker = subparsers.add_parser("retext-worker")
     p_retext_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
     p_retext_worker.add_argument("--language", required=True, help="Language code")
+    p_retext_worker.add_argument("--text-mode", default="single", choices=["single", "multi"], help="Text mode (single or multi)")
 
     # progressive-worker
     p_prog_worker = subparsers.add_parser("progressive-worker")
