@@ -3986,11 +3986,31 @@ def cmd_retext_worker(args):
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
                 col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+                
                 if col_sentence_dest != -1:
+                    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+                    content_to_absolute = {}
+                    if text_mode != 'single':
+                        c_idx = 0
+                        for a_idx, ln in enumerate(text.splitlines()):
+                            if ln.strip():
+                                content_to_absolute[c_idx] = a_idx
+                                c_idx += 1
+                                
                     for row in data_rows:
+                        content_line_idx = 0
+                        if col_index != -1 and len(row) > col_index:
+                            try:
+                                content_line_idx = int(row[col_index]) - 1
+                            except ValueError:
+                                pass
+                        
+                        abs_idx = content_to_absolute.get(content_line_idx, 0) if text_mode != 'single' else 0
+                        
                         if len(row) <= col_sentence_dest:
                             row.extend([""] * (col_sentence_dest - len(row) + 1))
-                        row[col_sentence_dest] = translation_text_out
+                        row[col_sentence_dest] = sentence_translations.get(abs_idx, "")
+                        
                 save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 
             # source_text="" because retext never changes the source text;
