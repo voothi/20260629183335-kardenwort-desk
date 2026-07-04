@@ -185,10 +185,10 @@ display_mode = monolithic
         
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
         
-        assert config.get('pipeline', 'base_provider') == 'deepl'
-        assert config.get('pipeline', 'enrichment_provider') == 'none'
-        assert config.get('triggers', 'run_base_translation') == 'manual'
-        assert config.get('triggers', 'run_enrichment') == 'auto'
+        assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
+        assert config.get('pipeline', 'lemma_reprocess_provider') == 'none'
+        assert config.get('triggers', 'run_lemma_base_translation') == 'manual'
+        assert config.get('triggers', 'run_lemma_enrichment') == 'auto'
         assert config.get('rendering', 'display_mode') == 'monolithic'
 
 def test_orthogonal_config_migration():
@@ -213,14 +213,14 @@ lemmas_translation = combined
         
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
         
-        assert config.get('triggers', 'run_base_translation') == 'auto'
-        assert config.get('triggers', 'run_enrichment') == 'manual'
+        assert config.get('triggers', 'run_lemma_base_translation') == 'auto'
+        assert config.get('triggers', 'run_lemma_enrichment') == 'manual'
         
         assert config.get('rendering', 'display_mode') == 'progressive'
         
-        assert config.get('pipeline', 'base_provider') == 'deepl'
-        assert config.get('pipeline', 'main_text_provider') == 'deepl'
-        assert config.get('pipeline', 'enrichment_provider') == 'intellifiller'
+        assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
+        assert config.get('pipeline', 'text_base_provider') == 'deepl'
+        assert config.get('pipeline', 'lemma_reprocess_provider') == 'intellifiller'
 
 def test_orthogonal_config_migration_d7():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -243,8 +243,8 @@ enrichment_provider = intellifiller
         
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
         
-        assert config.get('pipeline', 'base_provider') == 'deepl'
-        assert config.get('pipeline', 'enrichment_provider') == 'intellifiller'
+        assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
+        assert config.get('pipeline', 'lemma_reprocess_provider') == 'intellifiller'
 
 def test_default_rendering_and_triggers():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -271,7 +271,7 @@ enrichment_provider = combined
         config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
 
         assert config.get('rendering', 'display_mode') == 'monolithic'
-        assert config.get('triggers', 'run_base_translation') == 'auto'
-        assert config.get('triggers', 'run_enrichment') == 'auto'
-        assert config.get('pipeline', 'base_provider') == 'google'
-        assert config.get('pipeline', 'enrichment_provider') == 'combined'
+        assert config.get('triggers', 'run_lemma_base_translation') == 'auto'
+        assert config.get('triggers', 'run_lemma_enrichment') == 'auto'
+        assert config.get('pipeline', 'lemma_base_provider') == 'google'
+        assert config.get('pipeline', 'lemma_reprocess_provider') == 'combined'

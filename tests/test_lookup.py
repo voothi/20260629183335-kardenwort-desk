@@ -218,12 +218,12 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
     # Enable new triggers
-    config.set('pipeline', 'base_provider', 'google')
-    config.set('pipeline', 'enrichment_provider', 'intellifiller')
+    config.set('pipeline', 'lemma_base_provider', 'google')
+    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
     
     config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'auto')
-    config.set('triggers', 'run_enrichment', 'auto')
+    config.set('triggers', 'run_lemma_base_translation', 'auto')
+    config.set('triggers', 'run_lemma_enrichment', 'auto')
     
     config.add_section('rendering')
     config.set('rendering', 'display_mode', 'progressive')
@@ -295,11 +295,11 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
-    config.set('pipeline', 'base_provider', 'google')
-    config.set('pipeline', 'enrichment_provider', 'intellifiller')
+    config.set('pipeline', 'lemma_base_provider', 'google')
+    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
     config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'auto')
-    config.set('triggers', 'run_enrichment', 'auto')
+    config.set('triggers', 'run_lemma_base_translation', 'auto')
+    config.set('triggers', 'run_lemma_enrichment', 'auto')
     config.add_section('rendering')
     config.set('rendering', 'display_mode', 'progressive')
     
@@ -347,12 +347,12 @@ def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
-    config.set('pipeline', 'base_provider', 'google')
-    config.set('pipeline', 'enrichment_provider', 'intellifiller')
+    config.set('pipeline', 'lemma_base_provider', 'google')
+    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
     config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'manual')
+    config.set('triggers', 'run_lemma_base_translation', 'manual')
     config.set('triggers', 'run_text_translation', 'manual')
-    config.set('triggers', 'run_enrichment', 'auto')
+    config.set('triggers', 'run_lemma_enrichment', 'auto')
     
     tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -387,10 +387,10 @@ def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
     
-    config.set('pipeline', 'base_provider', 'google')
-    config.set('pipeline', 'enrichment_provider', 'intellifiller')
+    config.set('pipeline', 'lemma_base_provider', 'google')
+    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
     config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'auto')
+    config.set('triggers', 'run_lemma_base_translation', 'auto')
     
     tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
     tsv_path.parent.mkdir(parents=True, exist_ok=True)

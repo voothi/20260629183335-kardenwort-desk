@@ -75,52 +75,71 @@ def _migrate_config(config):
     legacy_main = config.get('translation_providers', 'main_text_translation', fallback=None) if config.has_section('translation_providers') else None
     legacy_lemmas = config.get('translation_providers', 'lemmas_translation', fallback=None) if config.has_section('translation_providers') else None
 
-    # Resolve base_provider
-    base_provider = config.get('pipeline', 'base_provider', fallback=None)
-    if base_provider is None:
-        if legacy_main is not None or legacy_lemmas is not None:
-            _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
-        if legacy_main == 'deepl':
-            base_provider = 'deepl'
+    # Resolve text_base_provider (migrated from main_text_provider or legacy_main)
+    text_base = config.get('pipeline', 'text_base_provider', fallback=None)
+    old_main_text = config.get('pipeline', 'main_text_provider', fallback=None)
+    if text_base is None:
+        if old_main_text is not None:
+            text_base = old_main_text
+        elif legacy_main is not None:
+            text_base = legacy_main
         else:
-            base_provider = 'google'
-    config.set('pipeline', 'base_provider', base_provider)
+            text_base = 'google'
+    config.set('pipeline', 'text_base_provider', text_base)
 
-    # Resolve main_text_provider
-    main_text_provider = config.get('pipeline', 'main_text_provider', fallback=None)
-    if main_text_provider is None:
-        if legacy_main is not None:
-            main_text_provider = legacy_main
-        else:
-            main_text_provider = base_provider
-    config.set('pipeline', 'main_text_provider', main_text_provider)
+    # Resolve text_reprocess_provider
+    text_reprocess = config.get('pipeline', 'text_reprocess_provider', fallback=None)
+    if text_reprocess is None:
+        text_reprocess = 'deepl'
+    config.set('pipeline', 'text_reprocess_provider', text_reprocess)
 
-    # Resolve enrichment_provider
-    enrichment_provider = config.get('pipeline', 'enrichment_provider', fallback=None)
-    if enrichment_provider is None:
-        if legacy_main is not None or legacy_lemmas is not None:
-            _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
-        if legacy_lemmas in ('google', 'deepl'):
-            enrichment_provider = 'none'
-        elif legacy_lemmas in ('intellifiller', 'combined'):
-            enrichment_provider = 'intellifiller'
+    # Resolve lemma_base_provider (migrated from base_provider)
+    lemma_base = config.get('pipeline', 'lemma_base_provider', fallback=None)
+    old_base = config.get('pipeline', 'base_provider', fallback=None)
+    if lemma_base is None:
+        if old_base is not None:
+            lemma_base = old_base
         else:
-            enrichment_provider = 'intellifiller'
-    config.set('pipeline', 'enrichment_provider', enrichment_provider)
+            if legacy_main is not None or legacy_lemmas is not None:
+                _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
+            if legacy_main == 'deepl':
+                lemma_base = 'deepl'
+            else:
+                lemma_base = 'google'
+    config.set('pipeline', 'lemma_base_provider', lemma_base)
+
+    # Resolve lemma_reprocess_provider (migrated from enrichment_provider)
+    lemma_reprocess = config.get('pipeline', 'lemma_reprocess_provider', fallback=None)
+    old_enrichment = config.get('pipeline', 'enrichment_provider', fallback=None)
+    if lemma_reprocess is None:
+        if old_enrichment is not None:
+            lemma_reprocess = old_enrichment
+        else:
+            if legacy_main is not None or legacy_lemmas is not None:
+                _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
+            if legacy_lemmas in ('google', 'deepl'):
+                lemma_reprocess = 'none'
+            elif legacy_lemmas in ('intellifiller', 'combined'):
+                lemma_reprocess = 'intellifiller'
+            else:
+                lemma_reprocess = 'intellifiller'
+    config.set('pipeline', 'lemma_reprocess_provider', lemma_reprocess)
 
     # Read legacy triggers
     legacy_lazy = config.get('settings', 'lazy_processing', fallback=None) if config.has_section('settings') else None
 
     # Resolve triggers
-    run_base = config.get('triggers', 'run_base_translation', fallback=None)
-    run_enrichment = config.get('triggers', 'run_enrichment', fallback=None)
+    run_lemma_base = config.get('triggers', 'run_lemma_base_translation', fallback=None)
+    old_run_base = config.get('triggers', 'run_base_translation', fallback=None)
+    run_lemma_enrich = config.get('triggers', 'run_lemma_enrichment', fallback=None)
+    old_run_enrich = config.get('triggers', 'run_enrichment', fallback=None)
     run_text = config.get('triggers', 'run_text_translation', fallback=None)
 
-    if run_base is None or run_enrichment is None or run_text is None:
+    if run_lemma_base is None or run_lemma_enrich is None or run_text is None:
         mapped_base = 'auto'
         mapped_enrich = 'auto'
         if legacy_lazy is not None:
-            _warn_deprecated('lazy_processing', "lazy_processing is deprecated; map it to triggers.run_base_translation and triggers.run_enrichment.")
+            _warn_deprecated('lazy_processing', "lazy_processing is deprecated; map it to triggers.run_lemma_base_translation and triggers.run_lemma_enrichment.")
             lazy_val = legacy_lazy.lower()
             if lazy_val in ('true', 'all'):
                 mapped_base = 'manual'
@@ -131,15 +150,16 @@ def _migrate_config(config):
             else:
                 mapped_base = 'auto'
                 mapped_enrich = 'auto'
-        if run_base is None:
-            run_base = mapped_base
-        if run_enrichment is None:
-            run_enrichment = mapped_enrich
+        
+        if run_lemma_base is None:
+            run_lemma_base = old_run_base if old_run_base is not None else mapped_base
+        if run_lemma_enrich is None:
+            run_lemma_enrich = old_run_enrich if old_run_enrich is not None else mapped_enrich
         if run_text is None:
-            run_text = run_base
+            run_text = run_lemma_base
     
-    config.set('triggers', 'run_base_translation', run_base)
-    config.set('triggers', 'run_enrichment', run_enrichment)
+    config.set('triggers', 'run_lemma_base_translation', run_lemma_base)
+    config.set('triggers', 'run_lemma_enrichment', run_lemma_enrich)
     config.set('triggers', 'run_text_translation', run_text)
 
     # Read legacy rendering
@@ -968,8 +988,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    main_text_provider = config.get('pipeline', 'main_text_provider', fallback=config.get('pipeline', 'base_provider', fallback='google'))
-    lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
+    main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
+    lemmas_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
     
     role_fields = get_role_fields(mapping, headers)
         
@@ -980,11 +1000,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
-    run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+    run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
     run_text = config.get('triggers', 'run_text_translation', fallback='auto')
-    run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
-    base_provider = config.get('pipeline', 'base_provider', fallback='google')
-    enrich_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
+    run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
+    base_provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
+    enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
     
     if is_progressive:
         source_text_path = working_tsv_path.with_suffix('.txt')
@@ -2789,7 +2809,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     ttl_seconds = goldendict['lookup_ttl_seconds']
     run_intellifiller = goldendict['run_intellifiller']
     
-    main_text_provider = config.get('pipeline', 'main_text_provider', fallback=config.get('pipeline', 'base_provider', fallback='google'))
+    main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
     sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
     sentence_translation = sentence_translations.get(0, "")
     
@@ -2823,7 +2843,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
     
     if col_lemma != -1 and col_word_dest != -1:
-        lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
+        lemmas_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
         lemmas_to_translate = []
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
@@ -3457,7 +3477,7 @@ def cmd_reprocess(args):
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
         role_fields = get_role_fields(mapping, headers)
-        run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+        run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
         if run_enrich == 'auto':
             write_update_js(tsv_path, data_rows, headers, role_fields)
     except Exception as e:
@@ -3535,7 +3555,7 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                                 row[col_word_dest] = lemma_translations[lemma_val]
                 save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 
-            run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 write_update_js(tsv_path, data_rows, headers, role_fields)
     return data_rows
@@ -3549,7 +3569,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         
         try:
             comments, headers, data_rows = load_tsv_rows(tsv_path)
-            run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 write_update_js(tsv_path, data_rows, headers, role_fields)
         except Exception as e:
@@ -3565,7 +3585,7 @@ def cmd_reprocess_worker(args):
         return
         
     selected_rows = [int(r.strip()) for r in rows_str.split(',') if r.strip()]
-    lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
+    lemmas_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
     language = config.get('settings', 'default_language', fallback='en')
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
@@ -3594,7 +3614,7 @@ def cmd_reprocess_worker(args):
         logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
     finally:
         try:
-            run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
+            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
         except Exception as e:
@@ -3680,7 +3700,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     
     run_text = config.get('triggers', 'run_text_translation', fallback='auto')
-    run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+    run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
     
     try:
         # check if sentence needs translation
@@ -3693,7 +3713,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             source_txt_path = tsv_path.with_suffix('.txt')
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
-                main_text_provider = config.get('pipeline', 'main_text_provider', fallback=config.get('pipeline', 'base_provider', fallback='google'))
+                main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
                 sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
                 
                 col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
@@ -3733,7 +3753,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
         word_translations_empty = args.word_empty.lower() == 'true'
         if word_translations_empty and col_lemma != -1 and run_base == 'auto':
             lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip()))
-            provider = config.get('pipeline', 'base_provider', fallback='google')
+            provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
             lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
             
             with file_lock(tsv_path):
@@ -3772,6 +3792,128 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment", status="failed")
     return data_rows
 
+def cmd_retext(args):
+    logger.info("Retext subcommand invoked")
+    config, resolved_paths, goldendict = load_config(args.config)
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    
+    manifest_path = Path(args.selection_manifest).resolve()
+    if not manifest_path.exists():
+        print_structured_error("INVALID_ARGS", f"Selection manifest not found: {manifest_path}")
+        sys.exit(1)
+        
+    try:
+        with open(manifest_path, 'r', encoding='utf-8-sig') as f:
+            manifest = json.load(f)
+    except Exception as e:
+        print_structured_error("INVALID_ARGS", f"Failed to parse selection manifest: {e}")
+        sys.exit(1)
+        
+    zid = manifest.get("zid")
+    if not zid:
+        print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
+        sys.exit(1)
+        
+    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    
+    tsv_path_str = manifest.get("tsv_path")
+    if tsv_path_str:
+        tsv_path = Path(tsv_path_str)
+    else:
+        tsv_path = find_working_tsv(results_dir, zid, lang)
+        
+    if not tsv_path or not tsv_path.exists():
+        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
+        sys.exit(1)
+        
+    logger.info("Triggering async retext worker.")
+    
+    python_exe = sys.executable
+    desk_script = Path(__file__).resolve()
+    
+    cmd = [
+        str(python_exe),
+        str(desk_script),
+        "retext-worker",
+        "--tsv", str(tsv_path),
+        "--language", lang
+    ]
+    if args.config:
+        cmd.extend(["--config", args.config])
+        
+    if sys.platform == 'win32':
+        creationflags = 0x08000000 | 0x00000200
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            creationflags=creationflags,
+            close_fds=True
+        )
+    else:
+        subprocess.Popen(
+            cmd,
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            close_fds=True
+        )
+    print(json.dumps({"retext_started": True}))
+
+def cmd_retext_worker(args):
+    config, resolved_paths, goldendict = load_config(args.config)
+    tsv_path = Path(args.tsv)
+    language = args.language
+    target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    
+    try:
+        with file_lock(tsv_path):
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+            
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, headers)
+        
+        source_text_path = tsv_path.with_suffix('.txt')
+        if not source_text_path.exists():
+            logger.error("Source text file missing for retext")
+            return
+            
+        text = source_text_path.read_text(encoding='utf-8')
+        text_reprocess_provider = config.get('pipeline', 'text_reprocess_provider', fallback='deepl')
+        logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
+        
+        sentence_translations = translate_source_text(text, language, target_lang, 'single', config, resolved_paths, text_reprocess_provider)
+        
+        if sentence_translations and any(v.strip() for v in sentence_translations.values()):
+            target_text_path = source_text_path.with_suffix(f'.{target_lang}.txt')
+            target_text_path.write_text(sentence_translations.get(0, ''), encoding='utf-8')
+            
+            with file_lock(tsv_path):
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+                col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+                if col_sentence_dest != -1:
+                    for row in data_rows:
+                        if len(row) <= col_sentence_dest:
+                            row.extend([""] * (col_sentence_dest - len(row) + 1))
+                        row[col_sentence_dest] = sentence_translations.get(0, '')
+                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+    except Exception as e:
+        logger.error(f"Unhandled exception in cmd_retext_worker: {e}")
+        try:
+            with file_lock(tsv_path):
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+            mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+            role_fields = get_role_fields(mapping, headers)
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+        except Exception:
+            pass
 def cmd_progressive_worker(args):
     logger.info("Progressive-worker subcommand invoked")
     config, resolved_paths, goldendict = load_config(args.config)
@@ -3788,10 +3930,10 @@ def cmd_progressive_worker(args):
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
         
-        run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+        run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
         run_text = config.get('triggers', 'run_text_translation', fallback='auto')
-        run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
-        enrich_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
+        run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
+        enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
         
         # Write initial source stage
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
@@ -4297,11 +4439,21 @@ def main():
     p_reprocess.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_reprocess.add_argument("--language", required=True, help="Language code")
 
+    # retext
+    p_retext = subparsers.add_parser("retext")
+    p_retext.add_argument("--selection-manifest", required=True, help="Selection manifest path")
+    p_retext.add_argument("--language", required=True, help="Language code")
+
     # batch-worker
     p_batch_worker = subparsers.add_parser("batch-worker")
     p_batch_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
     p_batch_worker.add_argument("--prompt", required=True, help="Prompt name")
     p_batch_worker.add_argument("--rows", required=True, help="Comma-separated list of row indices")
+
+    # retext-worker
+    p_retext_worker = subparsers.add_parser("retext-worker")
+    p_retext_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
+    p_retext_worker.add_argument("--language", required=True, help="Language code")
 
     # progressive-worker
     p_prog_worker = subparsers.add_parser("progressive-worker")
@@ -4354,7 +4506,9 @@ def main():
         "render": cmd_render,
         "export": cmd_export,
         "reprocess": cmd_reprocess,
+        "retext": cmd_retext,
         "batch-worker": cmd_reprocess_worker,
+        "retext-worker": cmd_retext_worker,
         "progressive-worker": cmd_progressive_worker,
         "edit-save": cmd_edit_save,
         "merge": cmd_merge,

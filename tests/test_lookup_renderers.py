@@ -102,8 +102,8 @@ def test_run_render_flow_regions(tmp_path):
     config.add_section('rendering')
     config.set('rendering', 'display_mode', 'progressive')
     config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'auto')
-    config.set('triggers', 'run_enrichment', 'auto')
+    config.set('triggers', 'run_lemma_base_translation', 'auto')
+    config.set('triggers', 'run_lemma_enrichment', 'auto')
     
     config.add_section('environment')
     config.set('environment', 'kardenwort_workspace', str(tmp_path))
@@ -165,8 +165,8 @@ def test_d1_progressive_display_mode(tmp_path):
     config.set('rendering', 'display_mode', 'monolithic')
     
     config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'manual')
-    config.set('triggers', 'run_enrichment', 'manual')
+    config.set('triggers', 'run_lemma_base_translation', 'manual')
+    config.set('triggers', 'run_lemma_enrichment', 'manual')
     
     config.add_section('environment')
     config.set('environment', 'kardenwort_workspace', str(tmp_path))
@@ -205,7 +205,7 @@ def test_d2_render_source_translated_pending(tmp_path):
     config.add_section('rendering')
     config.set('rendering', 'display_mode', 'progressive')
     config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'auto')
+    config.set('triggers', 'run_lemma_base_translation', 'auto')
     
     config.add_section('environment')
     config.set('environment', 'kardenwort_workspace', str(tmp_path))
