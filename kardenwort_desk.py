@@ -3627,6 +3627,7 @@ def cmd_reprocess_worker(args):
         if lemmas_provider in ('combined', 'google', 'deepl'):
             try:
                 data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang)
+                write_update_js(tsv_path, data_rows, headers, role_fields)
             except Exception as e:
                 logger.error(f"Failed fast-path translation during reprocess: {e}")
 
@@ -3640,9 +3641,7 @@ def cmd_reprocess_worker(args):
         logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
     finally:
         try:
-            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
-            if run_enrich == 'auto':
-                write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
         except Exception as e:
             logger.error(f"Failed to write finished event in reprocess: {e}")
 
