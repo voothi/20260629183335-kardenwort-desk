@@ -458,6 +458,7 @@ This MVP overlay is designed as a host-side overlay. When the full `202607021541
 ├── b64util.py              # Base64 transport utility
 ├── requirements.txt        # Python dependencies
 ├── config.ini.template     # Configuration template
+├── release-notes.md        # Release changelog and history
 └── README.md               # Project documentation
 ```
 
