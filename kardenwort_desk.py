@@ -1682,6 +1682,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 }
             }
             
+            if (updated) {
+                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
+                if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
+            }
+            
             var rowsData = null;
             if (data.stage) {
                 if (data.rows) {
