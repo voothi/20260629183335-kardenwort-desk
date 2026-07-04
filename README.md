@@ -36,7 +36,14 @@ no linguistic logic.
 - [Source text saving & session restore](#source-text-saving--session-restore)
 - [GoldenDict Integration](#goldendict-integration)
 - [Integration Contracts & Formats](#integration-contracts--formats)
+  - [1. Desk Core ↔ Headless IntelliFiller Contract](#1-desk-core--headless-intellifiller-contract-task-22)
+  - [2. Desk Core ↔ Kardenwort Invocation](#2-desk-core--kardenwort-invocation-task-23)
+  - [3. Selection Manifest format](#3-selection-manifest-format-task-24)
 - [Hover-highlight MVP (proof-of-concept)](#hover-highlight-mvp-proof-of-concept)
+  - [Configuration](#configuration-1)
+  - [Interaction Model](#interaction-model)
+  - [Known Limitations](#known-limitations-mvp-overlay)
+  - [Retirement](#retirement)
 - [Project Structure](#project-structure)
 - [Kardenwort Ecosystem](#kardenwort-ecosystem)
 - [License and Acknowledgements](#license-and-acknowledgements)
@@ -232,18 +239,22 @@ the offending key.
 This orchestration core coordinates and depends on several sister projects within the Kardenwort ecosystem:
 
 1. **Kardenwort Parser (`U:/voothi/20241223170748-kardenwort`)**
+   - **Repository**: [voothi/20241223170748-kardenwort](https://github.com/voothi/20241223170748-kardenwort)
    - **Role**: Core linguistic engine.
    - **Dependency**: The desk core calls `kardenwort.py` in a subprocess to run morphological parsing, tokenization, lemma analysis, and generation of the initial lemmatized HTML structure.
 
 2. **IntelliFiller (`U:/voothi/20251206123938-intellifiller-ai-addon-for-anki`)**
+   - **Repository**: [voothi/20251206123938-intellifiller-ai-addon-for-anki](https://github.com/voothi/20251206123938-intellifiller-ai-addon-for-anki)
    - **Role**: Headless LLM translation and details enrichment.
    - **Dependency**: Called in Stage 2/Export to query LLMs and fill localized vocabulary parameters (e.g. IPA, transcription, translation variants, morphology) directly into the generated TSV schema.
 
 3. **AutoHotkey Frontend (`U:/voothi/20240411110510-autohotkey`)**
+   - **Repository**: [voothi/20240411110510-autohotkey](https://github.com/voothi/20240411110510-autohotkey)
    - **Role**: User Interface and Interaction shim.
    - **Dependency**: Provides the physical desktop interface (`kardenwort-window.ahk`). Captures system text selections, hosts the WebView component to render the desk core's HTML outputs, coordinates inline grid edits, and manages the sequence number cascade.
 
 4. **Deep-Translator (`U:/voothi/20241122093311-deep-translator`)**
+   - **Repository**: [voothi/20241122093311-deep-translator](https://github.com/voothi/20241122093311-deep-translator)
    - **Role**: Translation services broker.
    - **Dependency**: Provides the backend integration script (`translate_google.py`, `translate_deepl.py`) used by the pipeline to fetch baseline target translations of the selection block.
 
