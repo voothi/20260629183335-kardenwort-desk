@@ -28,7 +28,7 @@ no linguistic logic.
 - [Single Architectural Contract (portability anchor)](#single-architectural-contract-portability-anchor)
 - [CLI contract (called by the AHK shell / SendTo)](#cli-contract-called-by-the-ahk-shell--sendto)
 - [Configuration (`config.ini`)](#configuration-configini)
-- [Related](#related)
+- [Dependencies on Sibling Projects](#dependencies-on-sibling-projects)
 - [Processing pipeline (file-on-disk, SendTo per-stage)](#processing-pipeline-file-on-disk-sendto-per-stage)
 - [Inflection → lemma link & bidirectional selection](#inflection--lemma-link--bidirectional-selection)
 - [Multi-session reliability](#multi-session-reliability)
@@ -227,12 +227,25 @@ the offending key.
 
 [Return to Top](#table-of-contents)
 
-## Related
+## Dependencies on Sibling Projects
 
-- Kardenwort (lemma/sentence extraction + import): `U:/voothi/20241223170748-kardenwort`
-- IntelliFiller (headless LLM field-filling): `U:/voothi/20251206123938-intellifiller-ai-addon-for-anki`
-- AHK display frontend: `U:/voothi/20240411110510-autohotkey`
-- OpenSpec change: `autohotkey/openspec/changes/20260629172653-kardenwort-window`
+This orchestration core coordinates and depends on several sister projects within the Kardenwort ecosystem:
+
+1. **Kardenwort Parser (`U:/voothi/20241223170748-kardenwort`)**
+   - **Role**: Core linguistic engine.
+   - **Dependency**: The desk core calls `kardenwort.py` in a subprocess to run morphological parsing, tokenization, lemma analysis, and generation of the initial lemmatized HTML structure.
+
+2. **IntelliFiller (`U:/voothi/20251206123938-intellifiller-ai-addon-for-anki`)**
+   - **Role**: Headless LLM translation and details enrichment.
+   - **Dependency**: Called in Stage 2/Export to query LLMs and fill localized vocabulary parameters (e.g. IPA, transcription, translation variants, morphology) directly into the generated TSV schema.
+
+3. **AutoHotkey Frontend (`U:/voothi/20240411110510-autohotkey`)**
+   - **Role**: User Interface and Interaction shim.
+   - **Dependency**: Provides the physical desktop interface (`kardenwort-window.ahk`). Captures system text selections, hosts the WebView component to render the desk core's HTML outputs, coordinates inline grid edits, and manages the sequence number cascade.
+
+4. **Deep-Translator (`U:/voothi/20241122093311-deep-translator`)**
+   - **Role**: Translation services broker.
+   - **Dependency**: Provides the backend integration script (`translate_google.py`, `translate_deepl.py`) used by the pipeline to fetch baseline target translations of the selection block.
 
 [Return to Top](#table-of-contents)
 
