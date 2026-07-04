@@ -1694,7 +1694,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
         };
 
-        if (isProgressive) {
+        window.startPolling = function() {
+            if (window.pollInterval) {
+                clearInterval(window.pollInterval);
+                window.pollInterval = null;
+            }
             var tsvPathStr = document.getElementById('tsv-path').textContent || "";
             if (tsvPathStr) {
                 var baseName = tsvPathStr.replace(/\\.tsv$/i, '');
@@ -1707,6 +1711,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     document.head.appendChild(script);
                 }, 200);
             }
+        };
+
+        if (isProgressive) {
+            window.startPolling();
         }
         
         var sourceContainer = document.getElementById('source-container');
