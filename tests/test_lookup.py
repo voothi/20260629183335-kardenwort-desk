@@ -278,16 +278,18 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     
     # Stage emission order and tags:
     # 1. source (status success)
-    # 2. translated (status success)
-    # 3. enrichment (batch 1, rows 0-1)
-    # 4. enrichment (batch 2, row 2)
-    # 5. finished
-    assert len(write_calls) == 5
+    # 2. translated_text (status success)
+    # 3. translated (status success)
+    # 4. enrichment (batch 1, rows 0-1)
+    # 5. enrichment (batch 2, row 2)
+    # 6. finished
+    assert len(write_calls) == 6
     assert write_calls[0] == ('source', 'success', 3)
-    assert write_calls[1] == ('translated', 'success', 3)
-    assert write_calls[2] == ('enrichment', 'success', 3)
+    assert write_calls[1] == ('translated_text', 'success', 3)
+    assert write_calls[2] == ('translated', 'success', 3)
     assert write_calls[3] == ('enrichment', 'success', 3)
-    assert write_calls[4] == ('finished', 'success', 3)
+    assert write_calls[4] == ('enrichment', 'success', 3)
+    assert write_calls[5] == ('finished', 'success', 3)
 
 def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)

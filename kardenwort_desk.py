@@ -3674,6 +3674,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                             row[col_sentence_dest] = sentence_translations_raw.get(content_line_idx, "")
                     save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                     data_rows = current_rows
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
                 
                 save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
                 if save_translation_text and sentence_translations_raw:
