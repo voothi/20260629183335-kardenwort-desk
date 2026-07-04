@@ -1675,7 +1675,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 var container = document.getElementById('translation-container');
                 if (container) {
                     var pendingNode = container.querySelector('[data-pending="true"]');
-                    if (pendingNode || container.innerHTML !== data.translatedText) {
+                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                    var tempDiv = document.createElement('div');
+                    tempDiv.innerHTML = data.translatedText;
+                    var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
+                    if (pendingNode || currentText !== newText) {
                         container.innerHTML = data.translatedText;
                         updated = true;
                     }
