@@ -3582,7 +3582,8 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
         
         try:
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+            with file_lock(tsv_path):
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
             run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 write_update_js(tsv_path, data_rows, headers, role_fields)
