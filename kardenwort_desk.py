@@ -1093,6 +1093,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 translation_text_out = "\n".join(translation_lines)
             translation_text_path.write_text(translation_text_out, encoding='utf-8')
             
+    worker_launched = False
     if not llm_filled:
         prompt_name = config.get('languages', f'{language}_prompt')
         
@@ -1101,6 +1102,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
                 text_mode = config.get('settings', 'text_mode', fallback='single')
                 run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller, text_mode)
+                worker_launched = True
         else:
             # Monolithic mode enrichment
             if run_enrich == 'auto' and enrich_provider == 'intellifiller':
@@ -1548,6 +1550,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="session-lang" type="text/plain">{language}</script>
 <script id="display-mode" type="text/plain">{display_mode_js}</script>
 <script id="run-enrichment" type="text/plain">{run_enrichment_js}</script>
+<script id="worker-launched" type="text/plain">{worker_launched_js}</script>
 
 
 <script type="text/javascript">
@@ -1714,7 +1717,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
         };
 
-        if (isProgressive) {
+        var workerLaunched = false;
+        try {
+            var wlEl = document.getElementById('worker-launched');
+            if (wlEl && (wlEl.textContent || wlEl.innerText).trim() === 'true') {
+                workerLaunched = true;
+            }
+        } catch(e) {}
+
+        if (isProgressive && workerLaunched) {
             window.startPolling();
         }
         
@@ -2734,6 +2745,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{display_mode_js}", "progressive" if is_progressive else "monolithic")
     html_page = html_page.replace("{run_enrichment_js}", run_enrich)
+    html_page = html_page.replace("{worker_launched_js}", "true" if worker_launched else "false")
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
