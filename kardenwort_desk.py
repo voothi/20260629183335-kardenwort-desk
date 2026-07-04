@@ -351,7 +351,7 @@ def get_deepl_key(config, base_dir):
             settings.read(settings_path, encoding=enc)
             read_success = True
             break
-        except UnicodeDecodeError:
+        except Exception:
             continue
     if not read_success:
         logger.error(f"Failed to decode DeepL settings file {settings_path}")
@@ -374,7 +374,7 @@ def get_deepl_key(config, base_dir):
             secrets.read(secrets_path, encoding=enc)
             read_success = True
             break
-        except UnicodeDecodeError:
+        except Exception:
             continue
     if not read_success:
         logger.error(f"Failed to decode DeepL secrets file {secrets_path}")
