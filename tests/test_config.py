@@ -219,6 +219,7 @@ lemmas_translation = combined
         assert config.get('rendering', 'display_mode') == 'progressive'
         
         assert config.get('pipeline', 'base_provider') == 'deepl'
+        assert config.get('pipeline', 'main_text_provider') == 'deepl'
         assert config.get('pipeline', 'enrichment_provider') == 'intellifiller'
 
 def test_orthogonal_config_migration_d7():

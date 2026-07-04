@@ -86,6 +86,15 @@ def _migrate_config(config):
             base_provider = 'google'
     config.set('pipeline', 'base_provider', base_provider)
 
+    # Resolve main_text_provider
+    main_text_provider = config.get('pipeline', 'main_text_provider', fallback=None)
+    if main_text_provider is None:
+        if legacy_main is not None:
+            main_text_provider = legacy_main
+        else:
+            main_text_provider = base_provider
+    config.set('pipeline', 'main_text_provider', main_text_provider)
+
     # Resolve enrichment_provider
     enrichment_provider = config.get('pipeline', 'enrichment_provider', fallback=None)
     if enrichment_provider is None:
@@ -255,6 +264,16 @@ def build_field_mapping(mapping, mode):
     if 'tts' in mapping:
         field_mapping.update(dict(mapping['tts']))
     return field_mapping
+
+def get_role_fields(mapping, headers):
+    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
+    if 'WordSourceMorphologyAI' in headers and 'morphology' not in role_fields:
+        role_fields['morphology'] = 'WordSourceMorphologyAI'
+    if 'WordSourceIPA' in headers and 'ipa' not in role_fields:
+        role_fields['ipa'] = 'WordSourceIPA'
+    if 'DeskSelected' in headers and 'selected' not in role_fields:
+        role_fields['selected'] = 'DeskSelected'
+    return role_fields
 
 # Setup structured logging
 class JSONFormatter(logging.Formatter):
@@ -945,16 +964,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
+    main_text_provider = config.get('pipeline', 'main_text_provider', fallback=config.get('pipeline', 'base_provider', fallback='google'))
     lemmas_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
     
-    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
-    if 'WordSourceMorphologyAI' in headers and 'morphology' not in role_fields:
-        role_fields['morphology'] = 'WordSourceMorphologyAI'
-    if 'WordSourceIPA' in headers and 'ipa' not in role_fields:
-        role_fields['ipa'] = 'WordSourceIPA'
-    if 'DeskSelected' in headers and 'selected' not in role_fields:
-        role_fields['selected'] = 'DeskSelected'
+    role_fields = get_role_fields(mapping, headers)
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -1069,7 +1082,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     sentence_translations[a_idx] = ""
             
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-    if save_translation_text and sentence_translations:
+    if save_translation_text and any(v.strip() for v in sentence_translations.values()):
         translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
         if not translation_text_path.exists():
             max_idx = max(sentence_translations.keys())
@@ -2730,7 +2743,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     ttl_seconds = goldendict['lookup_ttl_seconds']
     run_intellifiller = goldendict['run_intellifiller']
     
-    main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
+    main_text_provider = config.get('pipeline', 'main_text_provider', fallback=config.get('pipeline', 'base_provider', fallback='google'))
     sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
     sentence_translation = sentence_translations.get(0, "")
     
@@ -2758,7 +2771,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
 
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+    role_fields = get_role_fields(mapping, headers)
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
@@ -3397,7 +3410,7 @@ def cmd_reprocess(args):
         with file_lock(tsv_path):
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
-        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
+        role_fields = get_role_fields(mapping, headers)
         write_update_js(tsv_path, data_rows, headers, role_fields)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
@@ -3511,7 +3524,7 @@ def cmd_reprocess_worker(args):
             comments, headers, data_rows = load_tsv_rows(tsv_path)
             
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
+        role_fields = get_role_fields(mapping, headers)
         
         if lemmas_provider in ('combined', 'google', 'deepl'):
             try:
@@ -3623,7 +3636,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             source_txt_path = tsv_path.with_suffix('.txt')
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
-                main_text_provider = config.get('pipeline', 'base_provider', fallback='google')
+                main_text_provider = config.get('pipeline', 'main_text_provider', fallback=config.get('pipeline', 'base_provider', fallback='google'))
                 sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
                 
                 col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
@@ -3642,6 +3655,21 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                             row[col_sentence_dest] = sentence_translations_raw.get(content_line_idx, "")
                     save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                     data_rows = current_rows
+                
+                save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+                if save_translation_text and sentence_translations_raw:
+                    slug = generate_slug(text)
+                    import re
+                    m = re.match(r"^(\d{14})", tsv_path.name)
+                    zid = m.group(1) if m else "session"
+                    translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
+                    max_idx = max(sentence_translations_raw.keys())
+                    translation_lines = [sentence_translations_raw.get(i, "").strip() for i in range(max_idx + 1)]
+                    if args.text_mode == 'single':
+                        translation_text_out = " ".join(line for line in translation_lines if line)
+                    else:
+                        translation_text_out = "\n".join(translation_lines)
+                    translation_text_path.write_text(translation_text_out, encoding='utf-8')
         
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
@@ -3700,7 +3728,7 @@ def cmd_progressive_worker(args):
     try:
         comments, headers, data_rows = load_tsv_rows(tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
+        role_fields = get_role_fields(mapping, headers)
         
         run_base = config.get('triggers', 'run_base_translation', fallback='auto')
         run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
