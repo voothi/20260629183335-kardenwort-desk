@@ -865,6 +865,19 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     working_tsv_path = results_dir / cache_key
     
     import time
+    
+    # Clean up stale update.js files (> 5 minutes old) to prevent clutter
+    try:
+        now = time.time()
+        for f in results_dir.rglob("*.update.js"):
+            if f.is_file() and (now - f.stat().st_mtime) > 300:
+                try:
+                    f.unlink()
+                except OSError:
+                    pass
+    except Exception:
+        pass
+        
     import re
     
     if working_tsv_path.exists():
