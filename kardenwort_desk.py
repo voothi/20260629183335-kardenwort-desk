@@ -1669,6 +1669,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     var newText = data.sourceText.trim().replace(/\s+/g, ' ');
                     if (pendingNode || currentText !== newText) {
                         container.textContent = data.sourceText;
+                        if (typeof tokenSpans !== 'undefined') {
+                            tokenSpans = [];
+                        }
                         updated = true;
                     }
                 }
