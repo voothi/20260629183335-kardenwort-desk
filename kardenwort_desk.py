@@ -1661,22 +1661,22 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
             
             var updated = false;
-            if (data.source_text) {
+            if (data.sourceText) {
                 var container = document.getElementById('source-container');
                 if (container) {
                     var pendingNode = container.querySelector('[data-pending="true"]');
-                    if (pendingNode || container.innerHTML !== data.source_text) {
-                        container.innerHTML = data.source_text;
+                    if (pendingNode || container.textContent !== data.sourceText) {
+                        container.textContent = data.sourceText;
                         updated = true;
                     }
                 }
             }
-            if (data.translated_text) {
+            if (data.translatedText) {
                 var container = document.getElementById('translation-container');
                 if (container) {
                     var pendingNode = container.querySelector('[data-pending="true"]');
-                    if (pendingNode || container.innerHTML !== data.translated_text) {
-                        container.innerHTML = data.translated_text;
+                    if (pendingNode || container.innerHTML !== data.translatedText) {
+                        container.innerHTML = data.translatedText;
                         updated = true;
                     }
                 }
