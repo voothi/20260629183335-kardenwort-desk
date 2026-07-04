@@ -3968,7 +3968,10 @@ def cmd_retext_worker(args):
         sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider)
         
         if sentence_translations and any(v.strip() for v in sentence_translations.values()):
-            target_text_path = source_text_path.with_suffix(f'.{target_lang}.txt')
+            slug = generate_slug(text)
+            m = re.match(r"^(\d{14})", tsv_path.name)
+            zid = m.group(1) if m else "session"
+            target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
             
             if text_mode == 'single':
                 translation_text_out = sentence_translations.get(0, '')
