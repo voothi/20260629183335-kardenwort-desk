@@ -114,8 +114,9 @@ def _migrate_config(config):
     # Resolve triggers
     run_base = config.get('triggers', 'run_base_translation', fallback=None)
     run_enrichment = config.get('triggers', 'run_enrichment', fallback=None)
+    run_text = config.get('triggers', 'run_text_translation', fallback=None)
 
-    if run_base is None or run_enrichment is None:
+    if run_base is None or run_enrichment is None or run_text is None:
         mapped_base = 'auto'
         mapped_enrich = 'auto'
         if legacy_lazy is not None:
@@ -134,9 +135,12 @@ def _migrate_config(config):
             run_base = mapped_base
         if run_enrichment is None:
             run_enrichment = mapped_enrich
+        if run_text is None:
+            run_text = run_base
     
     config.set('triggers', 'run_base_translation', run_base)
     config.set('triggers', 'run_enrichment', run_enrichment)
+    config.set('triggers', 'run_text_translation', run_text)
 
     # Read legacy rendering
     legacy_prog = config.get('settings', 'progressive_loading', fallback=None) if config.has_section('settings') else None
@@ -977,6 +981,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
     run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+    run_text = config.get('triggers', 'run_text_translation', fallback='auto')
     run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
     base_provider = config.get('pipeline', 'base_provider', fallback='google')
     enrich_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
@@ -1098,7 +1103,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         prompt_name = config.get('languages', f'{language}_prompt')
         
         if is_progressive:
-            if (run_base == 'auto' and (not sentence_translated or word_translations_empty)) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
+            if (run_text == 'auto' and not sentence_translated) or (run_base == 'auto' and word_translations_empty) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
                 text_mode = config.get('settings', 'text_mode', fallback='single')
                 run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller, text_mode)
@@ -1190,7 +1195,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     source_html = "".join(span_htmls)
     
     sentence_htmls = []
-    if is_progressive and run_base == 'auto' and not sentence_translated:
+    if is_progressive and run_text == 'auto' and not sentence_translated:
         sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
     else:
         for idx in sorted(sentence_translations.keys()):
@@ -3674,6 +3679,9 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     
+    run_text = config.get('triggers', 'run_text_translation', fallback='auto')
+    run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+    
     try:
         # check if sentence needs translation
         sentence_translated = False
@@ -3681,7 +3689,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                 sentence_translated = True
                 
-        if not sentence_translated:
+        if not sentence_translated and run_text == 'auto':
             source_txt_path = tsv_path.with_suffix('.txt')
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
@@ -3723,7 +3731,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
         
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
-        if word_translations_empty and col_lemma != -1:
+        if word_translations_empty and col_lemma != -1 and run_base == 'auto':
             lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip()))
             provider = config.get('pipeline', 'base_provider', fallback='google')
             lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
@@ -3781,6 +3789,7 @@ def cmd_progressive_worker(args):
         role_fields = get_role_fields(mapping, headers)
         
         run_base = config.get('triggers', 'run_base_translation', fallback='auto')
+        run_text = config.get('triggers', 'run_text_translation', fallback='auto')
         run_enrich = config.get('triggers', 'run_enrichment', fallback='auto')
         enrich_provider = config.get('pipeline', 'enrichment_provider', fallback='intellifiller')
         
@@ -3788,7 +3797,7 @@ def cmd_progressive_worker(args):
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
         
         # 1. Base Translation Stage
-        if run_base == 'auto':
+        if run_base == 'auto' or run_text == 'auto':
             data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                 
         # 2. Enrichment Stage

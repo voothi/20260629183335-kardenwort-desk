@@ -351,6 +351,7 @@ def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
     config.set('pipeline', 'enrichment_provider', 'intellifiller')
     config.add_section('triggers')
     config.set('triggers', 'run_base_translation', 'manual')
+    config.set('triggers', 'run_text_translation', 'manual')
     config.set('triggers', 'run_enrichment', 'auto')
     
     tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
