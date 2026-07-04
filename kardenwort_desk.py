@@ -2323,8 +2323,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         function updateBidirectionalHighlights() {
             for (var i = 0; i < tokenSpans.length; i++) {
                 var span = tokenSpans[i];
-                span.classList.remove('highlight-orange-active');
-                span.classList.remove('highlight-purple-active');
+                try {
+                    span.classList.remove('highlight-orange-active');
+                    span.classList.remove('highlight-purple-active');
+                } catch(e) {}
             }
             
             for (var rId in selectedRowIdsMap) {
@@ -2341,11 +2343,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                             }
                         }
                         if (span) {
-                            if (span.classList.contains('highlight-purple')) {
-                                span.classList.add('highlight-purple-active');
-                            } else if (span.classList.contains('highlight-orange')) {
-                                span.classList.add('highlight-orange-active');
-                            }
+                            try {
+                                if (span.classList.contains('highlight-purple')) {
+                                    span.classList.add('highlight-purple-active');
+                                } else if (span.classList.contains('highlight-orange')) {
+                                    span.classList.add('highlight-orange-active');
+                                }
+                            } catch(e) {}
                         }
                     }
                 }
