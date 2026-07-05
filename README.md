@@ -201,6 +201,8 @@ default_target_language = ru
 progressive_loading = true
 ; [DEPRECATED] Use [triggers] instead.
 lazy_processing = llm_only
+; Maximum source-word index distance allowed between parts of a split/separable verb construct
+split_gap_limit = 60
 ; Favorites TSV output directory (relative or absolute)
 favorites_output_dir = ./favorites
 ; Standalone schema-mapping file (same pattern as kardenwort-mpv's anki-mapping.ini)
@@ -293,6 +295,17 @@ tokenizer) and exposes a token→lemma map derived from kardenwort's
 `Quotation`/`WordSource`/`WordSourceInflectedForm` columns. The window uses
 this for **bidirectional selection**: selecting word(s) in the original text
 highlights the corresponding lemma row(s) in the table, and vice versa.
+
+### Separable Verb & Multi-Word Anchoring
+
+For lemma rows with multi-word inflected forms (e.g., German separable verbs like `ankommen` with inflected form `kommt an`), the highlighter anchors highlights to the specific token positions that form the split construct in the source text rather than highlighting all string-matching candidate occurrences.
+
+- **Greedy Minimum-Span Selection**: It recursively finds strictly-increasing, order-preserving tuples of candidate word occurrences within the text, selecting the combination with the minimum source-word index distance (greedy, non-overlapping).
+- **Three-State Highlighting**:
+  - `highlight-purple` (Purple): Applied to the specific token positions forming the successfully anchored construct (e.g., the specific `kommt` and `an` forming the construct).
+  - `highlight-orange` (Yellow/Gold): Applied to candidates mapped to single-word lemma rows (retaining all-occurrences highlighting).
+  - `not-connected` (Gray/No Highlight): Applied to candidate occurrences of multi-word rows that are *not* part of the anchored tuple (e.g., a stray `an` in a sentence that is not part of the `ankommen` construct).
+- **Bidirectional Isolation**: The `token_manifest` `row_ids` metadata and JavaScript `findTokenData` lookup are filtered by visual index position. Clicks or hovers on unanchored stray particles do not select or trigger active bidirectional highlighting for the multi-word lemma row.
 
 The lemma table is **frequency-ordered** (most frequent lemma first, per the
 language's `--lemma-index-file`).
