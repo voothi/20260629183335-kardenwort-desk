@@ -1356,6 +1356,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     table_rows_html = "\n".join(table_rows)
     
     token_manifest = []
+    word_counter = 0
     for token in source_tokens:
         tok_data = {
             "text": token["text"],
@@ -1365,8 +1366,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         if token["is_word"] and "lower_clean" in token:
             tok_data["lower_clean"] = token["lower_clean"]
             mapped_rows = token_to_rows.get(token["lower_clean"], [])
-            if mapped_rows:
-                tok_data["row_ids"] = mapped_rows
+            filtered_rows = []
+            for r_idx in mapped_rows:
+                if r_idx in single_word_rows:
+                    filtered_rows.append(r_idx)
+                elif word_counter in anchored_positions.get(r_idx, set()):
+                    filtered_rows.append(r_idx)
+            if filtered_rows:
+                tok_data["row_ids"] = filtered_rows
+            word_counter += 1
         token_manifest.append(tok_data)
         
     html_page = """<!DOCTYPE html>
@@ -1876,10 +1884,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
         }
 
-        function findTokenData(lowerClean) {
+        function findTokenData(span) {
+            var wordIdx = parseInt(span.getAttribute('data-word-idx'));
             for (var i = 0; i < tokenMap.length; i++) {
                 var t = tokenMap[i];
-                if (t.lower_clean === lowerClean && t.is_word) {
+                if (t.visual_idx === wordIdx) {
                     return t;
                 }
             }
@@ -1887,8 +1896,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         }
         
         function getWordTranslation(span) {
-            var lowerClean = span.getAttribute('data-lower-clean');
-            var tokenData = findTokenData(lowerClean);
+            var tokenData = findTokenData(span);
             if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
                 return "";
             }
@@ -1925,8 +1933,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     e = e || window.event;
                     
                     if (e.button === 0) { // LMB
-                        var lowerClean = span.getAttribute('data-lower-clean');
-                        var tokenData = findTokenData(lowerClean);
+                        var tokenData = findTokenData(span);
                         if (!tokenData || !tokenData.row_ids) return;
                         
                         isTokenDragSelecting = true;
@@ -2034,8 +2041,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
-                            var lc = s.getAttribute('data-lower-clean');
-                            var td = findTokenData(lc);
+                            var td = findTokenData(s);
                             if (td && td.row_ids) {
                                 for (var j = 0; j < td.row_ids.length; j++) {
                                     if (tokenDragMode) {
