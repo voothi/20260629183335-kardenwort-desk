@@ -275,3 +275,39 @@ enrichment_provider = combined
         assert config.get('triggers', 'run_lemma_enrichment') == 'auto'
         assert config.get('pipeline', 'lemma_base_provider') == 'google'
         assert config.get('pipeline', 'lemma_reprocess_provider') == 'combined'
+
+def test_split_gap_limit_migration():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        desk_dir = tmp_path / "kardenwort-desk"
+        desk_dir.mkdir()
+        anki_mapping = desk_dir / "anki-mapping.ini"
+        anki_mapping.write_text("")
+
+        # Scenario 1: split_gap_limit is not in config, should fall back to 60
+        config_content = """[settings]
+anki_mapping_file = ./anki-mapping.ini
+"""
+        config_file = desk_dir / "config.ini"
+        config_file.write_text(config_content)
+        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        assert config.getint('settings', 'split_gap_limit') == 60
+
+        # Scenario 2: split_gap_limit is integer (e.g. 15), should be parsed and returned
+        config_content = """[settings]
+anki_mapping_file = ./anki-mapping.ini
+split_gap_limit = 15
+"""
+        config_file.write_text(config_content)
+        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        assert config.getint('settings', 'split_gap_limit') == 15
+
+        # Scenario 3: split_gap_limit is non-integer, should fall back to 60 without raising error
+        config_content = """[settings]
+anki_mapping_file = ./anki-mapping.ini
+split_gap_limit = abc
+"""
+        config_file.write_text(config_content)
+        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        assert config.getint('settings', 'split_gap_limit') == 60
+

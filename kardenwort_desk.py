@@ -15,15 +15,6 @@ from datetime import datetime, timezone
 
 import text_tokenizer as tok
 
-def is_contiguous_subsequence(sub, seq):
-    if not sub or not seq:
-        return False
-    n = len(sub)
-    m = len(seq)
-    for i in range(m - n + 1):
-        if seq[i:i+n] == sub:
-            return True
-    return False
 
 class ConfigError(Exception):
     pass
@@ -177,6 +168,17 @@ def _migrate_config(config):
         else:
             display_mode = 'progressive'
     config.set('rendering', 'display_mode', display_mode)
+
+    if not config.has_section('settings'):
+        config.add_section('settings')
+    raw_gap = config.get('settings', 'split_gap_limit', fallback=None)
+    val_gap = 60
+    if raw_gap is not None:
+        try:
+            val_gap = int(raw_gap)
+        except ValueError:
+            val_gap = 60
+    config.set('settings', 'split_gap_limit', str(val_gap))
 
 def load_config(config_path=None):
     """
@@ -979,7 +981,67 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 
     return working_tsv_path
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None):
+SPLIT_GAP_LIMIT = 60
+
+def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
+    """
+    Finds the set of non-overlapping minimum-span ordered tuples of source-word positions.
+    inflected_words: list of lowered, cleaned inflected form words.
+    source_word_cleans: list of lowered, cleaned source words.
+    gap_limit: int, maximum allowed distance between consecutive positions.
+    """
+    if len(inflected_words) < 2:
+        return set(), False
+
+    # Collect occurrence lists
+    occs = []
+    for word in inflected_words:
+        occs.append([idx for idx, w in enumerate(source_word_cleans) if w == word])
+
+    # If any of the words are not in the source text, no tuple can be formed
+    if any(not lst for lst in occs):
+        return set(), False
+
+    valid_tuples = []
+    k = len(inflected_words)
+
+    def backtrack(step, current_tuple):
+        if step == k:
+            valid_tuples.append(tuple(current_tuple))
+            return
+        
+        prev_pos = current_tuple[-1] if current_tuple else None
+        for pos in occs[step]:
+            if prev_pos is not None:
+                if pos <= prev_pos:
+                    continue
+                if pos - prev_pos > gap_limit:
+                    continue
+            current_tuple.append(pos)
+            backtrack(step + 1, current_tuple)
+            current_tuple.pop()
+
+    backtrack(0, [])
+
+    if not valid_tuples:
+        return set(), False
+
+    # Sort candidates by (span, start_pos)
+    valid_tuples.sort(key=lambda t: (t[-1] - t[0], t[0]))
+
+    used_positions = set()
+    selected_positions = set()
+    
+    for t in valid_tuples:
+        if any(p in used_positions for p in t):
+            continue
+        for p in t:
+            used_positions.add(p)
+            selected_positions.add(p)
+
+    return selected_positions, len(selected_positions) > 0
+
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -1177,29 +1239,28 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
     source_word_cleans = [t["lower_clean"] for t in source_tokens if t.get("is_word") and "lower_clean" in t]
 
-    natively_paired_rows = set()
+    anchored_positions = {}
     for row_id, row in enumerate(data_rows):
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        inf_words = []
         if inflected_val:
             inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch == "'"))
                          for p in re.findall(r"[\w']+", inflected_val)]
             inf_words = [w for w in inf_words if w]
-            if len(inf_words) > 1:
-                if not is_contiguous_subsequence(inf_words, source_word_cleans):
-                    natively_paired_rows.add(row_id)
-            
-    paired_tokens = set()
-    for cand, r_ids in token_to_rows.items():
-        if any(r in natively_paired_rows for r in r_ids):
-            paired_tokens.add(cand)
-            
-    paired_rows = set()
-    for row_id in range(len(data_rows)):
-        candidates = row_candidates.get(row_id, set())
-        if any(cand in paired_tokens for cand in candidates):
-            paired_rows.add(row_id)
+        
+        if len(inf_words) >= 2:
+            pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
+            if ok:
+                anchored_positions[row_id] = pos_set
+            else:
+                anchored_positions[row_id] = set()
+        else:
+            anchored_positions[row_id] = set()
+
+    paired_rows = {row_id for row_id, pos_set in anchored_positions.items() if pos_set}
     
     span_htmls = []
+    word_counter = 0
     for token in source_tokens:
         tok_text = token["text"]
         text_escaped = tok_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1210,7 +1271,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             
             classes = ["word"]
             if mapped_rows:
-                is_paired = any(r_idx in paired_rows for r_idx in mapped_rows)
+                is_paired = any(word_counter in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
                 if is_paired:
                     classes.append("highlight-purple")
                 else:
@@ -1222,6 +1283,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
                 f'data-lower-clean="{lower_clean}">{text_escaped}</span>'
             )
+            word_counter += 1
         else:
             if tok_text in ("\\N", "\\n", "\n"):
                 span_htmls.append("<br>")
@@ -3331,7 +3393,8 @@ def cmd_render(args):
         
     try:
         zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv)
+        split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint('settings', 'split_gap_limit', fallback=60)
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap)
         from b64util import encode
         print(encode(html))
     except Exception as e:
@@ -4503,7 +4566,8 @@ def cmd_desk(args):
     
     try:
         theme_val = args.theme if hasattr(args, 'theme') else "dark"
-        html = run_render_flow(text, lang, timestamp_id, args.text_mode, config, resolved_paths, theme=theme_val)
+        split_gap = config.getint('settings', 'split_gap_limit', fallback=60)
+        html = run_render_flow(text, lang, timestamp_id, args.text_mode, config, resolved_paths, theme=theme_val, split_gap_limit=split_gap)
         from b64util import encode
         print(encode(html))
     except Exception as e:
@@ -4540,6 +4604,7 @@ def main():
     p_render.add_argument("--zoom", default=None, help="Zoom level for CSS scaling (falls back to config default_zoom)")
     p_render.add_argument("--tsv", default=None, help="Path to TSV file to render")
     p_render.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
+    p_render.add_argument("--split-gap-limit", type=int, default=None, help="Maximum source-word index distance allowed between parts of a split/separable verb construct")
 
     # export
     p_export = subparsers.add_parser("export")

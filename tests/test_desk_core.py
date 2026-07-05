@@ -207,11 +207,73 @@ def test_restore_subcommand():
         assert data_rows == [["v1", "v2"]]
         assert source_text == "Hello source"
 
-def test_is_contiguous_subsequence():
-    assert desk.is_contiguous_subsequence(["set", "up"], ["i", "want", "to", "set", "up", "the", "system"]) is True
-    assert desk.is_contiguous_subsequence(["set", "up"], ["i", "set", "it", "up"]) is False
-    assert desk.is_contiguous_subsequence([], ["a", "b"]) is False
-    assert desk.is_contiguous_subsequence(["a"], []) is False
+def test_resolve_anchored_positions():
+    # 1. split verb with repeated particle (only forming positions anchored)
+    # Source: "heute kommt der redakteur an einem tag an"
+    source = ["heute", "kommt", "der", "redakteur", "an", "einem", "tag", "an"]
+    # Inflected: "kommt an"
+    pos, ok = desk.resolve_anchored_positions(["kommt", "an"], source, 60)
+    assert ok is True
+    assert pos == {1, 4} # minimum span is (1, 4) with span 3; (1, 7) has span 6
+
+    # 2. contiguous phrase
+    # Source: "he did it in spite of the rule of which he was aware"
+    source = ["he", "did", "it", "in", "spite", "of", "the", "rule", "of"]
+    pos, ok = desk.resolve_anchored_positions(["in", "spite", "of"], source, 60)
+    assert ok is True
+    assert pos == {3, 4, 5} # "in spite of" at 3,4,5. The other "of" at 8 is not anchored
+
+    # 3. out-of-order fallback
+    # Source: "an etwas kommt"
+    source = ["an", "etwas", "kommt"]
+    pos, ok = desk.resolve_anchored_positions(["kommt", "an"], source, 60)
+    assert ok is False
+    assert pos == set()
+
+    # 4. gap-exceeded fallback (with a custom small gap_limit)
+    # Source: "kommt" + 5 words + "an"
+    source = ["kommt", "one", "two", "three", "four", "five", "an"]
+    # gap limit = 5, distance is 6.
+    pos, ok = desk.resolve_anchored_positions(["kommt", "an"], source, 5)
+    assert ok is False
+    # gap limit = 6, distance is 6.
+    pos, ok = desk.resolve_anchored_positions(["kommt", "an"], source, 6)
+    assert ok is True
+    assert pos == {0, 6}
+
+    # 5. minimum-span tie-break
+    # Source: "kommt kommt an"
+    source = ["kommt", "kommt", "an"]
+    pos, ok = desk.resolve_anchored_positions(["kommt", "an"], source, 60)
+    assert ok is True
+    assert pos == {1, 2} # (1, 2) has span 1; (0, 2) has span 2
+
+    # 6. single-word input (<2 words -> empty/ok=False)
+    pos, ok = desk.resolve_anchored_positions(["ankommen"], source, 60)
+    assert ok is False
+    assert pos == set()
+    pos, ok = desk.resolve_anchored_positions([], source, 60)
+    assert ok is False
+    assert pos == set()
+
+    # 7. duplicate-word inflected form ("an an" needs two distinct positions; one occurrence -> no tuple)
+    source = ["an", "etwas", "an"]
+    pos, ok = desk.resolve_anchored_positions(["an", "an"], source, 60)
+    assert ok is True
+    assert pos == {0, 2}
+
+    source = ["an", "etwas"]
+    pos, ok = desk.resolve_anchored_positions(["an", "an"], source, 60)
+    assert ok is False
+    assert pos == set()
+
+    # 8. repeated-construct case yielding multiple non-overlapping tuples
+    # Source: "steht auf steht auf"
+    source = ["steht", "auf", "steht", "auf"]
+    pos, ok = desk.resolve_anchored_positions(["steht", "auf"], source, 60)
+    assert ok is True
+    assert pos == {0, 1, 2, 3}
+
 
 def test_build_field_mapping_includes_tts():
     mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
