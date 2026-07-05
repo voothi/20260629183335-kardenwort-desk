@@ -302,7 +302,7 @@ def test_separable_verb_anchoring_scenarios(tmp_path):
     
     assert 'class="word highlight-purple" data-word-idx="3" data-lower-clean="kommt">kommt</span>' in html
     assert 'class="word highlight-purple" data-word-idx="9" data-lower-clean="an">an</span>' in html
-    assert 'class="word highlight-orange" data-word-idx="15" data-lower-clean="an">an</span>' in html
+    assert 'class="word not-connected" data-word-idx="15" data-lower-clean="an">an</span>' in html
     assert 'class="highlight-purple"' in html # table row should be purple
 
     # 4.2 contiguous phrase
@@ -311,29 +311,31 @@ def test_separable_verb_anchoring_scenarios(tmp_path):
     assert 'class="word highlight-purple" data-word-idx="7" data-lower-clean="in">in</span>' in html
     assert 'class="word highlight-purple" data-word-idx="9" data-lower-clean="spite">spite</span>' in html
     assert 'class="word highlight-purple" data-word-idx="11" data-lower-clean="of">of</span>' in html
-    assert 'class="word highlight-orange" data-word-idx="17" data-lower-clean="of">of</span>' in html
+    assert 'class="word not-connected" data-word-idx="17" data-lower-clean="of">of</span>' in html
 
     # 4.3 out-of-order
     tsv_content = "WordSource\tWordSourceInflectedForm\tWordDestination\nankommen\tkommt an\tarrive\n"
     html = run_scenario("an etwas kommt", tsv_content)
-    assert 'class="word highlight-orange" data-word-idx="1" data-lower-clean="an">an</span>' in html
-    assert 'class="word highlight-orange" data-word-idx="5" data-lower-clean="kommt">kommt</span>' in html
+    assert 'class="word not-connected" data-word-idx="1" data-lower-clean="an">an</span>' in html
+    assert 'class="word not-connected" data-word-idx="5" data-lower-clean="kommt">kommt</span>' in html
     assert 'class="highlight-orange"' in html # table row should be orange
 
     # 4.4 gap-exceeded with default 60 (>60 word positions between kommt and an)
     tsv_content = "WordSource\tWordSourceInflectedForm\tWordDestination\nankommen\tkommt an\tarrive\n"
     text = "kommt " + "word " * 61 + "an"
     html = run_scenario(text, tsv_content)
-    assert 'class="word highlight-orange" data-word-idx="1" data-lower-clean="kommt">kommt</span>' in html
-    assert 'class="word highlight-orange"' in html # should have orange class
+    assert 'class="word not-connected" data-word-idx="1" data-lower-clean="kommt">kommt</span>' in html
+    assert 'class="word highlight-orange"' not in html # should not have orange class
     assert 'class="highlight-orange"' in html # table row should be orange
 
     # 4.5 tighter limit suppresses 20-word gap
     tsv_content = "WordSource\tWordSourceInflectedForm\tWordDestination\nankommen\tkommt an\tarrive\n"
     text = "kommt " + "word " * 19 + "an"
     html = run_scenario(text, tsv_content, split_gap_limit=10)
-    assert 'class="word highlight-orange" data-word-idx="1" data-lower-clean="kommt">kommt</span>' in html
+    assert 'class="word not-connected" data-word-idx="1" data-lower-clean="kommt">kommt</span>' in html
 
+    # 4.6 config vs flag limit
+    # Config has split_gap_limit = 15, no flag -> suppresses gap 20
     cfg15 = configparser.ConfigParser()
     for sec in config.sections():
         cfg15.add_section(sec)
@@ -342,7 +344,7 @@ def test_separable_verb_anchoring_scenarios(tmp_path):
     cfg15.set('settings', 'split_gap_limit', '15')
     
     html = run_scenario(text, tsv_content, split_gap_limit=cfg15.getint('settings', 'split_gap_limit', fallback=60), custom_config=cfg15)
-    assert 'class="word highlight-orange" data-word-idx="1" data-lower-clean="kommt">kommt</span>' in html
+    assert 'class="word not-connected" data-word-idx="1" data-lower-clean="kommt">kommt</span>' in html
 
     # Overridden by flag split_gap_limit = 30 -> allows gap 20
     html = run_scenario(text, tsv_content, split_gap_limit=30, custom_config=cfg15)

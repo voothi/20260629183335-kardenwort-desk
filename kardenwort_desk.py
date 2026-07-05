@@ -1239,6 +1239,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
     source_word_cleans = [t["lower_clean"] for t in source_tokens if t.get("is_word") and "lower_clean" in t]
 
+    single_word_rows = set()
     anchored_positions = {}
     for row_id, row in enumerate(data_rows):
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
@@ -1255,6 +1256,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             else:
                 anchored_positions[row_id] = set()
         else:
+            single_word_rows.add(row_id)
             anchored_positions[row_id] = set()
 
     paired_rows = {row_id for row_id, pos_set in anchored_positions.items() if pos_set}
@@ -1274,8 +1276,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 is_paired = any(word_counter in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
                 if is_paired:
                     classes.append("highlight-purple")
-                else:
+                elif any(r_idx in single_word_rows for r_idx in mapped_rows):
                     classes.append("highlight-orange")
+                else:
+                    classes.append("not-connected")
             else:
                 classes.append("not-connected")
             classes_str = " ".join(classes)
