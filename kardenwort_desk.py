@@ -1559,7 +1559,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                     if eff_mode == 'single':
                         sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
                     else:
-                        sentences = [ln.strip() for ln in text.splitlines() if ln.strip()]
+                        sentences = [ln.strip() for ln in text.splitlines()]
                     padded_sentences = pad_sentences(sentences, text, words_before, words_after, max_words=max_words)
                     modified = False
                     for row in data_rows:
