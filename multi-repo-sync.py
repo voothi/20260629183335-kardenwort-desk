@@ -20,6 +20,7 @@ DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
 GIT_REMOTE = "origin"
 LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text), "log" (Plain text log line)
+DEFAULT_CWD = None   # Default working directory context (None means use shell's current directory)
 
 def run_git(repo_path, args):
     try:
@@ -434,6 +435,8 @@ def main():
         description="Coordinated repository sync, tag, and checkout manager.",
         epilog="""
 subcommand options:
+  global
+    -C, --cwd PATH            Change the working directory before running the utility. Overrides DEFAULT_CWD.
   tag / commit
     -l, --log-file PATHS...   One or more paths to history log files to record sync snapshots.
     --log-format FORMAT       Logging format (choices: table, code, log). Overrides LOG_FORMAT.
@@ -445,7 +448,7 @@ subcommand options:
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument("-C", "--cwd", default=None, metavar="<path>", help="Change the working directory before running the utility (default: shell's current directory).")
+    parser.add_argument("-C", "--cwd", default=DEFAULT_CWD, metavar="<path>", help="Change the working directory before running the utility (default: DEFAULT_CWD or shell's current directory).")
     subparsers = parser.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
     
     # status subcommand
