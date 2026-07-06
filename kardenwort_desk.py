@@ -1721,7 +1721,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 eff_mode = _effective_text_mode(text, text_mode)
                 translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
                 save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-                _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=True, overwrite=True)
+                _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                 
  
         except TranslationAlignmentError as tae:
@@ -1735,7 +1735,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             eff_mode = _effective_text_mode(text, text_mode)
             translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
             save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-            _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=True, overwrite=True)
+            _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
         if word_translations_empty:
@@ -1795,7 +1795,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
     translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
     eff_mode = _effective_text_mode(text, text_mode)
-    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=True, overwrite=False)
+    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
             
     worker_launched = False
     if not llm_filled:
