@@ -1264,58 +1264,59 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     text_file_to_pass = source_text_path
     temp_file_path = None
     
-    use_temp = (eff_mode == 'single') or (not save_source_text)
-    if use_temp:
-        if eff_mode == 'single':
-            split_lines = split_single_mode_text(text, wrap_max_chars)
-            temp_content = "\n".join(split_lines)
-        else:
-            temp_content = text
-        temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
-        temp_file_path = Path(temp_file.name)
-        try:
-            temp_file.write(temp_content)
-        finally:
-            temp_file.close()
-        text_file_to_pass = temp_file_path
-        
-    cmd = [
-        str(python_exe),
-        str(kardenwort_script),
-        "--type", "word",
-        "--language", language,
-        "--deduplication-scope", "global",
-        "--lemma-index-file", str(lemma_index_file),
-        "--lemma-override-file", str(lemma_override_file),
-        "--sentence-context-size", "0",
-        "--anki-csv-header", json.dumps(fields),
-        "--anki-field-mapping", json.dumps(field_mapping),
-        "--output-file", str(working_tsv_path),
-        "--text1-file", str(text_file_to_pass),
-        "--tts-destination-lang", target_lang
-    ]
-    
-    if language == "de":
-        de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
-        de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
-        cmd.extend([
-            "--de-fix-genitive",
-            "--de-dictionary-file", str(de_dict_path),
-        ])
-        
-    kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
-    env = os.environ.copy()
-    env["PYTHONIOENCODING"] = "utf-8"
-    
-    logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
     try:
-        subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
-    except subprocess.TimeoutExpired as e:
-        print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
-        sys.exit(1)
-    except subprocess.CalledProcessError as e:
-        print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
-        sys.exit(1)
+        use_temp = (eff_mode == 'single') or (not save_source_text)
+        if use_temp:
+            if eff_mode == 'single':
+                split_lines = split_single_mode_text(text, wrap_max_chars)
+                temp_content = "\n".join(split_lines)
+            else:
+                temp_content = text
+            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
+            temp_file_path = Path(temp_file.name)
+            try:
+                temp_file.write(temp_content)
+            finally:
+                temp_file.close()
+            text_file_to_pass = temp_file_path
+            
+        cmd = [
+            str(python_exe),
+            str(kardenwort_script),
+            "--type", "word",
+            "--language", language,
+            "--deduplication-scope", "global",
+            "--lemma-index-file", str(lemma_index_file),
+            "--lemma-override-file", str(lemma_override_file),
+            "--sentence-context-size", "0",
+            "--anki-csv-header", json.dumps(fields),
+            "--anki-field-mapping", json.dumps(field_mapping),
+            "--output-file", str(working_tsv_path),
+            "--text1-file", str(text_file_to_pass),
+            "--tts-destination-lang", target_lang
+        ]
+        
+        if language == "de":
+            de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
+            de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
+            cmd.extend([
+                "--de-fix-genitive",
+                "--de-dictionary-file", str(de_dict_path),
+            ])
+            
+        kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
+        env = os.environ.copy()
+        env["PYTHONIOENCODING"] = "utf-8"
+        
+        logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
+        try:
+            subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
+        except subprocess.TimeoutExpired as e:
+            print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
+            sys.exit(1)
+        except subprocess.CalledProcessError as e:
+            print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
+            sys.exit(1)
     finally:
         if temp_file_path is not None:
             try:
