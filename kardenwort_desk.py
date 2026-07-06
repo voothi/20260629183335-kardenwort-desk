@@ -1451,19 +1451,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
                 _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=False)
                 
-            if word_translations_empty:
-                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
-                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
-                
-                for row in data_rows:
-                    if col_lemma != -1 and len(row) > col_lemma:
-                        lemma_val = row[col_lemma]
-                        if col_word_dest != -1:
-                            while len(row) <= col_word_dest:
-                                row.append("")
-                            row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                with file_lock(working_tsv_path):
-                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+
         except TranslationAlignmentError as tae:
             logger.error(f"Monolithic translation alignment error: {tae}")
             sentence_translations_raw = tae.partial_dict
