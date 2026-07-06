@@ -49,13 +49,9 @@ def get_zid():
         return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
 def cmd_status(args):
-    print("=" * 80)
-    print(f"{'Repository':<15} | {'Branch':<15} | {'Latest Commit':<12} | {'Tags on HEAD'}")
-    print("=" * 80)
-    
     for name, path in REPOS.items():
         if not os.path.exists(path):
-            print(f"{name:<15} | [Folder not found]")
+            print(f"## {name}...[Folder not found]")
             continue
             
         branch, _ = run_git(path, ["rev-parse", "--abbrev-ref", "HEAD"])
@@ -63,18 +59,19 @@ def cmd_status(args):
         tags, _ = run_git(path, ["tag", "--points-at", "HEAD"])
         dirty, _ = run_git(path, ["status", "--porcelain"])
         
-        branch_str = branch if branch else "Unknown"
+        status_parts = []
+        if tags:
+            tag_list = ", ".join(tags.splitlines())
+            status_parts.append(f"tag: {tag_list}")
         if dirty:
-            branch_str += " (DIRTY)"
+            status_parts.append("dirty")
             
-        commit_str = commit if commit else "No commits"
-        if len(commit_str) > 30:
-            commit_str = commit_str[:27] + "..."
-            
-        tags_str = ", ".join(tags.splitlines()) if tags else "-"
-        
-        print(f"{name:<15} | {branch_str:<15} | {commit_str:<30} | {tags_str}")
-    print("=" * 80)
+        status_suffix = f" [{', '.join(status_parts)}]" if status_parts else ""
+        print(f"## {name}...{branch}{status_suffix}")
+        if commit:
+            print(f"   {commit}")
+        else:
+            print("   (No commits)")
 
 def cmd_tag(args):
     tag_name = args.name
