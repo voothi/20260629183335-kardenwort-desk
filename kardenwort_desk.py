@@ -677,13 +677,9 @@ def split_single_mode_text(text, max_chars=90):
     sentences = [s.strip() for s in re.split(r'(?<=[.!?]|\:)\s+', text.strip()) if s.strip()]
     if not sentences:
         return []
-    final_lines = []
-    for sent in sentences:
-        if len(sent) > max_chars:
-            final_lines.extend(_split_long_line(sent, max_chars))
-        else:
-            final_lines.append(sent)
-    return final_lines
+    if len(sentences) <= 1 and len(text) > max_chars:
+        return _split_long_line(text, max_chars)
+    return sentences
 
 def _effective_text_mode(text, configured_text_mode):
     return 'multi' if (configured_text_mode == 'single' and '\n' in text.strip()) else configured_text_mode
