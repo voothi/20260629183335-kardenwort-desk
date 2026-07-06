@@ -672,6 +672,19 @@ def _split_long_line(line, max_chars=90):
     out.append(cur)
     return out
 
+def split_single_mode_text(text, max_chars=90):
+    import re
+    sentences = [s.strip() for s in re.split(r'(?<=[.!?]|\:)\s+', text.strip()) if s.strip()]
+    if not sentences:
+        return []
+    final_lines = []
+    for sent in sentences:
+        if len(sent) > max_chars:
+            final_lines.extend(_split_long_line(sent, max_chars))
+        else:
+            final_lines.append(sent)
+    return final_lines
+
 def _effective_text_mode(text, configured_text_mode):
     return 'multi' if (configured_text_mode == 'single' and '\n' in text.strip()) else configured_text_mode
 
@@ -1254,9 +1267,16 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         stem = stem[:-4]
     source_text_path = results_dir / f"{stem}.txt"
     
+    wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
+    
+    text_to_write = text
+    if text_mode == 'single':
+        split_lines = split_single_mode_text(text, wrap_max_chars)
+        text_to_write = "\n".join(split_lines)
+
     save_source_text = config.getboolean('settings', 'save_source_text', fallback=True)
     if save_source_text and not source_text_path.exists():
-        source_text_path.write_text(text, encoding='utf-8')
+        source_text_path.write_text(text_to_write, encoding='utf-8')
         
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     fields = list(mapping['fields'].keys())
@@ -1274,9 +1294,6 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     text_file_to_pass = source_text_path
     if not save_source_text:
         temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
-        text_to_write = text
-        if text_mode == 'single':
-            text_to_write = " ".join([line.strip() for line in text.splitlines() if line.strip()])
         temp_file.write(text_to_write)
         temp_file.close()
         text_file_to_pass = Path(temp_file.name)
@@ -1324,26 +1341,6 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 os.remove(temp_file.name)
             except OSError:
                 pass
-
-    if text_mode == 'single':
-        try:
-            comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-            col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-            col_source = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
-            clean_text = " ".join([line.strip() for line in text.splitlines() if line.strip()])
-            if col_index != -1 or col_source != -1:
-                modified = False
-                for row in data_rows:
-                    if col_index != -1 and len(row) > col_index:
-                        row[col_index] = "000001"
-                        modified = True
-                    if col_source != -1 and len(row) > col_source:
-                        row[col_source] = clean_text
-                        modified = True
-                if modified:
-                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
-        except Exception as e:
-            logger.warning(f"Failed to post-process single-mode TSV SentenceSource/SentenceSourceIndex: {e}")
 
     return working_tsv_path
 
