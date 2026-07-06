@@ -32,6 +32,7 @@ STATUS_TAGS_MAX_COUNT = 3  # Maximum number of tags to show in status output (No
 LOG_TAGS_MAX_LEN = None   # Maximum character length for tags column in log files (None for unlimited)
 LOG_TAGS_MAX_COUNT = None  # Maximum number of tags to show in log files (None or 0 for unlimited)
 STATUS_COLUMNS = ["REPOSITORY", "STATUS", "COMMIT", "MESSAGE", "TAGS"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
+LOG_COLUMNS = ["REPOSITORY", "STATUS", "BRANCH", "COMMIT", "MESSAGE", "TAGS"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
 
 def run_git(repo_path, args):
     try:
@@ -356,13 +357,13 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
             new_body = ""
             if resolved_format == "code":
                 widths = {}
-                for col in STATUS_COLUMNS:
+                for col in LOG_COLUMNS:
                     widths[col] = max(max(len(hashes[n].get(col, "")) for n in REPOS.keys()), len(col))
                 
                 new_body += "```text\n"
                 header_parts = []
-                for idx, col in enumerate(STATUS_COLUMNS):
-                    if idx == len(STATUS_COLUMNS) - 1:
+                for idx, col in enumerate(LOG_COLUMNS):
+                    if idx == len(LOG_COLUMNS) - 1:
                         header_parts.append(col)
                     else:
                         header_parts.append(f"{col:<{widths[col]}}")
@@ -370,19 +371,19 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
                 
                 for name in REPOS.keys():
                     row_parts = []
-                    for idx, col in enumerate(STATUS_COLUMNS):
+                    for idx, col in enumerate(LOG_COLUMNS):
                         val = hashes[name].get(col, "")
-                        if idx == len(STATUS_COLUMNS) - 1:
+                        if idx == len(LOG_COLUMNS) - 1:
                             row_parts.append(val)
                         else:
                             row_parts.append(f"{val:<{widths[col]}}")
                     new_body += " ".join(row_parts) + "\n"
                 new_body += "```"
             else:
-                new_body += "| " + " | ".join(STATUS_COLUMNS) + " |\n"
-                new_body += "| " + " | ".join([":---"] * len(STATUS_COLUMNS)) + " |\n"
+                new_body += "| " + " | ".join(LOG_COLUMNS) + " |\n"
+                new_body += "| " + " | ".join([":---"] * len(LOG_COLUMNS)) + " |\n"
                 for name in REPOS.keys():
-                    row_data = [hashes[name].get(col, "") for col in STATUS_COLUMNS]
+                    row_data = [hashes[name].get(col, "") for col in LOG_COLUMNS]
                     new_body += "| " + " | ".join(row_data) + " |\n"
             
             sections.append({
