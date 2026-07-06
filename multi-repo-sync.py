@@ -126,7 +126,7 @@ def cmd_tag(args):
         if not args.force:
             confirm = input("Do you want to proceed? [y/N]: ").strip().lower()
             if confirm != 'y':
-                print("Aborted.")
+                print("sync: Aborted.")
                 sys.exit(1)
                 
     # 2. Apply tags
@@ -338,18 +338,15 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
                     f.write(s["body"] + "\n\n")
                     f.write("[Return to Top](#table-of-contents)\n\n")
                     
-        print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
+        print(f"sync: Appended snapshot info [file={log_path.resolve()}]")
     except Exception as e:
-        print(f"[X] Failed to write sync log: {e}")
+        print(f"sync: Error - Failed to write sync log ({e})")
 
 def cmd_checkout(args):
     tag_name = args.name
     if not tag_name:
-        print("Error: You must specify a tag/branch name to checkout.")
+        print("sync: Error - You must specify a tag/branch name to checkout.")
         sys.exit(1)
-        
-    print(f"Checking out '{tag_name}' across all repositories...")
-    
     # 1. Pre-check dirty repos
     dirty_repos = []
     for name, path in REPOS.items():
@@ -359,8 +356,8 @@ def cmd_checkout(args):
                 dirty_repos.append(name)
                 
     if dirty_repos and not args.force:
-        print(f"ERROR: Cannot checkout because of uncommitted changes in: {', '.join(dirty_repos)}")
-        print("Use --force to discard uncommitted changes or stash them first.")
+        print(f"sync: Error - Cannot checkout because of uncommitted changes in: {', '.join(dirty_repos)}")
+        print("sync: Use -f/--force to discard uncommitted changes or stash them first.")
         sys.exit(1)
         
     print(f"sync: Checking out [target={tag_name}]")
@@ -388,7 +385,7 @@ def cmd_checkout(args):
 def cmd_delete(args):
     tag_name = args.name
     if not tag_name:
-        print("Error: You must specify a tag name to delete.")
+        print("sync: Error - You must specify a tag name to delete.")
         sys.exit(1)
         
     print(f"sync: Deleting tag [target={tag_name}]")
@@ -548,7 +545,7 @@ subcommand options:
         try:
             os.chdir(args.cwd)
         except Exception as e:
-            print(f"Error: Could not change working directory to '{args.cwd}': {e}")
+            print(f"sync: Error - Could not change working directory to '{args.cwd}' ({e})")
             sys.exit(1)
             
     
