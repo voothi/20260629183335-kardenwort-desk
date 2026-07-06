@@ -163,11 +163,12 @@ def test_translation_alignment_error_rescue(monkeypatch):
     assert partial[3] == "" # Failing line is blanked
 
 def test_single_mode_invariant_check():
-    data_rows = [["1", "a", ""], ["2", "b", ""]]
-    headers = ["SentenceSourceIndex", "Lemma", "SentenceTranslation"]
+    data_rows = [["1", "a", "", "snippet1"], ["2", "b", "", "snippet2"]]
+    headers = ["SentenceSourceIndex", "Lemma", "SentenceTranslation", "SentenceSource"]
     comments = []
     
-    # In single mode, rows with index > 1 resolve to sentence_translations_raw[0]
+    # In single mode, rows with index > 1 resolve to sentence_translations_raw[0],
+    # and SentenceSource is overwritten with the full text.
     res = desk.resolve_translations(
         text="hello", text_mode="single", data_rows=data_rows,
         col_index=0, col_sentence_dest=2, sentence_translations_raw={0: "hello"},
@@ -176,3 +177,5 @@ def test_single_mode_invariant_check():
     assert res is None
     assert data_rows[0][2] == "hello"
     assert data_rows[1][2] == "hello"
+    assert data_rows[0][3] == "hello"
+    assert data_rows[1][3] == "hello"
