@@ -140,9 +140,11 @@ def cmd_tag(args):
     # 3. Log to file if requested
     if success and args.log_file:
         for log_path in args.log_file:
-            log_tag_to_file(tag_name, log_path)
+            log_tag_to_file(tag_name, log_path, log_format=args.log_format)
 
-def log_tag_to_file(tag_name, log_path_str):
+def log_tag_to_file(tag_name, log_path_str, log_format=None):
+    if log_format is None:
+        log_format = LOG_FORMAT
     import datetime
     log_path = Path(log_path_str)
     
@@ -182,39 +184,67 @@ def log_tag_to_file(tag_name, log_path_str):
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
-            if write_header:
-                f.write("# Multi-Repo Sync History\n")
-            
-            f.write(f"\n## Release {tag_name} ({date_str})\n\n")
-            
-            if LOG_FORMAT == "code":
-                w_name = max(max(len(name) for name in REPOS.keys()), len("REPOSITORY"))
-                w_status = max(max(len(hashes[name]["status"]) for name in REPOS.keys()), len("STATUS"))
-                w_branch = max(max(len(hashes[name]["branch"]) for name in REPOS.keys()), len("BRANCH"))
-                w_hash = max(max(len(hashes[name]["hash"]) for name in REPOS.keys()), len("COMMIT"))
-                w_tags = max(max(len(hashes[name]["tags"]) for name in REPOS.keys()), len("TAGS"))
+            if log_format == "table":
+                # Flat horizontal table (perfect for sorting by ZID)
+                repo_names = list(REPOS.keys())
+                if write_header:
+                    f.write("# Multi-Repo Sync History\n\n")
+                    headers = ["Tag / ZID", "Date"] + repo_names
+                    alignments = [":---"] * len(headers)
+                    f.write("| " + " | ".join(headers) + " |\n")
+                    f.write("| " + " | ".join(alignments) + " |\n")
                 
-                f.write("```text\n")
-                f.write(f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}\n")
-                for name in REPOS.keys():
-                    status_str = hashes[name]["status"]
-                    branch_str = hashes[name]["branch"]
-                    c_hash = hashes[name]["hash"]
-                    tag_str = hashes[name]["tags"]
-                    c_msg = hashes[name]["msg"]
-                    f.write(f"{name:<{w_name}} {status_str:<{w_status}} {branch_str:<{w_branch}} {c_hash:<{w_hash}} {tag_str:<{w_tags}} {c_msg}\n")
-                f.write("```\n")
+                # Format cell values based on LOG_COMMIT_VAL configuration
+                row_data = [tag_name, date_str]
+                for name in repo_names:
+                    if hashes[name]["status"] == "missing":
+                        row_data.append("absent")
+                    else:
+                        c_hash = hashes[name]["hash"]
+                        c_msg = hashes[name]["msg"]
+                        if LOG_COMMIT_VAL == "msg":
+                            row_data.append(c_msg)
+                        elif LOG_COMMIT_VAL == "both":
+                            row_data.append(f"{c_hash} ({c_msg})")
+                        else:  # "hash"
+                            row_data.append(c_hash)
+                
+                f.write("| " + " | ".join(row_data) + " |\n")
             else:
-                f.write("| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n")
-                f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
-                for name in REPOS.keys():
-                    status_str = hashes[name]["status"]
-                    branch_str = hashes[name]["branch"]
-                    c_hash = hashes[name]["hash"]
-                    tag_str = hashes[name]["tags"]
-                    c_msg = hashes[name]["msg"]
-                    f.write(f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n")
+                # Vertical/detailed format per release (code block or vertical table)
+                if write_header:
+                    f.write("# Multi-Repo Sync History\n")
                 
+                f.write(f"\n## Release {tag_name} ({date_str})\n\n")
+                
+                if log_format == "code":
+                    w_name = max(max(len(name) for name in REPOS.keys()), len("REPOSITORY"))
+                    w_status = max(max(len(hashes[name]["status"]) for name in REPOS.keys()), len("STATUS"))
+                    w_branch = max(max(len(hashes[name]["branch"]) for name in REPOS.keys()), len("BRANCH"))
+                    w_hash = max(max(len(hashes[name]["hash"]) for name in REPOS.keys()), len("COMMIT"))
+                    w_tags = max(max(len(hashes[name]["tags"]) for name in REPOS.keys()), len("TAGS"))
+                    
+                    f.write("```text\n")
+                    f.write(f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}\n")
+                    for name in REPOS.keys():
+                        status_str = hashes[name]["status"]
+                        branch_str = hashes[name]["branch"]
+                        c_hash = hashes[name]["hash"]
+                        tag_str = hashes[name]["tags"]
+                        c_msg = hashes[name]["msg"]
+                        f.write(f"{name:<{w_name}} {status_str:<{w_status}} {branch_str:<{w_branch}} {c_hash:<{w_hash}} {tag_str:<{w_tags}} {c_msg}\n")
+                    f.write("```\n")
+                else:
+                    f.write("| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n")
+                    f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
+                    for name in REPOS.keys():
+                        status_str = hashes[name]["status"]
+                        branch_str = hashes[name]["branch"]
+                        c_hash = hashes[name]["hash"]
+                        tag_str = hashes[name]["tags"]
+                        c_msg = hashes[name]["msg"]
+                        f.write(f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n")
+                        
         print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
     except Exception as e:
         print(f"[X] Failed to write sync log: {e}")
@@ -318,7 +348,7 @@ def cmd_commit(args):
     # 3. Log to file if requested
     if committed_any and args.log_file and last_zid:
         for log_path in args.log_file:
-            log_tag_to_file(last_zid, log_path)
+            log_tag_to_file(last_zid, log_path, log_format=args.log_format)
 
 def main():
     parser = argparse.ArgumentParser(description="Coordinated repository sync, tag, and checkout manager.")
@@ -333,10 +363,12 @@ def main():
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
     parser_tag.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
+    parser_tag.add_argument("--log-format", choices=["table", "code"], default=None, help="Markdown logging format. Overrides LOG_FORMAT.")
     
     # commit subcommand
     parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs.")
     parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record post-commit hashes.")
+    parser_commit.add_argument("--log-format", choices=["table", "code"], default=None, help="Markdown logging format. Overrides LOG_FORMAT.")
     
     # checkout subcommand
     parser_checkout = subparsers.add_parser("checkout", help="Checkout a specific tag/branch across all repositories.")
