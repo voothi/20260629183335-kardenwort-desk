@@ -836,12 +836,15 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         content_to_absolute = {0: 0}
         
     if eff_mode == 'single' and col_index != -1:
+        import re
+        parts = [p for p in re.split(r'(?:[.!?]+|:)(?:\s+|$)', text.strip()) if p.strip()]
+        num_sents = max(1, len(parts))
         offending_rows = []
         for r_idx, row in enumerate(data_rows):
             if len(row) > col_index:
                 try:
                     val = int(row[col_index])
-                    if val > 1:
+                    if val > num_sents:
                         offending_rows.append((r_idx, val))
                 except ValueError:
                     pass
