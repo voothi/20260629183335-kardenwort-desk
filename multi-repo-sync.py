@@ -26,6 +26,7 @@ DEFAULT_CWD = r"U:\voothi\20260629183335-kardenwort-desk"   # Default working di
 DEFAULT_TAG_NAME_TEMPLATE = "{zid}-snapshot-desk"
 DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid} to desk"
 DEFAULT_COMMIT_MSG_TEMPLATE = "{zid} to desk"
+REVERSE_TAGS_ORDER = True  # Display tags starting from the latest/last (True) or alphabetical/chronological order (False)
 
 def run_git(repo_path, args):
     try:
@@ -98,6 +99,8 @@ def cmd_status(args):
         dirty, _ = run_git(path, ["status", "--porcelain"])
         
         tags_list = tags.splitlines() if tags else []
+        if REVERSE_TAGS_ORDER:
+            tags_list.reverse()
         
         rows.append({
             "name": name,
@@ -218,6 +221,8 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
             dirty, _ = run_git(path, ["status", "--porcelain"])
             
             tags_list = tags.splitlines() if tags else []
+            if REVERSE_TAGS_ORDER:
+                tags_list.reverse()
             hashes[name] = {
                 "status": "dirty" if dirty else "clean",
                 "branch": branch if branch else "detached",
