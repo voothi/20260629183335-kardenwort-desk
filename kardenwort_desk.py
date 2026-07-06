@@ -726,6 +726,64 @@ def split_single_mode_text(text, max_chars=90):
         return _split_long_line(text, max_chars)
     return sentences
 
+def pad_sentences(sentences, original_text, words_before=0, words_after=0):
+    if not (words_before or words_after):
+        return sentences
+        
+    import re
+    spans = []
+    current_pos = 0
+    for s in sentences:
+        start = original_text.find(s, current_pos)
+        if start == -1:
+            start = current_pos
+        end = start + len(s)
+        spans.append((start, end))
+        current_pos = end
+        
+    # Get all tokens using the repository's own tokenizer utility
+    tokens = tok.build_word_list_internal(original_text, keep_spaces=True)
+    
+    # Pre-calculate the character span of each token in original_text
+    token_spans = []
+    curr_idx = 0
+    for t in tokens:
+        t_len = len(t["text"])
+        token_spans.append({
+            "start": curr_idx,
+            "end": curr_idx + t_len,
+            "is_word": t["is_word"]
+        })
+        curr_idx += t_len
+        
+    padded = []
+    for i, (s_i, e_i) in enumerate(spans):
+        pad_s = s_i
+        pad_e = e_i
+        
+        # Word-based padding using the tokenizer spans
+        if words_before > 0:
+            words_before_tokens = [ts for ts in token_spans if ts["end"] <= s_i and ts["is_word"]]
+            if len(words_before_tokens) >= words_before:
+                pad_s = words_before_tokens[-words_before]["start"]
+            else:
+                pad_s = 0
+                
+        if words_after > 0:
+            words_after_tokens = [ts for ts in token_spans if ts["start"] >= e_i and ts["is_word"]]
+            if len(words_after_tokens) >= words_after:
+                pad_e = words_after_tokens[words_after - 1]["end"]
+            else:
+                pad_e = len(original_text)
+                
+        padded_sentence = original_text[pad_s:pad_e].replace('\n', ' ').replace('\r', ' ').strip()
+        padded_sentence = re.sub(r'\s+', ' ', padded_sentence)
+        padded.append(padded_sentence)
+        
+    return padded
+
+
+
 def _effective_text_mode(text, configured_text_mode=None):
     stripped = text.strip()
     return 'multi' if ('\n' in stripped or '\r' in stripped) else 'single'
@@ -934,6 +992,9 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 return {0: f"[Translation Error: {e}]"}
         else:
             pseudo_lines = split_single_mode_text(text, wrap_max_chars)
+            words_before = config.getint('settings', 'sentence_context_words_before', fallback=0)
+            words_after = config.getint('settings', 'sentence_context_words_after', fallback=0)
+            pseudo_lines = pad_sentences(pseudo_lines, text, words_before, words_after)
             try:
                 pseudo_translations = translate_source_text(
                     "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
@@ -1358,6 +1419,31 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         except subprocess.CalledProcessError as e:
             print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
             sys.exit(1)
+
+        words_before = config.getint('settings', 'sentence_context_words_before', fallback=0)
+        words_after = config.getint('settings', 'sentence_context_words_after', fallback=0)
+        if (words_before > 0 or words_after > 0) and working_tsv_path.exists():
+            try:
+                comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+                col_src_idx = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+                col_src_sent = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
+                if col_src_idx != -1 and col_src_sent != -1:
+                    sentences = split_single_mode_text(text, wrap_max_chars)
+                    padded_sentences = pad_sentences(sentences, text, words_before, words_after)
+                    modified = False
+                    for row in data_rows:
+                        if len(row) > col_src_idx and len(row) > col_src_sent:
+                            try:
+                                idx = int(row[col_src_idx]) - 1
+                                if 0 <= idx < len(padded_sentences):
+                                    row[col_src_sent] = padded_sentences[idx]
+                                    modified = True
+                            except ValueError:
+                                pass
+                    if modified:
+                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            except Exception as e:
+                logger.error(f"Failed to apply sentence context padding: {e}")
     finally:
         if temp_file_path is not None:
             try:

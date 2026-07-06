@@ -189,3 +189,21 @@ def test_abbreviation_aware_splitting():
         "Aber Kirschen nicht."
     ]
 
+def test_pad_sentences():
+    text = "This is sentence one. Here is sentence two. Finally, sentence three."
+    sentences = ["This is sentence one.", "Here is sentence two.", "Finally, sentence three."]
+    
+    # 1. No padding
+    res = desk.pad_sentences(sentences, text)
+    assert res == sentences
+    
+    # 2. Word padding before and after
+    res_words = desk.pad_sentences(sentences, text, words_before=2, words_after=2)
+    assert res_words[1] == "sentence one. Here is sentence two. Finally, sentence"
+    
+    # 3. Out of bounds fallback/clipping
+    res_clip = desk.pad_sentences(sentences, text, words_before=100, words_after=100)
+    assert res_clip[1] == text
+
+
+
