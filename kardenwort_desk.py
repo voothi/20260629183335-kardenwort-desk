@@ -1329,16 +1329,21 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         try:
             comments, headers, data_rows = load_tsv_rows(working_tsv_path)
             col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-            if col_index != -1:
+            col_source = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
+            clean_text = " ".join([line.strip() for line in text.splitlines() if line.strip()])
+            if col_index != -1 or col_source != -1:
                 modified = False
                 for row in data_rows:
-                    if len(row) > col_index:
+                    if col_index != -1 and len(row) > col_index:
                         row[col_index] = "000001"
+                        modified = True
+                    if col_source != -1 and len(row) > col_source:
+                        row[col_source] = clean_text
                         modified = True
                 if modified:
                     save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
         except Exception as e:
-            logger.warning(f"Failed to post-process single-mode TSV SentenceSourceIndex: {e}")
+            logger.warning(f"Failed to post-process single-mode TSV SentenceSource/SentenceSourceIndex: {e}")
 
     return working_tsv_path
 
