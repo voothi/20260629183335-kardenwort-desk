@@ -1069,11 +1069,51 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             if not terminators.strip():
                 terminators = ".!?:"
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+            words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
+            words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
+            max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
+            context_mode = config.get('settings', 'anki_context_mode', fallback='single').lower()
+            
+            apply_padding = False
+            if words_before > 0 or words_after > 0:
+                if context_mode == 'both' or context_mode == eff_mode:
+                    apply_padding = True
+                    
             try:
-                return translate_source_text(
-                    "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                    config, resolved_paths, provider
-                )
+                if apply_padding:
+                    padded_lines = pad_sentences(pseudo_lines, text, words_before, words_after, max_words=max_words)
+                    
+                    # 1. Translate the padded sentences for the TSV (SentenceDestination)
+                    pseudo_translations = translate_source_text(
+                        "\n".join(padded_lines), source_lang, target_lang, 'multi',
+                        config, resolved_paths, provider
+                    )
+                    
+                    # 2. Translate the unpadded pseudo-lines for the Translate View (.ru.txt) and TextDestination
+                    # This preserves the literal piecemeal formatting that the user prefers (avoiding DeepL reformatting a giant text block)
+                    full_text_trans = ""
+                    try:
+                        unpadded_translations = translate_source_text(
+                            "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                            config, resolved_paths, provider
+                        )
+                        full_text_trans = " ".join(
+                            unpadded_translations.get(i, "").strip() 
+                            for i in sorted(unpadded_translations.keys()) 
+                            if isinstance(i, int) and unpadded_translations.get(i, "")
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to translate unpadded lines block: {e}")
+                    
+                    if full_text_trans:
+                        pseudo_translations['FULL_TEXT'] = full_text_trans
+                        
+                    return pseudo_translations
+                else:
+                    return translate_source_text(
+                        "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                        config, resolved_paths, provider
+                    )
             except TranslationAlignmentError as tae:
                 raise TranslationAlignmentError(
                     tae.args[0],
