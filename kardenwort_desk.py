@@ -272,6 +272,7 @@ def load_config(config_path=None):
         goldendict['lemma_columns'] = ['inflected', 'lemma', 'translation']
 
     _migrate_config(config)
+    _validate_translation_config(config)
     return config, resolved_paths, goldendict
 
 def load_kardenwort_config(kardenwort_workspace):
@@ -626,70 +627,405 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             translations[lemma] = ""
     return translations
 
-def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider):
-    if text_mode == 'single':
-        try:
-            return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider)}
-        except Exception as e:
-            logger.error(f"Failed to translate main text: {e}")
-            return {0: f"[Translation Error: {e}]"}
-    else:
-        # Phase 1: Collision Protection
-        process_text = text.replace("[[S]]", "AHK_ESC_S_")
-        process_text = process_text.replace("[[B]]", "AHK_ESC_B_")
-        process_text = process_text.replace("[[N]]", "AHK_ESC_N_")
+EXIT_PARTIAL_TRANSLATION_PERSISTED = 2
 
-        # Phase 2: Tokenization
-        process_text = process_text.replace("  ", " [[S]] ")
-        if provider and provider.lower() == 'deepl':
-            process_text = process_text.replace("\\", " [[B]] ")
+class TranslationAlignmentError(Exception):
+    def __init__(self, message, partial_dict=None):
+        super().__init__(message)
+        self.partial_dict = partial_dict or {}
+
+_LEADING_PUNCT_RE = re.compile(r'^([.,!?;:\s]+)\s*')
+_PUNCT_ONLY_RE = re.compile(r'^[.,!?;:\s]+$')
+
+def clean_sentence_splits(lines):
+    cleaned = list(lines)
+    for i in range(1, len(cleaned)):
+        line = cleaned[i]
+        combined = line.strip()
+        if not combined:
+            continue
+        if _PUNCT_ONLY_RE.match(combined):
+            cleaned[i - 1] = cleaned[i - 1] + combined
+            cleaned[i] = ""
+        else:
+            m = _LEADING_PUNCT_RE.match(combined)
+            if m:
+                punct = m.group(1).rstrip()
+                remainder = combined[m.end():].strip()
+                cleaned[i - 1] = cleaned[i - 1] + punct
+                cleaned[i] = remainder
+    return cleaned
+
+def _split_long_line(line, max_chars=90):
+    words = line.split()
+    if not words:
+        return []
+    out = []
+    cur = words[0]
+    for word in words[1:]:
+        candidate = f"{cur} {word}"
+        if len(candidate) <= max_chars:
+            cur = candidate
+        else:
+            out.append(cur)
+            cur = word
+    out.append(cur)
+    return out
+
+def _effective_text_mode(text, configured_text_mode):
+    return 'multi' if (configured_text_mode == 'single' and '\n' in text.strip()) else configured_text_mode
+
+def _validate_translated_line(orig_line, trans_line, idx, config):
+    if not trans_line.strip():
+        raise ValueError(f"Empty line returned for non-empty source at line index {idx}")
         
-        process_text = process_text.replace("\r\n", "[[N]]")
-        process_text = process_text.replace("\n", "[[N]]")
-        process_text = process_text.replace("\r", "[[N]]")
-        
-        try:
-            import re
-            translated_text = translate_text(process_text, source_lang, target_lang, config, resolved_paths, provider)
+    word_count_check = config.getboolean('translation', 'translation_word_count_check', fallback=False)
+    if word_count_check:
+        orig_words = len(orig_line.split())
+        trans_words = len(trans_line.split())
+        if orig_words > 0:
+            abs_tolerance = config.getint('translation', 'translation_word_count_abs_tolerance', fallback=5)
+            if abs(orig_words - trans_words) > abs_tolerance:
+                min_ratio = config.getfloat('translation', 'translation_word_count_min_ratio', fallback=0.25)
+                max_ratio = config.getfloat('translation', 'translation_word_count_max_ratio', fallback=3.5)
+                ratio = trans_words / orig_words
+                if ratio < min_ratio or ratio > max_ratio:
+                    raise ValueError(
+                        f"Word count mismatch at line {idx}: original has {orig_words} words, "
+                        f"translated has {trans_words} words (ratio {ratio:.2f} outside [{min_ratio}, {max_ratio}])"
+                    )
+
+def _build_chunks(lines, chunk_size, config):
+    chunks = []
+    adaptive_max_lines = config.getint('translation', 'translation_adaptive_max_lines', fallback=30)
+    adaptive_max_chars = config.getint('translation', 'translation_adaptive_max_chars', fallback=1000)
+    
+    if chunk_size > 0:
+        chunk = []
+        chunk_indices = []
+        for idx, line in enumerate(lines):
+            if not line.strip():
+                continue
+            chunk.append(line)
+            chunk_indices.append(idx)
+            if len(chunk) == chunk_size:
+                chunks.append((chunk, chunk_indices))
+                chunk = []
+                chunk_indices = []
+        if chunk:
+            chunks.append((chunk, chunk_indices))
+    else:
+        chunk = []
+        chunk_indices = []
+        chunk_char_count = 0
+        for idx, line in enumerate(lines):
+            if not line.strip():
+                continue
             
-            if provider and provider.lower() == 'deepl':
-                translated_text = re.sub(r'(?i)\s*\[\[\s*B\s*\]\]\s*', '\\\\', translated_text)
+            line_len = len(line)
+            if len(chunk) >= adaptive_max_lines or (chunk_char_count + line_len) > adaptive_max_chars:
+                chunks.append((chunk, chunk_indices))
+                chunk = []
+                chunk_indices = []
+                chunk_char_count = 0
+            
+            chunk.append(line)
+            chunk_indices.append(idx)
+            chunk_char_count += line_len
+        if chunk:
+            chunks.append((chunk, chunk_indices))
+    return chunks
+
+def split_by_proportion(text, lengths):
+    if not text or not lengths:
+        return [text.strip()] if text else []
+    if len(lengths) == 1:
+        return [text.strip()]
+    total = sum(lengths)
+    if total == 0:
+        n = len(lengths)
+        equal = len(text) // n
+        return [text[i * equal:(i + 1) * equal].strip() for i in range(n - 1)] + [text[(n - 1) * equal:].strip()]
+    parts = []
+    remaining = text.strip()
+    remaining_total = total
+    for i, length in enumerate(lengths):
+        if i == len(lengths) - 1:
+            parts.append(remaining.strip())
+            break
+        if not remaining:
+            parts.extend([''] * (len(lengths) - i))
+            break
+        target_idx = int(round(len(remaining) * length / remaining_total))
+        target_idx = max(1, min(target_idx, len(remaining) - 1))
+        search_window = max(target_idx, len(remaining) - target_idx)
+        split_idx = None
+        for offset in range(search_window + 1):
+            for candidate in (target_idx - offset, target_idx + offset):
+                if 1 <= candidate < len(remaining) - 1 and remaining[candidate] == ' ':
+                    split_idx = candidate
+                    break
+            if split_idx is not None:
+                break
+        if split_idx is None:
+            split_idx = target_idx
+        parts.append(remaining[:split_idx].strip())
+        remaining = remaining[split_idx:].strip()
+        remaining_total -= length
+    return parts
+
+def make_merge_split_marker(index):
+    return f"[[KWSPLIT{index:04d}]]"
+
+def split_merged_text_by_markers(text, markers):
+    if not markers:
+        return [text.strip()]
+    parts = []
+    remaining = text
+    for marker in markers:
+        marker_idx = remaining.find(marker)
+        if marker_idx < 0:
+            raise ValueError(f"Missing merge split marker in translated text: {marker}")
+        parts.append(remaining[:marker_idx].strip())
+        remaining = remaining[marker_idx + len(marker):]
+    parts.append(remaining.strip())
+    return parts
+
+def _validate_translation_config(config):
+    if not config.has_section('translation'):
+        return
+    split_mode = config.get('translation', 'translation_split_mode', fallback='newline_join')
+    word_count_check = config.getboolean('translation', 'translation_word_count_check', fallback=False)
+    if split_mode == 'proportional' and word_count_check:
+        logger.warning(
+            "Config validation warning: translation_word_count_check = true is incompatible with "
+            "translation_split_mode = proportional. Forcing translation_word_count_check to false."
+        )
+        config.set('translation', 'translation_word_count_check', 'false')
+
+def _write_translation_txt(text, effective_text_mode, sentence_translations_raw, out_path, *, save_flag, overwrite=False):
+    if not save_flag:
+        return
+    if not sentence_translations_raw:
+        return
+    if not overwrite and out_path.exists():
+        return
+        
+    if effective_text_mode == 'single':
+        translation_text_out = sentence_translations_raw.get(0, "").strip()
+    else:
+        num_lines = len(text.splitlines())
+        translation_lines = [sentence_translations_raw.get(i, "").strip() for i in range(num_lines)]
+        translation_text_out = "\n".join(translation_lines)
+        
+    out_path.write_text(translation_text_out, encoding='utf-8')
+
+def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest,
+                         sentence_translations_raw, tsv_path, comments, headers,
+                         *, persist=True, return_single=False):
+    eff_mode = _effective_text_mode(text, text_mode)
+    
+    content_to_absolute = {}
+    if eff_mode != 'single':
+        c_idx = 0
+        for a_idx, ln in enumerate(text.splitlines()):
+            if ln.strip():
+                content_to_absolute[c_idx] = a_idx
+                c_idx += 1
+    else:
+        content_to_absolute = {0: 0}
+        
+    if eff_mode == 'single' and col_index != -1:
+        offending_rows = []
+        for r_idx, row in enumerate(data_rows):
+            if len(row) > col_index:
+                try:
+                    val = int(row[col_index])
+                    if val > 1:
+                        offending_rows.append((r_idx, val))
+                except ValueError:
+                    pass
+        if offending_rows:
+            logger.error(
+                f"Single-mode validation error: source text has effective_text_mode = 'single', "
+                f"but TSV {tsv_path.name if tsv_path else ''} contains SentenceSourceIndex > 1. "
+                f"Offending rows (index, value): {offending_rows}. Refusing single-mode resolution."
+            )
+            for row in data_rows:
+                if col_sentence_dest != -1:
+                    while len(row) <= col_sentence_dest:
+                        row.append("")
+                    row[col_sentence_dest] = ""
+            if persist and tsv_path:
+                with file_lock(tsv_path):
+                    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            if return_single:
+                return ""
+            return None
+
+    for row in data_rows:
+        content_line_idx = 0
+        if col_index != -1 and len(row) > col_index:
+            try:
+                content_line_idx = int(row[col_index]) - 1
+            except ValueError:
+                pass
+        
+        abs_idx = content_to_absolute.get(content_line_idx, 0) if eff_mode != 'single' else 0
+        
+        if col_sentence_dest != -1:
+            while len(row) <= col_sentence_dest:
+                row.append("")
+            row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
+            
+    if persist and tsv_path:
+        with file_lock(tsv_path):
+            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            
+    if return_single:
+        return sentence_translations_raw.get(0, "")
+    return None
+
+def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider):
+    import time
+    
+    eff_mode = _effective_text_mode(text, text_mode)
+    
+    split_mode = config.get('translation', 'translation_split_mode', fallback='newline_join')
+    chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
+    max_retries = config.getint('translation', 'translation_max_retries', fallback=3)
+    retry_backoff = config.getfloat('translation', 'translation_retry_backoff', fallback=1.0)
+    fix_sentence_splits = config.getboolean('translation', 'translation_fix_sentence_splits', fallback=False)
+    wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
+    
+    if eff_mode == 'single':
+        if len(text) <= wrap_max_chars and '\n' not in text.strip():
+            try:
+                return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider).strip()}
+            except Exception as e:
+                logger.error(f"Failed to translate main text: {e}")
+                return {0: f"[Translation Error: {e}]"}
+        else:
+            pseudo_lines = _split_long_line(text, wrap_max_chars)
+            try:
+                pseudo_translations = translate_source_text(
+                    "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                    config, resolved_paths, provider
+                )
+                stitched = " ".join(pseudo_translations[i] for i in range(len(pseudo_lines)))
+                return {0: stitched}
+            except TranslationAlignmentError as tae:
+                stitched_partial = " ".join(tae.partial_dict.get(i, "") for i in range(len(pseudo_lines)))
+                raise TranslationAlignmentError(
+                    tae.args[0],
+                    partial_dict={0: stitched_partial}
+                )
                 
-            translated_text = re.sub(r'(?i)\s*\[\[\s*S\s*\]\]\s*', '  ', translated_text)
-            
-            translated_text = translated_text.replace('\r\n', '')
-            translated_text = translated_text.replace('\n', '')
-            translated_text = translated_text.replace('\r', '')
-            
-            translated_text = re.sub(r'(?i)\[\[\s*N\s*\]\]', '\n', translated_text)
-            
-            translated_text = re.sub(r'(?i)AHK_ESC_S_', '[[S]]', translated_text)
-            translated_text = re.sub(r'(?i)AHK_ESC_B_', '[[B]]', translated_text)
-            translated_text = re.sub(r'(?i)AHK_ESC_N_', '[[N]]', translated_text)
-            
-            lines = text.splitlines()
-            translated_lines = translated_text.split('\n')
-            
-            translations = {}
-            trans_idx = 0
-            for idx in range(len(lines)):
-                if not lines[idx].strip():
-                    translations[idx] = ""
-                else:
-                    while trans_idx < len(translated_lines) and not translated_lines[trans_idx].strip():
-                        trans_idx += 1
+    raw_lines = text.splitlines()
+    if fix_sentence_splits:
+        lines = clean_sentence_splits(raw_lines)
+    else:
+        lines = raw_lines
+        
+    translations = {idx: "" for idx in range(len(lines))}
+    
+    if split_mode == 'line_by_line':
+        for idx, line in enumerate(lines):
+            if not line.strip():
+                continue
+            success = False
+            last_err = None
+            for attempt in range(1, max_retries + 1):
+                try:
+                    trans_line = translate_text(line, source_lang, target_lang, config, resolved_paths, provider)
+                    _validate_translated_line(line, trans_line, idx, config)
+                    translations[idx] = trans_line.strip()
+                    success = True
+                    break
+                except Exception as e:
+                    last_err = e
+                    if attempt < max_retries:
+                        time.sleep(retry_backoff)
+            if not success:
+                translations[idx] = ""
+                raise TranslationAlignmentError(
+                    f"Line-by-line translation failed at line {idx}: {last_err}",
+                    partial_dict=translations
+                )
+        return translations
+        
+    chunks = _build_chunks(lines, chunk_size, config)
+    
+    for chunk_text_list, indices in chunks:
+        success = False
+        last_err = None
+        for attempt in range(1, max_retries + 1):
+            try:
+                if split_mode == 'newline_join':
+                    joined_text = "\n".join(chunk_text_list)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider)
+                    normalized = translated_joined.replace('\r\n', '\n').replace('\r', '\n')
+                    translated_chunk_lines = normalized.split('\n')
                     
-                    if trans_idx < len(translated_lines):
-                        translations[idx] = translated_lines[trans_idx].strip()
-                        trans_idx += 1
-                    else:
-                        translations[idx] = ""
-            return translations
-            
-        except Exception as e:
-            logger.error(f"Failed to translate multi-line text: {e}")
-            lines = text.splitlines()
-            return {idx: f"[Translation Error: {e}]" for idx in range(len(lines))}
+                    if len(translated_chunk_lines) > 1 and translated_chunk_lines[-1] == "":
+                        translated_chunk_lines.pop()
+                    if len(translated_chunk_lines) > 1 and translated_chunk_lines[0] == "":
+                        translated_chunk_lines.pop(0)
+                        
+                elif split_mode == 'marker':
+                    escaped_chunk_text_list = [line.replace("[[KWSPLIT", "__KWSPLITESC__") for line in chunk_text_list]
+                    parts = []
+                    markers = []
+                    for i, line in enumerate(escaped_chunk_text_list):
+                        if i > 0:
+                            marker = make_merge_split_marker(i)
+                            markers.append(marker)
+                            parts.append(marker)
+                        parts.append(line)
+                    joined_text = " ".join(parts)
+                    
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider)
+                    parts_split = split_merged_text_by_markers(translated_joined, markers)
+                    translated_chunk_lines = [part.replace("__KWSPLITESC__", "[[KWSPLIT") for part in parts_split]
+                    
+                elif split_mode == 'proportional':
+                    joined_text = " ".join(chunk_text_list)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider)
+                    lengths = [len(line) for line in chunk_text_list]
+                    translated_chunk_lines = split_by_proportion(translated_joined, lengths)
+                else:
+                    raise ValueError(f"Unknown translation_split_mode: {split_mode}")
+                    
+                if len(translated_chunk_lines) != len(chunk_text_list):
+                    raise ValueError(f"Line count mismatch (expected {len(chunk_text_list)}, got {len(translated_chunk_lines)})")
+                    
+                for i, orig_line in enumerate(chunk_text_list):
+                    _validate_translated_line(orig_line, translated_chunk_lines[i], indices[i], config)
+                    
+                for list_idx, target_idx in enumerate(indices):
+                    translations[target_idx] = translated_chunk_lines[list_idx].strip()
+                success = True
+                break
+            except Exception as e:
+                last_err = e
+                if attempt < max_retries:
+                    time.sleep(retry_backoff)
+                    
+        if not success:
+            for list_idx, target_idx in enumerate(indices):
+                original_line = chunk_text_list[list_idx]
+                try:
+                    rescued_line = translate_text(original_line, source_lang, target_lang, config, resolved_paths, provider)
+                    _validate_translated_line(original_line, rescued_line, target_idx, config)
+                    translations[target_idx] = rescued_line.strip()
+                except Exception as rescue_err:
+                    translations[target_idx] = ""
+                    raise TranslationAlignmentError(
+                        f"Rescue translation failed for line {target_idx}: {rescue_err}",
+                        partial_dict=translations
+                    )
+                    
+    return translations
 
 def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
     python_exe = resolved_paths['kardenwort_python']
@@ -1101,34 +1437,46 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             
     # If monolithic mode and run_base is auto, run base translation synchronously
     if not is_progressive and run_base == 'auto':
-        if not sentence_translated:
-            sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, base_provider)
-            col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-            
-            content_to_absolute = {}
-            if text_mode != 'single':
-                c_idx = 0
-                for a_idx, ln in enumerate(text.splitlines()):
-                    if ln.strip():
-                        content_to_absolute[c_idx] = a_idx
-                        c_idx += 1
-                        
-            for row in data_rows:
-                content_line_idx = 0
-                if col_index != -1 and len(row) > col_index:
-                    try:
-                        content_line_idx = int(row[col_index]) - 1
-                    except ValueError:
-                        pass
+        col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+        try:
+            if not sentence_translated:
+                sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, base_provider)
+                resolve_translations(
+                    text, text_mode, data_rows, col_index, col_sentence_dest,
+                    sentence_translations_raw, working_tsv_path, comments, headers,
+                    persist=True, return_single=False
+                )
+                eff_mode = _effective_text_mode(text, text_mode)
+                translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+                save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+                _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=False)
                 
-                abs_idx = content_to_absolute.get(content_line_idx, 0) if text_mode != 'single' else 0
+            if word_translations_empty:
+                lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
                 
-                if col_sentence_dest != -1:
-                    while len(row) <= col_sentence_dest:
-                        row.append("")
-                    row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
-            with file_lock(working_tsv_path):
-                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                for row in data_rows:
+                    if col_lemma != -1 and len(row) > col_lemma:
+                        lemma_val = row[col_lemma]
+                        if col_word_dest != -1:
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                with file_lock(working_tsv_path):
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+        except TranslationAlignmentError as tae:
+            logger.error(f"Monolithic translation alignment error: {tae}")
+            sentence_translations_raw = tae.partial_dict
+            resolve_translations(
+                text, text_mode, data_rows, col_index, col_sentence_dest,
+                sentence_translations_raw, working_tsv_path, comments, headers,
+                persist=True, return_single=False
+            )
+            eff_mode = _effective_text_mode(text, text_mode)
+            translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+            save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+            _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=False)
+            run_enrich = 'manual'
                 
         if word_translations_empty:
             lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
@@ -1185,16 +1533,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     sentence_translations[a_idx] = ""
             
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-    if save_translation_text and any(v.strip() for v in sentence_translations.values()):
-        translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
-        if not translation_text_path.exists():
-            max_idx = max(sentence_translations.keys())
-            translation_lines = [sentence_translations.get(i, "").strip() for i in range(max_idx + 1)]
-            if text_mode == 'single':
-                translation_text_out = " ".join(line for line in translation_lines if line)
-            else:
-                translation_text_out = "\n".join(translation_lines)
-            translation_text_path.write_text(translation_text_out, encoding='utf-8')
+    translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+    eff_mode = _effective_text_mode(text, text_mode)
+    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
             
     worker_launched = False
     if not llm_filled:
@@ -2947,9 +3288,12 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     run_intellifiller = goldendict['run_intellifiller']
     
     main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
-    sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
-    sentence_translation = sentence_translations.get(0, "")
-    
+    try:
+        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
+    except TranslationAlignmentError as tae:
+        logger.error(f"Lookup translation alignment error: {tae}")
+        sentence_translations = tae.partial_dict
+        
     cached = False
     import re
     if ttl_seconds > 0:
@@ -2963,18 +3307,23 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     if not cached:
         working_tsv_path = prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode=text_mode)
         
-        save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-        if save_translation_text and sentence_translations:
-            translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
-            if not translation_text_path.exists():
-                max_idx = max(sentence_translations.keys())
-                translation_lines = [sentence_translations.get(i, "").strip() for i in range(max_idx + 1)]
-                translation_text_out = " ".join(line for line in translation_lines if line)
-                translation_text_path.write_text(translation_text_out, encoding='utf-8')
-
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
+    
+    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+    
+    sentence_translation = resolve_translations(
+        text, text_mode, data_rows, col_index, col_sentence_dest,
+        sentence_translations, working_tsv_path, comments, headers,
+        persist=True, return_single=True
+    )
+    
+    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+    translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+    eff_mode = _effective_text_mode(text, text_mode)
+    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
@@ -3858,39 +4207,45 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
                 main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
-                sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
-                
                 col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-                with file_lock(tsv_path):
+                try:
+                    sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
                     comments, headers, current_rows = load_tsv_rows(tsv_path)
-                    for row in current_rows:
-                        content_line_idx = 0
-                        if col_index != -1 and len(row) > col_index:
-                            try:
-                                content_line_idx = int(row[col_index]) - 1
-                            except ValueError:
-                                pass
-                        if col_sentence_dest != -1:
-                            while len(row) <= col_sentence_dest:
-                                row.append("")
-                            row[col_sentence_dest] = sentence_translations_raw.get(content_line_idx, "")
-                    save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                    resolve_translations(
+                        text, args.text_mode, current_rows, col_index, col_sentence_dest,
+                        sentence_translations_raw, tsv_path, comments, headers,
+                        persist=True, return_single=False
+                    )
                     data_rows = current_rows
                     write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
-                
-                save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-                if save_translation_text and sentence_translations_raw:
+                    
+                    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
                     slug = generate_slug(text)
                     m = re.match(r"^(\d{14})", tsv_path.name)
                     zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
-                    max_idx = max(sentence_translations_raw.keys())
-                    translation_lines = [sentence_translations_raw.get(i, "").strip() for i in range(max_idx + 1)]
-                    if args.text_mode == 'single':
-                        translation_text_out = " ".join(line for line in translation_lines if line)
-                    else:
-                        translation_text_out = "\n".join(translation_lines)
-                    translation_text_path.write_text(translation_text_out, encoding='utf-8')
+                    eff_mode = _effective_text_mode(text, args.text_mode)
+                    _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=False)
+                except TranslationAlignmentError as tae:
+                    logger.error(f"Progressive translation alignment error: {tae}")
+                    comments, headers, current_rows = load_tsv_rows(tsv_path)
+                    resolve_translations(
+                        text, args.text_mode, current_rows, col_index, col_sentence_dest,
+                        tae.partial_dict, tsv_path, comments, headers,
+                        persist=True, return_single=False
+                    )
+                    data_rows = current_rows
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted")
+                    
+                    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+                    slug = generate_slug(text)
+                    m = re.match(r"^(\d{14})", tsv_path.name)
+                    zid = m.group(1) if m else "session"
+                    translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
+                    eff_mode = _effective_text_mode(text, args.text_mode)
+                    _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=False)
+                    
+                    sys.exit(EXIT_PARTIAL_TRANSLATION_PERSISTED)
         
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
@@ -4038,57 +4393,32 @@ def cmd_retext_worker(args):
         text_reprocess_provider = config.get('pipeline', 'text_reprocess_provider', fallback='deepl')
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
         
-        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider)
+        try:
+            sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider)
+        except TranslationAlignmentError as tae:
+            logger.error(f"Retext worker translation alignment error: {tae}")
+            sentence_translations = tae.partial_dict
+            
+        slug = generate_slug(text)
+        m = re.match(r"^(\d{14})", tsv_path.name)
+        zid = m.group(1) if m else "session"
+        target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
+        eff_mode = _effective_text_mode(text, text_mode)
+        _write_translation_txt(text, eff_mode, sentence_translations, target_text_path, save_flag=True, overwrite=True)
         
-        if sentence_translations and any(v.strip() for v in sentence_translations.values()):
-            slug = generate_slug(text)
-            m = re.match(r"^(\d{14})", tsv_path.name)
-            zid = m.group(1) if m else "session"
-            target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
-            
-            if text_mode == 'single':
-                translation_text_out = sentence_translations.get(0, '')
-            else:
-                translation_text_out = "\n".join(
-                    sentence_translations.get(i, "") 
-                    for i in range(len(text.splitlines()))
-                )
-                
-            target_text_path.write_text(translation_text_out, encoding='utf-8')
-            
-            with file_lock(tsv_path):
-                comments, headers, data_rows = load_tsv_rows(tsv_path)
-                col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
-                
-                if col_sentence_dest != -1:
-                    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-                    content_to_absolute = {}
-                    if text_mode != 'single':
-                        c_idx = 0
-                        for a_idx, ln in enumerate(text.splitlines()):
-                            if ln.strip():
-                                content_to_absolute[c_idx] = a_idx
-                                c_idx += 1
-                                
-                    for row in data_rows:
-                        content_line_idx = 0
-                        if col_index != -1 and len(row) > col_index:
-                            try:
-                                content_line_idx = int(row[col_index]) - 1
-                            except ValueError:
-                                pass
-                        
-                        abs_idx = content_to_absolute.get(content_line_idx, 0) if text_mode != 'single' else 0
-                        
-                        if len(row) <= col_sentence_dest:
-                            row.extend([""] * (col_sentence_dest - len(row) + 1))
-                        row[col_sentence_dest] = sentence_translations.get(abs_idx, "")
-                        
-                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                
-            # source_text="" because retext never changes the source text;
-            # sending it would cause receiveUpdate to wipe the span DOM.
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+        col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+        col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+        
+        resolve_translations(
+            text, text_mode, data_rows, col_index, col_sentence_dest,
+            sentence_translations, tsv_path, comments, headers,
+            persist=True, return_single=False
+        )
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+        # source_text="" because retext never changes the source text;
+        # sending it would cause receiveUpdate to wipe the span DOM.
+        write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_retext_worker: {e}")
         try:
@@ -4100,46 +4430,62 @@ def cmd_retext_worker(args):
         except Exception:
             pass
 def cmd_progressive_worker(args):
-    logger.info("Progressive-worker subcommand invoked")
-    config, resolved_paths, goldendict = load_config(args.config)
     tsv_path = Path(args.tsv)
-    
-    if not tsv_path.exists():
-        return
-        
-    comments, headers, data_rows = [], [], []
-    role_fields = {}
-    
+    log_path = tsv_path.with_suffix('.log')
+    file_handler = None
     try:
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
-        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = get_role_fields(mapping, headers)
-        
-        run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
-        run_text = config.get('triggers', 'run_text_translation', fallback='auto')
-        run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
-        enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
-        
-        # Write initial source stage
-        write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
-        
-        # 1. Base Translation Stage
-        if run_base == 'auto' or run_text == 'auto':
-            data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
-                
-        # 2. Enrichment Stage
-        skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
-        if not skip_intellifiller:
-            data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
-                
-    except Exception as e:
-        logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
-    finally:
-        # 3. Finished Event
         try:
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+            file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+            file_handler.setFormatter(JSONFormatter())
+            logger.addHandler(file_handler)
+        except Exception as log_err:
+            sys.stderr.write(f"Warning: Failed to setup progressive-worker log file: {log_err}\n")
+            
+        logger.info("Progressive-worker subcommand invoked")
+        config, resolved_paths, goldendict = load_config(args.config)
+        
+        if not tsv_path.exists():
+            return
+            
+        comments, headers, data_rows = [], [], []
+        role_fields = {}
+        
+        try:
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+            mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+            role_fields = get_role_fields(mapping, headers)
+            
+            run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
+            run_text = config.get('triggers', 'run_text_translation', fallback='auto')
+            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
+            enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
+            
+            # Write initial source stage
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
+            
+            # 1. Base Translation Stage
+            if run_base == 'auto' or run_text == 'auto':
+                data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                    
+            # 2. Enrichment Stage
+            skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
+            if not skip_intellifiller:
+                data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                    
+        except SystemExit as se:
+            raise se
         except Exception as e:
-            logger.error(f"Failed to write finished event: {e}")
+            logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
+        finally:
+            # 3. Finished Event
+            try:
+                write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+            except Exception as e:
+                logger.error(f"Failed to write finished event: {e}")
+    finally:
+        if file_handler:
+            logger.removeHandler(file_handler)
+            file_handler.close()
 
 
 
