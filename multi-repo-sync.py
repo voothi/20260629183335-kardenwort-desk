@@ -139,7 +139,8 @@ def cmd_tag(args):
             
     # 3. Log to file if requested
     if success and args.log_file:
-        log_tag_to_file(tag_name, args.log_file)
+        for log_path in args.log_file:
+            log_tag_to_file(tag_name, log_path)
 
 def log_tag_to_file(tag_name, log_path_str):
     import datetime
@@ -316,7 +317,8 @@ def cmd_commit(args):
             
     # 3. Log to file if requested
     if committed_any and args.log_file and last_zid:
-        log_tag_to_file(last_zid, args.log_file)
+        for log_path in args.log_file:
+            log_tag_to_file(last_zid, log_path)
 
 def main():
     parser = argparse.ArgumentParser(description="Coordinated repository sync, tag, and checkout manager.")
@@ -329,12 +331,12 @@ def main():
     parser_tag = subparsers.add_parser("tag", help="Create a coordinated tag across all repositories.")
     parser_tag.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
-    parser_tag.add_argument("-l", "--log-file", help="Path to markdown tag history log file (e.g. ./ or ./coordinated_tags.md).")
+    parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
     parser_tag.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
     
     # commit subcommand
     parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs.")
-    parser_commit.add_argument("-l", "--log-file", help="Path to markdown history log file to record post-commit hashes.")
+    parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record post-commit hashes.")
     
     # checkout subcommand
     parser_checkout = subparsers.add_parser("checkout", help="Checkout a specific tag/branch across all repositories.")
