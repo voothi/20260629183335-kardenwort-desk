@@ -3962,9 +3962,19 @@ def cmd_lookup(args):
         if text_mode == 'single' and '\n' in args.text.strip():
             text_mode = 'multi'
             
-        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
-        if text_mode == 'multi' and remove_empty:
-            args.text = "\n".join(line for line in args.text.splitlines() if line.strip())
+        if text_mode == 'multi':
+            remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
+            clean_spaces = config.getboolean('settings', 'multi_mode_clean_spaces', fallback=True)
+            if remove_empty or clean_spaces:
+                import re
+                new_lines = []
+                for line in args.text.splitlines():
+                    if clean_spaces:
+                        line = re.sub(r'[ \t]+', ' ', line).strip()
+                    if remove_empty and not line.strip():
+                        continue
+                    new_lines.append(line)
+                args.text = "\n".join(new_lines)
             
         comments, headers, data_rows, sentence_translation = run_lookup_flow(
             args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode
@@ -4019,9 +4029,19 @@ def cmd_render(args):
     if text_mode == 'single' and '\n' in text.strip():
         text_mode = 'multi'
         
-    remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
-    if text_mode == 'multi' and remove_empty:
-        text = "\n".join(line for line in text.splitlines() if line.strip())
+    if text_mode == 'multi':
+        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
+        clean_spaces = config.getboolean('settings', 'multi_mode_clean_spaces', fallback=True)
+        if remove_empty or clean_spaces:
+            import re
+            new_lines = []
+            for line in text.splitlines():
+                if clean_spaces:
+                    line = re.sub(r'[ \t]+', ' ', line).strip()
+                if remove_empty and not line.strip():
+                    continue
+                new_lines.append(line)
+            text = "\n".join(new_lines)
         
     try:
         zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
@@ -5223,9 +5243,19 @@ def cmd_desk(args):
     if text_mode == 'single' and '\n' in text.strip():
         text_mode = 'multi'
         
-    remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
-    if text_mode == 'multi' and remove_empty:
-        text = "\n".join(line for line in text.splitlines() if line.strip())
+    if text_mode == 'multi':
+        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
+        clean_spaces = config.getboolean('settings', 'multi_mode_clean_spaces', fallback=True)
+        if remove_empty or clean_spaces:
+            import re
+            new_lines = []
+            for line in text.splitlines():
+                if clean_spaces:
+                    line = re.sub(r'[ \t]+', ' ', line).strip()
+                if remove_empty and not line.strip():
+                    continue
+                new_lines.append(line)
+            text = "\n".join(new_lines)
         
     lang = args.language
     if not lang:
