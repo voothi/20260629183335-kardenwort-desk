@@ -4182,7 +4182,20 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 
                 sorted_keys = sorted(idx_to_sentence.keys())
                 sentences = [idx_to_sentence[k] for k in sorted_keys]
-                translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
+                
+                def _get_configured_text_mode():
+                    try:
+                        import configparser
+                        cfg = configparser.ConfigParser()
+                        cfg.read("config.ini", encoding="utf-8")
+                        return cfg.get("settings", "text_mode", fallback="single")
+                    except Exception:
+                        return "single"
+                        
+                if _get_configured_text_mode() == 'single':
+                    translated_text = f"<div>{html.escape(' '.join(sentences))}</div>"
+                else:
+                    translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
                 
         update_data = {
             "stage": stage,
