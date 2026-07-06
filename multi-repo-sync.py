@@ -15,6 +15,8 @@ REPOS = {
 }
 
 ZID_SCRIPT = r"U:\voothi\20241116203211-zid\zid.py"
+DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
+GIT_REMOTE = "origin"
 
 def run_git(repo_path, args):
     try:
@@ -111,12 +113,12 @@ def cmd_tag(args):
         else:
             print(f"[+] {name}: Tagged successfully")
             if args.push:
-                print(f"    Pushing tag '{tag_name}' to origin...")
-                _, err_push = run_git(path, ["push", "origin", tag_name])
+                print(f"    Pushing tag '{tag_name}' to {GIT_REMOTE}...")
+                _, err_push = run_git(path, ["push", GIT_REMOTE, tag_name])
                 if err_push and "error:" in err_push:
                     print(f"    [X] Failed to push tag ({err_push})")
                 else:
-                    print(f"    [+] Tag pushed successfully to origin")
+                    print(f"    [+] Tag pushed successfully to {GIT_REMOTE}")
             
     # 3. Log to file if requested
     if success and args.log_file:
@@ -128,7 +130,7 @@ def log_tag_to_file(tag_name, log_path_str):
     
     # If path is a directory or lacks extension, append default filename
     if log_path.is_dir() or log_path_str.endswith(("/", "\\")) or not log_path.suffix:
-        log_path = log_path / "multi-repo-sync.md"
+        log_path = log_path / DEFAULT_LOG_FILENAME
         
     # Get commit hashes
     hashes = {}
