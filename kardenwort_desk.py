@@ -1324,7 +1324,22 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 os.remove(temp_file.name)
             except OSError:
                 pass
-                
+
+    if text_mode == 'single':
+        try:
+            comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+            col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+            if col_index != -1:
+                modified = False
+                for row in data_rows:
+                    if len(row) > col_index:
+                        row[col_index] = "000001"
+                        modified = True
+                if modified:
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+        except Exception as e:
+            logger.warning(f"Failed to post-process single-mode TSV SentenceSourceIndex: {e}")
+
     return working_tsv_path
 
 SPLIT_GAP_LIMIT = 60
