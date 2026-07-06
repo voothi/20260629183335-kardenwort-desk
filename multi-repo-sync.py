@@ -27,7 +27,8 @@ DEFAULT_TAG_NAME_TEMPLATE = "{zid}-snapshot-desk"
 DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid} to desk"
 DEFAULT_COMMIT_MSG_TEMPLATE = "{zid} to desk"
 REVERSE_TAGS_ORDER = True  # Display tags starting from the latest/last (True) or alphabetical/chronological order (False)
-STATUS_COLUMNS = ["REPOSITORY", "STATUS", "COMMIT", "TAGS", "MESSAGE"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
+MAX_TAGS_TO_SHOW = 3  # Maximum number of tags to display per repository (None or 0 for unlimited)
+STATUS_COLUMNS = ["REPOSITORY", "STATUS", "COMMIT", "MESSAGE", "TAGS"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
 
 def run_git(repo_path, args):
     try:
@@ -64,13 +65,21 @@ def get_zid():
 def format_tags(tags_list, max_len=40):
     if not tags_list:
         return "-"
-    joined = ", ".join(tags_list)
-    if len(joined) <= max_len:
+        
+    has_more_by_count = False
+    if MAX_TAGS_TO_SHOW is not None and MAX_TAGS_TO_SHOW > 0 and len(tags_list) > MAX_TAGS_TO_SHOW:
+        tags_list_limited = tags_list[:MAX_TAGS_TO_SHOW]
+        has_more_by_count = True
+    else:
+        tags_list_limited = tags_list
+        
+    joined = ", ".join(tags_list_limited)
+    if len(joined) <= max_len and not has_more_by_count:
         return joined
         
     result = []
     current_len = 0
-    for tag in tags_list:
+    for tag in tags_list_limited:
         extra = 5 if result else 3  # ", ..." vs "..."
         if current_len + len(tag) + extra > max_len:
             break
@@ -78,7 +87,7 @@ def format_tags(tags_list, max_len=40):
         current_len += len(tag) + (2 if len(result) > 1 else 0)
         
     if not result:
-        return tags_list[0][:max_len-3] + "..."
+        return tags_list_limited[0][:max_len-3] + "..."
         
     return ", ".join(result) + ", ..."
 
