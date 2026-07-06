@@ -1491,16 +1491,28 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
             sys.exit(1)
 
+        context_mode = config.get('settings', 'anki_context_mode', fallback='single').lower()
         words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
         words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
         max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
-        if (words_before > 0 or words_after > 0) and working_tsv_path.exists():
+        
+        apply_padding = False
+        if words_before > 0 or words_after > 0:
+            if context_mode == 'both':
+                apply_padding = True
+            elif context_mode == eff_mode:
+                apply_padding = True
+
+        if apply_padding and working_tsv_path.exists():
             try:
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
                 col_src_idx = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
                 col_src_sent = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
                 if col_src_idx != -1 and col_src_sent != -1:
-                    sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+                    if eff_mode == 'single':
+                        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+                    else:
+                        sentences = [ln.strip() for ln in text.splitlines() if ln.strip()]
                     padded_sentences = pad_sentences(sentences, text, words_before, words_after, max_words=max_words)
                     modified = False
                     for row in data_rows:
