@@ -64,7 +64,7 @@ def cmd_status(args):
         if not os.path.exists(path):
             rows.append({
                 "name": name, "status": "missing", "branch": "-",
-                "hash": "-", "tags": "-", "msg": "(Folder not found)"
+                "hash": "-", "tags": "-", "msg": "(path not found)"
             })
             continue
             
@@ -124,7 +124,7 @@ def cmd_tag(args):
         print(f"sync: Warning - The following repositories have uncommitted changes: {', '.join(dirty_repos)}")
         print("sync: The tag will be attached to the latest commit, not the uncommitted workspace changes.")
         if not args.force:
-            confirm = input("Do you want to proceed? [y/N]: ").strip().lower()
+            confirm = input("sync: Do you want to proceed? [y/N]: ").strip().lower()
             if confirm != 'y':
                 print("sync: Aborted.")
                 sys.exit(1)
@@ -144,7 +144,7 @@ def cmd_tag(args):
         else:
             print(f"{name}: Tag complete")
             if args.push:
-                print(f"{name}: Pushing tag '{tag_name}' to {GIT_REMOTE}...")
+                print(f"{name}: Pushing tag [remote={GIT_REMOTE}]...")
                 _, err_push = run_git(path, ["push", GIT_REMOTE, tag_name])
                 if err_push and "error:" in err_push:
                     print(f"{name}: Error - Failed to push tag ({err_push})")
@@ -397,7 +397,7 @@ def cmd_delete(args):
         if err and "error:" in err:
             print(f"{name}: Error - Failed to delete tag ({err})")
         else:
-            print(f"{name}: Tag deleted successfully")
+            print(f"{name}: Delete complete")
 
 def cmd_commit(args):
     print("sync: Evaluating repositories for commit...")
