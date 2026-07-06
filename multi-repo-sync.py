@@ -263,7 +263,13 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
                 "branch": branch if branch else "detached",
                 "hash": commit_hash if commit_hash else "-",
                 "tags": format_tags(tags_list, max_len=LOG_TAGS_MAX_LEN, max_tags=LOG_TAGS_MAX_COUNT),
-                "msg": commit_msg if commit_msg else "-"
+                "msg": commit_msg if commit_msg else "-",
+                "REPOSITORY": name,
+                "STATUS": "dirty" if dirty else "clean",
+                "BRANCH": branch if branch else "detached",
+                "COMMIT": commit_hash if commit_hash else "-",
+                "TAGS": format_tags(tags_list, max_len=LOG_TAGS_MAX_LEN, max_tags=LOG_TAGS_MAX_COUNT),
+                "MESSAGE": commit_msg if commit_msg else "-"
             }
         else:
             hashes[name] = {
@@ -271,7 +277,13 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
                 "branch": "-",
                 "hash": "-",
                 "tags": "-",
-                "msg": "absent"
+                "msg": "absent",
+                "REPOSITORY": name,
+                "STATUS": "missing",
+                "BRANCH": "-",
+                "COMMIT": "-",
+                "TAGS": "-",
+                "MESSAGE": "absent"
             }
             
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
