@@ -1327,12 +1327,6 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
     try:
         subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
-        # Prepend the creation-time text_mode configuration as a metadata comment in the TSV file
-        if working_tsv_path.exists():
-            content = working_tsv_path.read_text(encoding='utf-8')
-            prefix = f"# text_mode = {text_mode}\n"
-            if not content.startswith(prefix):
-                working_tsv_path.write_text(prefix + content, encoding='utf-8')
     except subprocess.TimeoutExpired as e:
         print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
         sys.exit(1)
@@ -1429,12 +1423,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-    
-    # Extract creation-time text_mode from TSV comments to guarantee deterministic session restoration
-    for comment in comments:
-        if comment.startswith('# text_mode ='):
-            text_mode = comment.split('=', 1)[1].strip()
-            break
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
@@ -4200,24 +4188,10 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 sentences = [idx_to_sentence[k] for k in sorted_keys]
                 
                 def _get_configured_text_mode():
-                    # 1. Parse TSV file comments first to extract the creation-time text_mode
-                    try:
-                        with open(tsv_path, 'r', encoding='utf-8') as f:
-                            for line in f:
-                                if line.startswith('# text_mode ='):
-                                    return line.split('=', 1)[1].strip()
-                                elif not line.startswith('#'):
-                                    break
-                    except Exception:
-                        pass
-                        
-                    # 2. Fall back to environment variable
                     import os
                     env_mode = os.environ.get("KARDEN_ACTIVE_TEXT_MODE")
                     if env_mode is not None:
                         return env_mode
-                        
-                    # 3. Fall back to config.ini settings
                     try:
                         import configparser
                         cfg = configparser.ConfigParser()
@@ -4525,12 +4499,6 @@ def cmd_progressive_worker(args):
         
         try:
             comments, headers, data_rows = load_tsv_rows(tsv_path)
-            # Sync creation-time text_mode from TSV comments
-            for comment in comments:
-                if comment.startswith('# text_mode ='):
-                    args.text_mode = comment.split('=', 1)[1].strip()
-                    os.environ["KARDEN_ACTIVE_TEXT_MODE"] = args.text_mode
-                    break
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             
