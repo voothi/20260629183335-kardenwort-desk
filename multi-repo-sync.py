@@ -170,15 +170,28 @@ def log_tag_to_file(tag_name, log_path_str):
                 f.write("# Multi-Repo Sync History\n")
             
             f.write(f"\n## Release {tag_name} ({date_str})\n\n")
-            f.write("| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n")
-            f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
-            for name in REPOS.keys():
-                status_str = hashes[name]["status"]
-                branch_str = hashes[name]["branch"]
-                c_hash = hashes[name]["hash"]
-                tag_str = hashes[name]["tags"]
-                c_msg = hashes[name]["msg"]
-                f.write(f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n")
+            
+            if LOG_FORMAT == "code":
+                f.write("```text\n")
+                f.write(f"{'REPOSITORY':<15} {'STATUS':<10} {'BRANCH':<20} {'COMMIT':<10} {'TAGS':<20} {'MESSAGE'}\n")
+                for name in REPOS.keys():
+                    status_str = hashes[name]["status"]
+                    branch_str = hashes[name]["branch"]
+                    c_hash = hashes[name]["hash"]
+                    tag_str = hashes[name]["tags"]
+                    c_msg = hashes[name]["msg"]
+                    f.write(f"{name:<15} {status_str:<10} {branch_str:<20} {c_hash:<10} {tag_str:<20} {c_msg}\n")
+                f.write("```\n")
+            else:
+                f.write("| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n")
+                f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
+                for name in REPOS.keys():
+                    status_str = hashes[name]["status"]
+                    branch_str = hashes[name]["branch"]
+                    c_hash = hashes[name]["hash"]
+                    tag_str = hashes[name]["tags"]
+                    c_msg = hashes[name]["msg"]
+                    f.write(f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n")
                 
         print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
     except Exception as e:
