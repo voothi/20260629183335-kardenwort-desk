@@ -896,6 +896,8 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
     if return_single:
+        if text_mode == 'single':
+            return " ".join([sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if sentence_translations_raw.get(i, "")])
         return sentence_translations_raw.get(0, "")
     return None
 
