@@ -992,8 +992,8 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 return {0: f"[Translation Error: {e}]"}
         else:
             pseudo_lines = split_single_mode_text(text, wrap_max_chars)
-            words_before = config.getint('settings', 'sentence_context_words_before', fallback=0)
-            words_after = config.getint('settings', 'sentence_context_words_after', fallback=0)
+            words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
+            words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
             pseudo_lines = pad_sentences(pseudo_lines, text, words_before, words_after)
             try:
                 pseudo_translations = translate_source_text(
@@ -1420,8 +1420,8 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
             sys.exit(1)
 
-        words_before = config.getint('settings', 'sentence_context_words_before', fallback=0)
-        words_after = config.getint('settings', 'sentence_context_words_after', fallback=0)
+        words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
+        words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
         if (words_before > 0 or words_after > 0) and working_tsv_path.exists():
             try:
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
