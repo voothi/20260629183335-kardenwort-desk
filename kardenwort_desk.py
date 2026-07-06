@@ -1861,8 +1861,27 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     paired_rows = {row_id for row_id, pos_set in anchored_positions.items() if pos_set}
     
+    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+    row_to_c_idx = {}
+    if col_index != -1:
+        for row_id, row in enumerate(data_rows):
+            if len(row) > col_index:
+                try:
+                    row_to_c_idx[row_id] = int(row[col_index]) - 1
+                except ValueError:
+                    row_to_c_idx[row_id] = -1
+                    
+    absolute_to_c_idx = {}
+    if eff_mode != 'single':
+        c_idx = 0
+        for a_idx, ln in enumerate(text.splitlines()):
+            if ln.strip():
+                absolute_to_c_idx[a_idx] = c_idx
+                c_idx += 1
+
     span_htmls = []
     word_counter = 0
+    current_a_idx = 0
     for token in source_tokens:
         tok_text = token["text"]
         text_escaped = tok_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
@@ -1870,6 +1889,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         if token["is_word"]:
             lower_clean = token.get("lower_clean", "")
             mapped_rows = token_to_rows.get(lower_clean, [])
+            
+            if eff_mode != 'single' and col_index != -1:
+                curr_c_idx = absolute_to_c_idx.get(current_a_idx, -1)
+                mapped_rows = [r_idx for r_idx in mapped_rows if row_to_c_idx.get(r_idx, -1) == curr_c_idx]
+                
+            token["filtered_mapped_rows"] = mapped_rows
             
             classes = ["word"]
             if mapped_rows:
@@ -1891,9 +1916,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         else:
             if tok_text in ("\\N", "\\n"):
                 span_htmls.append("<br>")
+                current_a_idx += 1
             elif "\n" in tok_text or "\r" in tok_text:
                 normalized = tok_text.replace("\r\n", "\n").replace("\r", "\n")
                 parts = normalized.split("\n")
+                current_a_idx += len(parts) - 1
                 span_htmls.append("<br>".join(parts))
             else:
                 span_htmls.append(text_escaped)
@@ -1969,7 +1996,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         }
         if token["is_word"] and "lower_clean" in token:
             tok_data["lower_clean"] = token["lower_clean"]
-            mapped_rows = token_to_rows.get(token["lower_clean"], [])
+            mapped_rows = token.get("filtered_mapped_rows", token_to_rows.get(token["lower_clean"], []))
             filtered_rows = []
             for r_idx in mapped_rows:
                 if r_idx in single_word_rows:
