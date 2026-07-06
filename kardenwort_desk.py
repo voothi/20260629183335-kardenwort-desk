@@ -1069,25 +1069,40 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
             words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
             max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
-            padded_lines = pad_sentences(pseudo_lines, text, words_before, words_after, max_words=max_words)
-            try:
-                # 1. Translate the padded sentences for the TSV (SentenceDestination)
-                pseudo_translations = translate_source_text(
-                    "\n".join(padded_lines), source_lang, target_lang, 'multi',
-                    config, resolved_paths, provider
-                )
-                
-                # 2. Translate the full continuous text for the Translate View (.ru.txt) and TextDestination
-                full_text_trans = ""
-                try:
-                    full_text_trans = translate_text(text, source_lang, target_lang, config, resolved_paths, provider).strip()
-                except Exception as e:
-                    logger.error(f"Failed to translate full text block: {e}")
-                
-                if full_text_trans:
-                    pseudo_translations['FULL_TEXT'] = full_text_trans
+            context_mode = config.get('settings', 'anki_context_mode', fallback='single').lower()
+            
+            apply_padding = False
+            if words_before > 0 or words_after > 0:
+                if context_mode == 'both' or context_mode == eff_mode:
+                    apply_padding = True
                     
-                return pseudo_translations
+            try:
+                if apply_padding:
+                    padded_lines = pad_sentences(pseudo_lines, text, words_before, words_after, max_words=max_words)
+                    
+                    # 1. Translate the padded sentences for the TSV (SentenceDestination)
+                    pseudo_translations = translate_source_text(
+                        "\n".join(padded_lines), source_lang, target_lang, 'multi',
+                        config, resolved_paths, provider
+                    )
+                    
+                    # 2. Translate the full continuous text for the Translate View (.ru.txt) and TextDestination
+                    full_text_trans = ""
+                    try:
+                        full_text_trans = translate_text(text, source_lang, target_lang, config, resolved_paths, provider).strip()
+                    except Exception as e:
+                        logger.error(f"Failed to translate full text block: {e}")
+                    
+                    if full_text_trans:
+                        pseudo_translations['FULL_TEXT'] = full_text_trans
+                        
+                    return pseudo_translations
+                else:
+                    # Single standard translation request if padding is disabled
+                    return translate_source_text(
+                        "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                        config, resolved_paths, provider
+                    )
             except TranslationAlignmentError as tae:
                 raise TranslationAlignmentError(
                     tae.args[0],
