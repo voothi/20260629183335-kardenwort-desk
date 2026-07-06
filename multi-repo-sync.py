@@ -430,6 +430,28 @@ def cmd_commit(args):
         for log_path in args.log_file:
             log_tag_to_file(last_zid, log_path, log_format=args.log_format)
 
+def cmd_sync(args):
+    print("=== SYNCHRONIZATION: COMMIT ===")
+    
+    # Temporarily disable logging for commit to avoid duplicate log entries
+    original_log_file = getattr(args, "log_file", None)
+    args.log_file = None
+    
+    # 1. Commit
+    cmd_commit(args)
+    
+    # Give a tiny bit of breathing room before generating a new ZID for the tag
+    print("Sleeping 1.1 seconds for unique tag ZID...")
+    time.sleep(1.1)
+    
+    print("\n=== SYNCHRONIZATION: TAG ===")
+    # Restore log_file for tag step
+    args.log_file = original_log_file
+    
+    # Make sure we don't accidentally reuse an explicit name for the tag if we didn't intend to
+    # If name wasn't provided, cmd_tag will generate a fresh ZID.
+    cmd_tag(args)
+
 def main():
     parser = argparse.ArgumentParser(
         description="Coordinated repository sync, tag, and checkout manager.",
@@ -437,10 +459,10 @@ def main():
 subcommand options:
   global
     -C, --cwd PATH            Change the working directory before running the utility. Overrides DEFAULT_CWD.
-  tag / commit
+  tag / commit / sync
     -l, --log-file PATHS...   One or more paths to history log files to record sync snapshots.
     --log-format FORMAT       Logging format (choices: table, code, log). Overrides LOG_FORMAT.
-  tag
+  tag / sync
     -f, --force               Force tag creation without confirmation on dirty worktrees.
     -p, --push                Push tags to remote origin repository.
   checkout
@@ -472,6 +494,14 @@ subcommand options:
     parser_checkout.add_argument("name", help="Tag or branch name to checkout.")
     parser_checkout.add_argument("-f", "--force", action="store_true", help="Force checkout (discarding local changes).")
     
+    # sync subcommand
+    parser_sync = subparsers.add_parser("sync", help="Commit dirty repositories and immediately tag them.")
+    parser_sync.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
+    parser_sync.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
+    parser_sync.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
+    parser_sync.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
+    parser_sync.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
+    
     # delete subcommand
     parser_delete = subparsers.add_parser("delete", help="Delete a specific tag across all repositories.")
     parser_delete.add_argument("name", help="Tag name to delete.")
@@ -494,6 +524,8 @@ subcommand options:
         cmd_commit(args)
     elif args.command == "checkout":
         cmd_checkout(args)
+    elif args.command == "sync":
+        cmd_sync(args)
     elif args.command == "delete":
         cmd_delete(args)
 
