@@ -4443,6 +4443,36 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                     pass
                     
         if translated_text is None:
+            if tsv_path:
+                try:
+                    parent = tsv_path.parent
+                    source_stem = tsv_path.stem
+                    parts = source_stem.rsplit('.', 1)
+                    if len(parts) == 2:
+                        prefix = parts[0]
+                        for f in parent.glob(f"{prefix}.*.txt"):
+                            if f.stem != source_stem:
+                                txt_content = f.read_text(encoding='utf-8').strip()
+                                if txt_content:
+                                    lines = [html.escape(line.strip()) for line in txt_content.splitlines()]
+                                    is_single = True
+                                    source_txt_path = tsv_path.with_suffix('.txt')
+                                    if source_txt_path.exists():
+                                        try:
+                                            src_txt = source_txt_path.read_text(encoding='utf-8').strip()
+                                            if '\n' in src_txt or '\r' in src_txt:
+                                                is_single = False
+                                        except Exception:
+                                            pass
+                                    if is_single:
+                                        translated_text = f"<div>{' '.join(lines)}</div>"
+                                    else:
+                                        translated_text = "".join(f"<div>{line}</div>" for line in lines)
+                                    break
+                except Exception as e:
+                    logger.error(f"Failed to read clean translation text file in write_update_js: {e}")
+
+        if translated_text is None:
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
             col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
             if col_sentence_dest != -1:
