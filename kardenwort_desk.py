@@ -539,7 +539,10 @@ def run_google_translation(text, source, target, config, resolved_paths):
     timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
     logger.info(f"Running Google translation command: {' '.join(cmd)}")
     
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    kwargs = {}
+    if sys.platform == 'win32' and not config.getboolean('settings', 'show_import_window', fallback=False):
+        kwargs['creationflags'] = 0x08000000
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout, **kwargs)
     if res.returncode == 0:
         return res.stdout.strip()
     else:
@@ -573,7 +576,10 @@ def run_deepl_translation(text, source, target, config, resolved_paths):
             logged_cmd[idx + 1] = "********"
     logger.info(f"Running DeepL translation command: {' '.join(logged_cmd)}")
     
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    kwargs = {}
+    if sys.platform == 'win32' and not config.getboolean('settings', 'show_import_window', fallback=False):
+        kwargs['creationflags'] = 0x08000000
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout, **kwargs)
     if res.returncode == 0:
         return res.stdout.strip()
     else:
@@ -1256,7 +1262,10 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
     timeout = config.getint('timeouts', 'intellifiller_timeout', fallback=120)
     logger.info(f"Running headless IntelliFiller command: {' '.join(cmd)}")
     
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    kwargs = {}
+    if sys.platform == 'win32' and not config.getboolean('settings', 'show_import_window', fallback=False):
+        kwargs['creationflags'] = 0x08000000
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout, **kwargs)
     if res.returncode == 0:
         logger.info("Headless IntelliFiller finished successfully.")
         return True
@@ -1398,7 +1407,10 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
     
     logger.info(f"Running synchronous import: {' '.join(cmd)}")
     try:
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', check=True)
+        kwargs = {}
+        if sys.platform == 'win32' and not config.getboolean('settings', 'show_import_window', fallback=False):
+            kwargs['creationflags'] = 0x08000000
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', check=True, **kwargs)
         return True, res.stdout
     except subprocess.CalledProcessError as e:
         return False, e.stderr
@@ -1532,7 +1544,10 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         
         logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
         try:
-            subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
+            kwargs = {}
+            if sys.platform == 'win32' and not config.getboolean('settings', 'show_import_window', fallback=False):
+                kwargs['creationflags'] = 0x08000000
+            subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8', **kwargs)
         except subprocess.TimeoutExpired as e:
             print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
             sys.exit(1)
