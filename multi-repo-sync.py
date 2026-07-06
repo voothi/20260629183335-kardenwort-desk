@@ -20,6 +20,7 @@ ZID_SCRIPT = r"U:\voothi\20241116203211-zid\zid.py"
 DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
 DEFAULT_LOG_PATHS = [r"U:\voothi.vault\multi-repo-sync.md"]    # Default log paths to record sync history if -l/--log-file is omitted (e.g. [r"U:\voothi.vault\multi-repo-sync.md"])
 GIT_REMOTE = "origin"
+PUSH_TAGS = True  # Whether to push tags to remote origin repository by default
 LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text), "log" (Plain text log line)
 DEFAULT_CWD = r"U:\voothi\20260629183335-kardenwort-desk"   # Default working directory context (None means use shell's current directory)
@@ -575,7 +576,8 @@ subcommand options:
     --log-format FORMAT       Logging format (choices: table, code, log). Overrides LOG_FORMAT.
   tag / sync
     -f, --force               Force tag creation without confirmation on dirty worktrees.
-    -p, --push                Push tags to remote origin repository.
+    -p, --push                Push tags to remote origin repository (default: PUSH_TAGS).
+    --no-push                 Do not push tags to remote origin repository.
   checkout
     -f, --force               Force checkout (discarding local changes).
         """,
@@ -593,7 +595,8 @@ subcommand options:
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_tag.add_argument("-m", "--message", help="Tag message template. Use {zid} to insert ZID.")
     parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record sync snapshots (defaults to DEFAULT_LOG_PATHS).")
-    parser_tag.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
+    parser_tag.add_argument("-p", "--push", action="store_true", default=None, help="Push tags to remote origin repository (default: PUSH_TAGS).")
+    parser_tag.add_argument("--no-push", action="store_false", dest="push", help="Do not push tags to remote origin repository.")
     parser_tag.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
     # commit subcommand
@@ -613,7 +616,8 @@ subcommand options:
     parser_sync.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_sync.add_argument("-m", "--message", help="Tag/commit message template. Use {zid} to insert ZID.")
     parser_sync.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record sync snapshots (defaults to DEFAULT_LOG_PATHS).")
-    parser_sync.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
+    parser_sync.add_argument("-p", "--push", action="store_true", default=None, help="Push tags to remote origin repository (default: PUSH_TAGS).")
+    parser_sync.add_argument("--no-push", action="store_false", dest="push", help="Do not push tags to remote origin repository.")
     parser_sync.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
     # delete subcommand
@@ -622,6 +626,10 @@ subcommand options:
     
     args = parser.parse_args()
     
+    # Resolve default push setting if omitted from CLI
+    if hasattr(args, "push") and args.push is None:
+        args.push = PUSH_TAGS
+        
     # Resolve default log files if omitted from CLI
     if hasattr(args, "log_file") and not args.log_file:
         args.log_file = DEFAULT_LOG_PATHS
