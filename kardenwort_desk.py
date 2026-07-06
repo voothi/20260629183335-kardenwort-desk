@@ -889,35 +889,17 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 return {0: f"[Translation Error: {e}]"}
         else:
             pseudo_lines = split_single_mode_text(text, wrap_max_chars)
-            translations = {}
-            first_failure = None
-            for idx, line in enumerate(pseudo_lines):
-                if not line.strip():
-                    continue
-                success = False
-                last_err = None
-                for attempt in range(1, max_retries + 1):
-                    try:
-                        trans_line = translate_text(line, source_lang, target_lang, config, resolved_paths, provider)
-                        _validate_translated_line(line, trans_line, idx, config)
-                        translations[idx] = trans_line.strip()
-                        success = True
-                        break
-                    except Exception as e:
-                        last_err = e
-                        if attempt < max_retries:
-                            time.sleep(retry_backoff)
-                if not success:
-                    translations[idx] = ""
-                    if first_failure is None:
-                        first_failure = (idx, last_err)
-            if first_failure is not None:
-                failed_idx, failed_err = first_failure
-                raise TranslationAlignmentError(
-                    f"Line-by-line translation failed at line {failed_idx}: {failed_err}",
-                    partial_dict=translations
+            try:
+                pseudo_translations = translate_source_text(
+                    "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                    config, resolved_paths, provider
                 )
-            return translations
+                return pseudo_translations
+            except TranslationAlignmentError as tae:
+                raise TranslationAlignmentError(
+                    tae.args[0],
+                    partial_dict=tae.partial_dict
+                )
                 
     raw_lines = text.splitlines()
     if fix_sentence_splits:

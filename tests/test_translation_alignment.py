@@ -130,7 +130,7 @@ def test_single_mode_routing(monkeypatch):
     # Long single sentence wrapped
     res_long = desk.translate_source_text("this is a very long paragraph", "en", "ru", "single", config, {}, "google")
     assert res_long == {0: "THIS IS A", 1: "VERY LONG", 2: "PARAGRAPH"}
-    assert not called_multi
+    assert called_multi
 
 def test_translation_alignment_error_rescue(monkeypatch):
     config = configparser.ConfigParser()
