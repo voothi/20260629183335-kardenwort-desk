@@ -3614,7 +3614,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
     translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
     eff_mode = _effective_text_mode(text, text_mode)
-    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=True, overwrite=True)
+    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=True)
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
@@ -4607,7 +4607,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
-                    _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=True, overwrite=True)
+                    _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                     
                     data_rows = current_rows
                     write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
@@ -4625,7 +4625,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
-                    _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=True, overwrite=True)
+                    _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=True)
                     
                     data_rows = current_rows
                     write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted")
