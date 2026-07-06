@@ -1433,7 +1433,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     if is_progressive:
         source_text_path = working_tsv_path.with_suffix('.txt')
-        if not source_text_path.exists():
+        if eff_mode == 'single':
+            source_text_path.write_text(text, encoding='utf-8')
+        elif not source_text_path.exists():
             source_text_path.write_text(text, encoding='utf-8')
             
     sentence_translated = False
