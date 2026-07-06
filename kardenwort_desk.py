@@ -808,7 +808,7 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         return
     if not sentence_translations_raw:
         return
-    if not overwrite and out_path.exists():
+    if not overwrite and out_path.exists() and out_path.stat().st_size > 0:
         return
         
     if effective_text_mode == 'single':
