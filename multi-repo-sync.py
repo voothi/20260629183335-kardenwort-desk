@@ -11,7 +11,7 @@ REPOS = {
     "desk": r"U:\voothi\20260629183335-kardenwort-desk",
     "autohotkey": r"U:\voothi\20240411110510-autohotkey",
     "core": r"U:\voothi\20241223170748-kardenwort",
-    "goldendict": r"U:\voothi\20260113230706-goldendict\20260113230706-goldendict",
+    "goldendict": r"U:\voothi\20260113230706-goldendict",
     "vault": r"U:\voothi.vault"
 }
 
