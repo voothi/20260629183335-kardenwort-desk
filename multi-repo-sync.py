@@ -18,6 +18,7 @@ ZID_SCRIPT = r"U:\voothi\20241116203211-zid\zid.py"
 DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
 GIT_REMOTE = "origin"
 LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
+LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text)
 
 def run_git(repo_path, args):
     try:
@@ -133,19 +134,29 @@ def log_tag_to_file(tag_name, log_path_str):
     if log_path.is_dir() or log_path_str.endswith(("/", "\\")) or not log_path.suffix:
         log_path = log_path / DEFAULT_LOG_FILENAME
         
-    # Get commit identifiers based on configuration
+    # Get commit identifiers and statuses based on configuration
     hashes = {}
     for name, path in REPOS.items():
         if os.path.exists(path):
-            commit_hash, _ = run_git(path, ["rev-parse", "HEAD"])
+            branch, _ = run_git(path, ["rev-parse", "--abbrev-ref", "HEAD"])
+            commit_hash, _ = run_git(path, ["log", "-1", "--pretty=format:%h"])
             commit_msg, _ = run_git(path, ["log", "-1", "--pretty=format:%s"])
+            tags, _ = run_git(path, ["tag", "--points-at", "HEAD"])
+            dirty, _ = run_git(path, ["status", "--porcelain"])
+            
             hashes[name] = {
-                "hash": commit_hash[:8] if commit_hash else "-",
+                "status": "dirty" if dirty else "clean",
+                "branch": branch if branch else "detached",
+                "hash": commit_hash if commit_hash else "-",
+                "tags": ", ".join(tags.splitlines()) if tags else "-",
                 "msg": commit_msg if commit_msg else "-"
             }
         else:
             hashes[name] = {
-                "hash": "absent",
+                "status": "missing",
+                "branch": "-",
+                "hash": "-",
+                "tags": "-",
                 "msg": "absent"
             }
             
@@ -159,12 +170,15 @@ def log_tag_to_file(tag_name, log_path_str):
                 f.write("# Multi-Repo Sync History\n")
             
             f.write(f"\n## Release {tag_name} ({date_str})\n\n")
-            f.write("| REPOSITORY | COMMIT | MESSAGE |\n")
-            f.write("| :--- | :--- | :--- |\n")
+            f.write("| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n")
+            f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
             for name in REPOS.keys():
+                status_str = hashes[name]["status"]
+                branch_str = hashes[name]["branch"]
                 c_hash = hashes[name]["hash"]
+                tag_str = hashes[name]["tags"]
                 c_msg = hashes[name]["msg"]
-                f.write(f"| {name} | {c_hash} | {c_msg} |\n")
+                f.write(f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n")
                 
         print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
     except Exception as e:
