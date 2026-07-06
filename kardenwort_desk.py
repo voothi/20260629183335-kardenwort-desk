@@ -1086,12 +1086,21 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         config, resolved_paths, provider
                     )
                     
-                    # 2. Translate the full continuous text for the Translate View (.ru.txt) and TextDestination
+                    # 2. Translate the unpadded pseudo-lines for the Translate View (.ru.txt) and TextDestination
+                    # This preserves the literal piecemeal formatting that the user prefers (avoiding DeepL reformatting a giant text block)
                     full_text_trans = ""
                     try:
-                        full_text_trans = translate_text(text, source_lang, target_lang, config, resolved_paths, provider).strip()
+                        unpadded_translations = translate_source_text(
+                            "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                            config, resolved_paths, provider
+                        )
+                        full_text_trans = " ".join(
+                            unpadded_translations.get(i, "").strip() 
+                            for i in sorted(unpadded_translations.keys()) 
+                            if isinstance(i, int) and unpadded_translations.get(i, "")
+                        )
                     except Exception as e:
-                        logger.error(f"Failed to translate full text block: {e}")
+                        logger.error(f"Failed to translate unpadded lines block: {e}")
                     
                     if full_text_trans:
                         pseudo_translations['FULL_TEXT'] = full_text_trans
