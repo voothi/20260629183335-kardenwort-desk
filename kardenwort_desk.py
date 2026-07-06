@@ -1643,8 +1643,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             )
             word_counter += 1
         else:
-            if tok_text in ("\\N", "\\n", "\n"):
+            if tok_text in ("\\N", "\\n"):
                 span_htmls.append("<br>")
+            elif "\n" in tok_text or "\r" in tok_text:
+                normalized = tok_text.replace("\r\n", "\n").replace("\r", "\n")
+                parts = normalized.split("\n")
+                span_htmls.append("<br>".join(parts))
             else:
                 span_htmls.append(text_escaped)
                 
