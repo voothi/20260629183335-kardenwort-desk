@@ -204,6 +204,14 @@ def test_pad_sentences():
     # 3. Out of bounds fallback/clipping
     res_clip = desk.pad_sentences(sentences, text, words_before=100, words_after=100)
     assert res_clip[1] == text
-
-
-
+def test_custom_abbreviation_allowlist():
+    text = "Wir trafen Prof. Müller. Er ging nach Hause."
+    
+    # Standard splitting (Prof. is in defaults)
+    res_default = desk.split_single_mode_text(text)
+    assert res_default == ["Wir trafen Prof. Müller.", "Er ging nach Hause."]
+    
+    # Custom allowlist (without Prof.)
+    custom_abbrev_set = {"ca", "z.b"}
+    res_custom = desk.split_single_mode_text(text, abbrevs=custom_abbrev_set)
+    assert res_custom == ["Wir trafen Prof.", "Müller.", "Er ging nach Hause."]
