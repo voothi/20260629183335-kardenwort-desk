@@ -4184,10 +4184,12 @@ def cmd_export(args):
         send_to_anki = config.getboolean('settings', 'send_to_anki_after_export', fallback=False)
         if send_to_anki:
             detach = config.getboolean('settings', 'detach_import_on_send', fallback=True)
+            show_window = config.getboolean('settings', 'show_import_window', fallback=False)
             if detach:
                 pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
                 response = {
                     "import_started": True,
+                    "show_window": show_window,
                     "pid": pid,
                     "log": log_path,
                     "tsv": str(import_path),
@@ -4197,13 +4199,14 @@ def cmd_export(args):
             else:
                 success, output = run_synchronous_import(import_path, config, resolved_paths)
                 if success:
-                    print(json.dumps({"import_complete": True, "output": output}))
+                    print(json.dumps({"import_complete": True, "show_window": show_window, "output": output}))
                 else:
                     print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
                     sys.exit(1)
         else:
             if save_to_favorites:
-                print(f"SUCCESS: Exported to {import_path}")
+                show_window = config.getboolean('settings', 'show_import_window', fallback=False)
+                print(json.dumps({"import_complete": True, "show_window": show_window, "output": f"SUCCESS: Exported to {import_path}"}))
             else:
                 print(f"SUCCESS: Ready for Anki (no favorites file created)")
     except Exception as e:
