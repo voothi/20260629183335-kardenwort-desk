@@ -17,6 +17,7 @@ REPOS = {
 ZID_SCRIPT = r"U:\voothi\20241116203211-zid\zid.py"
 DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
 GIT_REMOTE = "origin"
+LOG_COMMIT_VAL = "msg"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 
 def run_git(repo_path, args):
     try:
@@ -132,12 +133,22 @@ def log_tag_to_file(tag_name, log_path_str):
     if log_path.is_dir() or log_path_str.endswith(("/", "\\")) or not log_path.suffix:
         log_path = log_path / DEFAULT_LOG_FILENAME
         
-    # Get commit hashes
+    # Get commit identifiers based on configuration
     hashes = {}
     for name, path in REPOS.items():
         if os.path.exists(path):
-            commit, _ = run_git(path, ["rev-parse", "HEAD"])
-            hashes[name] = commit[:8] if commit else "unknown"
+            commit_hash, _ = run_git(path, ["rev-parse", "HEAD"])
+            commit_msg, _ = run_git(path, ["log", "-1", "--pretty=format:%s"])
+            
+            c_hash = commit_hash[:8] if commit_hash else "unknown"
+            c_msg = commit_msg if commit_msg else "unknown"
+            
+            if LOG_COMMIT_VAL == "msg":
+                hashes[name] = c_msg
+            elif LOG_COMMIT_VAL == "both":
+                hashes[name] = f"{c_hash} ({c_msg})"
+            else:  # "hash"
+                hashes[name] = c_hash
         else:
             hashes[name] = "absent"
             
