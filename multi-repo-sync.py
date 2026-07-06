@@ -445,6 +445,7 @@ subcommand options:
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
+    parser.add_argument("-C", "--cwd", default=None, metavar="<path>", help="Change the working directory before running the utility (default: shell's current directory).")
     subparsers = parser.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
     
     # status subcommand
@@ -473,6 +474,14 @@ subcommand options:
     parser_delete.add_argument("name", help="Tag name to delete.")
     
     args = parser.parse_args()
+    
+    if args.cwd:
+        try:
+            os.chdir(args.cwd)
+        except Exception as e:
+            print(f"Error: Could not change working directory to '{args.cwd}': {e}")
+            sys.exit(1)
+            
     
     if args.command == "status":
         cmd_status(args)
