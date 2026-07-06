@@ -4573,9 +4573,6 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                         sentence_translations_raw, tsv_path, comments, headers,
                         persist=True, return_single=False
                     )
-                    data_rows = current_rows
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
-                    
                     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
                     slug = generate_slug(text)
                     m = re.match(r"^(\d{14})", tsv_path.name)
@@ -4583,6 +4580,9 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
                     _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
+                    
+                    data_rows = current_rows
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
                 except TranslationAlignmentError as tae:
                     logger.error(f"Progressive translation alignment error: {tae}")
                     comments, headers, current_rows = load_tsv_rows(tsv_path)
@@ -4591,9 +4591,6 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                         tae.partial_dict, tsv_path, comments, headers,
                         persist=True, return_single=False
                     )
-                    data_rows = current_rows
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted")
-                    
                     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
                     slug = generate_slug(text)
                     m = re.match(r"^(\d{14})", tsv_path.name)
@@ -4601,6 +4598,9 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
                     _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=True)
+                    
+                    data_rows = current_rows
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted")
                     
                     sys.exit(EXIT_PARTIAL_TRANSLATION_PERSISTED)
         
