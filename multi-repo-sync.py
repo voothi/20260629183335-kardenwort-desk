@@ -27,6 +27,7 @@ DEFAULT_TAG_NAME_TEMPLATE = "{zid}-snapshot-desk"
 DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid} to desk"
 DEFAULT_COMMIT_MSG_TEMPLATE = "{zid} to desk"
 REVERSE_TAGS_ORDER = True  # Display tags starting from the latest/last (True) or alphabetical/chronological order (False)
+STATUS_COLUMNS = ["REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
 
 def run_git(repo_path, args):
     try:
@@ -87,8 +88,12 @@ def cmd_status(args):
     for name, path in REPOS.items():
         if not os.path.exists(path):
             rows.append({
-                "name": name, "status": "missing", "branch": "-",
-                "hash": "-", "tags": "-", "msg": "(path not found)"
+                "REPOSITORY": name,
+                "STATUS": "missing",
+                "BRANCH": "-",
+                "COMMIT": "-",
+                "TAGS": "-",
+                "MESSAGE": "(path not found)"
             })
             continue
             
@@ -103,25 +108,37 @@ def cmd_status(args):
             tags_list.reverse()
         
         rows.append({
-            "name": name,
-            "status": "dirty" if dirty else "clean",
-            "branch": branch if branch else "detached",
-            "hash": commit_hash if commit_hash else "-",
-            "tags": format_tags(tags_list),
-            "msg": commit_msg if commit_msg else "(No commits)"
+            "REPOSITORY": name,
+            "STATUS": "dirty" if dirty else "clean",
+            "BRANCH": branch if branch else "detached",
+            "COMMIT": commit_hash if commit_hash else "-",
+            "TAGS": format_tags(tags_list),
+            "MESSAGE": commit_msg if commit_msg else "(No commits)"
         })
         
-    # Dynamically compute column widths
-    w_name = max(max(len(r["name"]) for r in rows), len("REPOSITORY"))
-    w_status = max(max(len(r["status"]) for r in rows), len("STATUS"))
-    w_branch = max(max(len(r["branch"]) for r in rows), len("BRANCH"))
-    w_hash = max(max(len(r["hash"]) for r in rows), len("COMMIT"))
-    w_tags = max(max(len(r["tags"]) for r in rows), len("TAGS"))
+    # Dynamically compute column widths for enabled columns
+    widths = {}
+    for col in STATUS_COLUMNS:
+        widths[col] = max(max(len(r.get(col, "")) for r in rows), len(col))
     
     # Print aligned columns
-    print(f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}")
+    header_parts = []
+    for idx, col in enumerate(STATUS_COLUMNS):
+        if idx == len(STATUS_COLUMNS) - 1:
+            header_parts.append(col)
+        else:
+            header_parts.append(f"{col:<{widths[col]}}")
+    print(" ".join(header_parts))
+    
     for r in rows:
-        print(f"{r['name']:<{w_name}} {r['status']:<{w_status}} {r['branch']:<{w_branch}} {r['hash']:<{w_hash}} {r['tags']:<{w_tags}} {r['msg']}")
+        row_parts = []
+        for idx, col in enumerate(STATUS_COLUMNS):
+            val = r.get(col, "")
+            if idx == len(STATUS_COLUMNS) - 1:
+                row_parts.append(val)
+            else:
+                row_parts.append(f"{val:<{widths[col]}}")
+        print(" ".join(row_parts))
 
 def cmd_tag(args):
     zid_val = get_zid()
@@ -321,32 +338,35 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
             # Generate the new section body
             new_body = ""
             if resolved_format == "code":
-                w_name = max(max(len(name) for name in REPOS.keys()), len("REPOSITORY"))
-                w_status = max(max(len(hashes[name]["status"]) for name in REPOS.keys()), len("STATUS"))
-                w_branch = max(max(len(hashes[name]["branch"]) for name in REPOS.keys()), len("BRANCH"))
-                w_hash = max(max(len(hashes[name]["hash"]) for name in REPOS.keys()), len("COMMIT"))
-                w_tags = max(max(len(hashes[name]["tags"]) for name in REPOS.keys()), len("TAGS"))
+                widths = {}
+                for col in STATUS_COLUMNS:
+                    widths[col] = max(max(len(hashes[n].get(col, "")) for n in REPOS.keys()), len(col))
                 
                 new_body += "```text\n"
-                new_body += f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}\n"
+                header_parts = []
+                for idx, col in enumerate(STATUS_COLUMNS):
+                    if idx == len(STATUS_COLUMNS) - 1:
+                        header_parts.append(col)
+                    else:
+                        header_parts.append(f"{col:<{widths[col]}}")
+                new_body += " ".join(header_parts) + "\n"
+                
                 for name in REPOS.keys():
-                    status_str = hashes[name]["status"]
-                    branch_str = hashes[name]["branch"]
-                    c_hash = hashes[name]["hash"]
-                    tag_str = hashes[name]["tags"]
-                    c_msg = hashes[name]["msg"]
-                    new_body += f"{name:<{w_name}} {status_str:<{w_status}} {branch_str:<{w_branch}} {c_hash:<{w_hash}} {tag_str:<{w_tags}} {c_msg}\n"
+                    row_parts = []
+                    for idx, col in enumerate(STATUS_COLUMNS):
+                        val = hashes[name].get(col, "")
+                        if idx == len(STATUS_COLUMNS) - 1:
+                            row_parts.append(val)
+                        else:
+                            row_parts.append(f"{val:<{widths[col]}}")
+                    new_body += " ".join(row_parts) + "\n"
                 new_body += "```"
             else:
-                new_body += "| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n"
-                new_body += "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                new_body += "| " + " | ".join(STATUS_COLUMNS) + " |\n"
+                new_body += "| " + " | ".join([":---"] * len(STATUS_COLUMNS)) + " |\n"
                 for name in REPOS.keys():
-                    status_str = hashes[name]["status"]
-                    branch_str = hashes[name]["branch"]
-                    c_hash = hashes[name]["hash"]
-                    tag_str = hashes[name]["tags"]
-                    c_msg = hashes[name]["msg"]
-                    new_body += f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n"
+                    row_data = [hashes[name].get(col, "") for col in STATUS_COLUMNS]
+                    new_body += "| " + " | ".join(row_data) + " |\n"
             
             sections.append({
                 "tag": tag_name,
