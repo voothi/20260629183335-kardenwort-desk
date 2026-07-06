@@ -445,7 +445,7 @@ subcommand options:
         """,
         formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=True, title="commands", metavar="<command>")
     
     # status subcommand
     subparsers.add_parser("status", help="Show current branch, status, and tags across repositories.")
