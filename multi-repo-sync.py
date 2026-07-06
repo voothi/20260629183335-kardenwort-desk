@@ -49,29 +49,28 @@ def get_zid():
         return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
 def cmd_status(args):
+    # Print clean Docker/Terraform-like aligned column headers
+    print(f"{'REPOSITORY':<15} {'STATUS':<10} {'BRANCH':<20} {'COMMIT':<10} {'TAGS':<20} {'MESSAGE'}")
+    
     for name, path in REPOS.items():
         if not os.path.exists(path):
-            print(f"## {name}...[Folder not found]")
+            print(f"{name:<15} {'missing':<10} {'-':<20} {'-':<10} {'-':<20} (Folder not found)")
             continue
             
         branch, _ = run_git(path, ["rev-parse", "--abbrev-ref", "HEAD"])
-        commit, _ = run_git(path, ["log", "-1", "--pretty=format:%h (%s)"])
+        commit_hash, _ = run_git(path, ["log", "-1", "--pretty=format:%h"])
+        commit_msg, _ = run_git(path, ["log", "-1", "--pretty=format:%s"])
         tags, _ = run_git(path, ["tag", "--points-at", "HEAD"])
         dirty, _ = run_git(path, ["status", "--porcelain"])
         
-        status_parts = []
-        if tags:
-            tag_list = ", ".join(tags.splitlines())
-            status_parts.append(f"tag: {tag_list}")
-        if dirty:
-            status_parts.append("dirty")
+        status_str = "dirty" if dirty else "clean"
+        branch_str = branch if branch else "detached"
+        
+        c_hash = commit_hash if commit_hash else "-"
+        c_msg = commit_msg if commit_msg else "(No commits)"
+        tag_str = ", ".join(tags.splitlines()) if tags else "-"
             
-        status_suffix = f" [{', '.join(status_parts)}]" if status_parts else ""
-        print(f"## {name}...{branch}{status_suffix}")
-        if commit:
-            print(f"   {commit}")
-        else:
-            print("   (No commits)")
+        print(f"{name:<15} {status_str:<10} {branch_str:<20} {c_hash:<10} {tag_str:<20} {c_msg}")
 
 def cmd_tag(args):
     tag_name = args.name
@@ -111,6 +110,13 @@ def cmd_tag(args):
             success = False
         else:
             print(f"[+] {name}: Tagged successfully")
+            if args.push:
+                print(f"    Pushing tag '{tag_name}' to origin...")
+                _, err_push = run_git(path, ["push", "origin", tag_name])
+                if err_push and "error:" in err_push:
+                    print(f"    [X] Failed to push tag ({err_push})")
+                else:
+                    print(f"    [+] Tag pushed successfully to origin")
             
     # 3. Log to file if requested
     if success and args.log_file:
@@ -262,6 +268,7 @@ def main():
     parser_tag.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_tag.add_argument("-l", "--log-file", help="Path to markdown tag history log file (e.g. ./ or ./coordinated_tags.md).")
+    parser_tag.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
     
     # commit subcommand
     parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs.")
