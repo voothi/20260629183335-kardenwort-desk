@@ -1910,6 +1910,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             classes_str = " ".join(classes)
             span_htmls.append(
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
+                f'data-line-idx="{current_a_idx}" '
                 f'data-lower-clean="{lower_clean}">{text_escaped}</span>'
             )
             word_counter += 1
