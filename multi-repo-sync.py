@@ -21,6 +21,9 @@ GIT_REMOTE = "origin"
 LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text), "log" (Plain text log line)
 DEFAULT_CWD = r"U:\voothi\20260629183335-kardenwort-desk"   # Default working directory context (None means use shell's current directory)
+DEFAULT_TAG_NAME_TEMPLATE = "{zid}"
+DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {tag_name}"
+DEFAULT_COMMIT_MSG_TEMPLATE = "{zid}"
 
 def run_git(repo_path, args):
     try:
@@ -98,13 +101,13 @@ def cmd_tag(args):
     # Resolve tag name template
     tag_name_template = getattr(args, "name", None)
     if not tag_name_template:
-        tag_name_template = "{zid}"
+        tag_name_template = DEFAULT_TAG_NAME_TEMPLATE
     tag_name = tag_name_template.format(zid=zid_val)
     
     # Resolve tag message template
     tag_msg_template = getattr(args, "message", None)
     if not tag_msg_template:
-        tag_msg_template = "Coordinated snapshot {tag_name}"
+        tag_msg_template = DEFAULT_TAG_MSG_TEMPLATE
     tag_msg = tag_msg_template.format(zid=zid_val, tag_name=tag_name)
         
     print(f"Creating coordinated tag '{tag_name}' across all repositories with message '{tag_msg}'...")
@@ -419,7 +422,11 @@ def cmd_commit(args):
             time.sleep(1.1)
             
         last_zid = get_zid()
-        commit_msg = args.message.format(zid=last_zid) if getattr(args, "message", None) else last_zid
+        msg_template = getattr(args, "message", None)
+        if not msg_template:
+            msg_template = DEFAULT_COMMIT_MSG_TEMPLATE
+            
+        commit_msg = msg_template.format(zid=last_zid)
         
         print(f"[{name}] Staging changes and committing with message '{commit_msg}'...")
         
