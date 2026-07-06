@@ -62,18 +62,23 @@ def get_zid():
         import datetime
         return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
-def format_tags(tags_list, max_len=40):
+def format_tags(tags_list, max_len=None, max_tags=None):
     if not tags_list:
         return "-"
         
     has_more_by_count = False
-    if MAX_TAGS_TO_SHOW is not None and MAX_TAGS_TO_SHOW > 0 and len(tags_list) > MAX_TAGS_TO_SHOW:
-        tags_list_limited = tags_list[:MAX_TAGS_TO_SHOW]
+    if max_tags is not None and max_tags > 0 and len(tags_list) > max_tags:
+        tags_list_limited = tags_list[:max_tags]
         has_more_by_count = True
     else:
         tags_list_limited = tags_list
         
     joined = ", ".join(tags_list_limited)
+    if max_len is None:
+        if has_more_by_count:
+            return joined + ", ..."
+        return joined
+        
     if len(joined) <= max_len and not has_more_by_count:
         return joined
         
@@ -121,7 +126,7 @@ def cmd_status(args):
             "STATUS": "dirty" if dirty else "clean",
             "BRANCH": branch if branch else "detached",
             "COMMIT": commit_hash if commit_hash else "-",
-            "TAGS": format_tags(tags_list),
+            "TAGS": format_tags(tags_list, max_len=40, max_tags=MAX_TAGS_TO_SHOW),
             "MESSAGE": commit_msg if commit_msg else "(No commits)"
         })
         
