@@ -1269,14 +1269,12 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     
     wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
     
-    text_to_write = text
-    if eff_mode == 'single':
-        split_lines = split_single_mode_text(text, wrap_max_chars)
-        text_to_write = "\n".join(split_lines)
-
     save_source_text = config.getboolean('settings', 'save_source_text', fallback=True)
-    if save_source_text and not source_text_path.exists():
-        source_text_path.write_text(text_to_write, encoding='utf-8')
+    if save_source_text:
+        if eff_mode == 'single':
+            source_text_path.write_text(text, encoding='utf-8')
+        elif not source_text_path.exists():
+            source_text_path.write_text(text, encoding='utf-8')
         
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     fields = list(mapping['fields'].keys())
@@ -1292,11 +1290,22 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
     
     text_file_to_pass = source_text_path
-    if not save_source_text:
+    temp_file_path = None
+    
+    use_temp = (eff_mode == 'single') or (not save_source_text)
+    if use_temp:
+        if eff_mode == 'single':
+            split_lines = split_single_mode_text(text, wrap_max_chars)
+            temp_content = "\n".join(split_lines)
+        else:
+            temp_content = text
         temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
-        temp_file.write(text_to_write)
-        temp_file.close()
-        text_file_to_pass = Path(temp_file.name)
+        temp_file_path = Path(temp_file.name)
+        try:
+            temp_file.write(temp_content)
+        finally:
+            temp_file.close()
+        text_file_to_pass = temp_file_path
         
     cmd = [
         str(python_exe),
@@ -1336,9 +1345,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
         sys.exit(1)
     finally:
-        if not save_source_text and 'temp_file' in locals():
+        if temp_file_path is not None:
             try:
-                os.remove(temp_file.name)
+                os.remove(temp_file_path)
             except OSError:
                 pass
 
