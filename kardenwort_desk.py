@@ -838,8 +838,8 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
                         
                     word_token_spans = [ts for ts in p_token_spans if ts["is_word"]]
                     if word_token_spans:
-                        f_char = word_token_spans[crop_start]["start"]
-                        l_char = word_token_spans[crop_end]["end"]
+                        f_char = 0 if crop_start == 0 else word_token_spans[crop_start]["start"]
+                        l_char = len(padded_sentence) if crop_end == len(word_token_spans) - 1 else word_token_spans[crop_end]["end"]
                         padded_sentence = padded_sentence[f_char:l_char].strip()
                         
         padded.append(padded_sentence)
