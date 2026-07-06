@@ -1427,12 +1427,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     base_provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
     enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
     
-    if is_progressive:
-        source_text_path = working_tsv_path.with_suffix('.txt')
-        if eff_mode == 'single':
-            source_text_path.write_text(text, encoding='utf-8')
-        elif not source_text_path.exists():
-            source_text_path.write_text(text, encoding='utf-8')
+    source_text_path = working_tsv_path.with_suffix('.txt')
+    if eff_mode == 'single':
+        source_text_path.write_text(text, encoding='utf-8')
+    elif not source_text_path.exists():
+        source_text_path.write_text(text, encoding='utf-8')
             
     sentence_translated = False
     if col_sentence_dest != -1:
