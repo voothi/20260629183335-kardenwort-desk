@@ -4111,7 +4111,7 @@ def cmd_reprocess_worker(args):
         except Exception as e:
             logger.error(f"Failed to write finished event in reprocess: {e}")
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, text_mode=None):
     import time
     update_js_path = tsv_path.with_suffix('.update.js')
     
@@ -4167,7 +4167,19 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 
                 sorted_keys = sorted(idx_to_sentence.keys())
                 sentences = [idx_to_sentence[k] for k in sorted_keys]
-                translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
+                
+                mode_to_use = text_mode
+                if mode_to_use is None:
+                    try:
+                        config, _, _ = load_config()
+                        mode_to_use = config.get('settings', 'text_mode', fallback='single')
+                    except Exception:
+                        mode_to_use = 'single'
+                        
+                if mode_to_use == 'single':
+                    translated_text = f"<div>{html.escape(' '.join(sentences))}</div>"
+                else:
+                    translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
                 
         update_data = {
             "stage": stage,
