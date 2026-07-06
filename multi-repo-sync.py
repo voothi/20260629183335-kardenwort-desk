@@ -199,85 +199,131 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
     
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
-        with open(log_path, "a", encoding="utf-8") as f:
-            if resolved_format == "log":
-                # Flat single-line log format (perfect for sorting by ZID)
-                parts = [f"{tag_name}", f"[{date_str}]"]
-                for name in REPOS.keys():
-                    if hashes[name]["status"] == "missing":
-                        parts.append(f"{name}:absent")
-                    else:
-                        c_hash = hashes[name]["hash"]
-                        c_msg = hashes[name]["msg"]
-                        if LOG_COMMIT_VAL == "msg":
-                            val = c_msg
-                        elif LOG_COMMIT_VAL == "both":
-                            val = f"{c_hash}({c_msg})"
-                        else:  # "hash"
-                            val = c_hash
-                        parts.append(f"{name}:{val}")
-                f.write(" ".join(parts) + "\n")
-            elif resolved_format == "table":
-                # Flat horizontal table (perfect for sorting by ZID)
-                repo_names = list(REPOS.keys())
-                if write_header:
-                    f.write("# Multi-Repo Sync History\n\n")
-                    headers = ["Tag / ZID", "Date"] + repo_names
-                    alignments = [":---"] * len(headers)
-                    f.write("| " + " | ".join(headers) + " |\n")
-                    f.write("| " + " | ".join(alignments) + " |\n")
-                
-                # Format cell values based on LOG_COMMIT_VAL configuration
-                row_data = [tag_name, date_str]
-                for name in repo_names:
-                    if hashes[name]["status"] == "missing":
-                        row_data.append("absent")
-                    else:
-                        c_hash = hashes[name]["hash"]
-                        c_msg = hashes[name]["msg"]
-                        if LOG_COMMIT_VAL == "msg":
-                            row_data.append(c_msg)
-                        elif LOG_COMMIT_VAL == "both":
-                            row_data.append(f"{c_hash} ({c_msg})")
-                        else:  # "hash"
-                            row_data.append(c_hash)
-                
-                f.write("| " + " | ".join(row_data) + " |\n")
-            else:
-                # Vertical/detailed format per release (code block or vertical table)
-                if write_header:
-                    f.write("# Multi-Repo Sync History\n")
-                
-                f.write(f"\n## Release {tag_name} ({date_str})\n\n")
-                
-                if resolved_format == "code":
-                    w_name = max(max(len(name) for name in REPOS.keys()), len("REPOSITORY"))
-                    w_status = max(max(len(hashes[name]["status"]) for name in REPOS.keys()), len("STATUS"))
-                    w_branch = max(max(len(hashes[name]["branch"]) for name in REPOS.keys()), len("BRANCH"))
-                    w_hash = max(max(len(hashes[name]["hash"]) for name in REPOS.keys()), len("COMMIT"))
-                    w_tags = max(max(len(hashes[name]["tags"]) for name in REPOS.keys()), len("TAGS"))
+        
+        if resolved_format in ("log", "table"):
+            with open(log_path, "a", encoding="utf-8") as f:
+                if resolved_format == "log":
+                    # Flat single-line log format (perfect for sorting by ZID)
+                    parts = [f"{tag_name}", f"[{date_str}]"]
+                    for name in REPOS.keys():
+                        if hashes[name]["status"] == "missing":
+                            parts.append(f"{name}:absent")
+                        else:
+                            c_hash = hashes[name]["hash"]
+                            c_msg = hashes[name]["msg"]
+                            if LOG_COMMIT_VAL == "msg":
+                                val = c_msg
+                            elif LOG_COMMIT_VAL == "both":
+                                val = f"{c_hash}({c_msg})"
+                            else:  # "hash"
+                                val = c_hash
+                            parts.append(f"{name}:{val}")
+                    f.write(" ".join(parts) + "\n")
+                elif resolved_format == "table":
+                    # Flat horizontal table (perfect for sorting by ZID)
+                    repo_names = list(REPOS.keys())
+                    if write_header:
+                        f.write("# Multi-Repo Sync History\n\n")
+                        headers = ["Tag / ZID", "Date"] + repo_names
+                        alignments = [":---"] * len(headers)
+                        f.write("| " + " | ".join(headers) + " |\n")
+                        f.write("| " + " | ".join(alignments) + " |\n")
                     
-                    f.write("```text\n")
-                    f.write(f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}\n")
-                    for name in REPOS.keys():
-                        status_str = hashes[name]["status"]
-                        branch_str = hashes[name]["branch"]
-                        c_hash = hashes[name]["hash"]
-                        tag_str = hashes[name]["tags"]
-                        c_msg = hashes[name]["msg"]
-                        f.write(f"{name:<{w_name}} {status_str:<{w_status}} {branch_str:<{w_branch}} {c_hash:<{w_hash}} {tag_str:<{w_tags}} {c_msg}\n")
-                    f.write("```\n")
-                else:
-                    f.write("| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n")
-                    f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
-                    for name in REPOS.keys():
-                        status_str = hashes[name]["status"]
-                        branch_str = hashes[name]["branch"]
-                        c_hash = hashes[name]["hash"]
-                        tag_str = hashes[name]["tags"]
-                        c_msg = hashes[name]["msg"]
-                        f.write(f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n")
-                        
+                    row_data = [tag_name, date_str]
+                    for name in repo_names:
+                        if hashes[name]["status"] == "missing":
+                            row_data.append("absent")
+                        else:
+                            c_hash = hashes[name]["hash"]
+                            c_msg = hashes[name]["msg"]
+                            if LOG_COMMIT_VAL == "msg":
+                                row_data.append(c_msg)
+                            elif LOG_COMMIT_VAL == "both":
+                                row_data.append(f"{c_hash} ({c_msg})")
+                            else:  # "hash"
+                                row_data.append(c_hash)
+                    
+                    f.write("| " + " | ".join(row_data) + " |\n")
+        else:
+            # Vertical/detailed format per release (code block or vertical table)
+            # Parse existing sections to maintain chronological TOC
+            sections = []
+            if log_path.exists() and log_path.stat().st_size > 0:
+                with open(log_path, "r", encoding="utf-8") as f:
+                    content = f.read()
+                parts = content.split("## Release ")
+                for part in parts[1:]:
+                    lines = part.strip().splitlines()
+                    if not lines:
+                        continue
+                    header_line = lines[0].strip()
+                    body = "\n".join(lines[1:])
+                    # Strip existing navigation links
+                    if "[Return to Top]" in body:
+                        body = body.split("[Return to Top]")[0].strip()
+                    
+                    tag_name_extracted = header_line.split("(")[0].strip()
+                    date_str_extracted = ""
+                    if "(" in header_line:
+                        date_str_extracted = header_line.split("(")[1].replace(")", "").strip()
+                    
+                    sections.append({
+                        "tag": tag_name_extracted,
+                        "date": date_str_extracted,
+                        "body": body.strip()
+                    })
+            
+            # Generate the new section body
+            new_body = ""
+            if resolved_format == "code":
+                w_name = max(max(len(name) for name in REPOS.keys()), len("REPOSITORY"))
+                w_status = max(max(len(hashes[name]["status"]) for name in REPOS.keys()), len("STATUS"))
+                w_branch = max(max(len(hashes[name]["branch"]) for name in REPOS.keys()), len("BRANCH"))
+                w_hash = max(max(len(hashes[name]["hash"]) for name in REPOS.keys()), len("COMMIT"))
+                w_tags = max(max(len(hashes[name]["tags"]) for name in REPOS.keys()), len("TAGS"))
+                
+                new_body += "```text\n"
+                new_body += f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}\n"
+                for name in REPOS.keys():
+                    status_str = hashes[name]["status"]
+                    branch_str = hashes[name]["branch"]
+                    c_hash = hashes[name]["hash"]
+                    tag_str = hashes[name]["tags"]
+                    c_msg = hashes[name]["msg"]
+                    new_body += f"{name:<{w_name}} {status_str:<{w_status}} {branch_str:<{w_branch}} {c_hash:<{w_hash}} {tag_str:<{w_tags}} {c_msg}\n"
+                new_body += "```"
+            else:
+                new_body += "| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n"
+                new_body += "| :--- | :--- | :--- | :--- | :--- | :--- |\n"
+                for name in REPOS.keys():
+                    status_str = hashes[name]["status"]
+                    branch_str = hashes[name]["branch"]
+                    c_hash = hashes[name]["hash"]
+                    tag_str = hashes[name]["tags"]
+                    c_msg = hashes[name]["msg"]
+                    new_body += f"| {name} | {status_str} | {branch_str} | {c_hash} | {tag_str} | {c_msg} |\n"
+            
+            sections.append({
+                "tag": tag_name,
+                "date": date_str,
+                "body": new_body.strip()
+            })
+            
+            # Write the reconstructed document back to the file
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("# Multi-Repo Sync History\n\n")
+                f.write("## Table of Contents\n")
+                for s in sections:
+                    anchor = f"release-{s['tag']}".lower().replace(" ", "-")
+                    anchor = "".join(c for c in anchor if c.isalnum() or c in "-_")
+                    f.write(f"- [Release {s['tag']} ({s['date']})](#{anchor})\n")
+                f.write("\n")
+                
+                for s in sections:
+                    f.write(f"## Release {s['tag']} ({s['date']})\n\n")
+                    f.write(s["body"] + "\n\n")
+                    f.write("[Return to Top](#table-of-contents)\n\n")
+                    
         print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
     except Exception as e:
         print(f"[X] Failed to write sync log: {e}")
