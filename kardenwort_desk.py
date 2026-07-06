@@ -1061,10 +1061,6 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             if not terminators.strip():
                 terminators = ".!?:"
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
-            words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
-            words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
-            max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
-            pseudo_lines = pad_sentences(pseudo_lines, text, words_before, words_after, max_words=max_words)
             try:
                 pseudo_translations = translate_source_text(
                     "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
