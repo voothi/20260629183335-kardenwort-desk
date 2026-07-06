@@ -141,16 +141,20 @@ def log_tag_to_file(tag_name, log_path_str):
             
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_header = not log_path.exists() or log_path.stat().st_size == 0
+    repo_names = list(REPOS.keys())
     
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
             if write_header:
                 f.write("# Multi-Repo Sync History\n\n")
-                f.write("| Tag / ZID | Date | autohotkey | desk | core | vault |\n")
-                f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
+                headers = ["Tag / ZID", "Date"] + repo_names
+                alignments = [":---"] * len(headers)
+                f.write("| " + " | ".join(headers) + " |\n")
+                f.write("| " + " | ".join(alignments) + " |\n")
             
-            row = f"| {tag_name} | {date_str} | {hashes.get('autohotkey', '-')} | {hashes.get('desk', '-')} | {hashes.get('core', '-')} | {hashes.get('vault', '-')} |\n"
+            row_data = [tag_name, date_str] + [hashes.get(name, "-") for name in repo_names]
+            row = "| " + " | ".join(row_data) + " |\n"
             f.write(row)
         print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
     except Exception as e:
