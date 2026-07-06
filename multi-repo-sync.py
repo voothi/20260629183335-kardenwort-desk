@@ -22,7 +22,7 @@ LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/
 LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text), "log" (Plain text log line)
 DEFAULT_CWD = r"U:\voothi\20260629183335-kardenwort-desk"   # Default working directory context (None means use shell's current directory)
 DEFAULT_TAG_NAME_TEMPLATE = "{zid}"
-DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {tag_name}"
+DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid}"
 DEFAULT_COMMIT_MSG_TEMPLATE = "{zid}"
 
 def run_git(repo_path, args):
@@ -426,7 +426,14 @@ def cmd_commit(args):
         if not msg_template:
             msg_template = DEFAULT_COMMIT_MSG_TEMPLATE
             
-        commit_msg = msg_template.format(zid=last_zid)
+        # To maintain perfect orthogonality with tag, commit template resolving also supports {tag_name} if passed globally
+        fallback_tag_name = getattr(args, "name", None)
+        if not fallback_tag_name:
+            fallback_tag_name = last_zid
+        else:
+            fallback_tag_name = fallback_tag_name.format(zid=last_zid)
+            
+        commit_msg = msg_template.format(zid=last_zid, tag_name=fallback_tag_name)
         
         print(f"[{name}] Staging changes and committing with message '{commit_msg}'...")
         
