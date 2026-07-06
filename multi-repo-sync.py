@@ -53,12 +53,14 @@ def get_zid():
         return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
 def cmd_status(args):
-    # Print clean Docker/Terraform-like aligned column headers
-    print(f"{'REPOSITORY':<15} {'STATUS':<10} {'BRANCH':<20} {'COMMIT':<10} {'TAGS':<20} {'MESSAGE'}")
-    
+    # Collect all repository status details
+    rows = []
     for name, path in REPOS.items():
         if not os.path.exists(path):
-            print(f"{name:<15} {'missing':<10} {'-':<20} {'-':<10} {'-':<20} (Folder not found)")
+            rows.append({
+                "name": name, "status": "missing", "branch": "-",
+                "hash": "-", "tags": "-", "msg": "(Folder not found)"
+            })
             continue
             
         branch, _ = run_git(path, ["rev-parse", "--abbrev-ref", "HEAD"])
@@ -67,14 +69,26 @@ def cmd_status(args):
         tags, _ = run_git(path, ["tag", "--points-at", "HEAD"])
         dirty, _ = run_git(path, ["status", "--porcelain"])
         
-        status_str = "dirty" if dirty else "clean"
-        branch_str = branch if branch else "detached"
+        rows.append({
+            "name": name,
+            "status": "dirty" if dirty else "clean",
+            "branch": branch if branch else "detached",
+            "hash": commit_hash if commit_hash else "-",
+            "tags": ", ".join(tags.splitlines()) if tags else "-",
+            "msg": commit_msg if commit_msg else "(No commits)"
+        })
         
-        c_hash = commit_hash if commit_hash else "-"
-        c_msg = commit_msg if commit_msg else "(No commits)"
-        tag_str = ", ".join(tags.splitlines()) if tags else "-"
-            
-        print(f"{name:<15} {status_str:<10} {branch_str:<20} {c_hash:<10} {tag_str:<20} {c_msg}")
+    # Dynamically compute column widths
+    w_name = max(max(len(r["name"]) for r in rows), len("REPOSITORY"))
+    w_status = max(max(len(r["status"]) for r in rows), len("STATUS"))
+    w_branch = max(max(len(r["branch"]) for r in rows), len("BRANCH"))
+    w_hash = max(max(len(r["hash"]) for r in rows), len("COMMIT"))
+    w_tags = max(max(len(r["tags"]) for r in rows), len("TAGS"))
+    
+    # Print aligned columns
+    print(f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}")
+    for r in rows:
+        print(f"{r['name']:<{w_name}} {r['status']:<{w_status}} {r['branch']:<{w_branch}} {r['hash']:<{w_hash}} {r['tags']:<{w_tags}} {r['msg']}")
 
 def cmd_tag(args):
     tag_name = args.name
@@ -172,15 +186,21 @@ def log_tag_to_file(tag_name, log_path_str):
             f.write(f"\n## Release {tag_name} ({date_str})\n\n")
             
             if LOG_FORMAT == "code":
+                w_name = max(max(len(name) for name in REPOS.keys()), len("REPOSITORY"))
+                w_status = max(max(len(hashes[name]["status"]) for name in REPOS.keys()), len("STATUS"))
+                w_branch = max(max(len(hashes[name]["branch"]) for name in REPOS.keys()), len("BRANCH"))
+                w_hash = max(max(len(hashes[name]["hash"]) for name in REPOS.keys()), len("COMMIT"))
+                w_tags = max(max(len(hashes[name]["tags"]) for name in REPOS.keys()), len("TAGS"))
+                
                 f.write("```text\n")
-                f.write(f"{'REPOSITORY':<15} {'STATUS':<10} {'BRANCH':<20} {'COMMIT':<10} {'TAGS':<20} {'MESSAGE'}\n")
+                f.write(f"{'REPOSITORY':<{w_name}} {'STATUS':<{w_status}} {'BRANCH':<{w_branch}} {'COMMIT':<{w_hash}} {'TAGS':<{w_tags}} {'MESSAGE'}\n")
                 for name in REPOS.keys():
                     status_str = hashes[name]["status"]
                     branch_str = hashes[name]["branch"]
                     c_hash = hashes[name]["hash"]
                     tag_str = hashes[name]["tags"]
                     c_msg = hashes[name]["msg"]
-                    f.write(f"{name:<15} {status_str:<10} {branch_str:<20} {c_hash:<10} {tag_str:<20} {c_msg}\n")
+                    f.write(f"{name:<{w_name}} {status_str:<{w_status}} {branch_str:<{w_branch}} {c_hash:<{w_hash}} {tag_str:<{w_tags}} {c_msg}\n")
                 f.write("```\n")
             else:
                 f.write("| REPOSITORY | STATUS | BRANCH | COMMIT | TAGS | MESSAGE |\n")
