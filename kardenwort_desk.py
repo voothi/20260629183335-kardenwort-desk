@@ -1474,9 +1474,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 eff_mode = _effective_text_mode(text, text_mode)
                 translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
                 save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-                _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=False)
+                _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                 
-
+ 
         except TranslationAlignmentError as tae:
             logger.error(f"Monolithic translation alignment error: {tae}")
             sentence_translations_raw = tae.partial_dict
@@ -1488,7 +1488,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             eff_mode = _effective_text_mode(text, text_mode)
             translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
             save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-            _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=False)
+            _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
         if word_translations_empty:
@@ -3336,7 +3336,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
     translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
     eff_mode = _effective_text_mode(text, text_mode)
-    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
+    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=True)
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
@@ -4184,6 +4184,10 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 sentences = [idx_to_sentence[k] for k in sorted_keys]
                 
                 def _get_configured_text_mode():
+                    import os
+                    env_mode = os.environ.get("KARDEN_ACTIVE_TEXT_MODE")
+                    if env_mode is not None:
+                        return env_mode
                     try:
                         import configparser
                         cfg = configparser.ConfigParser()
@@ -4262,7 +4266,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
-                    _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=False)
+                    _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                 except TranslationAlignmentError as tae:
                     logger.error(f"Progressive translation alignment error: {tae}")
                     comments, headers, current_rows = load_tsv_rows(tsv_path)
@@ -4280,7 +4284,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
-                    _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=False)
+                    _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=True)
                     
                     sys.exit(EXIT_PARTIAL_TRANSLATION_PERSISTED)
         
@@ -4480,6 +4484,8 @@ def cmd_progressive_worker(args):
             
         logger.info("Progressive-worker subcommand invoked")
         config, resolved_paths, goldendict = load_config(args.config)
+        import os
+        os.environ["KARDEN_ACTIVE_TEXT_MODE"] = args.text_mode
         
         if not tsv_path.exists():
             return
