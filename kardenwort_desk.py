@@ -860,6 +860,13 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
                 row.append("")
             row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
             
+        if eff_mode == 'single':
+            col_sentence_source = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
+            if col_sentence_source != -1:
+                while len(row) <= col_sentence_source:
+                    row.append("")
+                row[col_sentence_source] = text.strip()
+            
     if persist and tsv_path:
         with file_lock(tsv_path):
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
