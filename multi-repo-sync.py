@@ -150,7 +150,8 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
     
     # If path is a directory or lacks extension, append default filename
     if log_path.is_dir() or log_path_str.endswith(("/", "\\")) or not log_path.suffix:
-        log_path = log_path / DEFAULT_LOG_FILENAME
+        default_name = "multi-repo-sync.log" if log_format == "log" else DEFAULT_LOG_FILENAME
+        log_path = log_path / default_name
         
     # Get commit identifiers and statuses based on configuration
     hashes = {}
@@ -184,7 +185,24 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
-            if log_format == "table":
+            if log_format == "log":
+                # Flat single-line log format (perfect for sorting by ZID)
+                parts = [f"{tag_name}", f"[{date_str}]"]
+                for name in REPOS.keys():
+                    if hashes[name]["status"] == "missing":
+                        parts.append(f"{name}:absent")
+                    else:
+                        c_hash = hashes[name]["hash"]
+                        c_msg = hashes[name]["msg"]
+                        if LOG_COMMIT_VAL == "msg":
+                            val = c_msg
+                        elif LOG_COMMIT_VAL == "both":
+                            val = f"{c_hash}({c_msg})"
+                        else:  # "hash"
+                            val = c_hash
+                        parts.append(f"{name}:{val}")
+                f.write(" ".join(parts) + "\n")
+            elif log_format == "table":
                 # Flat horizontal table (perfect for sorting by ZID)
                 repo_names = list(REPOS.keys())
                 if write_header:
@@ -363,12 +381,12 @@ def main():
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
     parser_tag.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
-    parser_tag.add_argument("--log-format", choices=["table", "code"], default=None, help="Markdown logging format. Overrides LOG_FORMAT.")
+    parser_tag.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
     # commit subcommand
     parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs. Supports -l and --log-format.")
-    parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record post-commit hashes.")
-    parser_commit.add_argument("--log-format", choices=["table", "code"], default=None, help="Markdown logging format. Overrides LOG_FORMAT.")
+    parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record post-commit hashes.")
+    parser_commit.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
     # checkout subcommand
     parser_checkout = subparsers.add_parser("checkout", help="Checkout a specific tag/branch across all repositories.")
