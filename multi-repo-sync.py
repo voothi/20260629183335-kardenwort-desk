@@ -110,7 +110,7 @@ def cmd_tag(args):
         tag_msg_template = DEFAULT_TAG_MSG_TEMPLATE
     tag_msg = tag_msg_template.format(zid=zid_val, tag_name=tag_name)
         
-    print(f"Creating coordinated tag '{tag_name}' across all repositories with message '{tag_msg}'...")
+    print(f"sync: Creating coordinated tag [name={tag_name}]")
     
     # 1. Pre-check dirty repos
     dirty_repos = []
@@ -121,8 +121,8 @@ def cmd_tag(args):
                 dirty_repos.append(name)
                 
     if dirty_repos:
-        print(f"WARNING: The following repositories have uncommitted changes: {', '.join(dirty_repos)}")
-        print("The tag will be attached to the latest COMMIT, not the uncommitted workspace changes.")
+        print(f"sync: Warning - The following repositories have uncommitted changes: {', '.join(dirty_repos)}")
+        print("sync: The tag will be attached to the latest commit, not the uncommitted workspace changes.")
         if not args.force:
             confirm = input("Do you want to proceed? [y/N]: ").strip().lower()
             if confirm != 'y':
@@ -133,23 +133,23 @@ def cmd_tag(args):
     success = True
     for name, path in REPOS.items():
         if not os.path.exists(path):
-            print(f"[-] {name}: Skipped (Path not found)")
+            print(f"{name}: Skipped (path not found)")
             continue
             
         # Create annotated tag
         _, err = run_git(path, ["tag", "-a", tag_name, "-m", tag_msg])
         if err:
-            print(f"[X] {name}: Failed to tag ({err})")
+            print(f"{name}: Error - Failed to tag ({err})")
             success = False
         else:
-            print(f"[+] {name}: Tagged successfully")
+            print(f"{name}: Tag complete")
             if args.push:
-                print(f"    Pushing tag '{tag_name}' to {GIT_REMOTE}...")
+                print(f"{name}: Pushing tag '{tag_name}' to {GIT_REMOTE}...")
                 _, err_push = run_git(path, ["push", GIT_REMOTE, tag_name])
                 if err_push and "error:" in err_push:
-                    print(f"    [X] Failed to push tag ({err_push})")
+                    print(f"{name}: Error - Failed to push tag ({err_push})")
                 else:
-                    print(f"    [+] Tag pushed successfully to {GIT_REMOTE}")
+                    print(f"{name}: Push complete")
             
     # 3. Log to file if requested
     if success and args.log_file:
@@ -363,21 +363,27 @@ def cmd_checkout(args):
         print("Use --force to discard uncommitted changes or stash them first.")
         sys.exit(1)
         
-    # 2. Checkout
+    print(f"sync: Checking out [target={tag_name}]")
     for name, path in REPOS.items():
         if not os.path.exists(path):
-            print(f"[-] {name}: Skipped (Path not found)")
+            print(f"{name}: Skipped (path not found)")
             continue
             
-        checkout_args = ["checkout", tag_name]
-        if args.force:
-            checkout_args.append("-f")
+        # Check if repo is dirty
+        dirty, _ = run_git(path, ["status", "--porcelain"])
+        if dirty and not args.force:
+            print(f"{name}: Error - Repository has uncommitted changes. Use -f to force.")
+            continue
             
-        _, err = run_git(path, checkout_args)
+        cmd = ["checkout", tag_name]
+        if args.force:
+            cmd.append("-f")
+            
+        _, err = run_git(path, cmd)
         if err and "error:" in err:
-            print(f"[X] {name}: Failed to checkout ({err})")
+            print(f"{name}: Error - Failed to checkout ({err})")
         else:
-            print(f"[+] {name}: Checked out successfully")
+            print(f"{name}: Checkout complete")
 
 def cmd_delete(args):
     tag_name = args.name
@@ -385,19 +391,19 @@ def cmd_delete(args):
         print("Error: You must specify a tag name to delete.")
         sys.exit(1)
         
-    print(f"Deleting tag '{tag_name}' across all repositories...")
+    print(f"sync: Deleting tag [target={tag_name}]")
     for name, path in REPOS.items():
         if not os.path.exists(path):
             continue
             
         _, err = run_git(path, ["tag", "-d", tag_name])
         if err and "error:" in err:
-            print(f"[X] {name}: Failed to delete tag ({err})")
+            print(f"{name}: Error - Failed to delete tag ({err})")
         else:
-            print(f"[+] {name}: Tag deleted successfully")
+            print(f"{name}: Tag deleted successfully")
 
 def cmd_commit(args):
-    print("Coordinating commits across repositories...")
+    print("sync: Evaluating repositories for commit...")
     
     # 1. Identify dirty repositories
     dirty_repos = []
@@ -408,17 +414,17 @@ def cmd_commit(args):
                 dirty_repos.append((name, path))
                 
     if not dirty_repos:
-        print("No uncommitted changes found in any repository. Nothing to commit.")
+        print("sync: No uncommitted changes found. Nothing to commit.")
         return
         
-    print(f"Found uncommitted changes in: {', '.join(name for name, _ in dirty_repos)}")
+    print(f"sync: Uncommitted changes detected in: {', '.join(name for name, _ in dirty_repos)}")
     
     # 2. Perform commits
     committed_any = False
     last_zid = None
     for i, (name, path) in enumerate(dirty_repos):
         if i > 0:
-            print("Sleeping 1.1 seconds to guarantee a unique ZID timestamp...")
+            print("sync: Sleeping 1.1s for unique timestamp...")
             time.sleep(1.1)
             
         last_zid = get_zid()
@@ -435,20 +441,20 @@ def cmd_commit(args):
             
         commit_msg = msg_template.format(zid=last_zid, tag_name=fallback_tag_name)
         
-        print(f"[{name}] Staging changes and committing with message '{commit_msg}'...")
+        print(f"\n{name}: Staging changes and committing...")
         
         # Stage all changes (add untracked and modified)
         _, err_add = run_git(path, ["add", "-A"])
         if err_add:
-            print(f"[X] {name}: Failed to stage changes ({err_add})")
+            print(f"{name}: Error - Failed to stage changes ({err_add})")
             continue
             
         # Commit with resolved message
         _, err_commit = run_git(path, ["commit", "-m", commit_msg])
         if err_commit and "error:" in err_commit:
-            print(f"[X] {name}: Failed to commit ({err_commit})")
+            print(f"{name}: Error - Failed to commit ({err_commit})")
         else:
-            print(f"[+] {name}: Committed successfully")
+            print(f"{name}: Commit complete [msg={commit_msg}]")
             committed_any = True
             
     # 3. Log to file if requested
@@ -457,7 +463,7 @@ def cmd_commit(args):
             log_tag_to_file(last_zid, log_path, log_format=args.log_format)
 
 def cmd_sync(args):
-    print("=== SYNCHRONIZATION: COMMIT ===")
+    print("sync: Starting commit phase...")
     
     # Temporarily disable logging for commit to avoid duplicate log entries
     original_log_file = getattr(args, "log_file", None)
@@ -467,10 +473,10 @@ def cmd_sync(args):
     cmd_commit(args)
     
     # Give a tiny bit of breathing room before generating a new ZID for the tag
-    print("Sleeping 1.1 seconds for unique tag ZID...")
+    print("\nsync: Sleeping 1.1s for unique tag timestamp...")
     time.sleep(1.1)
     
-    print("\n=== SYNCHRONIZATION: TAG ===")
+    print("\nsync: Starting tag phase...")
     # Restore log_file for tag step
     args.log_file = original_log_file
     
