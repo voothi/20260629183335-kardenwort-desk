@@ -930,6 +930,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     translations = {idx: "" for idx in range(len(lines))}
     
     if split_mode == 'line_by_line':
+        first_failure = None
         for idx, line in enumerate(lines):
             if not line.strip():
                 continue
@@ -948,10 +949,14 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         time.sleep(retry_backoff)
             if not success:
                 translations[idx] = ""
-                raise TranslationAlignmentError(
-                    f"Line-by-line translation failed at line {idx}: {last_err}",
-                    partial_dict=translations
-                )
+                if first_failure is None:
+                    first_failure = (idx, last_err)
+        if first_failure is not None:
+            failed_idx, failed_err = first_failure
+            raise TranslationAlignmentError(
+                f"Line-by-line translation failed at line {failed_idx}: {failed_err}",
+                partial_dict=translations
+            )
         return translations
         
     chunks = _build_chunks(lines, chunk_size, config)
@@ -1012,6 +1017,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     time.sleep(retry_backoff)
                     
         if not success:
+            first_rescue_failure = None
             for list_idx, target_idx in enumerate(indices):
                 original_line = chunk_text_list[list_idx]
                 try:
@@ -1020,10 +1026,14 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     translations[target_idx] = rescued_line.strip()
                 except Exception as rescue_err:
                     translations[target_idx] = ""
-                    raise TranslationAlignmentError(
-                        f"Rescue translation failed for line {target_idx}: {rescue_err}",
-                        partial_dict=translations
-                    )
+                    if first_rescue_failure is None:
+                        first_rescue_failure = (target_idx, rescue_err)
+            if first_rescue_failure is not None:
+                failed_idx, failed_err = first_rescue_failure
+                raise TranslationAlignmentError(
+                    f"Rescue translation failed for line {failed_idx}: {failed_err}",
+                    partial_dict=translations
+                )
                     
     return translations
 
@@ -4139,13 +4149,24 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                     
         if translated_text is None:
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+            col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
             if col_sentence_dest != -1:
-                sentences = []
+                idx_to_sentence = {}
                 for row in data_rows:
                     if len(row) > col_sentence_dest:
                         s = row[col_sentence_dest].strip()
-                        if s and s not in sentences:
-                            sentences.append(s)
+                        if s:
+                            idx_val = 0
+                            if col_index != -1 and len(row) > col_index and row[col_index].strip():
+                                try:
+                                    idx_val = int(row[col_index])
+                                except ValueError:
+                                    pass
+                            if idx_val not in idx_to_sentence:
+                                idx_to_sentence[idx_val] = s
+                
+                sorted_keys = sorted(idx_to_sentence.keys())
+                sentences = [idx_to_sentence[k] for k in sorted_keys]
                 translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
                 
         update_data = {
