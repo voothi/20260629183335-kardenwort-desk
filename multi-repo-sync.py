@@ -27,7 +27,7 @@ DEFAULT_TAG_NAME_TEMPLATE = "{zid}-snapshot-desk"
 DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid} to desk"
 DEFAULT_COMMIT_MSG_TEMPLATE = "{zid} to desk"
 REVERSE_TAGS_ORDER = True  # Display tags starting from the latest/last (True) or alphabetical/chronological order (False)
-STATUS_COLUMNS = ["REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
+STATUS_COLUMNS = ["REPOSITORY", "STATUS", "COMMIT", "TAGS", "MESSAGE"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
 
 def run_git(repo_path, args):
     try:
