@@ -681,8 +681,8 @@ def split_single_mode_text(text, max_chars=90):
         return _split_long_line(text, max_chars)
     return sentences
 
-def _effective_text_mode(text, configured_text_mode):
-    return 'multi' if (configured_text_mode == 'single' and '\n' in text.strip()) else configured_text_mode
+def _effective_text_mode(text, configured_text_mode=None):
+    return 'multi' if '\n' in text.strip() else 'single'
 
 def _validate_translated_line(orig_line, trans_line, idx, config):
     if not trans_line.strip():
@@ -1413,12 +1413,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     slug = generate_slug(text)
     cache_key = f"{zid}-{slug}.{language}.tsv"
     
+    eff_mode = _effective_text_mode(text, text_mode)
+    
     if tsv_path and Path(tsv_path).exists():
         working_tsv_path = Path(tsv_path)
     else:
         working_tsv_path = prepare_lookup_tsv(
             text, language, target_lang, config, resolved_paths, zid,
-            ttl_seconds=0, cache_key=cache_key, text_mode=text_mode
+            ttl_seconds=0, cache_key=cache_key, text_mode=eff_mode
         )
     
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
@@ -1524,7 +1526,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         sentence_translations = sentence_translations_raw
     elif translation_text_path.exists():
         translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
-        if text_mode == 'single':
+        if eff_mode == 'single':
             sentence_translations[0] = " ".join(translation_lines)
         else:
             for a_idx, ln in enumerate(translation_lines):
@@ -1534,7 +1536,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 if a_idx not in sentence_translations:
                     sentence_translations[a_idx] = ""
     else:
-        if text_mode == 'single':
+        if eff_mode == 'single':
             sentence_translations[0] = extracted_translations.get(0, "")
         else:
             c_idx = 0
@@ -1557,8 +1559,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         if is_progressive:
             if (run_text == 'auto' and not sentence_translated) or (run_base == 'auto' and word_translations_empty) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
-                text_mode = config.get('settings', 'text_mode', fallback='single')
-                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller, text_mode)
+                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller, eff_mode)
                 worker_launched = True
         else:
             # Monolithic mode enrichment
@@ -3269,7 +3270,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
-    html_page = html_page.replace("{source_white_space}", "pre-wrap" if text_mode == "multi" else "normal")
+    html_page = html_page.replace("{source_white_space}", "pre-wrap" if eff_mode == "multi" else "normal")
     
     selected_col_name = role_fields.get('selected', 'DeskSelected')
     html_page = html_page.replace("{selected_col_name}", selected_col_name)
@@ -4187,20 +4188,21 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 sorted_keys = sorted(idx_to_sentence.keys())
                 sentences = [idx_to_sentence[k] for k in sorted_keys]
                 
-                def _get_configured_text_mode():
-                    import os
-                    env_mode = os.environ.get("KARDEN_ACTIVE_TEXT_MODE")
-                    if env_mode is not None:
-                        return env_mode
-                    try:
-                        import configparser
-                        cfg = configparser.ConfigParser()
-                        cfg.read("config.ini", encoding="utf-8")
-                        return cfg.get("settings", "text_mode", fallback="single")
-                    except Exception:
-                        return "single"
-                        
-                if _get_configured_text_mode() == 'single':
+                is_single = True
+                if source_text:
+                    if '\n' in source_text.strip():
+                        is_single = False
+                else:
+                    source_txt_path = tsv_path.with_suffix('.txt')
+                    if source_txt_path.exists():
+                        try:
+                            txt = source_txt_path.read_text(encoding='utf-8')
+                            if '\n' in txt.strip():
+                                is_single = False
+                        except Exception:
+                            pass
+
+                if is_single:
                     translated_text = f"<div>{html.escape(' '.join(sentences))}</div>"
                 else:
                     translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
