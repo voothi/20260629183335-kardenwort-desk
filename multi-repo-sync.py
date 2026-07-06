@@ -20,7 +20,7 @@ DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
 GIT_REMOTE = "origin"
 LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text), "log" (Plain text log line)
-DEFAULT_CWD = "U:\voothi\20260629183335-kardenwort-desk"   # Default working directory context (None means use shell's current directory)
+DEFAULT_CWD = r"U:\voothi\20260629183335-kardenwort-desk"   # Default working directory context (None means use shell's current directory)
 
 def run_git(repo_path, args):
     try:
