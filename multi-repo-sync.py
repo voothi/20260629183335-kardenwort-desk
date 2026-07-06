@@ -430,7 +430,21 @@ def cmd_commit(args):
             log_tag_to_file(last_zid, log_path, log_format=args.log_format)
 
 def main():
-    parser = argparse.ArgumentParser(description="Coordinated repository sync, tag, and checkout manager.")
+    parser = argparse.ArgumentParser(
+        description="Coordinated repository sync, tag, and checkout manager.",
+        epilog="""
+subcommand options:
+  tag / commit
+    -l, --log-file PATHS...   One or more paths to history log files to record sync snapshots.
+    --log-format FORMAT       Logging format (choices: table, code, log). Overrides LOG_FORMAT.
+  tag
+    -f, --force               Force tag creation without confirmation on dirty worktrees.
+    -p, --push                Push tags to remote origin repository.
+  checkout
+    -f, --force               Force checkout (discarding local changes).
+        """,
+        formatter_class=argparse.RawDescriptionHelpFormatter
+    )
     subparsers = parser.add_subparsers(dest="command", required=True)
     
     # status subcommand
