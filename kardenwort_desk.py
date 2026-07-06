@@ -3962,6 +3962,10 @@ def cmd_lookup(args):
         if text_mode == 'single' and '\n' in args.text.strip():
             text_mode = 'multi'
             
+        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
+        if text_mode == 'multi' and remove_empty:
+            args.text = "\n".join(line for line in args.text.splitlines() if line.strip())
+            
         comments, headers, data_rows, sentence_translation = run_lookup_flow(
             args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode
         )
@@ -4010,6 +4014,14 @@ def cmd_render(args):
             sys.exit(1)
     else:
         text = args.text
+        
+    text_mode = getattr(args, 'text_mode', 'single')
+    if text_mode == 'single' and '\n' in text.strip():
+        text_mode = 'multi'
+        
+    remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
+    if text_mode == 'multi' and remove_empty:
+        text = "\n".join(line for line in text.splitlines() if line.strip())
         
     try:
         zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
@@ -5206,6 +5218,14 @@ def cmd_desk(args):
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to read file: {e}")
         sys.exit(1)
+        
+    text_mode = getattr(args, 'text_mode', 'single')
+    if text_mode == 'single' and '\n' in text.strip():
+        text_mode = 'multi'
+        
+    remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
+    if text_mode == 'multi' and remove_empty:
+        text = "\n".join(line for line in text.splitlines() if line.strip())
         
     lang = args.language
     if not lang:
