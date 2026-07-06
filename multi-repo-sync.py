@@ -17,7 +17,7 @@ REPOS = {
 ZID_SCRIPT = r"U:\voothi\20241116203211-zid\zid.py"
 DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
 GIT_REMOTE = "origin"
-LOG_COMMIT_VAL = "msg"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
+LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 
 def run_git(repo_path, args):
     try:
@@ -139,34 +139,47 @@ def log_tag_to_file(tag_name, log_path_str):
         if os.path.exists(path):
             commit_hash, _ = run_git(path, ["rev-parse", "HEAD"])
             commit_msg, _ = run_git(path, ["log", "-1", "--pretty=format:%s"])
-            
-            c_hash = commit_hash[:8] if commit_hash else "unknown"
-            c_msg = commit_msg if commit_msg else "unknown"
-            
-            if LOG_COMMIT_VAL == "msg":
-                hashes[name] = c_msg
-            elif LOG_COMMIT_VAL == "both":
-                hashes[name] = f"{c_hash} ({c_msg})"
-            else:  # "hash"
-                hashes[name] = c_hash
+            hashes[name] = {
+                "hash": commit_hash[:8] if commit_hash else "-",
+                "msg": commit_msg if commit_msg else "-"
+            }
         else:
-            hashes[name] = "absent"
+            hashes[name] = {
+                "hash": "absent",
+                "msg": "absent"
+            }
             
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_header = not log_path.exists() or log_path.stat().st_size == 0
     repo_names = list(REPOS.keys())
     
+    # Dynamically build headers and row data based on LOG_COMMIT_VAL
+    headers = ["Tag / ZID", "Date"]
+    row_data = [tag_name, date_str]
+    
+    for name in repo_names:
+        c_hash = hashes[name]["hash"]
+        c_msg = hashes[name]["msg"]
+        
+        if LOG_COMMIT_VAL == "both":
+            headers.extend([f"{name}_hash", f"{name}_msg"])
+            row_data.extend([c_hash, c_msg])
+        elif LOG_COMMIT_VAL == "msg":
+            headers.append(name)
+            row_data.append(c_msg)
+        else:  # "hash"
+            headers.append(name)
+            row_data.append(c_hash)
+            
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
             if write_header:
                 f.write("# Multi-Repo Sync History\n\n")
-                headers = ["Tag / ZID", "Date"] + repo_names
                 alignments = [":---"] * len(headers)
                 f.write("| " + " | ".join(headers) + " |\n")
                 f.write("| " + " | ".join(alignments) + " |\n")
             
-            row_data = [tag_name, date_str] + [hashes.get(name, "-") for name in repo_names]
             row = "| " + " | ".join(row_data) + " |\n"
             f.write(row)
         print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
