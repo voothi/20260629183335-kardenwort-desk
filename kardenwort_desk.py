@@ -682,7 +682,8 @@ def split_single_mode_text(text, max_chars=90):
     return sentences
 
 def _effective_text_mode(text, configured_text_mode=None):
-    return 'multi' if '\n' in text.strip() else 'single'
+    stripped = text.strip()
+    return 'multi' if ('\n' in stripped or '\r' in stripped) else 'single'
 
 def _validate_translated_line(orig_line, trans_line, idx, config):
     if not trans_line.strip():
@@ -1214,6 +1215,7 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
         return False, e.stderr
 
 def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single'):
+    eff_mode = _effective_text_mode(text, text_mode)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -1268,7 +1270,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
     
     text_to_write = text
-    if text_mode == 'single':
+    if eff_mode == 'single':
         split_lines = split_single_mode_text(text, wrap_max_chars)
         text_to_write = "\n".join(split_lines)
 
@@ -4190,14 +4192,16 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 
                 is_single = True
                 if source_text:
-                    if '\n' in source_text.strip():
+                    stripped_src = source_text.strip()
+                    if '\n' in stripped_src or '\r' in stripped_src:
                         is_single = False
                 else:
                     source_txt_path = tsv_path.with_suffix('.txt')
                     if source_txt_path.exists():
                         try:
                             txt = source_txt_path.read_text(encoding='utf-8')
-                            if '\n' in txt.strip():
+                            stripped_txt = txt.strip()
+                            if '\n' in stripped_txt or '\r' in stripped_txt:
                                 is_single = False
                         except Exception:
                             pass
