@@ -674,7 +674,52 @@ def _split_long_line(line, max_chars=90):
 
 def split_single_mode_text(text, max_chars=90):
     import re
-    sentences = [s.strip() for s in re.split(r'(?<=[.!?]|\:)\s+', text.strip()) if s.strip()]
+    abbrevs = {
+        "ca", "z.b", "usw", "uzw", "bzw", "etc", "t.con", "d.h", "u.a", "vgl", "ggf",
+        "bspw", "u.u", "i.d.r", "bzgl", "evtl", "sog", "bsp", "z.zt", "m.e",
+        "e.g", "i.e", "approx", "vs", "cf", "ltd", "co", "inc", "prof", "dr",
+        "mr", "mrs", "ms"
+    }
+    
+    candidates = list(re.finditer(r'(?<=[.!?]|\:)\s+', text))
+    
+    splits = []
+    last_idx = 0
+    for m in candidates:
+        split_pos = m.start()
+        punc = text[split_pos - 1]
+        
+        if punc == '.':
+            preceding_part = text[last_idx:split_pos]
+            match = re.search(r'([a-zA-Z0-9.-]+)$', preceding_part.strip())
+            if match:
+                word = match.group(1).lower().rstrip('.')
+                full_word = word
+                if len(word) == 1 and preceding_part.strip().endswith(f" {word}"):
+                    prev_part = preceding_part.strip()[:-len(word)].strip()
+                    prev_match = re.search(r'([a-zA-Z0-9.-]+)$', prev_part)
+                    if prev_match:
+                        prev_word = prev_match.group(1).lower()
+                        if prev_word.endswith('.'):
+                            full_word = f"{prev_word} {word}"
+                
+                clean_word = full_word.replace(' ', '')
+                if clean_word in abbrevs or clean_word.replace('.', '') in abbrevs:
+                    continue
+                if re.match(r'^[a-zA-Z]$', clean_word.replace('.', '')):
+                    continue
+        
+        splits.append(split_pos)
+        
+    sentences = []
+    start = 0
+    for pos in splits:
+        sentences.append(text[start:pos].strip())
+        spaces_match = re.match(r'^\s+', text[pos:])
+        start = pos + (spaces_match.end() if spaces_match else 0)
+    sentences.append(text[start:].strip())
+    sentences = [s for s in sentences if s]
+    
     if not sentences:
         return []
     if len(sentences) <= 1 and len(text) > max_chars:

@@ -179,3 +179,13 @@ def test_single_mode_invariant_check():
     assert data_rows[1][2] == "world"
     assert data_rows[0][3] == "snippet1"
     assert data_rows[1][3] == "snippet2"
+
+def test_abbreviation_aware_splitting():
+    # Abbreviations ca., usw., uzw., d.h., z.B. should not split the sentence.
+    text = "Wir haben ca. 5 Äpfel usw. und auch Birnen d.h. Obst. Aber Kirschen nicht."
+    res = desk.split_single_mode_text(text)
+    assert res == [
+        "Wir haben ca. 5 Äpfel usw. und auch Birnen d.h. Obst.",
+        "Aber Kirschen nicht."
+    ]
+
