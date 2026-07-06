@@ -215,3 +215,24 @@ def test_custom_abbreviation_allowlist():
     custom_abbrev_set = {"ca", "z.b"}
     res_custom = desk.split_single_mode_text(text, abbrevs=custom_abbrev_set)
     assert res_custom == ["Wir trafen Prof.", "Müller.", "Er ging nach Hause."]
+
+def test_custom_terminators():
+    text = "Sentence one: detail. Sentence two! Sentence three."
+    
+    # Default splitting (splits on colon too)
+    res_default = desk.split_single_mode_text(text)
+    assert res_default == ["Sentence one:", "detail.", "Sentence two!", "Sentence three."]
+    
+    # Custom terminators (only .!)
+    res_custom = desk.split_single_mode_text(text, terminators=".!")
+    assert res_custom == ["Sentence one: detail.", "Sentence two!", "Sentence three."]
+
+def test_context_truncation():
+    text = "word1 word2 word3 TargetSentence word4 word5 word6"
+    sentences = ["TargetSentence"]
+    
+    # Pad by 3 words on both sides, limit to 5 total words
+    res = desk.pad_sentences(sentences, text, words_before=3, words_after=3, max_words=5)
+    # TargetSentence (1 word) + 2 words left + 2 words right = 5 words total
+    assert res[0] == "word2 word3 TargetSentence word4 word5"
+

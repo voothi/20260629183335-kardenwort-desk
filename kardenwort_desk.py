@@ -672,7 +672,7 @@ def _split_long_line(line, max_chars=90):
     out.append(cur)
     return out
 
-def split_single_mode_text(text, max_chars=90, abbrevs=None):
+def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:"):
     import re
     if abbrevs is None:
         abbrevs = {
@@ -682,7 +682,8 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None):
             "mr", "mrs", "ms"
         }
     
-    candidates = list(re.finditer(r'(?<=[.!?]|\:)\s+', text))
+    escaped_terms = "".join(re.escape(c) for c in terminators)
+    candidates = list(re.finditer(f'(?<=[{escaped_terms}])\\s+', text))
     
     splits = []
     last_idx = 0
@@ -727,7 +728,7 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None):
         return _split_long_line(text, max_chars)
     return sentences
 
-def pad_sentences(sentences, original_text, words_before=0, words_after=0):
+def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_words=0):
     if not (words_before or words_after):
         return sentences
         
@@ -779,6 +780,68 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0):
                 
         padded_sentence = original_text[pad_s:pad_e].replace('\n', ' ').replace('\r', ' ').strip()
         padded_sentence = re.sub(r'\s+', ' ', padded_sentence)
+        
+        # Truncate context if it exceeds max_words
+        if max_words > 0:
+            padded_words = tok.build_word_list(padded_sentence)
+            if len(padded_words) > max_words:
+                target_sentence = sentences[i]
+                target_words = tok.build_word_list(target_sentence)
+                if target_words:
+                    n_p = len(padded_words)
+                    n_t = len(target_words)
+                    
+                    target_start_idx = -1
+                    for j in range(n_p - n_t + 1):
+                        if padded_words[j:j+n_t] == target_words:
+                            target_start_idx = j
+                            break
+                            
+                    if target_start_idx == -1:
+                        target_start_idx = (n_p - n_t) // 2
+                        
+                    target_end_idx = target_start_idx + n_t - 1
+                    
+                    span = n_t
+                    if span >= max_words:
+                        crop_start = target_start_idx
+                        crop_end = target_end_idx
+                    else:
+                        left_cap = (max_words - span) // 2
+                        right_cap = max_words - span - left_cap
+                        
+                        actual_left_cap = min(left_cap, target_start_idx)
+                        actual_right_cap = min(right_cap, n_p - 1 - target_end_idx)
+                        
+                        leftover_right = left_cap - actual_left_cap
+                        leftover_left = right_cap - actual_right_cap
+                        
+                        if leftover_right > 0:
+                            actual_right_cap = min(actual_right_cap + leftover_right, n_p - 1 - target_end_idx)
+                        if leftover_left > 0:
+                            actual_left_cap = min(actual_left_cap + leftover_left, target_start_idx)
+                            
+                        crop_start = target_start_idx - actual_left_cap
+                        crop_end = target_end_idx + actual_right_cap
+                        
+                    p_tokens = tok.build_word_list_internal(padded_sentence, keep_spaces=True)
+                    p_token_spans = []
+                    p_curr_idx = 0
+                    for t in p_tokens:
+                        t_len = len(t["text"])
+                        p_token_spans.append({
+                            "start": p_curr_idx,
+                            "end": p_curr_idx + t_len,
+                            "is_word": t["is_word"]
+                        })
+                        p_curr_idx += t_len
+                        
+                    word_token_spans = [ts for ts in p_token_spans if ts["is_word"]]
+                    if word_token_spans:
+                        f_char = word_token_spans[crop_start]["start"]
+                        l_char = word_token_spans[crop_end]["end"]
+                        padded_sentence = padded_sentence[f_char:l_char].strip()
+                        
         padded.append(padded_sentence)
         
     return padded
@@ -994,10 +1057,14 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
         else:
             abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
             abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
-            pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set)
+            terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+            if not terminators.strip():
+                terminators = ".!?:"
+            pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
             words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
             words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
-            pseudo_lines = pad_sentences(pseudo_lines, text, words_before, words_after)
+            max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
+            pseudo_lines = pad_sentences(pseudo_lines, text, words_before, words_after, max_words=max_words)
             try:
                 pseudo_translations = translate_source_text(
                     "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
@@ -1372,10 +1439,13 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     try:
         abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
         abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
+        terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+        if not terminators.strip():
+            terminators = ".!?:"
         use_temp = (eff_mode == 'single') or (not save_source_text)
         if use_temp:
             if eff_mode == 'single':
-                split_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set)
+                split_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
                 temp_content = "\n".join(split_lines)
             else:
                 temp_content = text
@@ -1427,14 +1497,15 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
         words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
         words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
+        max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
         if (words_before > 0 or words_after > 0) and working_tsv_path.exists():
             try:
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
                 col_src_idx = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
                 col_src_sent = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
                 if col_src_idx != -1 and col_src_sent != -1:
-                    sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set)
-                    padded_sentences = pad_sentences(sentences, text, words_before, words_after)
+                    sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+                    padded_sentences = pad_sentences(sentences, text, words_before, words_after, max_words=max_words)
                     modified = False
                     for row in data_rows:
                         if len(row) > col_src_idx and len(row) > col_src_sent:
