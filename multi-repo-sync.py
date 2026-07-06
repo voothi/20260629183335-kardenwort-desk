@@ -358,7 +358,7 @@ def main():
     subparsers.add_parser("status", help="Show current branch, status, and tags across repositories.")
     
     # tag subcommand
-    parser_tag = subparsers.add_parser("tag", help="Create a coordinated tag across all repositories.")
+    parser_tag = subparsers.add_parser("tag", help="Create a coordinated tag across all repositories. Supports -l and --log-format.")
     parser_tag.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
@@ -366,7 +366,7 @@ def main():
     parser_tag.add_argument("--log-format", choices=["table", "code"], default=None, help="Markdown logging format. Overrides LOG_FORMAT.")
     
     # commit subcommand
-    parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs.")
+    parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs. Supports -l and --log-format.")
     parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record post-commit hashes.")
     parser_commit.add_argument("--log-format", choices=["table", "code"], default=None, help="Markdown logging format. Overrides LOG_FORMAT.")
     
