@@ -27,7 +27,10 @@ DEFAULT_TAG_NAME_TEMPLATE = "{zid}-snapshot-desk"
 DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid} to desk"
 DEFAULT_COMMIT_MSG_TEMPLATE = "{zid} to desk"
 REVERSE_TAGS_ORDER = True  # Display tags starting from the latest/last (True) or alphabetical/chronological order (False)
-MAX_TAGS_TO_SHOW = 3  # Maximum number of tags to display per repository (None or 0 for unlimited)
+STATUS_TAGS_MAX_LEN = 40  # Maximum character length for tags column in status output (None for unlimited)
+STATUS_TAGS_MAX_COUNT = 3  # Maximum number of tags to show in status output (None or 0 for unlimited)
+LOG_TAGS_MAX_LEN = None   # Maximum character length for tags column in log files (None for unlimited)
+LOG_TAGS_MAX_COUNT = None  # Maximum number of tags to show in log files (None or 0 for unlimited)
 STATUS_COLUMNS = ["REPOSITORY", "STATUS", "COMMIT", "MESSAGE", "TAGS"]  # Options: "REPOSITORY", "STATUS", "BRANCH", "COMMIT", "TAGS", "MESSAGE"
 
 def run_git(repo_path, args):
@@ -126,7 +129,7 @@ def cmd_status(args):
             "STATUS": "dirty" if dirty else "clean",
             "BRANCH": branch if branch else "detached",
             "COMMIT": commit_hash if commit_hash else "-",
-            "TAGS": format_tags(tags_list, max_len=40, max_tags=MAX_TAGS_TO_SHOW),
+            "TAGS": format_tags(tags_list, max_len=STATUS_TAGS_MAX_LEN, max_tags=STATUS_TAGS_MAX_COUNT),
             "MESSAGE": commit_msg if commit_msg else "(No commits)"
         })
         
@@ -258,7 +261,7 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
                 "status": "dirty" if dirty else "clean",
                 "branch": branch if branch else "detached",
                 "hash": commit_hash if commit_hash else "-",
-                "tags": format_tags(tags_list),
+                "tags": format_tags(tags_list, max_len=LOG_TAGS_MAX_LEN, max_tags=LOG_TAGS_MAX_COUNT),
                 "msg": commit_msg if commit_msg else "-"
             }
         else:
