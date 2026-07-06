@@ -1,0 +1,296 @@
+#!/usr/bin/env python3
+import os
+import sys
+import time
+import argparse
+import subprocess
+from pathlib import Path
+
+# Coordinated Repositories Configuration
+REPOS = {
+    "autohotkey": r"U:\voothi\20240411110510-autohotkey",
+    "desk": r"U:\voothi\20260629183335-kardenwort-desk",
+    "core": r"U:\voothi\20241223170748-kardenwort",
+    "vault": r"U:\voothi.vault"
+}
+
+ZID_SCRIPT = r"U:\voothi\20241116203211-zid\zid.py"
+
+def run_git(repo_path, args):
+    try:
+        res = subprocess.run(
+            ["git"] + args,
+            cwd=repo_path,
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True
+        )
+        return res.stdout.strip(), res.stderr.strip()
+    except subprocess.CalledProcessError as e:
+        return None, e.stderr.strip()
+
+def get_zid():
+    if not os.path.exists(ZID_SCRIPT):
+        # Fallback to generating a timestamp locally if the ZID script is not found
+        import datetime
+        return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    try:
+        res = subprocess.run(
+            ["python", ZID_SCRIPT, "--no-clipboard"],
+            capture_output=True,
+            text=True,
+            encoding="utf-8",
+            check=True
+        )
+        return res.stdout.strip()
+    except Exception:
+        import datetime
+        return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+
+def cmd_status(args):
+    print("=" * 80)
+    print(f"{'Repository':<15} | {'Branch':<15} | {'Latest Commit':<12} | {'Tags on HEAD'}")
+    print("=" * 80)
+    
+    for name, path in REPOS.items():
+        if not os.path.exists(path):
+            print(f"{name:<15} | [Folder not found]")
+            continue
+            
+        branch, _ = run_git(path, ["rev-parse", "--abbrev-ref", "HEAD"])
+        commit, _ = run_git(path, ["log", "-1", "--pretty=format:%h (%s)"])
+        tags, _ = run_git(path, ["tag", "--points-at", "HEAD"])
+        dirty, _ = run_git(path, ["status", "--porcelain"])
+        
+        branch_str = branch if branch else "Unknown"
+        if dirty:
+            branch_str += " (DIRTY)"
+            
+        commit_str = commit if commit else "No commits"
+        if len(commit_str) > 30:
+            commit_str = commit_str[:27] + "..."
+            
+        tags_str = ", ".join(tags.splitlines()) if tags else "-"
+        
+        print(f"{name:<15} | {branch_str:<15} | {commit_str:<30} | {tags_str}")
+    print("=" * 80)
+
+def cmd_tag(args):
+    tag_name = args.name
+    if not tag_name:
+        tag_name = get_zid()
+        
+    print(f"Creating coordinated tag '{tag_name}' across all repositories...")
+    
+    # 1. Pre-check dirty repos
+    dirty_repos = []
+    for name, path in REPOS.items():
+        if os.path.exists(path):
+            dirty, _ = run_git(path, ["status", "--porcelain"])
+            if dirty:
+                dirty_repos.append(name)
+                
+    if dirty_repos:
+        print(f"WARNING: The following repositories have uncommitted changes: {', '.join(dirty_repos)}")
+        print("The tag will be attached to the latest COMMIT, not the uncommitted workspace changes.")
+        if not args.force:
+            confirm = input("Do you want to proceed? [y/N]: ").strip().lower()
+            if confirm != 'y':
+                print("Aborted.")
+                sys.exit(1)
+                
+    # 2. Apply tags
+    success = True
+    for name, path in REPOS.items():
+        if not os.path.exists(path):
+            print(f"[-] {name}: Skipped (Path not found)")
+            continue
+            
+        # Create annotated tag
+        _, err = run_git(path, ["tag", "-a", tag_name, "-m", f"Coordinated snapshot {tag_name}"])
+        if err:
+            print(f"[X] {name}: Failed to tag ({err})")
+            success = False
+        else:
+            print(f"[+] {name}: Tagged successfully")
+            
+    # 3. Log to file if requested
+    if success and args.log_file:
+        log_tag_to_file(tag_name, args.log_file)
+
+def log_tag_to_file(tag_name, log_path_str):
+    import datetime
+    log_path = Path(log_path_str)
+    
+    # If path is a directory or lacks extension, append default filename
+    if log_path.is_dir() or log_path_str.endswith(("/", "\\")) or not log_path.suffix:
+        log_path = log_path / "coordinated_tags.md"
+        
+    # Get commit hashes
+    hashes = {}
+    for name, path in REPOS.items():
+        if os.path.exists(path):
+            commit, _ = run_git(path, ["rev-parse", "HEAD"])
+            hashes[name] = commit[:8] if commit else "unknown"
+        else:
+            hashes[name] = "absent"
+            
+    date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    write_header = not log_path.exists() or log_path.stat().st_size == 0
+    
+    try:
+        log_path.parent.mkdir(parents=True, exist_ok=True)
+        with open(log_path, "a", encoding="utf-8") as f:
+            if write_header:
+                f.write("# Coordinated Repository Tags Log\n\n")
+                f.write("| Tag / ZID | Date | autohotkey | desk | core | vault |\n")
+                f.write("| :--- | :--- | :--- | :--- | :--- | :--- |\n")
+            
+            row = f"| {tag_name} | {date_str} | {hashes.get('autohotkey', '-')} | {hashes.get('desk', '-')} | {hashes.get('core', '-')} | {hashes.get('vault', '-')} |\n"
+            f.write(row)
+        print(f"[+] Appended tag snapshot info to {log_path.resolve()}")
+    except Exception as e:
+        print(f"[X] Failed to write tag log: {e}")
+
+def cmd_checkout(args):
+    tag_name = args.name
+    if not tag_name:
+        print("Error: You must specify a tag/branch name to checkout.")
+        sys.exit(1)
+        
+    print(f"Checking out '{tag_name}' across all repositories...")
+    
+    # 1. Pre-check dirty repos
+    dirty_repos = []
+    for name, path in REPOS.items():
+        if os.path.exists(path):
+            dirty, _ = run_git(path, ["status", "--porcelain"])
+            if dirty:
+                dirty_repos.append(name)
+                
+    if dirty_repos and not args.force:
+        print(f"ERROR: Cannot checkout because of uncommitted changes in: {', '.join(dirty_repos)}")
+        print("Use --force to discard uncommitted changes or stash them first.")
+        sys.exit(1)
+        
+    # 2. Checkout
+    for name, path in REPOS.items():
+        if not os.path.exists(path):
+            print(f"[-] {name}: Skipped (Path not found)")
+            continue
+            
+        checkout_args = ["checkout", tag_name]
+        if args.force:
+            checkout_args.append("-f")
+            
+        _, err = run_git(path, checkout_args)
+        if err and "error:" in err:
+            print(f"[X] {name}: Failed to checkout ({err})")
+        else:
+            print(f"[+] {name}: Checked out successfully")
+
+def cmd_delete(args):
+    tag_name = args.name
+    if not tag_name:
+        print("Error: You must specify a tag name to delete.")
+        sys.exit(1)
+        
+    print(f"Deleting tag '{tag_name}' across all repositories...")
+    for name, path in REPOS.items():
+        if not os.path.exists(path):
+            continue
+            
+        _, err = run_git(path, ["tag", "-d", tag_name])
+        if err and "error:" in err:
+            print(f"[X] {name}: Failed to delete tag ({err})")
+        else:
+            print(f"[+] {name}: Tag deleted successfully")
+
+def cmd_commit(args):
+    print("Coordinating commits across repositories...")
+    
+    # 1. Identify dirty repositories
+    dirty_repos = []
+    for name, path in REPOS.items():
+        if os.path.exists(path):
+            dirty, _ = run_git(path, ["status", "--porcelain"])
+            if dirty:
+                dirty_repos.append((name, path))
+                
+    if not dirty_repos:
+        print("No uncommitted changes found in any repository. Nothing to commit.")
+        return
+        
+    print(f"Found uncommitted changes in: {', '.join(name for name, _ in dirty_repos)}")
+    
+    # 2. Perform commits
+    committed_any = False
+    last_zid = None
+    for i, (name, path) in enumerate(dirty_repos):
+        if i > 0:
+            print("Sleeping 1.1 seconds to guarantee a unique ZID timestamp...")
+            time.sleep(1.1)
+            
+        last_zid = get_zid()
+        print(f"[{name}] Staging changes and committing with message '{last_zid}'...")
+        
+        # Stage all changes (add untracked and modified)
+        _, err_add = run_git(path, ["add", "-A"])
+        if err_add:
+            print(f"[X] {name}: Failed to stage changes ({err_add})")
+            continue
+            
+        # Commit with ZID as message
+        _, err_commit = run_git(path, ["commit", "-m", last_zid])
+        if err_commit and "error:" in err_commit:
+            print(f"[X] {name}: Failed to commit ({err_commit})")
+        else:
+            print(f"[+] {name}: Committed successfully with ZID {last_zid}")
+            committed_any = True
+            
+    # 3. Log to file if requested
+    if committed_any and args.log_file and last_zid:
+        log_tag_to_file(last_zid, args.log_file)
+
+def main():
+    parser = argparse.ArgumentParser(description="Coordinated repository sync, tag, and checkout manager.")
+    subparsers = parser.add_subparsers(dest="command", required=True)
+    
+    # status subcommand
+    subparsers.add_parser("status", help="Show current branch, status, and tags across repositories.")
+    
+    # tag subcommand
+    parser_tag = subparsers.add_parser("tag", help="Create a coordinated tag across all repositories.")
+    parser_tag.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
+    parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
+    parser_tag.add_argument("-l", "--log-file", help="Path to markdown tag history log file (e.g. ./ or ./coordinated_tags.md).")
+    
+    # commit subcommand
+    parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs.")
+    parser_commit.add_argument("-l", "--log-file", help="Path to markdown history log file to record post-commit hashes.")
+    
+    # checkout subcommand
+    parser_checkout = subparsers.add_parser("checkout", help="Checkout a specific tag/branch across all repositories.")
+    parser_checkout.add_argument("name", help="Tag or branch name to checkout.")
+    parser_checkout.add_argument("-f", "--force", action="store_true", help="Force checkout (discarding local changes).")
+    
+    # delete subcommand
+    parser_delete = subparsers.add_parser("delete", help="Delete a specific tag across all repositories.")
+    parser_delete.add_argument("name", help="Tag name to delete.")
+    
+    args = parser.parse_args()
+    
+    if args.command == "status":
+        cmd_status(args)
+    elif args.command == "tag":
+        cmd_tag(args)
+    elif args.command == "commit":
+        cmd_commit(args)
+    elif args.command == "checkout":
+        cmd_checkout(args)
+    elif args.command == "delete":
+        cmd_delete(args)
+
+if __name__ == "__main__":
+    main()
