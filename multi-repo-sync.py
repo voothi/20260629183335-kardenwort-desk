@@ -491,7 +491,7 @@ subcommand options:
     -C, --cwd PATH            Change the working directory before running the utility. Overrides DEFAULT_CWD.
   tag / commit / sync
     -m, --message MSG         Template for tag/commit message. Use {zid} to dynamically inject the generated ZID.
-    -l, --log-file PATHS...   One or more paths to history log files to record sync snapshots.
+    -l, --log-file PATHS...   One or more paths to history log files to record sync snapshots (defaults to DEFAULT_LOG_PATHS).
     --log-format FORMAT       Logging format (choices: table, code, log). Overrides LOG_FORMAT.
   tag / sync
     -f, --force               Force tag creation without confirmation on dirty worktrees.
@@ -512,14 +512,14 @@ subcommand options:
     parser_tag.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_tag.add_argument("-m", "--message", help="Tag message template. Use {zid} to insert ZID.")
-    parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
+    parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record sync snapshots (defaults to DEFAULT_LOG_PATHS).")
     parser_tag.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
     parser_tag.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
     # commit subcommand
     parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs.")
     parser_commit.add_argument("-m", "--message", help="Commit message template. Use {zid} to insert ZID.")
-    parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record post-commit hashes.")
+    parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record post-commit hashes (defaults to DEFAULT_LOG_PATHS).")
     parser_commit.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
     # checkout subcommand
@@ -532,7 +532,7 @@ subcommand options:
     parser_sync.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
     parser_sync.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
     parser_sync.add_argument("-m", "--message", help="Tag/commit message template. Use {zid} to insert ZID.")
-    parser_sync.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
+    parser_sync.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record sync snapshots (defaults to DEFAULT_LOG_PATHS).")
     parser_sync.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
     parser_sync.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
