@@ -844,35 +844,7 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
                 c_idx += 1
     else:
         content_to_absolute = {0: 0}
-        
-    if eff_mode == 'single' and col_index != -1:
-        offending_rows = []
-        for r_idx, row in enumerate(data_rows):
-            if len(row) > col_index:
-                try:
-                    val = int(row[col_index])
-                    if val > 1:
-                        offending_rows.append((r_idx, val))
-                except ValueError:
-                    pass
-        if offending_rows:
-            logger.error(
-                f"Single-mode validation error: source text has effective_text_mode = 'single', "
-                f"but TSV {tsv_path.name if tsv_path else ''} contains SentenceSourceIndex > 1. "
-                f"Offending rows (index, value): {offending_rows}. Refusing single-mode resolution."
-            )
-            for row in data_rows:
-                if col_sentence_dest != -1:
-                    while len(row) <= col_sentence_dest:
-                        row.append("")
-                    row[col_sentence_dest] = ""
-            if persist and tsv_path:
-                with file_lock(tsv_path):
-                    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-            if return_single:
-                return ""
-            return None
-
+    
     for row in data_rows:
         content_line_idx = 0
         if col_index != -1 and len(row) > col_index:
@@ -4216,6 +4188,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                             pass
 
                 if is_single:
+                    non_empty = [s for s in sentences if s]
+                    if non_empty and all(s == non_empty[0] for s in non_empty):
+                        sentences = [non_empty[0]]
                     translated_text = f"<div>{html.escape(' '.join(sentences))}</div>"
                 else:
                     translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)

@@ -167,12 +167,12 @@ def test_single_mode_invariant_check():
     headers = ["SentenceSourceIndex", "Lemma", "SentenceTranslation"]
     comments = []
     
-    # Single-mode resolution check should refuse to resolve and blank destinations when index > 1
+    # In single mode, rows with index > 1 resolve to sentence_translations_raw[0]
     res = desk.resolve_translations(
         text="hello", text_mode="single", data_rows=data_rows,
         col_index=0, col_sentence_dest=2, sentence_translations_raw={0: "hello"},
         tsv_path=None, comments=comments, headers=headers, persist=False
     )
     assert res is None
-    assert data_rows[0][2] == ""
-    assert data_rows[1][2] == ""
+    assert data_rows[0][2] == "hello"
+    assert data_rows[1][2] == "hello"
