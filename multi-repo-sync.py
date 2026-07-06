@@ -17,6 +17,7 @@ REPOS = {
 
 ZID_SCRIPT = r"U:\voothi\20241116203211-zid\zid.py"
 DEFAULT_LOG_FILENAME = "multi-repo-sync.md"
+DEFAULT_LOG_PATHS = [r"U:\voothi.vault\multi-repo-sync.md"]    # Default log paths to record sync history if -l/--log-file is omitted (e.g. [r"U:\voothi.vault\multi-repo-sync.md"])
 GIT_REMOTE = "origin"
 LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text), "log" (Plain text log line)
@@ -541,6 +542,10 @@ subcommand options:
     
     args = parser.parse_args()
     
+    # Resolve default log files if omitted from CLI
+    if hasattr(args, "log_file") and not args.log_file:
+        args.log_file = DEFAULT_LOG_PATHS
+        
     if args.cwd:
         try:
             os.chdir(args.cwd)
