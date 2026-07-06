@@ -59,6 +59,27 @@ def get_zid():
         import datetime
         return datetime.datetime.now().strftime("%Y%m%d%H%M%S")
 
+def format_tags(tags_list, max_len=40):
+    if not tags_list:
+        return "-"
+    joined = ", ".join(tags_list)
+    if len(joined) <= max_len:
+        return joined
+        
+    result = []
+    current_len = 0
+    for tag in tags_list:
+        extra = 5 if result else 3  # ", ..." vs "..."
+        if current_len + len(tag) + extra > max_len:
+            break
+        result.append(tag)
+        current_len += len(tag) + (2 if len(result) > 1 else 0)
+        
+    if not result:
+        return tags_list[0][:max_len-3] + "..."
+        
+    return ", ".join(result) + ", ..."
+
 def cmd_status(args):
     # Collect all repository status details
     rows = []
@@ -76,12 +97,14 @@ def cmd_status(args):
         tags, _ = run_git(path, ["tag", "--points-at", "HEAD"])
         dirty, _ = run_git(path, ["status", "--porcelain"])
         
+        tags_list = tags.splitlines() if tags else []
+        
         rows.append({
             "name": name,
             "status": "dirty" if dirty else "clean",
             "branch": branch if branch else "detached",
             "hash": commit_hash if commit_hash else "-",
-            "tags": ", ".join(tags.splitlines()) if tags else "-",
+            "tags": format_tags(tags_list),
             "msg": commit_msg if commit_msg else "(No commits)"
         })
         
@@ -194,11 +217,12 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
             tags, _ = run_git(path, ["tag", "--points-at", "HEAD"])
             dirty, _ = run_git(path, ["status", "--porcelain"])
             
+            tags_list = tags.splitlines() if tags else []
             hashes[name] = {
                 "status": "dirty" if dirty else "clean",
                 "branch": branch if branch else "detached",
                 "hash": commit_hash if commit_hash else "-",
-                "tags": ", ".join(tags.splitlines()) if tags else "-",
+                "tags": format_tags(tags_list),
                 "msg": commit_msg if commit_msg else "-"
             }
         else:
