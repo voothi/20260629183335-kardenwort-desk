@@ -143,16 +143,31 @@ def cmd_tag(args):
             log_tag_to_file(tag_name, log_path, log_format=args.log_format)
 
 def log_tag_to_file(tag_name, log_path_str, log_format=None):
-    if log_format is None:
-        log_format = LOG_FORMAT
     import datetime
     log_path = Path(log_path_str)
     
-    # If path is a directory or lacks extension, append default filename
+    # 1. Resolve log_format orthogonally: fall back to file suffix if format is not explicitly passed
+    resolved_format = log_format
+    if resolved_format is None:
+        if log_path.suffix.lower() == ".log":
+            resolved_format = "log"
+        elif log_path.suffix.lower() == ".md":
+            resolved_format = LOG_FORMAT if LOG_FORMAT != "log" else "code"
+        else:
+            resolved_format = LOG_FORMAT
+            
+    # 2. If path is a directory or lacks suffix, append default filename
     if log_path.is_dir() or log_path_str.endswith(("/", "\\")) or not log_path.suffix:
-        default_name = "multi-repo-sync.log" if log_format == "log" else DEFAULT_LOG_FILENAME
+        default_name = "multi-repo-sync.log" if resolved_format == "log" else DEFAULT_LOG_FILENAME
         log_path = log_path / default_name
         
+    # Re-verify format if we appended default filename and log_format was not explicitly passed
+    if log_format is None:
+        if log_path.suffix.lower() == ".log":
+            resolved_format = "log"
+        else:
+            resolved_format = LOG_FORMAT if LOG_FORMAT != "log" else "code"
+            
     # Get commit identifiers and statuses based on configuration
     hashes = {}
     for name, path in REPOS.items():
@@ -185,7 +200,7 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
-            if log_format == "log":
+            if resolved_format == "log":
                 # Flat single-line log format (perfect for sorting by ZID)
                 parts = [f"{tag_name}", f"[{date_str}]"]
                 for name in REPOS.keys():
@@ -202,7 +217,7 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
                             val = c_hash
                         parts.append(f"{name}:{val}")
                 f.write(" ".join(parts) + "\n")
-            elif log_format == "table":
+            elif resolved_format == "table":
                 # Flat horizontal table (perfect for sorting by ZID)
                 repo_names = list(REPOS.keys())
                 if write_header:
@@ -235,7 +250,7 @@ def log_tag_to_file(tag_name, log_path_str, log_format=None):
                 
                 f.write(f"\n## Release {tag_name} ({date_str})\n\n")
                 
-                if log_format == "code":
+                if resolved_format == "code":
                     w_name = max(max(len(name) for name in REPOS.keys()), len("REPOSITORY"))
                     w_status = max(max(len(hashes[name]["status"]) for name in REPOS.keys()), len("STATUS"))
                     w_branch = max(max(len(hashes[name]["branch"]) for name in REPOS.keys()), len("BRANCH"))
