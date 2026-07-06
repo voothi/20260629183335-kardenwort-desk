@@ -822,7 +822,7 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         return
         
     if effective_text_mode == 'single':
-        translation_text_out = sentence_translations_raw.get(0, "").strip()
+        translation_text_out = " ".join(sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if sentence_translations_raw.get(i, ""))
     else:
         num_lines = len(text.splitlines())
         translation_lines = [sentence_translations_raw.get(i, "").strip() for i in range(num_lines)]
@@ -842,8 +842,6 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             if ln.strip():
                 content_to_absolute[c_idx] = a_idx
                 c_idx += 1
-    else:
-        content_to_absolute = {0: 0}
     
     for row in data_rows:
         content_line_idx = 0
@@ -853,19 +851,12 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             except ValueError:
                 pass
         
-        abs_idx = content_to_absolute.get(content_line_idx, 0) if eff_mode != 'single' else 0
+        abs_idx = content_line_idx if eff_mode == 'single' else content_to_absolute.get(content_line_idx, 0)
         
         if col_sentence_dest != -1:
             while len(row) <= col_sentence_dest:
                 row.append("")
             row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
-            
-        if eff_mode == 'single':
-            col_sentence_source = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
-            if col_sentence_source != -1:
-                while len(row) <= col_sentence_source:
-                    row.append("")
-                row[col_sentence_source] = text.strip()
             
     if persist and tsv_path:
         with file_lock(tsv_path):
@@ -903,13 +894,11 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
                     config, resolved_paths, provider
                 )
-                stitched = " ".join(pseudo_translations[i] for i in range(len(pseudo_lines)))
-                return {0: stitched}
+                return pseudo_translations
             except TranslationAlignmentError as tae:
-                stitched_partial = " ".join(tae.partial_dict.get(i, "") for i in range(len(pseudo_lines)))
                 raise TranslationAlignmentError(
                     tae.args[0],
-                    partial_dict={0: stitched_partial}
+                    partial_dict=tae.partial_dict
                 )
                 
     raw_lines = text.splitlines()

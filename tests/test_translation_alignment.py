@@ -129,7 +129,7 @@ def test_single_mode_routing(monkeypatch):
     
     # Long single sentence wrapped
     res_long = desk.translate_source_text("this is a very long paragraph", "en", "ru", "single", config, {}, "google")
-    assert res_long == {0: "THIS IS A VERY LONG PARAGRAPH"}
+    assert res_long == {0: "THIS IS A", 1: "VERY LONG", 2: "PARAGRAPH"}
     assert called_multi
 
 def test_translation_alignment_error_rescue(monkeypatch):
@@ -167,15 +167,15 @@ def test_single_mode_invariant_check():
     headers = ["SentenceSourceIndex", "Lemma", "SentenceTranslation", "SentenceSource"]
     comments = []
     
-    # In single mode, rows with index > 1 resolve to sentence_translations_raw[0],
-    # and SentenceSource is overwritten with the full text.
+    # In single mode, rows resolve to their corresponding segment translations
+    # in sentence_translations_raw, and SentenceSource is preserved (not overwritten).
     res = desk.resolve_translations(
         text="hello", text_mode="single", data_rows=data_rows,
-        col_index=0, col_sentence_dest=2, sentence_translations_raw={0: "hello"},
+        col_index=0, col_sentence_dest=2, sentence_translations_raw={0: "hello", 1: "world"},
         tsv_path=None, comments=comments, headers=headers, persist=False
     )
     assert res is None
     assert data_rows[0][2] == "hello"
-    assert data_rows[1][2] == "hello"
-    assert data_rows[0][3] == "hello"
-    assert data_rows[1][3] == "hello"
+    assert data_rows[1][2] == "world"
+    assert data_rows[0][3] == "snippet1"
+    assert data_rows[1][3] == "snippet2"
