@@ -989,7 +989,10 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         return
         
     if effective_text_mode == 'single':
-        translation_text_out = " ".join(sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if sentence_translations_raw.get(i, ""))
+        if 'FULL_TEXT' in sentence_translations_raw:
+            translation_text_out = sentence_translations_raw['FULL_TEXT']
+        else:
+            translation_text_out = " ".join(sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if isinstance(i, int) and sentence_translations_raw.get(i, ""))
     else:
         num_lines = len(text.splitlines())
         translation_lines = [sentence_translations_raw.get(i, "").strip() for i in range(num_lines)]
@@ -1031,7 +1034,9 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             
     if return_single:
         if text_mode == 'single':
-            return " ".join([sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if sentence_translations_raw.get(i, "")])
+            if 'FULL_TEXT' in sentence_translations_raw:
+                return sentence_translations_raw['FULL_TEXT']
+            return " ".join([sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if isinstance(i, int) and sentence_translations_raw.get(i, "")])
         return sentence_translations_raw.get(0, "")
     return None
 
@@ -1061,11 +1066,27 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             if not terminators.strip():
                 terminators = ".!?:"
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+            words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
+            words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
+            max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
+            padded_lines = pad_sentences(pseudo_lines, text, words_before, words_after, max_words=max_words)
             try:
+                # 1. Translate the padded sentences for the TSV (SentenceDestination)
                 pseudo_translations = translate_source_text(
-                    "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                    "\n".join(padded_lines), source_lang, target_lang, 'multi',
                     config, resolved_paths, provider
                 )
+                
+                # 2. Translate the full continuous text for the Translate View (.ru.txt) and TextDestination
+                full_text_trans = ""
+                try:
+                    full_text_trans = translate_text(text, source_lang, target_lang, config, resolved_paths, provider).strip()
+                except Exception as e:
+                    logger.error(f"Failed to translate full text block: {e}")
+                
+                if full_text_trans:
+                    pseudo_translations['FULL_TEXT'] = full_text_trans
+                    
                 return pseudo_translations
             except TranslationAlignmentError as tae:
                 raise TranslationAlignmentError(
