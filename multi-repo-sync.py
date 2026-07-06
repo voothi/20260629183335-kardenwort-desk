@@ -151,37 +151,21 @@ def log_tag_to_file(tag_name, log_path_str):
             
     date_str = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     write_header = not log_path.exists() or log_path.stat().st_size == 0
-    repo_names = list(REPOS.keys())
     
-    # Dynamically build headers and row data based on LOG_COMMIT_VAL
-    headers = ["Tag / ZID", "Date"]
-    row_data = [tag_name, date_str]
-    
-    for name in repo_names:
-        c_hash = hashes[name]["hash"]
-        c_msg = hashes[name]["msg"]
-        
-        if LOG_COMMIT_VAL == "both":
-            headers.extend([f"{name}_hash", f"{name}_msg"])
-            row_data.extend([c_hash, c_msg])
-        elif LOG_COMMIT_VAL == "msg":
-            headers.append(name)
-            row_data.append(c_msg)
-        else:  # "hash"
-            headers.append(name)
-            row_data.append(c_hash)
-            
     try:
         log_path.parent.mkdir(parents=True, exist_ok=True)
         with open(log_path, "a", encoding="utf-8") as f:
             if write_header:
-                f.write("# Multi-Repo Sync History\n\n")
-                alignments = [":---"] * len(headers)
-                f.write("| " + " | ".join(headers) + " |\n")
-                f.write("| " + " | ".join(alignments) + " |\n")
+                f.write("# Multi-Repo Sync History\n")
             
-            row = "| " + " | ".join(row_data) + " |\n"
-            f.write(row)
+            f.write(f"\n## Release {tag_name} ({date_str})\n\n")
+            f.write("| REPOSITORY | COMMIT | MESSAGE |\n")
+            f.write("| :--- | :--- | :--- |\n")
+            for name in REPOS.keys():
+                c_hash = hashes[name]["hash"]
+                c_msg = hashes[name]["msg"]
+                f.write(f"| {name} | {c_hash} | {c_msg} |\n")
+                
         print(f"[+] Appended sync snapshot info to {log_path.resolve()}")
     except Exception as e:
         print(f"[X] Failed to write sync log: {e}")
