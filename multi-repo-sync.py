@@ -21,9 +21,9 @@ GIT_REMOTE = "origin"
 LOG_COMMIT_VAL = "both"  # Options: "hash" (commit hash), "msg" (commit message/ZID), "both" (hash (msg))
 LOG_FORMAT = "code"  # Options: "table" (Markdown table), "code" (Fenced code block text), "log" (Plain text log line)
 DEFAULT_CWD = r"U:\voothi\20260629183335-kardenwort-desk"   # Default working directory context (None means use shell's current directory)
-DEFAULT_TAG_NAME_TEMPLATE = "{zid}-snapshot"
-DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid}"
-DEFAULT_COMMIT_MSG_TEMPLATE = "{zid}"
+DEFAULT_TAG_NAME_TEMPLATE = "{zid}-snapshot-desk"
+DEFAULT_TAG_MSG_TEMPLATE = "Coordinated snapshot {zid} to desk"
+DEFAULT_COMMIT_MSG_TEMPLATE = "{zid} to desk"
 
 def run_git(repo_path, args):
     try:
