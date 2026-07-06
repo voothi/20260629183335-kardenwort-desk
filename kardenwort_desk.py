@@ -4476,9 +4476,10 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             if tsv_path:
                 try:
                     parent = tsv_path.parent
-                    source_stem = tsv_path.stem
+                    source_stem_full = tsv_path.stem
+                    source_stem = source_stem_full.rsplit('.', 1)[0] if '.' in source_stem_full else source_stem_full
                     for f in parent.glob(f"{source_stem}.*.txt"):
-                        if f.stem != source_stem:
+                        if f.stem != source_stem_full:
                             txt_content = f.read_text(encoding='utf-8').strip()
                             if txt_content:
                                 lines = [html.escape(line.strip()) for line in txt_content.splitlines()]
