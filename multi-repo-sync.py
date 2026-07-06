@@ -93,11 +93,21 @@ def cmd_status(args):
         print(f"{r['name']:<{w_name}} {r['status']:<{w_status}} {r['branch']:<{w_branch}} {r['hash']:<{w_hash}} {r['tags']:<{w_tags}} {r['msg']}")
 
 def cmd_tag(args):
-    tag_name = args.name
-    if not tag_name:
-        tag_name = get_zid()
+    zid_val = get_zid()
+    
+    # Resolve tag name template
+    tag_name_template = getattr(args, "name", None)
+    if not tag_name_template:
+        tag_name_template = "{zid}"
+    tag_name = tag_name_template.format(zid=zid_val)
+    
+    # Resolve tag message template
+    tag_msg_template = getattr(args, "message", None)
+    if not tag_msg_template:
+        tag_msg_template = "Coordinated snapshot {tag_name}"
+    tag_msg = tag_msg_template.format(zid=zid_val, tag_name=tag_name)
         
-    print(f"Creating coordinated tag '{tag_name}' across all repositories...")
+    print(f"Creating coordinated tag '{tag_name}' across all repositories with message '{tag_msg}'...")
     
     # 1. Pre-check dirty repos
     dirty_repos = []
@@ -124,7 +134,7 @@ def cmd_tag(args):
             continue
             
         # Create annotated tag
-        _, err = run_git(path, ["tag", "-a", tag_name, "-m", f"Coordinated snapshot {tag_name}"])
+        _, err = run_git(path, ["tag", "-a", tag_name, "-m", tag_msg])
         if err:
             print(f"[X] {name}: Failed to tag ({err})")
             success = False
@@ -409,7 +419,9 @@ def cmd_commit(args):
             time.sleep(1.1)
             
         last_zid = get_zid()
-        print(f"[{name}] Staging changes and committing with message '{last_zid}'...")
+        commit_msg = args.message.format(zid=last_zid) if getattr(args, "message", None) else last_zid
+        
+        print(f"[{name}] Staging changes and committing with message '{commit_msg}'...")
         
         # Stage all changes (add untracked and modified)
         _, err_add = run_git(path, ["add", "-A"])
@@ -417,12 +429,12 @@ def cmd_commit(args):
             print(f"[X] {name}: Failed to stage changes ({err_add})")
             continue
             
-        # Commit with ZID as message
-        _, err_commit = run_git(path, ["commit", "-m", last_zid])
+        # Commit with resolved message
+        _, err_commit = run_git(path, ["commit", "-m", commit_msg])
         if err_commit and "error:" in err_commit:
             print(f"[X] {name}: Failed to commit ({err_commit})")
         else:
-            print(f"[+] {name}: Committed successfully with ZID {last_zid}")
+            print(f"[+] {name}: Committed successfully")
             committed_any = True
             
     # 3. Log to file if requested
@@ -460,6 +472,7 @@ subcommand options:
   global
     -C, --cwd PATH            Change the working directory before running the utility. Overrides DEFAULT_CWD.
   tag / commit / sync
+    -m, --message MSG         Template for tag/commit message. Use {zid} to dynamically inject the generated ZID.
     -l, --log-file PATHS...   One or more paths to history log files to record sync snapshots.
     --log-format FORMAT       Logging format (choices: table, code, log). Overrides LOG_FORMAT.
   tag / sync
@@ -480,12 +493,14 @@ subcommand options:
     parser_tag = subparsers.add_parser("tag", help="Create a coordinated tag across all repositories.")
     parser_tag.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
     parser_tag.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
+    parser_tag.add_argument("-m", "--message", help="Tag message template. Use {zid} to insert ZID.")
     parser_tag.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
     parser_tag.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
     parser_tag.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
     # commit subcommand
     parser_commit = subparsers.add_parser("commit", help="Commit dirty repositories sequentially with unique ZIDs.")
+    parser_commit.add_argument("-m", "--message", help="Commit message template. Use {zid} to insert ZID.")
     parser_commit.add_argument("-l", "--log-file", nargs="+", help="One or more paths to history log files to record post-commit hashes.")
     parser_commit.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
     
@@ -498,6 +513,7 @@ subcommand options:
     parser_sync = subparsers.add_parser("sync", help="Commit dirty repositories and immediately tag them.")
     parser_sync.add_argument("name", nargs="?", help="Tag name. Defaults to current ZID if omitted.")
     parser_sync.add_argument("-f", "--force", action="store_true", help="Force tag creation without confirmation on dirty worktrees.")
+    parser_sync.add_argument("-m", "--message", help="Tag/commit message template. Use {zid} to insert ZID.")
     parser_sync.add_argument("-l", "--log-file", nargs="+", help="One or more paths to markdown history log files to record sync snapshots.")
     parser_sync.add_argument("-p", "--push", action="store_true", help="Push tags to remote origin repository.")
     parser_sync.add_argument("--log-format", choices=["table", "code", "log"], default=None, help="Logging format. Overrides LOG_FORMAT.")
