@@ -8,8 +8,8 @@ from pathlib import Path
 
 # Coordinated Repositories Configuration
 REPOS = {
-    "autohotkey": r"U:\voothi\20240411110510-autohotkey",
     "desk": r"U:\voothi\20260629183335-kardenwort-desk",
+    "autohotkey": r"U:\voothi\20240411110510-autohotkey",
     "core": r"U:\voothi\20241223170748-kardenwort",
     "vault": r"U:\voothi.vault"
 }
