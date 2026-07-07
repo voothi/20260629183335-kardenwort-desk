@@ -11,14 +11,14 @@
 			"path": "U:/voothi/20240411110510-autohotkey"
 		},
 		{
-			"name": "kardenwort",
-			"desc": "(Kardenwort Core) (Lib) (TSV) (SpaCy)",
-			"path": "U:/voothi/20241223170748-kardenwort"
-		},
-		{
 			"name": "vault",
 			"desc": "(Private Vault) (Docs) (Conversations) (Specs)",
 			"path": "U:/voothi.vault"
+		},
+		{
+			"name": "kardenwort",
+			"desc": "(Kardenwort Core) (Lib) (TSV) (SpaCy)",
+			"path": "U:/voothi/20241223170748-kardenwort"
 		},
 		{
 			"name": "anki-templates",
@@ -154,7 +154,8 @@
 			"name": "createjunction",
 			"desc": "(Tool) (System) (Junction) (Windows 11)",
 			"path": "U:/voothi/20251206145855-createjunction"
-		},		{
+		},
+		{
 			"name": "convert-to-lf",
 			"desc": "(Tool) (System) (LF/CRLF) (Windows 11)",
 			"path": "U:/voothi/20241220151407-convert-to-lf"
