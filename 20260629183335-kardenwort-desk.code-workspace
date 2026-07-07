@@ -154,6 +154,10 @@
 			"name": "createjunction",
 			"desc": "(Tool) (System) (Junction) (Windows 11)",
 			"path": "U:/voothi/20251206145855-createjunction"
+		},		{
+			"name": "convert-to-lf",
+			"desc": "(Tool) (System) (LF/CRLF) (Windows 11)",
+			"path": "U:/voothi/20241220151407-convert-to-lf"
 		},
 		{
 			"name": "default",
