@@ -21,9 +21,39 @@
 			"path": "U:/voothi.vault"
 		},
 		{
+			"name": "anki-templates",
+			"desc": "(Anki) (Templates) (Kardenwort Core)",
+			"path": "U:/voothi/20241106211123-anki-templates"
+		},
+		{
+			"name": "kardenwort-ankiconnect",
+			"desc": "(Anki) (AnkiConnect) (Kardenwort Core)",
+			"path": "U:/voothi/20251110002755-kardenwort-ankiconnect"
+		},
+		{
+			"name": "anki-csv-importer",
+			"desc": "(Anki) (Importer) (Kardenwort Core)",
+			"path": "U:/voothi/20250401192017-anki-csv-importer"
+		},
+		{
 			"name": "spacy-env",
 			"desc": "(Kardenwort Core) (Enviroment)",
 			"path": "U:/voothi/20250825231214-spacy-env"
+		},
+		{
+			"name": "deep-translator",
+			"desc": "(Translator) (Wrapper) (Desk)",
+			"path": "U:/voothi/20241122093311-deep-translator"
+		},
+		{
+			"name": "deep-translator",
+			"desc": "(Translator) (Provider) (Lib) (Desk)",
+			"path": "U:/voothi/20260209094544-deep-translator"
+		},
+		{
+			"name": "intellifiller",
+			"desc": "(AI) (Anki) (Addon) (Desk)",
+			"path": "U:/voothi/20251206123938-intellifiller-ai-addon-for-anki"
 		},
 		{
 			"name": "openspec",
@@ -41,16 +71,6 @@
 			"path": "U:/voothi/20260113230706-goldendict"
 		},
 		{
-			"name": "deep-translator",
-			"desc": "(Translator) (Wrapper) (Desk)",
-			"path": "U:/voothi/20241122093311-deep-translator"
-		},
-		{
-			"name": "deep-translator",
-			"desc": "(Translator) (Provider) (Lib) (Desk)",
-			"path": "U:/voothi/20260209094544-deep-translator"
-		},
-		{
 			"name": "argotranslate",
 			"desc": "(Translator) (Provider) (Wrapper) (Lib)",
 			"path": "U:/voothi/20241121100211-argotranslate"
@@ -61,34 +81,14 @@
 			"path": "U:/voothi/20250214181911-lingva-translate-cli"
 		},
 		{
-			"name": "kardenwort-quiz",
-			"desc": "(Language Learning Tool) (MPV) (TSV) (TUI)",
-			"path": "U:/voothi/20260622113607-kardenwort-quiz"
-		},
-		{
 			"name": "kardenwort-mpv",
 			"desc": "(Dual-Subtitles Player) (MPV) (TSV) (TUI)",
 			"path": "U:/voothi/20260308110646-kardenwort-mpv"
 		},
 		{
-			"name": "intellifiller",
-			"desc": "(AI) (Anki) (Addon) (Desk)",
-			"path": "U:/voothi/20251206123938-intellifiller-ai-addon-for-anki"
-		},
-		{
-			"name": "anki-templates",
-			"desc": "(Anki) (Templates) (Kardenwort Core)",
-			"path": "U:/voothi/20241106211123-anki-templates"
-		},
-		{
-			"name": "kardenwort-ankiconnect",
-			"desc": "(Anki) (AnkiConnect) (Kardenwort Core)",
-			"path": "U:/voothi/20251110002755-kardenwort-ankiconnect"
-		},
-		{
-			"name": "anki-csv-importer",
-			"desc": "(Anki) (Importer) (Kardenwort Core)",
-			"path": "U:/voothi/20250401192017-anki-csv-importer"
+			"name": "kardenwort-quiz",
+			"desc": "(Language Learning Tool) (MPV) (TSV) (TUI)",
+			"path": "U:/voothi/20260622113607-kardenwort-quiz"
 		},
 		{
 			"name": "goldendict-anki-search",
