@@ -8,9 +8,9 @@ from pathlib import Path
 
 # Coordinated Repositories Configuration
 REPOS = {
-    "krdwrt-desk": r"U:\voothi\20260629183335-kardenwort-desk",
+    "kardenwort-desk": r"U:\voothi\20260629183335-kardenwort-desk",
     "autohotkey": r"U:\voothi\20240411110510-autohotkey",
-    "krdwrt-core": r"U:\voothi\20241223170748-kardenwort",
+    "kardenwort-core": r"U:\voothi\20241223170748-kardenwort",
     "goldendict": r"U:\voothi\20260113230706-goldendict",
     "dt-w": r"U:\voothi\20241122093311-deep-translator",
     "dt-p": r"U:\voothi\20260209094544-deep-translator",
@@ -24,8 +24,8 @@ REPOS = {
     # "openspec": r"U:\voothi\20260406202446-openspec",
     # "argo": r"U:\voothi\20241121100211-argotranslate",
     # "lingva": r"U:\voothi\20250214181911-lingva-translate-cli",
-    "krdwrt-mpv": r"U:\voothi\20260308110646-kardenwort-mpv",
-    "krdwrt-quiz": r"U:\voothi\20260622113607-kardenwort-quiz",
+    "kardenwort-mpv": r"U:\voothi\20260308110646-kardenwort-mpv",
+    "kardenwort-quiz": r"U:\voothi\20260622113607-kardenwort-quiz",
     # "gd-anki-search": r"U:\voothi\20240408222910-goldendict-anki-search",
     # "piper-tts": r"U:\voothi\20241206010110-piper-tts",
     # "anki-gtts-player": r"U:\voothi\20250421115831-anki-gtts-player",
