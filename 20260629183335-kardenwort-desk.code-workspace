@@ -1,19 +1,89 @@
 {
 	"folders": [
 		{
-			"name": "Kardenwort Desk (Backend)",
+			"name": "kardenwort-desk",
+			"desc": "(Main) (Backend) (TSV)",
 			"path": "U:/voothi/20260629183335-kardenwort-desk"
 		},
 		{
-			"name": "Kardenwort Window (Frontend)",
+			"name": "autohotkey",
+			"desc": "(kardenwort-window) (Frontend) (AHKv2)",
 			"path": "U:/voothi/20240411110510-autohotkey"
-		},		{
-			"name": "GoldenDict-ng (Frontend)",
+		},
+		{
+			"name": "kardenwort",
+			"desc": "(Kardenwort Core) (Lib) (TSV) (SpaCy)",
+			"path": "U:/voothi/20241223170748-kardenwort"
+		},
+		{
+			"name": "vault",
+			"desc": "(Private Vault) (Docs) (Conversations) (Specs)",
+			"path": "U:/voothi.vault"
+		},
+		{
+			"name": "goldendict-ng",
+			"desc": "(GoldenDict-ng) (Frontend) (Config)",
 			"path": "U:/voothi/20260113230706-goldendict"
 		},
 		{
-			"name": "Private Vault",
-			"path": "U:/voothi.vault"
+			"name": "deep-translator",
+			"desc": "(Translator) (Wrapper)",
+			"path": "U:/voothi/20241122093311-deep-translator"
+		},
+		{
+			"name": "deep-translator",
+			"desc": "(Translator) (Provider) (Lib)",
+			"path": "U:/voothi/20260209094544-deep-translator"
+		},
+		{
+			"name": "argotranslate",
+			"desc": "(Translator) (Provider) (Wrapper) (Lib)",
+			"path": "U:/voothi/20241121100211-argotranslate"
+		},
+		{
+			"name": "lingva-translate",
+			"desc": "(Translator) (Wrapper)",
+			"path": "U:/voothi/20250214181911-lingva-translate-cli"
+		},
+		{
+			"name": "multi-repo-sync",
+			"desc": "(Management) (Tool) (Git)",
+			"path": "U:/voothi/20260706123954-multi-repo-sync"
+		},
+		{
+			"name": "spacy-env",
+			"desc": "(Kardenwort Core) (Enviroment)",
+			"path": "U:/voothi/20250825231214-spacy-env"
+		},
+		{
+			"name": "obsidian-note-creator",
+			"desc": "(Management) (Note) (Tool)",
+			"path": "U:/voothi/20260529182202-obsidian-note-creator"
+		},
+		{
+			"name": "obsidian-paste-image",
+			"desc": "(Management) (Image) (Tool)",
+			"path": "U:/voothi/20260529201233-obsidian-paste-image"
+		},
+		{
+			"name": "openspec",
+			"desc": "(Management) (SDD) (Tool) (AI)",
+			"path": "U:/voothi/20260406202446-openspec"
+		},
+		{
+			"name": "kardenwort-quiz",
+			"desc": "(Language Learning Tool) (MPV) (TSV) (TUI)",
+			"path": "U:/voothi/20260622113607-kardenwort-quiz"
+		},
+		{
+			"name": "kardenwort-mpv",
+			"desc": "(Dual-Subtitles Player) (MPV) (TSV) (TUI)",
+			"path": "U:/voothi/20260308110646-kardenwort-mpv"
+		},
+		{
+			"name": "intellifiller",
+			"desc": "(AI) (Anki) (Addon)",
+			"path": "U:/voothi/20251206123938-intellifiller-ai-addon-for-anki"
 		}
 	],
 	"settings": {

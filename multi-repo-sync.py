@@ -12,6 +12,9 @@ REPOS = {
     "autohotkey": r"U:\voothi\20240411110510-autohotkey",
     "core": r"U:\voothi\20241223170748-kardenwort",
     "goldendict": r"U:\voothi\20260113230706-goldendict",
+    "dt-1": r"U:\voothi\20241122093311-deep-translator",
+    "dt-2": r"U:\voothi\20260209094544-deep-translator",
+    "spacy-env": r"U:\voothi\20250825231214-spacy-env",
     "multi-repo-sync": r"U:\voothi\20260706123954-multi-repo-sync",
     "vault": r"U:\voothi.vault"
 }
