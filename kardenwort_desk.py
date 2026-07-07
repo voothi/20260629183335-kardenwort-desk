@@ -5169,19 +5169,35 @@ def cmd_restore(args):
     
     if not args.no_gui:
         ahk_args = []
-        processed_zids = set()
+        zid_groups = {}
+        non_zid_files = []
         for file_val in file_list:
             input_path = Path(file_val).resolve()
             if input_path.exists():
                 match = re.match(r"^(\d{14})", input_path.name)
                 if match:
                     zid = match.group(1)
-                    if zid in processed_zids:
-                        continue
-                    processed_zids.add(zid)
-                ahk_args.extend(["--restore", str(input_path)])
+                    if zid not in zid_groups:
+                        zid_groups[zid] = []
+                    zid_groups[zid].append(input_path)
+                else:
+                    non_zid_files.append(input_path)
             else:
                 print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
+                
+        def priority(p):
+            ext = p.suffix.lower()
+            if ext == '.tsv': return 0
+            if ext == '.txt': return 1
+            return 2
+
+        for zid, files in zid_groups.items():
+            best_file = sorted(files, key=priority)[0]
+            ahk_args.extend(["--restore", str(best_file)])
+            
+        for file_path in non_zid_files:
+            ahk_args.extend(["--restore", str(file_path)])
+
         if ahk_args:
             spawn_ahk(ahk_args, resolved_paths['base_dir'])
         return
@@ -5202,14 +5218,27 @@ def cmd_restore(args):
         tsv_path = input_path
         txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
         if txt_files:
-            txt_path = txt_files[0]
+            source_lang = None
+            if len(input_path.suffixes) >= 2:
+                source_lang = input_path.suffixes[-2].strip('.')
+            
+            def txt_priority(p):
+                sufs = p.suffixes
+                lang_code = sufs[-2].strip('.') if len(sufs) >= 2 else None
+                if source_lang and lang_code == source_lang:
+                    return 0
+                target_lang = goldendict.get('target_language', 'ru')
+                if lang_code == target_lang:
+                    return 2
+                return 1
+
+            txt_path = sorted(txt_files, key=txt_priority)[0]
         else:
             txt_path = input_path.with_suffix('.txt')
             if not txt_path.exists():
                 txt_path = None
                 warnings.append("Sibling source text file not found.")
     else:
-        txt_path = input_path
         tsv_files = list(parent_dir.glob(f"{zid}-*.tsv"))
         if tsv_files:
             tsv_path = tsv_files[0]
@@ -5218,6 +5247,32 @@ def cmd_restore(args):
             if not tsv_path.exists():
                 tsv_path = None
                 warnings.append("Sibling TSV file not found.")
+                
+        txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
+        if txt_files:
+            source_lang = None
+            if tsv_path and len(tsv_path.suffixes) >= 2:
+                source_lang = tsv_path.suffixes[-2].strip('.')
+            
+            def txt_priority(p):
+                sufs = p.suffixes
+                lang_code = sufs[-2].strip('.') if len(sufs) >= 2 else None
+                if source_lang and lang_code == source_lang:
+                    return 0
+                target_lang = goldendict.get('target_language', 'ru')
+                if lang_code == target_lang:
+                    return 2
+                return 1
+
+            txt_path = sorted(txt_files, key=txt_priority)[0]
+        else:
+            if input_path.suffix == '.txt':
+                txt_path = input_path
+            else:
+                txt_path = input_path.with_suffix('.txt')
+                if not txt_path.exists():
+                    txt_path = None
+                    warnings.append("Sibling source text file not found.")
                     
     source_text = ""
     if txt_path and txt_path.exists():
@@ -5255,7 +5310,8 @@ def cmd_desk(args):
     
     if not args.no_gui:
         ahk_args = []
-        processed_zids = set()
+        zid_groups = {}
+        non_zid_files = []
         for file_val in file_list:
             file_path = Path(file_val).resolve()
             if not file_path.exists():
@@ -5265,17 +5321,31 @@ def cmd_desk(args):
             match = re.match(r"^(\d{14})", file_path.name)
             if match:
                 zid = match.group(1)
-                if zid in processed_zids:
-                    continue
-                processed_zids.add(zid)
+                if zid not in zid_groups:
+                    zid_groups[zid] = []
+                zid_groups[zid].append(file_path)
+            else:
+                non_zid_files.append(file_path)
                 
+        def priority(p):
+            ext = p.suffix.lower()
+            if ext == '.tsv': return 0
+            if ext == '.txt': return 1
+            return 2
+
+        for zid, files in zid_groups.items():
+            best_file = sorted(files, key=priority)[0]
+            logger.info(f"File '{best_file.name}' is recognized as an existing session. Delegating to restore...")
+            ahk_args.extend(["--restore", str(best_file)])
+            
+        for file_path in non_zid_files:
             is_tsv = file_path.suffix == '.tsv'
-            has_zid = bool(match)
-            if is_tsv or has_zid:
+            if is_tsv:
                 logger.info(f"File '{file_path.name}' is recognized as an existing session. Delegating to restore...")
                 ahk_args.extend(["--restore", str(file_path)])
             else:
                 ahk_args.extend(["--desk", str(file_path), "--text-mode", args.text_mode])
+                
         if ahk_args:
             spawn_ahk(ahk_args, resolved_paths['base_dir'])
         return
@@ -5308,7 +5378,6 @@ def cmd_desk(args):
         remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
         clean_spaces = config.getboolean('settings', 'multi_mode_clean_spaces', fallback=True)
         if remove_empty or clean_spaces:
-            import re
             new_lines = []
             for line in text.splitlines():
                 if clean_spaces:
