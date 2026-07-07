@@ -2,7 +2,7 @@
 	"folders": [
 		{
 			"name": "kardenwort-desk",
-			"desc": "(Main) (Backend) (TSV)",
+			"desc": "(Main) (Backend) (TSV) (Desk)",
 			"path": "U:/voothi/20260629183335-kardenwort-desk"
 		},
 		{
@@ -27,12 +27,12 @@
 		},
 		{
 			"name": "deep-translator",
-			"desc": "(Translator) (Wrapper)",
+			"desc": "(Translator) (Wrapper) (Desk)",
 			"path": "U:/voothi/20241122093311-deep-translator"
 		},
 		{
 			"name": "deep-translator",
-			"desc": "(Translator) (Provider) (Lib)",
+			"desc": "(Translator) (Provider) (Lib) (Desk)",
 			"path": "U:/voothi/20260209094544-deep-translator"
 		},
 		{
@@ -56,16 +56,6 @@
 			"path": "U:/voothi/20250825231214-spacy-env"
 		},
 		{
-			"name": "obsidian-note-creator",
-			"desc": "(Management) (Note) (Tool)",
-			"path": "U:/voothi/20260529182202-obsidian-note-creator"
-		},
-		{
-			"name": "obsidian-paste-image",
-			"desc": "(Management) (Image) (Tool)",
-			"path": "U:/voothi/20260529201233-obsidian-paste-image"
-		},
-		{
 			"name": "openspec",
 			"desc": "(Management) (SDD) (Tool) (AI)",
 			"path": "U:/voothi/20260406202446-openspec"
@@ -82,64 +72,93 @@
 		},
 		{
 			"name": "intellifiller",
-			"desc": "(AI) (Anki) (Addon)",
+			"desc": "(AI) (Anki) (Addon) (Desk)",
 			"path": "U:/voothi/20251206123938-intellifiller-ai-addon-for-anki"
 		},
 		{
 			"name": "anki-templates",
+			"desc": "(Anki) (Templates) (Kardenwort Core)",
 			"path": "U:/voothi/20241106211123-anki-templates"
 		},
 		{
 			"name": "kardenwort-ankiconnect",
+			"desc": "(Anki) (AnkiConnect) (Kardenwort Core)",
 			"path": "U:/voothi/20251110002755-kardenwort-ankiconnect"
 		},
 		{
 			"name": "anki-csv-importer",
+			"desc": "(Anki) (Importer) (Kardenwort Core)",
 			"path": "U:/voothi/20250401192017-anki-csv-importer"
 		},
 		{
 			"name": "goldendict-anki-search",
+			"desc": "(Anki) (GoldenDict) (Search)",
 			"path": "U:/voothi/20240408222910-goldendict-anki-search"
 		},
 		{
-			"name": "obsidian-templates",
-			"path": "U:/voothi/20250831153442-obsidian-templates"
-		},
-		{
-			"name": "whisper",
-			"path": "U:/voothi/20250228230803-whisper"
-		},
-		{
-			"name": "createjunction",
-			"path": "U:/voothi/20251206145855-createjunction"
-		},
-		{
-			"name": "default",
-			"path": "U:/voothi/20260531201104-default"
-		},
-		{
 			"name": "piper-tts",
+			"desc": "(AI) (Piper) (TTS) (Engine) (Wrapper)",
 			"path": "U:/voothi/20241206010110-piper-tts"
 		},
 		{
 			"name": "anki-gtts-player",
+			"desc": "(Anki) (Addon) (TTS) (Player)",
 			"path": "U:/voothi/20250421115831-anki-gtts-player"
 		},
 		{
 			"name": "anki-tts-cli",
+			"desc": "(GoldenDict) (TTS) (CLI) (Adapter)",
 			"path": "U:/voothi/20260119103526-anki-tts-cli"
 		},
 		{
 			"name": "zid",
+			"desc": "(ZID) (Management)",
 			"path": "U:/voothi/20241116203211-zid"
 		},
 		{
+			"name": "zid-name",
+			"desc": "(ZID) (Management)",
+			"path": "U:/voothi/20240929203511-zid-name"
+		},
+		{
+			"name": "obsidian-templates",
+			"desc": "(Obsidian) (Templates) (ZID) (Management)",
+			"path": "U:/voothi/20250831153442-obsidian-templates"
+		},
+		{
+			"name": "obsidian-note-creator",
+			"desc": "(Management) (Note) (Tool)",
+			"path": "U:/voothi/20260529182202-obsidian-note-creator"
+		},
+		{
+			"name": "obsidian-paste-image",
+			"desc": "(Management) (Image) (Tool)",
+			"path": "U:/voothi/20260529201233-obsidian-paste-image"
+		},
+		{
 			"name": "remove-newline-util",
+			"desc": "(Tool) (Utility)",
 			"path": "U:/voothi/20240310195111-remove-newline-util"
 		},
 		{
-			"name": "zid-name",
-			"path": "U:/voothi/20240929203511-zid-name"
+			"name": "whisper",
+			"desc": "(AI) (Whisper) (STT)",
+			"path": "U:/voothi/20250228230803-whisper"
+		},
+		{
+			"name": "subtitles",
+			"desc": "(Docs) (Example) (Dual-Subtitles)",
+			"path": "U:/voothi/20251228104300-subtitles"
+		},
+		{
+			"name": "createjunction",
+			"desc": "(Tool) (System) (Junction) (Windows 11)",
+			"path": "U:/voothi/20251206145855-createjunction"
+		},
+		{
+			"name": "default",
+			"desc": "(Default)",
+			"path": "U:/voothi/20260531201104-default"
 		}
 	],
 	"settings": {
