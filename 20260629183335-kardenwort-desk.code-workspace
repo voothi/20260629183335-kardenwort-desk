@@ -21,6 +21,21 @@
 			"path": "U:/voothi.vault"
 		},
 		{
+			"name": "spacy-env",
+			"desc": "(Kardenwort Core) (Enviroment)",
+			"path": "U:/voothi/20250825231214-spacy-env"
+		},
+		{
+			"name": "openspec",
+			"desc": "(Management) (SDD) (Tool) (AI)",
+			"path": "U:/voothi/20260406202446-openspec"
+		},
+		{
+			"name": "multi-repo-sync",
+			"desc": "(Management) (Tool) (Git)",
+			"path": "U:/voothi/20260706123954-multi-repo-sync"
+		},
+		{
 			"name": "goldendict-ng",
 			"desc": "(GoldenDict-ng) (Frontend) (Config)",
 			"path": "U:/voothi/20260113230706-goldendict"
@@ -44,21 +59,6 @@
 			"name": "lingva-translate",
 			"desc": "(Translator) (Wrapper)",
 			"path": "U:/voothi/20250214181911-lingva-translate-cli"
-		},
-		{
-			"name": "multi-repo-sync",
-			"desc": "(Management) (Tool) (Git)",
-			"path": "U:/voothi/20260706123954-multi-repo-sync"
-		},
-		{
-			"name": "spacy-env",
-			"desc": "(Kardenwort Core) (Enviroment)",
-			"path": "U:/voothi/20250825231214-spacy-env"
-		},
-		{
-			"name": "openspec",
-			"desc": "(Management) (SDD) (Tool) (AI)",
-			"path": "U:/voothi/20260406202446-openspec"
 		},
 		{
 			"name": "kardenwort-quiz",
