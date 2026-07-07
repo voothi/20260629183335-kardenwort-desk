@@ -84,6 +84,62 @@
 			"name": "intellifiller",
 			"desc": "(AI) (Anki) (Addon)",
 			"path": "U:/voothi/20251206123938-intellifiller-ai-addon-for-anki"
+		},
+		{
+			"name": "anki-templates",
+			"path": "U:/voothi/20241106211123-anki-templates"
+		},
+		{
+			"name": "kardenwort-ankiconnect",
+			"path": "U:/voothi/20251110002755-kardenwort-ankiconnect"
+		},
+		{
+			"name": "anki-csv-importer",
+			"path": "U:/voothi/20250401192017-anki-csv-importer"
+		},
+		{
+			"name": "goldendict-anki-search",
+			"path": "U:/voothi/20240408222910-goldendict-anki-search"
+		},
+		{
+			"name": "obsidian-templates",
+			"path": "U:/voothi/20250831153442-obsidian-templates"
+		},
+		{
+			"name": "whisper",
+			"path": "U:/voothi/20250228230803-whisper"
+		},
+		{
+			"name": "createjunction",
+			"path": "U:/voothi/20251206145855-createjunction"
+		},
+		{
+			"name": "default",
+			"path": "U:/voothi/20260531201104-default"
+		},
+		{
+			"name": "piper-tts",
+			"path": "U:/voothi/20241206010110-piper-tts"
+		},
+		{
+			"name": "anki-gtts-player",
+			"path": "U:/voothi/20250421115831-anki-gtts-player"
+		},
+		{
+			"name": "anki-tts-cli",
+			"path": "U:/voothi/20260119103526-anki-tts-cli"
+		},
+		{
+			"name": "zid",
+			"path": "U:/voothi/20241116203211-zid"
+		},
+		{
+			"name": "remove-newline-util",
+			"path": "U:/voothi/20240310195111-remove-newline-util"
+		},
+		{
+			"name": "zid-name",
+			"path": "U:/voothi/20240929203511-zid-name"
 		}
 	],
 	"settings": {
