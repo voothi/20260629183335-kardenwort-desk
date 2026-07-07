@@ -14,7 +14,7 @@ REPOS = {
     "goldendict": r"U:\voothi\20260113230706-goldendict",
     "dt-w": r"U:\voothi\20241122093311-deep-translator",
     "dt-p": r"U:\voothi\20260209094544-deep-translator",
-    # "spacy-env": r"U:\voothi\20250825231214-spacy-env",
+    "spacy-env": r"U:\voothi\20250825231214-spacy-env",
     "multi-repo-sync": r"U:\voothi\20260706123954-multi-repo-sync",
     "vault": r"U:\voothi.vault",
     "anki-templates": r"U:\voothi\20241106211123-anki-templates",
