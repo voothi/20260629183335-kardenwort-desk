@@ -579,6 +579,30 @@ def run_deepl_translation(text, source, target, config, resolved_paths):
     else:
         raise Exception(f"DeepL translation failed: {res.stderr}")
 
+def run_argos_translation(text, source, target, config, resolved_paths):
+    python_exe = resolved_paths.get('argotranslate_python')
+    script_path = resolved_paths.get('argotranslate_script')
+    
+    if not python_exe or not script_path:
+        raise Exception("argotranslate_python or argotranslate_script not configured in config.ini")
+        
+    cmd = [
+        str(python_exe),
+        str(script_path),
+        "-f", source,
+        "-t", target,
+        text
+    ]
+        
+    timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
+    logger.info(f"Running Argos translation command: {' '.join(cmd)}")
+    
+    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    if res.returncode == 0:
+        return res.stdout.strip()
+    else:
+        raise Exception(f"Argos translation failed: {res.stderr}")
+
 def translate_text(text, source, target, config, resolved_paths, provider):
     if provider == 'google':
         try:
@@ -588,6 +612,8 @@ def translate_text(text, source, target, config, resolved_paths, provider):
             raise
     elif provider == 'deepl':
         return run_deepl_translation(text, source, target, config, resolved_paths)
+    elif provider == 'argos':
+        return run_argos_translation(text, source, target, config, resolved_paths)
     elif provider in ('combined', 'intellifiller'):
         try:
             return run_google_translation(text, source, target, config, resolved_paths)
@@ -596,8 +622,12 @@ def translate_text(text, source, target, config, resolved_paths, provider):
             try:
                 return run_deepl_translation(text, source, target, config, resolved_paths)
             except Exception as ex:
-                logger.error(f"DeepL failover also failed: {ex}")
-                raise ex
+                logger.warning(f"DeepL failover also failed: {ex}. Trying Argos offline fallback...")
+                try:
+                    return run_argos_translation(text, source, target, config, resolved_paths)
+                except Exception as ex2:
+                    logger.error(f"Argos offline fallback failed: {ex2}")
+                    raise ex2
     else:
         raise Exception(f"Unsupported translation provider: {provider}")
 
