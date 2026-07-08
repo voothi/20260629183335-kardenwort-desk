@@ -10,6 +10,7 @@ import tempfile
 import shutil
 import contextlib
 import html
+import socket
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -607,9 +608,29 @@ def run_argos_translation(text, source, target, config, resolved_paths):
     except subprocess.TimeoutExpired as e:
         raise Exception(f"Argos translation timed out after {timeout} seconds. Model loading under concurrent load may exceed limits: {e}")
 
+def is_network_online(host="8.8.8.8", port=53, timeout=1.0):
+    try:
+        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        s.settimeout(timeout)
+        s.connect((host, port))
+        s.close()
+        return True
+    except Exception:
+        return False
+
 def translate_text(text, source, target, config, resolved_paths, provider):
     auto_fallback = config.getboolean('pipeline', 'auto_offline_fallback', fallback=True)
+    check_ip = config.get('pipeline', 'fast_connectivity_check_ip', fallback='8.8.8.8').strip()
     
+    if auto_fallback and check_ip and provider != 'argos':
+        if not is_network_online(host=check_ip):
+            logger.warning(f"Fast connectivity check to {check_ip} failed. Bypassing online providers and going straight to Argos.")
+            try:
+                return run_argos_translation(text, source, target, config, resolved_paths)
+            except Exception as ex2:
+                logger.error(f"Argos offline fallback failed: {ex2}")
+                raise ex2
+
     try:
         if provider == 'google':
             return run_google_translation(text, source, target, config, resolved_paths)
