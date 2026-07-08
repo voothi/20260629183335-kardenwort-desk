@@ -4715,7 +4715,10 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                             partial_translations, tsv_path, c, h,
                             persist=True, return_single=False
                         )
-                        write_update_js(tsv_path, curr_rows, h, role_fields, stage="translated_text")
+                        # Use stage=None to push only table row data.
+                        # The TRANSLATE section (paragraph) is updated once at the end
+                        # after the full .ru.txt file is written, avoiding blink/flicker.
+                        write_update_js(tsv_path, curr_rows, h, role_fields, stage=None)
 
                     sentence_translations_raw = translate_source_text(
                         text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider, chunk_callback=on_chunk_done)
