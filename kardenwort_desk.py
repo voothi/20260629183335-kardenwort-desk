@@ -1103,7 +1103,7 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         return sentence_translations_raw.get(0, "")
     return None
 
-def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider):
+def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None):
     import time
     
     eff_mode = _effective_text_mode(text, text_mode)
@@ -1146,7 +1146,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     # 1. Translate the padded sentences for the TSV (SentenceDestination)
                     pseudo_translations = translate_source_text(
                         "\n".join(padded_lines), source_lang, target_lang, 'multi',
-                        config, resolved_paths, provider
+                        config, resolved_paths, provider, chunk_callback=chunk_callback
                     )
                     
                     # 2. Translate the unpadded pseudo-lines for the Translate View (.ru.txt) and TextDestination
@@ -1172,7 +1172,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 else:
                     return translate_source_text(
                         "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                        config, resolved_paths, provider
+                        config, resolved_paths, provider, chunk_callback=chunk_callback
                     )
             except TranslationAlignmentError as tae:
                 raise TranslationAlignmentError(
@@ -1216,6 +1216,8 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 f"Line-by-line translation failed at line {failed_idx}: {failed_err}",
                 partial_dict=translations
             )
+        if chunk_callback:
+            chunk_callback(translations)
         return translations
         
     chunks = _build_chunks(lines, chunk_size, config)
@@ -1293,7 +1295,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     f"Rescue translation failed for line {failed_idx}: {failed_err}",
                     partial_dict=translations
                 )
-                    
+                
+        if chunk_callback:
+            chunk_callback(translations)
+            
     return translations
 
 def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
@@ -4655,7 +4660,17 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                 main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
                 col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
                 try:
-                    sentence_translations_raw = translate_source_text(text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider)
+                    def on_chunk_done(partial_translations):
+                        c, h, curr_rows = load_tsv_rows(tsv_path)
+                        resolve_translations(
+                            text, args.text_mode, curr_rows, col_index, col_sentence_dest,
+                            partial_translations, tsv_path, c, h,
+                            persist=True, return_single=False
+                        )
+                        write_update_js(tsv_path, curr_rows, h, role_fields, stage="translated_text")
+
+                    sentence_translations_raw = translate_source_text(
+                        text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider, chunk_callback=on_chunk_done)
                     comments, headers, current_rows = load_tsv_rows(tsv_path)
                     resolve_translations(
                         text, args.text_mode, current_rows, col_index, col_sentence_dest,
