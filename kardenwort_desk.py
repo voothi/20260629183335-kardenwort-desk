@@ -3026,12 +3026,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 return;
             } else if (e.ctrlKey && keyCode === 65) { // Ctrl+A
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                if (typeof tableRows !== 'undefined') {
+                if (typeof tableRows !== 'undefined' && tableRows.length > 0) {
                     for (var i = 0; i < tableRows.length; i++) {
-                        var cb = document.getElementById('cb-' + i);
-                        if (cb) { cb.checked = true; }
-                        tableRows[i].className = "selected";
+                        var rowId = String(tableRows[i].getAttribute('data-row-id'));
+                        selectedRowIdsMap[rowId] = true;
                     }
+                    updateRowStyles();
+                    updateBidirectionalHighlights();
                     if (typeof notifyAHKSelection !== 'undefined') {
                         notifyAHKSelection();
                     }
