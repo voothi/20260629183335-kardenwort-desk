@@ -1177,15 +1177,23 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         if api_delay > 0:
                             import time
                             time.sleep(api_delay)
-                        unpadded_translations = translate_source_text(
-                            "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                            config, resolved_paths, provider
-                        )
-                        full_text_trans = " ".join(
-                            unpadded_translations.get(i, "").strip() 
-                            for i in sorted(unpadded_translations.keys()) 
-                            if isinstance(i, int) and unpadded_translations.get(i, "")
-                        )
+                            
+                        # Disable fallback for unpadded run so we don't accidentally downgrade the UI 
+                        # to Argo if the network drops between the two passes.
+                        original_fallback = config.get('pipeline', 'auto_offline_fallback', fallback='true')
+                        config.set('pipeline', 'auto_offline_fallback', 'false')
+                        try:
+                            unpadded_translations = translate_source_text(
+                                "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                                config, resolved_paths, provider
+                            )
+                            full_text_trans = " ".join(
+                                unpadded_translations.get(i, "").strip() 
+                                for i in sorted(unpadded_translations.keys()) 
+                                if isinstance(i, int) and unpadded_translations.get(i, "")
+                            )
+                        finally:
+                            config.set('pipeline', 'auto_offline_fallback', original_fallback)
                     except Exception as e:
                         logger.error(f"Failed to translate unpadded lines block: {e}")
                     
