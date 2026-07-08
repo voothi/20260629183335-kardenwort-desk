@@ -3577,6 +3577,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
         };
         
+        window.selectAllRows = function() {
+            if (typeof tableRows !== 'undefined' && tableRows.length > 0) {
+                for (var i = 0; i < tableRows.length; i++) {
+                    var rowId = String(tableRows[i].getAttribute('data-row-id'));
+                    selectedRowIdsMap[rowId] = true;
+                }
+                updateRowStyles();
+                updateBidirectionalHighlights();
+                if (typeof notifyAHKSelection !== 'undefined') {
+                    notifyAHKSelection();
+                }
+            }
+        };
+        
         window.copySelection = function() {
             try {
                 document.execCommand('copy');
