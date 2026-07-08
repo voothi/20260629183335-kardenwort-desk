@@ -103,7 +103,7 @@ def test_lookup_cache_behavior(monkeypatch, tmp_path):
     kardenwort_desk.run_lookup_flow("test text", "en", "ru", "html", config, resolved_paths, goldendict, "zid3")
     assert mock_subprocess_run.call_count == 2
 
-def test_lookup_translation_failure(monkeypatch, capsys, tmp_path):
+def test_lookup_translation_failure(monkeypatch, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     goldendict['format'] = 'text'
     
@@ -171,8 +171,7 @@ def test_lookup_intellifiller(monkeypatch, tmp_path):
     # Should clear morphology data
     assert data_rows[0][headers.index('WordSourceMorphologyAI')] == ''
 
-def test_lookup_utf8_stdout(monkeypatch, tmp_path):
-    import io
+def test_lookup_utf8_stdout(monkeypatch, capfdbinary, tmp_path):
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     
     def mock_load_config(*args, **kwargs):
@@ -181,10 +180,6 @@ def test_lookup_utf8_stdout(monkeypatch, tmp_path):
     monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
     
     monkeypatch.setattr(kardenwort_desk, 'run_lookup_flow', lambda *a, **kw: ([], ['WordSource'], [['test']], "тест"))
-    
-    # We test cmd_lookup directly by capturing stdout as bytes
-    mock_stdout = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
-    monkeypatch.setattr(sys, 'stdout', mock_stdout)
     
     class Args:
         text = "test"
@@ -203,13 +198,8 @@ def test_lookup_utf8_stdout(monkeypatch, tmp_path):
     with pytest.raises(SystemExit):
         kardenwort_desk.cmd_lookup(Args())
         
-    mock_stdout.seek(0)
-    out = mock_stdout.read()
-    assert "тест" in out
-    
-    # verify underlying bytes
-    raw_bytes = mock_stdout.buffer.getvalue()
-    # It must be decodable via utf-8
+    captured = capfdbinary.readouterr()
+    raw_bytes = captured.out
     decoded = raw_bytes.decode('utf-8')
     assert "тест" in decoded
 
@@ -398,7 +388,7 @@ def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
     tsv_path.with_suffix('.txt').write_text("word1", encoding='utf-8')
     
     passed_text_mode = None
-    def mock_translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider):
+    def mock_translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, **kwargs):
         nonlocal passed_text_mode
         passed_text_mode = text_mode
         return {}

@@ -5,7 +5,7 @@ from unittest.mock import MagicMock
 import kardenwort_desk
 from kardenwort_desk import main, cmd_lookup
 
-def test_lookup_cli_smoke(monkeypatch, capsys, tmp_path):
+def test_lookup_cli_smoke(monkeypatch, capfd, tmp_path):
     import subprocess
     import configparser
     
@@ -64,10 +64,10 @@ en_lemma_override=en_over
         main()
         
     assert excinfo.value.code == 0
-    captured = capsys.readouterr()
+    captured = capfd.readouterr()
     assert "working" in captured.out
     
-def test_lookup_cli_overrides(monkeypatch, capsys, tmp_path):
+def test_lookup_cli_overrides(monkeypatch, capfd, tmp_path):
     import configparser
     
     config = configparser.ConfigParser()
@@ -110,7 +110,7 @@ en_prompt=en_prompt
     with pytest.raises(SystemExit):
         main()
         
-    captured = capsys.readouterr()
+    captured = capfd.readouterr()
     assert '<div class="kw-translation"' not in captured.out
     assert '<div class="kw-source-text"' not in captured.out
     assert "<h3>" not in captured.out

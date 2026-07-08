@@ -12,8 +12,83 @@ import contextlib
 import html
 import socket
 import concurrent.futures
+import threading
+import traceback
 from pathlib import Path
 from datetime import datetime, timezone
+
+sys.stdout = sys.stderr
+
+if sys.__stdout__ is not None:
+    sys.__stdout__.reconfigure(encoding='utf-8')
+
+def emit_payload(data, raw=False):
+    out = sys.__stdout__
+    if out is None:
+        out = sys.stderr
+        if out is None:
+            return
+    if not raw:
+        payload_str = json.dumps(data) + "\n"
+    else:
+        payload_str = data + "\n"
+    out.write(payload_str)
+    out.flush()
+
+def print_structured_error(error_code, message, details=None):
+    error_payload = {
+        "error_code": error_code,
+        "message": message,
+    }
+    if details:
+        error_payload["details"] = details
+    if sys.stderr is not None:
+        sys.stderr.write(json.dumps(error_payload) + "\n")
+        sys.stderr.flush()
+
+def _custom_excepthook(exc_type, exc_value, exc_traceback):
+    if issubclass(exc_type, KeyboardInterrupt):
+        try:
+            print_structured_error("INTERRUPTED", "Process was interrupted.")
+        except Exception:
+            if sys.stderr is not None:
+                sys.stderr.write('{"error_code": "INTERRUPTED", "message": "Process was interrupted."}\n')
+                sys.stderr.flush()
+        return
+    if issubclass(exc_type, SystemExit):
+        if isinstance(exc_value.code, int):
+            return
+    try:
+        tb_str = "".join(traceback.format_exception(exc_type, exc_value, exc_traceback))
+        print_structured_error("UNHANDLED_EXCEPTION", str(exc_value), details=tb_str)
+    except Exception:
+        if sys.stderr is not None:
+            sys.stderr.write('{"error_code": "UNHANDLED_EXCEPTION", "message": "Critical exception in error handler."}\n')
+            sys.stderr.flush()
+
+sys.excepthook = _custom_excepthook
+
+if hasattr(sys, 'unraisablehook'):
+    def _custom_unraisablehook(unraisable):
+        try:
+            tb_str = "".join(traceback.format_exception(unraisable.exc_type, unraisable.exc_value, unraisable.exc_traceback)) if unraisable.exc_traceback else None
+            print_structured_error("UNRAISABLE_EXCEPTION", unraisable.err_msg or "Unraisable exception", details=tb_str)
+        except Exception:
+            if sys.stderr is not None:
+                sys.stderr.write('{"error_code": "UNRAISABLE_EXCEPTION", "message": "Unraisable exception."}\n')
+                sys.stderr.flush()
+    sys.unraisablehook = _custom_unraisablehook
+
+if hasattr(threading, 'excepthook'):
+    def _custom_thread_excepthook(args):
+        try:
+            tb_str = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)) if args.exc_traceback else None
+            print_structured_error("UNHANDLED_THREAD_EXCEPTION", str(args.exc_value), details=tb_str)
+        except Exception:
+            if sys.stderr is not None:
+                sys.stderr.write('{"error_code": "UNHANDLED_THREAD_EXCEPTION", "message": "Thread exception."}\n')
+                sys.stderr.flush()
+    threading.excepthook = _custom_thread_excepthook
 
 import text_tokenizer as tok
 
@@ -329,15 +404,6 @@ def setup_logging(verbose=False, debug=False):
         logger.setLevel(logging.INFO)
     else:
         logger.setLevel(logging.WARNING)
-
-def print_structured_error(error_code, message, details=None):
-    error_payload = {
-        "error_code": error_code,
-        "message": message,
-    }
-    if details:
-        error_payload["details"] = details
-    sys.stderr.write(json.dumps(error_payload) + "\n")
 
 def get_deepl_key(config, base_dir):
     deepl_settings_file_val = config.get('environment', 'deepl_settings_file', fallback=None)
@@ -4113,9 +4179,7 @@ def cmd_lookup(args):
         if f"{args.language}_prompt" not in config['languages']:
             raise KeyError(f"Missing {args.language}_prompt in [languages]")
             
-        if hasattr(sys.stdout, 'reconfigure'):
-            sys.stdout.reconfigure(encoding='utf-8')
-            
+
         text_mode = getattr(args, 'text_mode', 'single')
         if text_mode == 'single' and '\n' in args.text.strip():
             text_mode = 'multi'
@@ -4146,7 +4210,7 @@ def cmd_lookup(args):
         else:
             out = render_lookup_combined(args.text, args.language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
             
-        print(out)
+        emit_payload(out, raw=True)
         sys.exit(0)
     except (configparser.Error, KeyError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         if isinstance(e, subprocess.CalledProcessError):
@@ -4165,9 +4229,9 @@ def cmd_lookup(args):
             
         err_msg = str(e)
         if fmt == 'text':
-            print(f"Error: {err_msg}")
+            emit_payload(f"Error: {err_msg}", raw=True)
         else:
-            print(f'<div style="color: red; padding: 10px; font-family: sans-serif;">Error: {err_msg}</div>')
+            emit_payload(f'<div style="color: red; padding: 10px; font-family: sans-serif;">Error: {err_msg}</div>', raw=True)
         sys.exit(1)
 
 def cmd_render(args):
@@ -4206,7 +4270,7 @@ def cmd_render(args):
         split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint('settings', 'split_gap_limit', fallback=60)
         html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap)
         from b64util import encode
-        print(encode(html))
+        emit_payload(encode(html), raw=True)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Render failed: {str(e)}")
         sys.exit(1)
@@ -4266,7 +4330,7 @@ def cmd_export(args):
         
     if not actual_export_rows:
         logger.warning("No rows to export based on selection mode.")
-        print("Warning: No rows to export based on selection mode. Export skipped.")
+        emit_payload({"status": "skipped", "message": "Warning: No rows to export based on selection mode. Export skipped."})
         sys.exit(0)
         
     exported_rows = []
@@ -4277,7 +4341,7 @@ def cmd_export(args):
             logger.warning(f"Export row index {row_id} is out of bounds (total rows: {len(data_rows)})")
             
     if not exported_rows:
-        print("Warning: None of the selected row indices were valid.")
+        emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
         sys.exit(0)
         
     fav_dir = resolved_paths['favorites_output_dir']
@@ -4323,20 +4387,20 @@ def cmd_export(args):
                     "tsv": str(import_path),
                     "note": "safe to close the window"
                 }
-                print(json.dumps(response))
+                emit_payload(response)
             else:
                 success, output = run_synchronous_import(import_path, config, resolved_paths)
                 if success:
-                    print(json.dumps({"import_complete": True, "show_window": show_window, "output": output}))
+                    emit_payload({"import_complete": True, "show_window": show_window, "output": output})
                 else:
                     print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
                     sys.exit(1)
         else:
             if save_to_favorites:
                 show_window = config.getboolean('settings', 'show_import_window', fallback=False)
-                print(json.dumps({"import_complete": True, "show_window": show_window, "output": f"SUCCESS: Exported to {import_path}"}))
+                emit_payload({"import_complete": True, "show_window": show_window, "output": f"SUCCESS: Exported to {import_path}"})
             else:
-                print(f"SUCCESS: Ready for Anki (no favorites file created)")
+                emit_payload({"status": "success", "message": "SUCCESS: Ready for Anki (no favorites file created)"})
     except Exception as e:
         print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
         sys.exit(1)
@@ -4370,7 +4434,7 @@ def cmd_reprocess(args):
         
     if not selected_rows:
         logger.warning("No rows selected for reprocess.")
-        print("Warning: No rows selected. Reprocess skipped.")
+        emit_payload({"status": "skipped", "message": "Warning: No rows selected. Reprocess skipped."})
         sys.exit(0)
         
     lang = args.language or config.get('settings', 'default_language', fallback='en')
@@ -4410,7 +4474,7 @@ def cmd_reprocess(args):
             cleared_count += 1
             
     if cleared_count == 0:
-        print("Warning: None of the selected row indices were valid.")
+        emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
         sys.exit(0)
         
     try:
@@ -4467,7 +4531,7 @@ def cmd_reprocess(args):
             stderr=log_file,
             close_fds=True
         )
-    print(json.dumps({"reprocess_started": True, "rows": cleared_count}))
+    emit_payload({"reprocess_started": True, "rows": cleared_count})
 
 def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang):
     col_lemma_name = role_fields.get('lemma', 'WordSource')
@@ -4926,7 +4990,7 @@ def cmd_retext(args):
             stderr=log_file,
             close_fds=True
         )
-    print(json.dumps({"retext_started": True}))
+    emit_payload({"retext_started": True})
 
 def cmd_retext_worker(args):
     config, resolved_paths, goldendict = load_config(args.config)
@@ -5131,7 +5195,7 @@ def cmd_edit_save(args):
             data_rows = [r for r in data_rows if r is not None]
             
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-        print("SUCCESS")
+        emit_payload({"status": "success"})
     except SystemExit:
         raise
     except Exception as e:
@@ -5267,7 +5331,7 @@ def cmd_merge(args):
                 except Exception as e:
                     logger.warning(f"Failed to delete merged source {f.name}: {e}")
                     
-        print(f"SUCCESS: Merged TSV: {dest_tsv_path}, Merged TXT: {dest_txt_path}")
+        emit_payload(f"SUCCESS: Merged TSV: {dest_tsv_path}, Merged TXT: {dest_txt_path}", raw=True)
     except Exception as e:
         print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
         sys.exit(1)
@@ -5317,7 +5381,7 @@ def spawn_ahk(args_list, base_dir):
         cmd = [found_exe, str(ahk_script)] + args_list
         logger.info(f"Spawning AHK via executable: {' '.join(cmd)}")
         try:
-            subprocess.Popen(cmd)
+            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
         except Exception as e:
             logger.error(f"Failed to spawn AHK window process: {e}")
     else:
@@ -5327,7 +5391,7 @@ def spawn_ahk(args_list, base_dir):
             if sys.version_info >= (3, 10):
                 os.startfile(str(ahk_script), operation='open', arguments=args_str)
             else:
-                subprocess.Popen(["cmd.exe", "/c", "start", '""', str(ahk_script)] + args_list)
+                subprocess.Popen(["cmd.exe", "/c", "start", '""', str(ahk_script)] + args_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
         except Exception as e2:
             logger.error(f"Failed to spawn AHK via fallback: {e2}")
 
@@ -5470,7 +5534,7 @@ def cmd_restore(args):
     
     from b64util import encode
     response_str = json.dumps(payload)
-    print(encode(response_str))
+    emit_payload(encode(response_str), raw=True)
 
 def cmd_desk(args):
     logger.info("Desk subcommand invoked")
@@ -5572,7 +5636,7 @@ def cmd_desk(args):
         split_gap = config.getint('settings', 'split_gap_limit', fallback=60)
         html = run_render_flow(text, lang, timestamp_id, args.text_mode, config, resolved_paths, theme=theme_val, split_gap_limit=split_gap)
         from b64util import encode
-        print(encode(html))
+        emit_payload(encode(html), raw=True)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Desk flow failed: {str(e)}")
         sys.exit(1)
