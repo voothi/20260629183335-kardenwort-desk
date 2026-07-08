@@ -4708,10 +4708,10 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                 main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
                 col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
                 try:
-                    def on_chunk_done(partial_translations):
+                    def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest):
                         c, h, curr_rows = load_tsv_rows(tsv_path)
                         resolve_translations(
-                            text, args.text_mode, curr_rows, col_index, col_sentence_dest,
+                            _text, args.text_mode, curr_rows, _col_index, _col_sentence_dest,
                             partial_translations, tsv_path, c, h,
                             persist=True, return_single=False
                         )
@@ -4759,7 +4759,19 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
         if word_translations_empty and col_lemma != -1 and run_base == 'auto':
-            lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip()))
+            # Preserve row order while deduplicating (set() destroys order via hash)
+            seen = set()
+            lemmas_to_translate = []
+            for row in data_rows:
+                if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                    val = row[col_lemma]
+                    if val not in seen:
+                        seen.add(val)
+                        lemmas_to_translate.append(val)
+            
+            translation_order = config.get('translation', 'translation_order', fallback='top_to_bottom').strip().lower()
+            if translation_order == 'bottom_to_top':
+                lemmas_to_translate = list(reversed(lemmas_to_translate))
             if lemmas_to_translate:
                 provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
                 chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
