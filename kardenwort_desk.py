@@ -4800,7 +4800,11 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                         save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                         data_rows = current_rows
                         
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+                    # Push table row updates only — don't rebuild TRANSLATE section on each chunk
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage=None)
+                    
+                # Final update with stage=translated to render TRANSLATE section once all lemmas are done
+                write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
             else:
                 write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
         else:
