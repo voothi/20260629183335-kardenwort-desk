@@ -11,6 +11,7 @@ import shutil
 import contextlib
 import html
 import socket
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timezone
 
@@ -608,23 +609,36 @@ def run_argos_translation(text, source, target, config, resolved_paths):
     except subprocess.TimeoutExpired as e:
         raise Exception(f"Argos translation timed out after {timeout} seconds. Model loading under concurrent load may exceed limits: {e}")
 
-def is_network_online(host="8.8.8.8", port=53, timeout=1.0):
-    try:
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        s.settimeout(timeout)
-        s.connect((host, port))
-        s.close()
+def is_network_online_multi(hosts, port=53, timeout=1.0):
+    if not hosts:
         return True
-    except Exception:
+        
+    def check_host(host):
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(timeout)
+            s.connect((host.strip(), port))
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=len(hosts)) as executor:
+        futures = [executor.submit(check_host, h) for h in hosts]
+        for future in concurrent.futures.as_completed(futures):
+            if future.result():
+                return True
         return False
 
 def translate_text(text, source, target, config, resolved_paths, provider):
     auto_fallback = config.getboolean('pipeline', 'auto_offline_fallback', fallback=True)
-    check_ip = config.get('pipeline', 'fast_connectivity_check_ip', fallback='8.8.8.8').strip()
     
-    if auto_fallback and check_ip and provider != 'argos':
-        if not is_network_online(host=check_ip):
-            logger.warning(f"Fast connectivity check to {check_ip} failed. Bypassing online providers and going straight to Argos.")
+    check_ips_str = config.get('pipeline', 'fast_connectivity_check_ips', fallback=config.get('pipeline', 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1'))
+    check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
+    
+    if auto_fallback and check_ips and provider != 'argos':
+        if not is_network_online_multi(hosts=check_ips):
+            logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online providers and going straight to Argos.")
             try:
                 return run_argos_translation(text, source, target, config, resolved_paths)
             except Exception as ex2:
@@ -1153,8 +1167,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     # This preserves the literal piecemeal formatting that the user prefers (avoiding DeepL reformatting a giant text block)
                     full_text_trans = ""
                     try:
-                        import time
-                        time.sleep(1.5) # Avoid rapid-fire rate limits from previous block
+                        api_delay = config.getfloat('translation', 'translation_api_delay', fallback=0.0)
+                        if api_delay > 0:
+                            import time
+                            time.sleep(api_delay)
                         unpadded_translations = translate_source_text(
                             "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
                             config, resolved_paths, provider
