@@ -22,7 +22,7 @@ REPOS = {
     "anki-importer": r"U:\voothi\20250401192017-anki-csv-importer",
     "intellifiller": r"U:\voothi\20251206123938-intellifiller-ai-addon-for-anki",
     # "openspec": r"U:\voothi\20260406202446-openspec",
-    # "argo": r"U:\voothi\20241121100211-argotranslate",
+    "argo": r"U:\voothi\20241121100211-argotranslate",
     # "lingva": r"U:\voothi\20250214181911-lingva-translate-cli",
     "kardenwort-mpv": r"U:\voothi\20260308110646-kardenwort-mpv",
     "kardenwort-quiz": r"U:\voothi\20260622113607-kardenwort-quiz",
