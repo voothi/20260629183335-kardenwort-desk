@@ -1242,14 +1242,16 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 translations[idx] = ""
                 if first_failure is None:
                     first_failure = (idx, last_err)
+                    
+            if chunk_callback:
+                chunk_callback(translations)
+                
         if first_failure is not None:
             failed_idx, failed_err = first_failure
             raise TranslationAlignmentError(
                 f"Line-by-line translation failed at line {failed_idx}: {failed_err}",
                 partial_dict=translations
             )
-        if chunk_callback:
-            chunk_callback(translations)
         return translations
         
     chunks = _build_chunks(lines, chunk_size, config)
