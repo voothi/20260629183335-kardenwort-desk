@@ -608,32 +608,35 @@ def run_argos_translation(text, source, target, config, resolved_paths):
         raise Exception(f"Argos translation timed out after {timeout} seconds. Model loading under concurrent load may exceed limits: {e}")
 
 def translate_text(text, source, target, config, resolved_paths, provider):
-    if provider == 'google':
-        try:
+    auto_fallback = config.getboolean('pipeline', 'auto_offline_fallback', fallback=True)
+    
+    try:
+        if provider == 'google':
             return run_google_translation(text, source, target, config, resolved_paths)
-        except Exception as e:
-            logger.warning(f"Google translation failed: {e}. No failover.")
-            raise
-    elif provider == 'deepl':
-        return run_deepl_translation(text, source, target, config, resolved_paths)
-    elif provider == 'argos':
-        return run_argos_translation(text, source, target, config, resolved_paths)
-    elif provider in ('combined', 'intellifiller'):
-        try:
-            return run_google_translation(text, source, target, config, resolved_paths)
-        except Exception as e:
-            logger.warning(f"Google translation failed: {e}. Trying DeepL failover...")
+        elif provider == 'deepl':
+            return run_deepl_translation(text, source, target, config, resolved_paths)
+        elif provider == 'argos':
+            return run_argos_translation(text, source, target, config, resolved_paths)
+        elif provider in ('combined', 'intellifiller'):
             try:
+                return run_google_translation(text, source, target, config, resolved_paths)
+            except Exception as e:
+                logger.warning(f"Google translation failed: {e}. Trying DeepL failover...")
                 return run_deepl_translation(text, source, target, config, resolved_paths)
-            except Exception as ex:
-                logger.warning(f"DeepL failover also failed: {ex}. Trying Argos offline fallback...")
-                try:
-                    return run_argos_translation(text, source, target, config, resolved_paths)
-                except Exception as ex2:
-                    logger.error(f"Argos offline fallback failed: {ex2}")
-                    raise ex2
-    else:
-        raise Exception(f"Unsupported translation provider: {provider}")
+        else:
+            raise Exception(f"Unsupported translation provider: {provider}")
+    except Exception as e:
+        if auto_fallback and provider != 'argos':
+            logger.warning(f"Primary provider '{provider}' failed: {e}. Auto-offline fallback to Argos...")
+            try:
+                return run_argos_translation(text, source, target, config, resolved_paths)
+            except Exception as ex2:
+                logger.error(f"Argos offline fallback failed: {ex2}")
+                raise ex2
+        else:
+            if provider != 'argos':
+                logger.warning(f"Provider '{provider}' failed: {e}. Auto-offline fallback is disabled.")
+            raise e
 
 def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider):
     if not lemmas:
