@@ -590,18 +590,22 @@ def run_argos_translation(text, source, target, config, resolved_paths):
         str(python_exe),
         str(script_path),
         "-f", source,
-        "-t", target,
-        text
+        "-t", target
     ]
         
-    timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
+    # Double the timeout for local offline translation to handle model loading overhead and concurrent requests
+    timeout = config.getint('timeouts', 'translation_timeout', fallback=60) * 2
     logger.info(f"Running Argos translation command: {' '.join(cmd)}")
     
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
-    if res.returncode == 0:
-        return res.stdout.strip()
-    else:
-        raise Exception(f"Argos translation failed: {res.stderr}")
+    try:
+        # Pass text via stdin to avoid command-line length limits and escaping issues on Windows
+        res = subprocess.run(cmd, input=text, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+        if res.returncode == 0:
+            return res.stdout.strip()
+        else:
+            raise Exception(f"Argos translation failed (code {res.returncode}): {res.stderr}")
+    except subprocess.TimeoutExpired as e:
+        raise Exception(f"Argos translation timed out after {timeout} seconds. Model loading under concurrent load may exceed limits: {e}")
 
 def translate_text(text, source, target, config, resolved_paths, provider):
     if provider == 'google':
