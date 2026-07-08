@@ -2495,7 +2495,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     tempDiv.innerHTML = data.translatedText;
                     var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
                     if (pendingNode || currentText !== newText) {
+                        // Preserve minimum height to prevent layout jump
+                        var h = container.offsetHeight;
+                        if (h > 0) { container.style.minHeight = h + 'px'; }
+                        container.style.opacity = '0';
                         container.innerHTML = data.translatedText;
+                        // Force a reflow before starting fade-in
+                        void container.offsetWidth;
+                        container.style.transition = 'opacity 0.3s ease-in';
+                        container.style.opacity = '1';
+                        setTimeout(function() {
+                            container.style.minHeight = '';
+                            container.style.transition = '';
+                        }, 350);
                         updated = true;
                     }
                 }
