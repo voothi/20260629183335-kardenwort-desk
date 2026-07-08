@@ -662,12 +662,18 @@ def translate_text(text, source, target, config, resolved_paths, provider):
             raise Exception(f"Unsupported translation provider: {provider}")
     except Exception as e:
         if auto_fallback and provider != 'argos':
-            logger.warning(f"Primary provider '{provider}' failed: {e}. Auto-offline fallback to Argos...")
-            try:
-                return run_argos_translation(text, source, target, config, resolved_paths)
-            except Exception as ex2:
-                logger.error(f"Argos offline fallback failed: {ex2}")
-                raise ex2
+            # Verify if it's an actual offline event vs an API rate limit (429)
+            if check_ips and not is_network_online_multi(hosts=check_ips):
+                logger.warning(f"Primary provider '{provider}' failed: {e}. Network appears offline. Auto-fallback to Argos...")
+                try:
+                    return run_argos_translation(text, source, target, config, resolved_paths)
+                except Exception as ex2:
+                    logger.error(f"Argos offline fallback failed: {ex2}")
+                    raise ex2
+            else:
+                # Network is online. Likely a rate limit or transient API error. Raise to trigger retry loop.
+                logger.warning(f"Primary provider '{provider}' failed: {e}. Network is online. Raising exception for retries...")
+                raise e
         else:
             if provider != 'argos':
                 logger.warning(f"Provider '{provider}' failed: {e}. Auto-offline fallback is disabled.")
