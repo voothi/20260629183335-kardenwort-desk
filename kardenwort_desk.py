@@ -2026,7 +2026,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     source_html = "".join(span_htmls)
     
     sentence_htmls = []
-    if is_progressive and run_text == 'auto' and not sentence_translated:
+    has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
+    if is_progressive and run_text == 'auto' and not has_real_text:
         sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
     else:
         for idx in sorted(sentence_translations.keys()):
@@ -2486,7 +2487,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     }
                 }
             }
-            if (data.translatedText) {
+            if (data.translatedText !== undefined) {
                 var container = document.getElementById('translation-container');
                 if (container) {
                     var pendingNode = container.querySelector('[data-pending="true"]');
@@ -2494,9 +2495,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     var tempDiv = document.createElement('div');
                     tempDiv.innerHTML = data.translatedText;
                     var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
-                    if (pendingNode || currentText !== newText) {
-                        container.innerHTML = data.translatedText;
-                        updated = true;
+                    if (newText || !pendingNode) {
+                        if (pendingNode || currentText !== newText) {
+                            container.innerHTML = data.translatedText;
+                            updated = true;
+                        }
                     }
                 }
             }
