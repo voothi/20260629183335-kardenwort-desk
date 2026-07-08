@@ -1153,6 +1153,8 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     # This preserves the literal piecemeal formatting that the user prefers (avoiding DeepL reformatting a giant text block)
                     full_text_trans = ""
                     try:
+                        import time
+                        time.sleep(1.5) # Avoid rapid-fire rate limits from previous block
                         unpadded_translations = translate_source_text(
                             "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
                             config, resolved_paths, provider
@@ -2990,6 +2992,19 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (window.redo) window.redo();
                 return;
+            } else if (e.ctrlKey && keyCode === 65) { // Ctrl+A
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                if (typeof tableRows !== 'undefined') {
+                    for (var i = 0; i < tableRows.length; i++) {
+                        var cb = document.getElementById('cb-' + i);
+                        if (cb) { cb.checked = true; }
+                        tableRows[i].className = "selected";
+                    }
+                    if (typeof notifyAHKSelection !== 'undefined') {
+                        notifyAHKSelection();
+                    }
+                }
+                return;
             }
             if (keyCode === 27) { // Escape key
                 clearAllSelections();
@@ -4712,23 +4727,36 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
         word_translations_empty = args.word_empty.lower() == 'true'
         if word_translations_empty and col_lemma != -1 and run_base == 'auto':
             lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip()))
-            provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
-            lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, args.language, args.target_lang, config, resolved_paths, provider)
-            
-            with file_lock(tsv_path):
-                comments, headers, current_rows = load_tsv_rows(tsv_path)
-                for row in current_rows:
-                    if col_lemma != -1 and len(row) > col_lemma:
-                        lemma_val = row[col_lemma]
-                        if col_word_dest != -1:
-                            while len(row) <= col_word_dest:
-                                row.append("")
-                            if not row[col_word_dest].strip():
-                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
-                save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
-                data_rows = current_rows
-        
-        write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+            if lemmas_to_translate:
+                provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
+                chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
+                if chunk_size > 0:
+                    chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
+                else:
+                    chunks = [lemmas_to_translate]
+                    
+                for chunk in chunks:
+                    lemma_translations = translate_lemmas_fast_path(chunk, args.language, args.target_lang, config, resolved_paths, provider)
+                    
+                    with file_lock(tsv_path):
+                        comments, headers, current_rows = load_tsv_rows(tsv_path)
+                        for row in current_rows:
+                            if col_lemma != -1 and len(row) > col_lemma:
+                                lemma_val = row[col_lemma]
+                                if col_word_dest != -1:
+                                    while len(row) <= col_word_dest:
+                                        row.append("")
+                                    if not row[col_word_dest].strip():
+                                        if lemma_val in lemma_translations:
+                                            row[col_word_dest] = lemma_translations[lemma_val]
+                        save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                        data_rows = current_rows
+                        
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+            else:
+                write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+        else:
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
