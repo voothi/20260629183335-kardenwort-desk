@@ -4,18 +4,20 @@ import pytest
 import io
 import kardenwort_desk
 
-def test_emit_payload_json(capfd):
+def test_emit_payload_json(monkeypatch):
     """1.10a: Test emit_payload with default JSON envelope."""
+    mock_stdout = io.StringIO()
+    monkeypatch.setattr(sys, '__stdout__', mock_stdout)
     kardenwort_desk.emit_payload({"status": "success"})
-    captured = capfd.readouterr()
-    out_str = captured.out.replace('\r\n', '\n') or captured.err.replace('\r\n', '\n')
+    out_str = mock_stdout.getvalue()
     assert out_str.endswith('{"status": "success"}\n')
 
-def test_emit_payload_raw(capfd):
+def test_emit_payload_raw(monkeypatch):
     """1.10b: Test emit_payload with raw data."""
+    mock_stdout = io.StringIO()
+    monkeypatch.setattr(sys, '__stdout__', mock_stdout)
     kardenwort_desk.emit_payload("raw data", raw=True)
-    captured = capfd.readouterr()
-    out_str = captured.out.replace('\r\n', '\n') or captured.err.replace('\r\n', '\n')
+    out_str = mock_stdout.getvalue()
     assert out_str.endswith("raw data\n")
 
 def test_stdout_hijack_pollution(capfd):
@@ -67,7 +69,7 @@ def test_sys_excepthook_systemexit(capfd):
     assert captured.err == ""
     assert captured.out == ""
 
-def test_emit_payload_base64(capfd):
+def test_emit_payload_base64(monkeypatch):
     """1.10e: Test that base64 encode + emit_payload(raw=True) produces valid base64."""
     from b64util import encode
     html_data = "<div>test html</div>"
@@ -77,11 +79,12 @@ def test_emit_payload_base64(capfd):
     assert " " not in encoded
     assert "\n" not in encoded
     
+    mock_stdout = io.StringIO()
+    monkeypatch.setattr(sys, '__stdout__', mock_stdout)
     kardenwort_desk.emit_payload(encoded, raw=True)
-    captured = capfd.readouterr()
+    out_str = mock_stdout.getvalue()
     
     # Check output matches what AHK expects (base64 string + \n)
-    out_str = captured.out.replace('\r\n', '\n') or captured.err.replace('\r\n', '\n')
     assert out_str.endswith(encoded + "\n")
 
 def test_emit_payload_no_stdout_fallback(monkeypatch, capfd):
