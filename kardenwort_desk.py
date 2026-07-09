@@ -4173,7 +4173,6 @@ def render_lookup_combined(text, language, target_lang, config, resolved_paths, 
 
 def cmd_lookup(args):
     import datetime, sys, subprocess, configparser
-    setup_logging(args.verbose, args.debug)
     zid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     logger.info("Lookup subcommand invoked", extra={"zid": zid})
     
