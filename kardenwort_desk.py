@@ -2605,7 +2605,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                     var val = rowData.trans || "";
                                     var oldVal = div ? div.textContent : (tds[2].classList.contains('editing') ? null : tds[2].textContent);
                                     var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
-                                    if (oldVal !== val || hasSkeleton) {
+                                    var shouldUpdate = (oldVal !== val);
+                                    if (hasSkeleton) shouldUpdate = (val !== "") || (data.stage === 'finished');
+                                    if (shouldUpdate) {
                                         if (div) div.textContent = val;
                                         else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
                                         updated = true;
@@ -2616,7 +2618,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                     var val = rowData.ipa || "";
                                     var oldVal = div ? div.textContent : (tds[3].classList.contains('editing') ? null : tds[3].textContent);
                                     var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
-                                    if (oldVal !== val || hasSkeleton) {
+                                    var shouldUpdate = (oldVal !== val);
+                                    if (hasSkeleton) shouldUpdate = (val !== "") || (data.stage === 'finished');
+                                    if (shouldUpdate) {
                                         if (div) div.textContent = val;
                                         else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
                                         updated = true;
@@ -2626,7 +2630,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                     var div = tds[4].querySelector('.scrollable-cell');
                                     var val = rowData.morph || "";
                                     var oldVal = div ? div.innerHTML : (tds[4].classList.contains('editing') ? null : tds[4].innerHTML);
-                                    if (oldVal !== val) {
+                                    var hasSkeleton = (div || tds[4]).querySelector('.skeleton-loader') !== null;
+                                    var shouldUpdate = (oldVal !== val);
+                                    if (hasSkeleton) shouldUpdate = (val !== "") || (data.stage === 'finished');
+                                    if (shouldUpdate) {
                                         if (div) div.innerHTML = val;
                                         else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
                                         updated = true;
