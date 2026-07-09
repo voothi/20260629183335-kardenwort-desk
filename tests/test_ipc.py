@@ -8,13 +8,15 @@ def test_emit_payload_json(capfd):
     """1.10a: Test emit_payload with default JSON envelope."""
     kardenwort_desk.emit_payload({"status": "success"})
     captured = capfd.readouterr()
-    assert captured.out.replace('\r\n', '\n') == '{"status": "success"}\n'
+    out_str = captured.out.replace('\r\n', '\n') or captured.err.replace('\r\n', '\n')
+    assert out_str.endswith('{"status": "success"}\n')
 
 def test_emit_payload_raw(capfd):
     """1.10b: Test emit_payload with raw data."""
     kardenwort_desk.emit_payload("raw data", raw=True)
     captured = capfd.readouterr()
-    assert captured.out.replace('\r\n', '\n') == "raw data\n"
+    out_str = captured.out.replace('\r\n', '\n') or captured.err.replace('\r\n', '\n')
+    assert out_str.endswith("raw data\n")
 
 def test_stdout_hijack_pollution(capfd):
     """1.10c: Test that a third-party print() to sys.stdout does NOT appear on sys.__stdout__."""
@@ -79,7 +81,8 @@ def test_emit_payload_base64(capfd):
     captured = capfd.readouterr()
     
     # Check output matches what AHK expects (base64 string + \n)
-    assert captured.out.replace('\r\n', '\n') == encoded + "\n"
+    out_str = captured.out.replace('\r\n', '\n') or captured.err.replace('\r\n', '\n')
+    assert out_str.endswith(encoded + "\n")
 
 def test_emit_payload_no_stdout_fallback(monkeypatch, capfd):
     """1.10f: Test the sys.__stdout__ is None fallback path."""

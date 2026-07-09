@@ -171,7 +171,8 @@ def test_lookup_intellifiller(monkeypatch, tmp_path):
     # Should clear morphology data
     assert data_rows[0][headers.index('WordSourceMorphologyAI')] == ''
 
-def test_lookup_utf8_stdout(monkeypatch, capfdbinary, tmp_path):
+def test_lookup_utf8_stdout(monkeypatch, tmp_path):
+    import io
     config, resolved_paths, goldendict = setup_test_env(tmp_path)
     
     def mock_load_config(*args, **kwargs):
@@ -180,6 +181,11 @@ def test_lookup_utf8_stdout(monkeypatch, capfdbinary, tmp_path):
     monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
     
     monkeypatch.setattr(kardenwort_desk, 'run_lookup_flow', lambda *a, **kw: ([], ['WordSource'], [['test']], "тест"))
+    
+    # Mock sys.__stdout__ directly as it's what emit_payload uses
+    mock_stdout = io.TextIOWrapper(io.BytesIO(), encoding='utf-8')
+    monkeypatch.setattr(sys, '__stdout__', mock_stdout)
+    monkeypatch.setattr(sys, 'stdout', mock_stdout)
     
     class Args:
         text = "test"
@@ -198,9 +204,8 @@ def test_lookup_utf8_stdout(monkeypatch, capfdbinary, tmp_path):
     with pytest.raises(SystemExit):
         kardenwort_desk.cmd_lookup(Args())
         
-    captured = capfdbinary.readouterr()
-    raw_bytes = captured.out
-    decoded = raw_bytes.decode('utf-8')
+    mock_stdout.seek(0)
+    decoded = mock_stdout.read()
     assert "тест" in decoded
 
 def test_progressive_worker_stages(monkeypatch, tmp_path):

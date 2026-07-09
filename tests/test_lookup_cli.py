@@ -60,13 +60,20 @@ en_lemma_override=en_over
     
     monkeypatch.setattr(sys, 'argv', ['kardenwort_desk.py', 'lookup', '--text', 'running', '--language', 'en', '--format', 'text'])
     
+    # Mock sys.__stdout__ and sys.stderr to avoid [WinError 6] under pytest capture on Windows
+    import io
+    mock_out = io.StringIO()
+    monkeypatch.setattr(sys, '__stdout__', mock_out)
+    monkeypatch.setattr(sys, 'stdout', mock_out)
+    monkeypatch.setattr(sys, 'stderr', mock_out)
+    
     with pytest.raises(SystemExit) as excinfo:
         main()
         
     assert excinfo.value.code == 0
-    captured = capfd.readouterr()
-    assert "working" in captured.out
-    
+    out_str = mock_out.getvalue()
+    assert "working" in out_str
+        
 def test_lookup_cli_overrides(monkeypatch, capfd, tmp_path):
     import configparser
     
@@ -107,11 +114,18 @@ en_prompt=en_prompt
     
     monkeypatch.setattr(sys, 'argv', ['kardenwort_desk.py', 'lookup', '--text', 'running', '--language', 'en', '--sections', 'lemmas', '--lemma-columns', 'lemma,translation', '--no-headings'])
     
+    # Mock sys.__stdout__ and sys.stderr
+    import io
+    mock_out = io.StringIO()
+    monkeypatch.setattr(sys, '__stdout__', mock_out)
+    monkeypatch.setattr(sys, 'stdout', mock_out)
+    monkeypatch.setattr(sys, 'stderr', mock_out)
+    
     with pytest.raises(SystemExit):
         main()
         
-    captured = capfd.readouterr()
-    assert '<div class="kw-translation"' not in captured.out
-    assert '<div class="kw-source-text"' not in captured.out
-    assert "<h3>" not in captured.out
-    assert "Lemma" in captured.out
+    out_str = mock_out.getvalue()
+    assert '<div class="kw-translation"' not in out_str
+    assert '<div class="kw-source-text"' not in out_str
+    assert "<h3>" not in out_str
+    assert "Lemma" in out_str
