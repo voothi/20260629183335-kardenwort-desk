@@ -2604,7 +2604,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                     var div = tds[2].querySelector('.scrollable-cell');
                                     var val = rowData.trans || "";
                                     var oldVal = div ? div.textContent : (tds[2].classList.contains('editing') ? null : tds[2].textContent);
-                                    if (oldVal !== val) {
+                                    var hasSkeleton = (div ? div.innerHTML : tds[2].innerHTML).indexOf('skeleton-loader') > -1;
+                                    if (oldVal !== val || hasSkeleton) {
                                         if (div) div.textContent = val;
                                         else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
                                         updated = true;
@@ -2614,7 +2615,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                     var div = tds[3].querySelector('.scrollable-cell');
                                     var val = rowData.ipa || "";
                                     var oldVal = div ? div.textContent : (tds[3].classList.contains('editing') ? null : tds[3].textContent);
-                                    if (oldVal !== val) {
+                                    var hasSkeleton = (div ? div.innerHTML : tds[3].innerHTML).indexOf('skeleton-loader') > -1;
+                                    if (oldVal !== val || hasSkeleton) {
                                         if (div) div.textContent = val;
                                         else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
                                         updated = true;
