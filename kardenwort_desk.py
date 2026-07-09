@@ -19,7 +19,7 @@ from datetime import datetime, timezone
 
 sys.stdout = sys.stderr
 
-if sys.__stdout__ is not None:
+if sys.__stdout__ is not None and hasattr(sys.__stdout__, 'reconfigure'):
     sys.__stdout__.reconfigure(encoding='utf-8')
 
 def emit_payload(data, raw=False):
