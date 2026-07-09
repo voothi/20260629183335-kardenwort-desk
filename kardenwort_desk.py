@@ -1531,7 +1531,8 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
     
     logger.info(f"Launching detached import: {' '.join(cmd)}")
     
-    show_window = config.getboolean('settings', 'show_import_window', fallback=False)
+    # Detached background import always runs without showing a console window
+    show_window = False
     if sys.platform == 'win32':
         # CREATE_NEW_PROCESS_GROUP = 0x00000200
         # DETACHED_PROCESS = 0x00000008
@@ -1542,6 +1543,7 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
             creationflags = 0x00000200 | 0x08000000
         p = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             creationflags=creationflags,
@@ -1550,6 +1552,7 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
     else:
         p = subprocess.Popen(
             cmd,
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             start_new_session=True,
@@ -4397,6 +4400,7 @@ def cmd_export(args):
             detach = config.getboolean('settings', 'detach_import_on_send', fallback=True)
             show_window = config.getboolean('settings', 'show_import_window', fallback=False)
             if detach:
+                show_window = False
                 pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
                 response = {
                     "import_started": True,
