@@ -4766,6 +4766,14 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         for attempt in range(10):
             try:
                 os.replace(temp_path, update_js_path)
+                try:
+                    import time
+                    now = time.time()
+                    st = os.stat(update_js_path)
+                    new_mtime = max(now, st.st_mtime + 2.0)
+                    os.utime(update_js_path, (now, new_mtime))
+                except Exception as utime_err:
+                    logger.warning(f"Failed to set utime for {update_js_path}: {utime_err}")
                 break
             except PermissionError:
                 time.sleep(0.1)
@@ -5108,6 +5116,9 @@ def cmd_progressive_worker(args):
             raise se
         except Exception as e:
             logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
+            import traceback
+            with open(Path(__file__).parent / "worker_crash.txt", "a", encoding="utf-8") as f:
+                f.write(f"CRASH: {e}\n{traceback.format_exc()}\n")
         finally:
             # 3. Finished Event
             try:
