@@ -32,8 +32,16 @@ def emit_payload(data, raw=False):
         payload_str = json.dumps(data) + "\n"
     else:
         payload_str = data + "\n"
-    out.write(payload_str)
-    out.flush()
+    try:
+        out.write(payload_str)
+        out.flush()
+    except OSError:
+        if out is not sys.stderr and sys.stderr is not None:
+            try:
+                sys.stderr.write(payload_str)
+                sys.stderr.flush()
+            except OSError:
+                pass
 
 def print_structured_error(error_code, message, details=None):
     error_payload = {
