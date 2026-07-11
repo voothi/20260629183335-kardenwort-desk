@@ -5378,7 +5378,8 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     selected_rows_to_translate = []
                     for i, row in enumerate(data_rows):
                         if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
-                            selected_rows_to_translate.append(i)
+                            if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
+                                selected_rows_to_translate.append(i)
                             
                     if selected_rows_to_translate:
                         data_rows = _progressive_worker_stage_enrichment(
@@ -5430,11 +5431,15 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
             
+        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+        col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+        col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+
         # Protection against empty lines slipping through to IntelliFiller
         valid_selected = []
         source_col = role_fields.get('word_source', 'WordSource')
         source_idx = headers.index(source_col) if source_col in headers else -1
-        
+
         for r in selected_rows:
             if r < len(data_rows):
                 row = data_rows[r]
@@ -5443,6 +5448,17 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                     continue
                 # If we have a source column, ensure it's not empty
                 if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
+                    continue
+                
+                has_dest = col_word_dest != -1 and len(row) > col_word_dest and str(row[col_word_dest]).strip()
+                has_ipa = col_ipa != -1 and len(row) > col_ipa and str(row[col_ipa]).strip()
+                has_morph = col_morph != -1 and len(row) > col_morph and str(row[col_morph]).strip()
+                
+                need_dest = col_word_dest != -1 and not has_dest
+                need_ipa = col_ipa != -1 and not has_ipa
+                need_morph = col_morph != -1 and not has_morph
+                
+                if not (need_dest or need_ipa or need_morph):
                     continue
                 valid_selected.append(r)
                 
