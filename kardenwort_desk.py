@@ -1473,7 +1473,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             
     return translations
 
-def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
+def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False):
     python_exe = resolved_paths['kardenwort_python']
     headless_script = resolved_paths['intellifiller_headless']
     
@@ -1483,6 +1483,8 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
         "--tsv", str(tsv_path),
         "--prompt", prompt_name,
     ]
+    if reprocess:
+        cmd.append("--reprocess")
     
     if selected_rows:
         rows_str = ",".join(str(r) for r in selected_rows)
@@ -5084,7 +5086,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
     for i in range(0, len(selected_rows), batch_size):
         batch = selected_rows[i:i + batch_size]
         logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
-        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch, reprocess=True)
         
         try:
             with file_lock(tsv_path):
