@@ -5332,11 +5332,14 @@ def cmd_merge(args):
                 files_by_lang[lang] = []
             files_by_lang[lang].append(f)
 
+        import time
         all_written_tsvs = []
         all_written_txts = []
-        timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
 
-        for lang, lang_files in sorted(files_by_lang.items()):
+        for idx, (lang, lang_files) in enumerate(sorted(files_by_lang.items())):
+            if idx > 0:
+                time.sleep(1.1)
+            timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
             # Validate schema for this language group
             first_headers = None
             for f in lang_files:

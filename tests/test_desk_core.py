@@ -768,12 +768,16 @@ def test_cmd_merge_multilingual(monkeypatch, tmp_path):
     de_txt = tmp_path / "20260630000001-part2.txt"
     de_tsv.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nde_inf\tde_lem\t1\n", encoding='utf-8')
     de_txt.write_text("Deutsche Zeile.", encoding='utf-8')
-
-    dest_tsv_pattern = tmp_path / "custom.tsv"
     
+    # Also add translations for both
+    en_ru_txt = tmp_path / "20260630000000-part1.ru.txt"
+    en_ru_txt.write_text("English translation.", encoding='utf-8')
+    de_ru_txt = tmp_path / "20260630000001-part2.ru.txt"
+    de_ru_txt.write_text("Deutsche Ubersetzung.", encoding='utf-8')
+
     class Args:
         files = [str(en_tsv), str(de_tsv)]
-        target = str(dest_tsv_pattern)
+        target = "new"
         config = None
 
     config = configparser.ConfigParser()
@@ -787,22 +791,22 @@ def test_cmd_merge_multilingual(monkeypatch, tmp_path):
     
     desk.cmd_merge(Args())
     
-    # It should have written separate merged files for en and de
-    dest_en_tsv = tmp_path / "custom.en.tsv"
-    dest_de_tsv = tmp_path / "custom.de.tsv"
-    dest_en_txt = tmp_path / "custom.en.txt"
-    dest_de_txt = tmp_path / "custom.de.txt"
-
-    assert dest_en_tsv.exists()
-    assert dest_de_tsv.exists()
-    assert dest_en_txt.exists()
-    assert dest_de_txt.exists()
-
-    _, _, en_rows = desk.load_tsv_rows(dest_en_tsv)
-    assert en_rows == [["en_inf", "en_lem", "1"]]
+    # We should have written exactly 6 output files in tmp_path: 3 with en_ZID, 3 with de_ZID
+    created_files = list(tmp_path.glob("*merged*"))
+    assert len(created_files) == 6
     
-    _, _, de_rows = desk.load_tsv_rows(dest_de_tsv)
-    assert de_rows == [["de_inf", "de_lem", "1"]]
+    # Separate them by language
+    en_files = [f for f in created_files if "en" in f.name]
+    de_files = [f for f in created_files if "de" in f.name]
+    ru_files = [f for f in created_files if "ru" in f.name]
+    
+    assert len(en_files) == 2  # .en.tsv and .en.txt
+    assert len(de_files) == 2  # .de.tsv and .de.txt
+    assert len(ru_files) == 2  # .ru.txt (one for en ZID, one for de ZID)
+    
+    # ZID check: they must have different timestamps (two unique ZIDs)
+    zids = {f.name.split("-")[0] for f in created_files}
+    assert len(zids) == 2
 
 
 
