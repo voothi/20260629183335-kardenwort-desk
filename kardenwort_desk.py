@@ -4965,7 +4965,8 @@ def cmd_reprocess(args):
     translation_col = role_fields.get('word_translation', 'WordDestination')
     
     editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
-    exclude_from_clear = ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2', translation_col)
+    selected_col = role_fields.get('selected', 'DeskSelected')
+    exclude_from_clear = ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2', translation_col, selected_col)
     
     fields_to_clear = [c for c in editable_cols if c not in exclude_from_clear]
     for col in headers:
