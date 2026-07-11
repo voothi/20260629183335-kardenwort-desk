@@ -525,3 +525,38 @@ def test_cmd_merge_filters_tsv(monkeypatch, tmp_path):
     assert dest_txt_ru.read_text(encoding='utf-8') == "Text one RU\n\nText two RU"
 
 
+def test_cmd_merge_deduplicates_rows(monkeypatch, tmp_path):
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\nv1\tv2\n", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\nv1\tv2\nv3\tv4\n", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+
+    # mock load_config
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    # We must resolve_paths to point to real mapping file
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    
+    # Verify merge output has deduplicated "v1", "v2"
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    assert final_headers == ["WordSourceInflectedForm", "WordSource"]
+    assert final_rows == [["v1", "v2"], ["v3", "v4"]]
+
+
+

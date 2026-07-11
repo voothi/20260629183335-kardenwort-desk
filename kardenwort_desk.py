@@ -1844,6 +1844,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             ttl_seconds=0, cache_key=cache_key, text_mode=eff_mode
         )
     
+    tsv_slug = slug
+    tsv_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', working_tsv_path.name, re.IGNORECASE)
+    if tsv_match:
+        tsv_slug = tsv_match.group(1)
+    
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
 
@@ -1896,7 +1901,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     persist=True, return_single=False
                 )
                 eff_mode = _effective_text_mode(text, text_mode)
-                translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+                translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
                 save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
                 _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                 
@@ -1910,7 +1915,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 persist=True, return_single=False
             )
             eff_mode = _effective_text_mode(text, text_mode)
-            translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+            translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
             save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
             _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
@@ -1929,7 +1934,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             with file_lock(working_tsv_path):
                 save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                 
-    translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+    translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
     
     extracted_translations = {}
     col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
@@ -1970,7 +1975,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     sentence_translations[a_idx] = ""
             
     save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
-    translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+    translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
     eff_mode = _effective_text_mode(text, text_mode)
     _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
             
@@ -5330,6 +5335,27 @@ def cmd_merge(args):
 
     written_txt_paths = set()
     
+    # Deduplicate rows by unique (inflected, lemma) pairs
+    try:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, first_headers)
+        col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
+        col_inflected = first_headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in first_headers else -1
+        
+        if col_lemma != -1 and col_inflected != -1:
+            seen_pairs = set()
+            unique_data_rows = []
+            for row in all_data_rows:
+                lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
+                inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
+                pair = (inflected_val, lemma_val)
+                if pair not in seen_pairs:
+                    seen_pairs.add(pair)
+                    unique_data_rows.append(row)
+            all_data_rows = unique_data_rows
+    except Exception as e:
+        logger.warning(f"Failed to deduplicate merged TSV rows: {e}")
+
     try:
         with file_lock(dest_tsv_path):
             save_tsv_rows_safely(dest_tsv_path, all_comments, first_headers, all_data_rows)
