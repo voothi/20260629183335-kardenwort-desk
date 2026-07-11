@@ -487,7 +487,7 @@ class TestWordfillIntegration:
             'WordSourceIPA': '/tɛst/',
             'WordSourceMorphologyAI': 'noun',
         }
-        monkeypatch.setattr(desk, 'find_wordfill_match', lambda w, l, cfg: match if w == 'test' else None)
+        monkeypatch.setattr(desk, 'find_wordfill_match', lambda w, l, cfg, exclude_path=None: match if w == 'test' else None)
 
         # Mock translate_source_text for sentences
         monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "working"})

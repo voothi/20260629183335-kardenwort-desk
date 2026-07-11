@@ -1853,7 +1853,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 
     return selected_positions, len(selected_positions) > 0
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -1895,6 +1895,31 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     
+    # --- Word-fill early pre-fill step ---
+    if wordfill_cfg and wordfill_cfg.get('enabled', False):
+        try:
+            col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
+            if col_lemma_wf != -1:
+                seen_lemmas = {}
+                for i, row in enumerate(data_rows):
+                    if len(row) > col_lemma_wf:
+                        lemma_val = row[col_lemma_wf].strip()
+                        if lemma_val:
+                            seen_lemmas.setdefault(lemma_val, []).append(i)
+                for lemma_val, row_indices in seen_lemmas.items():
+                    match = find_wordfill_match(lemma_val, language, wordfill_cfg, exclude_path=working_tsv_path)
+                    if match:
+                        lemma_rows = [data_rows[i] for i in row_indices]
+                        apply_wordfill_to_rows(lemma_rows, headers, match)
+                        logger.info(
+                            f"wordfill (desk): pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
+                            f"from corpus."
+                        )
+                with file_lock(working_tsv_path):
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+        except Exception as wf_err:
+            logger.warning(f"wordfill (desk): early pre-fill step failed, continuing: {wf_err}")
+
     sentence_index_col = "SentenceSourceIndex"
     if 'fields_mapping.word' in mapping:
         for col, role in mapping['fields_mapping.word'].items():
@@ -1922,10 +1947,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
             sentence_translated = True
             
-    word_translations_empty = True
-    if col_word_dest != -1:
-        if any(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows):
-            word_translations_empty = False
+    has_untranslated_lemmas = False
+    if col_lemma != -1 and col_word_dest != -1:
+        for row in data_rows:
+            if len(row) > col_lemma and row[col_lemma].strip():
+                if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                    has_untranslated_lemmas = True
+                    break
+    elif col_word_dest != -1:
+        # Fallback if col_lemma is not defined but we have word_dest
+        if not all(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows if any(row)):
+            has_untranslated_lemmas = True
             
     # If monolithic mode and run_base is auto, run base translation synchronously
     if not is_progressive and run_base == 'auto':
@@ -1957,8 +1989,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
-        if word_translations_empty:
-            lemmas_to_translate = list(set(row[col_lemma] for row in data_rows if len(row) > col_lemma and row[col_lemma].strip()))
+        if has_untranslated_lemmas:
+            lemmas_to_translate = []
+            for row in data_rows:
+                if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                    if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
+                        lemmas_to_translate.append(row[col_lemma].strip())
+            lemmas_to_translate = list(set(lemmas_to_translate))
+            
             lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
             
             for row in data_rows:
@@ -2025,9 +2063,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         prompt_name = config.get('languages', f'{language}_prompt')
         
         if is_progressive:
-            if (run_text == 'auto' and not sentence_translated) or (run_base == 'auto' and word_translations_empty) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
+            if (run_text == 'auto' and not sentence_translated) or (run_base == 'auto' and has_untranslated_lemmas) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
-                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, word_translations_empty, skip_intellifiller, eff_mode)
+                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, str(has_untranslated_lemmas), skip_intellifiller, eff_mode)
                 worker_launched = True
         else:
             # Monolithic mode enrichment
@@ -2188,7 +2226,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
         # Skeleton loaders for cells if they are pending in progressive mode:
         if is_progressive:
-            if run_base == 'auto' and not trans_val.strip() and word_translations_empty:
+            if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
                 trans_val = '<span class="skeleton-loader" style="width: 60px;"></span>'
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
                 ipa_val = '<span class="skeleton-loader" style="width: 50px;"></span>'
@@ -3888,7 +3926,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                             seen_lemmas.setdefault(lemma_val, []).append(i)
                 # Query and apply per unique lemma
                 for lemma_val, row_indices in seen_lemmas.items():
-                    match = find_wordfill_match(lemma_val, language, wordfill_cfg)
+                    match = find_wordfill_match(lemma_val, language, wordfill_cfg, exclude_path=working_tsv_path)
                     if match:
                         lemma_rows = [data_rows[i] for i in row_indices]
                         apply_wordfill_to_rows(lemma_rows, headers, match)
@@ -4396,7 +4434,7 @@ def score_wordfill_row(row, headers):
     return 0
 
 
-def find_wordfill_match(word, language, wordfill_cfg):
+def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     """
     Scan configured TSV corpus for the best matching row for *word* in *language*.
     Returns a dict {column: value} for non-empty eligible fields, or None.
@@ -4427,6 +4465,9 @@ def find_wordfill_match(word, language, wordfill_cfg):
     best_match = None        # dict of column->value
 
     for file_rank, tsv_path in enumerate(candidates):
+        if exclude_path and tsv_path.resolve() == Path(exclude_path).resolve():
+            continue
+            
         try:
             _comments, headers, data_rows = load_tsv_rows(tsv_path)
         except Exception as e:
@@ -4453,19 +4494,19 @@ def find_wordfill_match(word, language, wordfill_cfg):
                 continue
 
             # Score: lower file_rank = newer = better; higher tier = better quality
+            match_dict = {}
+            for col in WORDFILL_ELIGIBLE_FIELDS:
+                if col in headers:
+                    col_idx = headers.index(col)
+                    if len(row) > col_idx:
+                        val = row[col_idx].strip()
+                        if val:
+                            match_dict[col] = val
+                            
             # Compare as tuple: we want maximize quality within same file, prefer newer files
             row_score = (-file_rank, tier)
             if best_match is None or row_score > best_score:
                 best_score = row_score
-                # Build result dict: only eligible, non-empty fields
-                match_dict = {}
-                for col in WORDFILL_ELIGIBLE_FIELDS:
-                    if col in headers:
-                        col_idx = headers.index(col)
-                        if len(row) > col_idx:
-                            val = row[col_idx].strip()
-                            if val:
-                                match_dict[col] = val
                 best_match = match_dict
 
     return best_match if best_match else None
@@ -4617,7 +4658,7 @@ def cmd_render(args):
     try:
         zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
         split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint('settings', 'split_gap_limit', fallback=60)
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap)
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill)
         from b64util import encode
         emit_payload(encode(html), raw=True)
     except Exception as e:
