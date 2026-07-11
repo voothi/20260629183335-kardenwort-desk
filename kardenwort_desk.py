@@ -5451,6 +5451,9 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                     continue
                 
                 has_dest = col_word_dest != -1 and len(row) > col_word_dest and str(row[col_word_dest]).strip()
+                if col_word_dest != -1 and has_dest:
+                    continue
+                
                 has_ipa = col_ipa != -1 and len(row) > col_ipa and str(row[col_ipa]).strip()
                 has_morph = col_morph != -1 and len(row) > col_morph and str(row[col_morph]).strip()
                 
