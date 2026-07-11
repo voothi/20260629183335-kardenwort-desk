@@ -3872,6 +3872,37 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
     
+    # --- Word-fill early pre-fill step ---
+    # Runs at the start so that existing translations are filled before slow translations run.
+    filled_lemmas = set()
+    if wordfill_cfg and wordfill_cfg.get('enabled', False):
+        try:
+            col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
+            if col_lemma_wf != -1:
+                # Collect unique lemmas
+                seen_lemmas = {}
+                for i, row in enumerate(data_rows):
+                    if len(row) > col_lemma_wf:
+                        lemma_val = row[col_lemma_wf].strip()
+                        if lemma_val:
+                            seen_lemmas.setdefault(lemma_val, []).append(i)
+                # Query and apply per unique lemma
+                for lemma_val, row_indices in seen_lemmas.items():
+                    match = find_wordfill_match(lemma_val, language, wordfill_cfg)
+                    if match:
+                        lemma_rows = [data_rows[i] for i in row_indices]
+                        apply_wordfill_to_rows(lemma_rows, headers, match)
+                        filled_lemmas.add(lemma_val)
+                        logger.info(
+                            f"wordfill: pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
+                            f"from corpus."
+                        )
+                # Save the pre-filled rows back to the working TSV so they persist!
+                with file_lock(working_tsv_path):
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+        except Exception as wf_err:
+            logger.warning(f"wordfill: early pre-fill step failed, continuing: {wf_err}")
+    
     col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     
@@ -3939,33 +3970,11 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                 col_idx = headers.index(col_name)
                 for row in data_rows:
                     if len(row) > col_idx:
-                        row[col_idx] = ""
-
-    # --- Word-fill pre-fill step ---
-    # Runs after any IPA/morphology clearing so wordfill data is preserved.
-    if wordfill_cfg and wordfill_cfg.get('enabled', False):
-        try:
-            col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
-            if col_lemma_wf != -1:
-                # Collect unique lemmas
-                seen_lemmas = {}
-                for i, row in enumerate(data_rows):
-                    if len(row) > col_lemma_wf:
-                        lemma_val = row[col_lemma_wf].strip()
-                        if lemma_val:
-                            seen_lemmas.setdefault(lemma_val, []).append(i)
-                # Query and apply per unique lemma
-                for lemma_val, row_indices in seen_lemmas.items():
-                    match = find_wordfill_match(lemma_val, language, wordfill_cfg)
-                    if match:
-                        lemma_rows = [data_rows[i] for i in row_indices]
-                        apply_wordfill_to_rows(lemma_rows, headers, match)
-                        logger.info(
-                            f"wordfill: pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
-                            f"from corpus."
-                        )
-        except Exception as wf_err:
-            logger.warning(f"wordfill: pre-fill step failed, continuing without it: {wf_err}")
+                        # Clear only if the lemma was not early pre-filled by wordfill
+                        col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
+                        lemma_val = row[col_lemma_wf].strip() if col_lemma_wf != -1 and len(row) > col_lemma_wf else ""
+                        if lemma_val not in filled_lemmas:
+                            row[col_idx] = ""
 
     return comments, headers, data_rows, sentence_translation
 

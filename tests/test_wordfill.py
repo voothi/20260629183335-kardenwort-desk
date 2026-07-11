@@ -447,3 +447,107 @@ class TestApplyWordfillToRows:
         assert rows[0][ipa_idx] == '/rʌn/'
         # SentenceSource must not be filled (not in WORDFILL_ELIGIBLE_FIELDS)
         assert len(rows[0]) <= sentence_idx or rows[0][sentence_idx] == ''
+
+
+# ---------------------------------------------------------------------------
+# Integration tests with run_lookup_flow
+# ---------------------------------------------------------------------------
+
+import subprocess
+
+class TestWordfillIntegration:
+
+    def test_run_lookup_flow_prefills_and_bypasses_translation(self, monkeypatch, tmp_path):
+        """
+        run_lookup_flow with wordfill enabled should fill translations and bypass
+        calling the slow translation API for matched words, and it should preserve
+        the filled IPA/morphology even if run_intellifiller=False.
+        """
+        # Setup lookup test env (borrow setup_test_env from test_lookup)
+        from tests.test_lookup import setup_test_env
+        config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+
+        # Set run_intellifiller = False
+        goldendict['run_intellifiller'] = False
+        
+        # Configure wordfill
+        wordfill_cfg = {
+            'enabled': True,
+            'scan_roots': [tmp_path],
+            'search_depth': 0,
+            'data_mode': 'all',
+            'min_quality': 'any',
+            'max_scan_files': 500,
+            'language_strict': True,
+        }
+
+        # Mock find_wordfill_match to return a full match for 'test'
+        match = {
+            'WordDestination': 'тест_wordfilled',
+            'WordSourceIPA': '/tɛst/',
+            'WordSourceMorphologyAI': 'noun',
+        }
+        monkeypatch.setattr(desk, 'find_wordfill_match', lambda w, l, cfg: match if w == 'test' else None)
+
+        # Mock translate_source_text for sentences
+        monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "working"})
+
+        # Mock subprocess.run to provide initial TSV containing the word 'test'
+        def mock_run(*args, **kwargs):
+            cmd = args[0]
+            out_file = Path(cmd[cmd.index("--output-file") + 1])
+            out_file.parent.mkdir(parents=True, exist_ok=True)
+            # headers must contain all fields
+            headers = [
+                'WordSource', 'WordDestination', 'WordSourceIPA', 'WordSourceMorphologyAI',
+                'SentenceSourceIndex', 'SentenceSourceContextLeft', 'SentenceSource', 'SentenceSourceContextRight',
+                'SentenceDestinationContextLeft', 'SentenceDestination', 'SentenceDestinationContextRight',
+                'SentenceDestination2ContextLeft', 'SentenceDestination2', 'SentenceDestination2ContextRight',
+                'SentenceSourceWordlist', 'SentenceSourceCloze', 'SentenceSourceRewriteAISentenceSource',
+                'SentenceSourceRewriteAISentenceDestination'
+            ]
+            rows = [['test', '', '', '', '0', '', 'test context', '', '', '', '', '', '', '', '', '', '', '']]
+            
+            with open(out_file, 'w', encoding='utf-8', newline='') as f:
+                writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+                writer.writerow(headers)
+                for row in rows:
+                    writer.writerow(row)
+
+        monkeypatch.setattr(subprocess, 'run', mock_run)
+
+        # Mock translate_lemmas_fast_path — we expect it NOT to be called or to receive no lemmas
+        # because the word 'test' translation is already filled by wordfill!
+        translate_lemmas_called = []
+        def mock_translate_lemmas_fast_path(lemmas, *args, **kwargs):
+            translate_lemmas_called.append(lemmas)
+            return {l: 'fallback_transl' for l in lemmas}
+        monkeypatch.setattr(desk, 'translate_lemmas_fast_path', mock_translate_lemmas_fast_path)
+
+        # Run lookup flow
+        comments, headers, data_rows, sent_trans = desk.run_lookup_flow(
+            text="test context",
+            language="en",
+            target_lang="ru",
+            fmt="text",
+            config=config,
+            resolved_paths=resolved_paths,
+            goldendict=goldendict,
+            zid="test_zid",
+            text_mode="single",
+            wordfill_cfg=wordfill_cfg
+        )
+
+        # Verify translate_lemmas_fast_path was NOT called with 'test' (because it was pre-filled)
+        assert len(translate_lemmas_called) == 0 or 'test' not in translate_lemmas_called[0]
+
+        # Verify data_rows has the filled translation, IPA and morphology (and they were NOT cleared)
+        lemma_idx = headers.index('WordSource')
+        dest_idx = headers.index('WordDestination')
+        ipa_idx = headers.index('WordSourceIPA')
+        morph_idx = headers.index('WordSourceMorphologyAI')
+
+        row_test = [r for r in data_rows if r[lemma_idx] == 'test'][0]
+        assert row_test[dest_idx] == 'тест_wordfilled'
+        assert row_test[ipa_idx] == '/tɛst/'
+        assert row_test[morph_idx] == 'noun'
