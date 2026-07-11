@@ -4295,7 +4295,17 @@ WORDFILL_ELIGIBLE_FIELDS = (
 )
 
 def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_scan_files=500):
-    """Return a list of candidate TSV Paths, sorted newest-ZID-first, capped at max_scan_files."""
+    """
+    Return a list of candidate TSV Paths, sorted and capped at max_scan_files.
+
+    Sort order (primary → secondary):
+      1. Newest ZID first — a file whose name starts with a later timestamp wins.
+      2. Merged before session — when two files share the same ZID prefix,
+         '*-merged.*' files are ranked before plain session files (key=1 > key=0
+         with reverse=True).
+         This applies in data_mode='all'; in data_mode='merged' only merged
+         files are collected so the secondary key has no effect.
+    """
     lang_suffix = f'.{language.lower()}.tsv'
     candidates = []
 
@@ -4328,8 +4338,16 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
                         continue
                     candidates.append(f)
 
-    # Sort newest ZID first (ZID is in the filename prefix)
-    candidates.sort(key=lambda p: extract_zid(p), reverse=True)
+    # Sort order:
+    #   Primary:   newest ZID first   (later timestamp = higher priority)
+    #   Secondary: merged before session — within the same ZID, merged files win.
+    #              With reverse=True, higher secondary key wins:
+    #              merged → 1, session → 0, so merged floats to the top.
+    # In data_mode='merged' only merged files are present, so secondary key is moot.
+    candidates.sort(
+        key=lambda p: (extract_zid(p), 1 if '-merged.' in p.name else 0),
+        reverse=True
+    )
 
     if len(candidates) > max_scan_files:
         logger.warning(
