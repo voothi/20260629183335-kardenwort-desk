@@ -375,7 +375,7 @@ def load_config(config_path=None):
             else:
                 parsed_roots.append(Path(raw_root).resolve())
         wordfill['scan_roots'] = parsed_roots
-        wordfill['search_depth'] = wf.getint('search_depth', fallback=1)
+        wordfill['scan_depth'] = wf.getint('scan_depth', fallback=1)
         wordfill['scan_scope'] = wf.get('scan_scope', 'merged').strip().lower()
         wordfill['scan_sort_order'] = wf.get('scan_sort_order', 'chronological').strip().lower()
         wordfill['scan_match_language'] = wf.getboolean('scan_match_language', fallback=True)
@@ -385,7 +385,7 @@ def load_config(config_path=None):
     else:
         wordfill['enabled'] = False
         wordfill['scan_roots'] = []
-        wordfill['search_depth'] = 1
+        wordfill['scan_depth'] = 1
         wordfill['scan_scope'] = 'merged'
         wordfill['scan_sort_order'] = 'chronological'
         wordfill['scan_match_language'] = True
@@ -4348,7 +4348,7 @@ WORDFILL_ELIGIBLE_FIELDS = (
     'WordSourceDefinitionSecond',
 )
 
-def collect_candidate_files(scan_roots, search_depth, scan_scope, language, scan_sort_order='chronological', scan_max_files=500, scan_match_language=True):
+def collect_candidate_files(scan_roots, scan_depth, scan_scope, language, scan_sort_order='chronological', scan_max_files=500, scan_match_language=True):
     """
     Return a list of candidate TSV Paths, sorted and capped at max_scan_files.
 
@@ -4383,7 +4383,7 @@ def collect_candidate_files(scan_roots, search_depth, scan_scope, language, scan
                 continue
             candidates.append(f)
         # Level 1: one subdirectory deep
-        if search_depth >= 1:
+        if scan_depth >= 1:
             for sub in root.iterdir():
                 if not sub.is_dir():
                     continue
@@ -4448,7 +4448,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
         return None
 
     scan_roots = wordfill_cfg.get('scan_roots', [])
-    search_depth = wordfill_cfg.get('search_depth', 1)
+    scan_depth = wordfill_cfg.get('scan_depth', 1)
     scan_scope = wordfill_cfg.get('scan_scope', 'merged')
     scan_sort_order = wordfill_cfg.get('scan_sort_order', 'chronological')
     scan_match_language = wordfill_cfg.get('scan_match_language', True)
@@ -4463,7 +4463,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
         return None
 
     candidates = collect_candidate_files(
-        scan_roots, search_depth, scan_scope, language,
+        scan_roots, scan_depth, scan_scope, language,
         scan_sort_order=scan_sort_order,
         scan_max_files=scan_max_files,
         scan_match_language=scan_match_language

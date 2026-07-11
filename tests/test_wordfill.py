@@ -25,13 +25,13 @@ def _write_tsv(path: Path, headers: list, rows: list) -> None:
             writer.writerow(row)
 
 
-def _make_wordfill_cfg(tmp_path, scan_roots=None, search_depth=1,
+def _make_wordfill_cfg(tmp_path, scan_roots=None, scan_depth=1,
                        scan_scope='all', target_quality='any', target_fallback=True,
                        scan_sort_order='chronological', scan_max_files=500, enabled=True):
     return {
         'enabled': enabled,
         'scan_roots': scan_roots or [tmp_path],
-        'search_depth': search_depth,
+        'scan_depth': scan_depth,
         'scan_scope': scan_scope,
         'target_quality': target_quality,
         'target_fallback': target_fallback,
@@ -56,7 +56,7 @@ class TestCollectCandidateFiles:
         subdir.mkdir()
         (subdir / "20260702120100-sub.en.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
@@ -71,7 +71,7 @@ class TestCollectCandidateFiles:
         sub_file = subdir / "20260702120100-sub.en.tsv"
         sub_file.touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=1,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=1,
                                               scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
@@ -82,7 +82,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260701120000-session.en.tsv").touch()
         (tmp_path / "20260701130000-merged.en.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='merged', language='en')
         names = [f.name for f in result]
         assert "20260701130000-merged.en.tsv" in names
@@ -93,7 +93,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260701120000-session.en.tsv").touch()
         (tmp_path / "20260701130000-merged.en.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
@@ -104,7 +104,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260701120000-session.en.tsv").touch()
         (tmp_path / "20260701120000-session.de.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
@@ -118,7 +118,7 @@ class TestCollectCandidateFiles:
 
         import logging
         with caplog.at_level(logging.WARNING, logger='root'):
-            result = desk.collect_candidate_files([tmp_path], search_depth=0,
+            result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                                   scan_scope='all', language='en',
                                                   scan_max_files=5)
         assert len(result) == 5
@@ -134,7 +134,7 @@ class TestCollectCandidateFiles:
         (root_a / "20260701120000-a.en.tsv").touch()
         (root_b / "20260701130000-b.en.tsv").touch()
 
-        result = desk.collect_candidate_files([root_a, root_b], search_depth=0,
+        result = desk.collect_candidate_files([root_a, root_b], scan_depth=0,
                                               scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-a.en.tsv" in names
@@ -145,7 +145,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260701000000-old.en.tsv").touch()
         (tmp_path / "20260710000000-new.en.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en')
         assert result[0].name.startswith("20260710")
         assert result[1].name.startswith("20260701")
@@ -156,7 +156,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260710120000-session.en.tsv").touch()
         (tmp_path / "20260710120000-merged.en.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en')
         assert result[0].name == "20260710120000-merged.en.tsv"
         assert result[1].name == "20260710120000-session.en.tsv"
@@ -167,7 +167,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260701120000-merged.en.tsv").touch()  # Older, but merged
         (tmp_path / "20250101120000-session.en.tsv").touch() # Oldest
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en',
                                               scan_sort_order='merged_first')
         assert result[0].name == "20260701120000-merged.en.tsv"
@@ -180,7 +180,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260710120000-merged.en.tsv").touch()   # older, merged
         (tmp_path / "20260711000000-session.en.tsv").touch()  # newer, session
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en')
         assert result[0].name.startswith("20260711")
         assert result[1].name.startswith("20260710")
@@ -191,7 +191,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260710120000-session.de.tsv").touch()
         (tmp_path / "20260710120000-session.fr.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en',
                                               scan_match_language=True)
         names = [f.name for f in result]
@@ -205,7 +205,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260710120000-session.de.tsv").touch()
         (tmp_path / "20260710120000-session.fr.tsv").touch()
 
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en',
                                               scan_match_language=False)
         names = [f.name for f in result]
@@ -219,7 +219,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260710120000-session.de.tsv").touch()
 
         # Call without scan_match_language kwarg — default must behave as strict=True
-        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+        result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                               scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260710120000-session.en.tsv" in names
@@ -283,7 +283,7 @@ class TestFindWordfillMatch:
         wordfill_cfg = {
             'enabled': True,
             'scan_roots': [tmp_path],
-            'search_depth': 0,
+            'scan_depth': 0,
             'scan_scope': 'all',
             'target_quality': 'full',  # Requires tier 2 (IPA + Morphology)
             'target_fallback': True,
@@ -304,7 +304,7 @@ class TestFindWordfillMatch:
         wordfill_cfg = {
             'enabled': True,
             'scan_roots': [tmp_path],
-            'search_depth': 0,
+            'scan_depth': 0,
             'scan_scope': 'all',
             'target_quality': 'full',
             'target_fallback': False,
@@ -530,7 +530,7 @@ class TestWordfillIntegration:
         wordfill_cfg = {
             'enabled': True,
             'scan_roots': [tmp_path],
-            'search_depth': 0,
+            'scan_depth': 0,
             'scan_scope': 'all',
             'target_quality': 'any',
             'scan_max_files': 500,
