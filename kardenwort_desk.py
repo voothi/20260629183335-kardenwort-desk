@@ -4054,7 +4054,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                 for row in data_rows:
                     if len(row) > col_idx:
                         # Clear only if the lemma was not early pre-filled by wordfill
-                        col_lemma_wf = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
+                        col_lemma_wf = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
                         lemma_val = row[col_lemma_wf].strip() if col_lemma_wf != -1 and len(row) > col_lemma_wf else ""
                         if lemma_val not in filled_lemmas:
                             row[col_idx] = ""
@@ -4109,12 +4109,14 @@ def render_section(token, ctx):
         
         role_fields = ctx.get('role_fields', {})
         COLUMN_TOKEN_MAP = {
-            'inflected': role_fields.get('inflected', 'WordSourceInflectedForm'),
-            'lemma': role_fields.get('lemma', 'WordSource'),
-            'ipa': role_fields.get('ipa', 'WordSourceIPA'),
-            'morphology': role_fields.get('morphology', 'WordSourceMorphologyAI'),
-            'translation': role_fields.get('word_translation', 'WordDestination')
+            'inflected': role_fields.get('inflected') or ('WordSourceInflectedForm' if 'WordSourceInflectedForm' in ctx.get('headers', []) else None),
+            'lemma': role_fields.get('lemma') or ('WordSource' if 'WordSource' in ctx.get('headers', []) else None),
+            'ipa': role_fields.get('ipa') or ('WordSourceIPA' if 'WordSourceIPA' in ctx.get('headers', []) else None),
+            'morphology': role_fields.get('morphology') or ('WordSourceMorphologyAI' if 'WordSourceMorphologyAI' in ctx.get('headers', []) else None),
+            'translation': role_fields.get('word_translation') or ('WordDestination' if 'WordDestination' in ctx.get('headers', []) else None)
         }
+        # Exclude tokens with no resolvable column
+        COLUMN_TOKEN_MAP = {k: v for k, v in COLUMN_TOKEN_MAP.items() if v}
         
         valid_tokens = []
         html_output += '<thead><tr>'
@@ -4336,12 +4338,14 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
             add_heading("lemmas", "Lemmas")
             
             COLUMN_TOKEN_MAP = {
-                'inflected': role_fields.get('inflected', 'WordSourceInflectedForm'),
-                'lemma': role_fields.get('lemma', 'WordSource'),
-                'ipa': role_fields.get('ipa', 'WordSourceIPA'),
-                'morphology': role_fields.get('morphology', 'WordSourceMorphologyAI'),
-                'translation': role_fields.get('word_translation', 'WordDestination')
+                'inflected': role_fields.get('inflected') or ('WordSourceInflectedForm' if 'WordSourceInflectedForm' in headers else None),
+                'lemma': role_fields.get('lemma') or ('WordSource' if 'WordSource' in headers else None),
+                'ipa': role_fields.get('ipa') or ('WordSourceIPA' if 'WordSourceIPA' in headers else None),
+                'morphology': role_fields.get('morphology') or ('WordSourceMorphologyAI' if 'WordSourceMorphologyAI' in headers else None),
+                'translation': role_fields.get('word_translation') or ('WordDestination' if 'WordDestination' in headers else None)
             }
+            # Exclude tokens with no resolvable column
+            COLUMN_TOKEN_MAP = {k: v for k, v in COLUMN_TOKEN_MAP.items() if v}
             
             valid_tokens = []
             for t in column_tokens:
