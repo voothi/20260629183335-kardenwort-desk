@@ -8,7 +8,7 @@ SENDTO_DIRECTORY = r"%APPDATA%\Microsoft\Windows\SendTo"
 # Registry of entrypoints
 # Format: { "Shortcut Name": { "arguments": "...", "desc": "description" } }
 ENTRYPOINTS = {
-    "Kardenwort Merge": { "arguments": "merge --files", "desc": "Merge multiple kardenwort TSVs" },
+    "Kardenwort Merge": { "arguments": "merge --deduplicate --files", "desc": "Merge multiple kardenwort TSVs" },
     "Kardenwort Desk": { "arguments": "desk --file", "desc": "Open text file or restore session in desk window" }
 }
 

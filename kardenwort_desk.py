@@ -5255,6 +5255,12 @@ def cmd_edit_save(args):
 def cmd_merge(args):
     logger.info("Merge subcommand invoked")
     config, resolved_paths, goldendict = load_config(args.config)
+    deduplicate = getattr(args, 'deduplicate', False)
+    if not deduplicate:
+        if config and config.has_section('settings'):
+            deduplicate = config.getboolean('settings', 'merge_deduplicate', fallback=True)
+        else:
+            deduplicate = True
     
     try:
         # Expand any folders in the input list
@@ -5457,26 +5463,36 @@ def cmd_merge(args):
             dest_dir = lang_files[0].parent
             dest_tsv_path = get_dest_tsv_path(args.target, lang, lang_files, dest_dir, timestamp_id)
 
-            # Deduplicate rows by unique (inflected, lemma) pairs
-            try:
-                col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
-                col_inflected = first_headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in first_headers else -1
-            except Exception as e:
-                logger.warning(f"Failed to load lemma/inflected mapping for deduplication: {e}")
-                col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
-                col_inflected = first_headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in first_headers else -1
-                
-            if col_lemma != -1 and col_inflected != -1:
-                seen_pairs = set()
-                unique_data_rows = []
-                for row in all_data_rows:
-                    lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
-                    inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
-                    pair = (inflected_val, lemma_val)
-                    if pair not in seen_pairs:
-                        seen_pairs.add(pair)
-                        unique_data_rows.append(row)
-                all_data_rows = unique_data_rows
+            # Deduplicate rows by unique (inflected, lemma) pairs if requested
+            if deduplicate:
+                try:
+                    col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
+                    col_inflected = first_headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in first_headers else -1
+                except Exception as e:
+                    logger.warning(f"Failed to load lemma/inflected mapping for deduplication: {e}")
+                    col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
+                    col_inflected = first_headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in first_headers else -1
+                    
+                if col_lemma != -1 and col_inflected != -1:
+                    seen_pairs = []
+                    grouped_rows = {}
+                    for row in all_data_rows:
+                        lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
+                        inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
+                        pair = (inflected_val, lemma_val)
+                        if pair not in grouped_rows:
+                            grouped_rows[pair] = []
+                            seen_pairs.append(pair)
+                        grouped_rows[pair].append(row)
+                    
+                    unique_data_rows = []
+                    for pair in seen_pairs:
+                        rows_list = grouped_rows[pair]
+                        # Prioritize the option with the most fields filled in.
+                        # Ties are resolved in favor of the first encountered option (stable choice).
+                        best_row = max(enumerate(rows_list), key=lambda x: (sum(1 for cell in x[1] if cell.strip()), -x[0]))[1]
+                        unique_data_rows.append(best_row)
+                    all_data_rows = unique_data_rows
 
             written_txt_paths = set()
             try:
@@ -5930,6 +5946,7 @@ def main():
     p_merge.add_argument("--files", nargs="+", required=True, help="List of TSV files to merge")
     p_merge.add_argument("--target", default="new", help="Merge target path, new, or first")
     p_merge.add_argument("--delete-sources", action="store_true", help="Delete source files after merge")
+    p_merge.add_argument("--deduplicate", action="store_true", help="Deduplicate by (inflected, lemma) pair, prioritizing the row with most fields filled")
 
     # restore
     p_restore = subparsers.add_parser("restore")

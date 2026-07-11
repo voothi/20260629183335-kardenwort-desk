@@ -887,6 +887,57 @@ def test_cmd_merge_empty_sentence_index(monkeypatch, tmp_path):
     assert final_rows[1][col_idx] == "2"
 
 
+def test_cmd_merge_deduplicate_prioritization(monkeypatch, tmp_path):
+    # Setup two files with a duplicate (inflected, lemma) pair but different fields filled
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\tWordTranslation\tWordIPA\tWordMorphology\nv1\tv2\t1\t\t\t\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\tWordTranslation\tWordIPA\tWordMorphology\nv1\tv2\t1\ttranslation\tIPA\tmorphology\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    # 1. Test with deduplicate = False (default)
+    class ArgsNoDedup:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+        deduplicate = False
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    config.set('settings', 'merge_deduplicate', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(ArgsNoDedup())
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    assert len(final_rows) == 2  # No deduplication occurred
+    
+    # 2. Test with deduplicate = True
+    class ArgsDedup:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+        deduplicate = True
+
+    desk.cmd_merge(ArgsDedup())
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    assert len(final_rows) == 1  # Deduplicated to 1 row
+    assert final_rows[0][final_headers.index("WordTranslation")] == "translation"
+    assert final_rows[0][final_headers.index("WordIPA")] == "IPA"
+    assert final_rows[0][final_headers.index("WordMorphology")] == "morphology"
+
+
 
 
 
