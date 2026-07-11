@@ -4962,12 +4962,21 @@ def cmd_reprocess(args):
         
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
-    translation_col = role_fields.get('word_translation', 'WordDestination')
     
     editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
-    selected_col = role_fields.get('selected', 'DeskSelected')
-    exclude_from_clear = ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2', translation_col, selected_col)
     
+    exclude_roles = {'lemma', 'inflected', 'word_translation', 'selected', 'source_word', 'source_sentence', 'sentence_index'}
+    exclude_from_clear = set()
+    if 'desk_columns' in mapping:
+        for col, role in mapping['desk_columns'].items():
+            if role in exclude_roles and col in headers:
+                exclude_from_clear.add(col)
+    for section in ('fields_mapping.word', 'fields_mapping.sentence'):
+        if section in mapping:
+            for col, role in mapping[section].items():
+                if role in exclude_roles and col in headers:
+                    exclude_from_clear.add(col)
+                    
     fields_to_clear = [c for c in editable_cols if c not in exclude_from_clear]
     for col in headers:
         if col.startswith('Word') and col not in exclude_from_clear:
