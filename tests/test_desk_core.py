@@ -473,3 +473,42 @@ send_to_anki_after_export=false
     assert len(saved_paths) == 1
     assert len(saved_rows[0]) == 1
     assert saved_rows[0][0] == ["v3", "v4"]
+
+
+def test_cmd_merge_filters_tsv(monkeypatch, tmp_path):
+    # Create files: TSVs, TXT, LOG
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    log1 = tmp_path / "20260630000000-part1.log"
+    
+    tsv1.write_text("Header1\tHeader2\nv1\tv2\n", encoding='utf-8')
+    txt1.write_text("Text one", encoding='utf-8')
+    log1.write_text("Log one", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("Header1\tHeader2\nv3\tv4\n", encoding='utf-8')
+    txt2.write_text("Text two", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(tsv1), str(txt1), str(log1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+
+    # mock load_config
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, {}, {}))
+    
+    # Run cmd_merge
+    desk.cmd_merge(Args())
+    
+    # Verify merge output (only TSV files got merged)
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    assert final_headers == ["Header1", "Header2"]
+    assert final_rows == [["v1", "v2"], ["v3", "v4"]]
+
