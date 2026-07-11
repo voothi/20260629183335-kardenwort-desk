@@ -3907,6 +3907,24 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                         
     return comments, headers, data_rows, sentence_translation
 
+def normalize_blank_lines(text):
+    if not text:
+        return ""
+    lines = [line.strip() for line in text.splitlines()]
+    normalized = []
+    last_empty = True
+    for line in lines:
+        if not line:
+            if not last_empty:
+                normalized.append("")
+                last_empty = True
+        else:
+            normalized.append(line)
+            last_empty = False
+    while normalized and not normalized[-1]:
+        normalized.pop()
+    return "\n".join(normalized)
+
 def render_section(token, ctx):
     import re
     html_output = ""
@@ -3921,12 +3939,14 @@ def render_section(token, ctx):
         
     if token == "source":
         html_output += make_heading("source", "Source Text")
-        safe_text = ctx["text"].replace('\r', '')
+        normalized_text = normalize_blank_lines(ctx["text"])
+        safe_text = normalized_text.replace('\r', '')
         html_output += f'<div class="kw-source-text">{safe_text}</div>\n'
         
     elif token == "translation":
         html_output += make_heading("translation", "Translation")
-        safe_trans = html.escape(ctx.get("sentence_translation", "").replace('\r', ''))
+        normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
+        safe_trans = html.escape(normalized_trans.replace('\r', ''))
         html_output += f'<div class="kw-translation">{safe_trans}</div>\n'
         
     elif token == "lemmas":

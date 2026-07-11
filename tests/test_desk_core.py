@@ -983,6 +983,12 @@ def test_cmd_merge_sort_frequency(monkeypatch, tmp_path):
     assert final_rows[1][0] == "uncommon"
 
 
+def test_normalize_blank_lines():
+    text = "\n\nline 1\n\n\n\nline 2\n\nline 3\n\n"
+    res = desk.normalize_blank_lines(text)
+    assert res == "line 1\n\nline 2\n\nline 3"
+
+
 
 
 
