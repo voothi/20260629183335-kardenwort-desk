@@ -564,7 +564,8 @@ def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
                 f.write(comment + '\n')
             writer.writerow(headers)
             for row in data_rows:
-                writer.writerow(row)
+                sanitized_row = [str(cell).replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ') for cell in row]
+                writer.writerow(sanitized_row)
                 
         os.replace(temp_path, tsv_path)
     except Exception as e:
