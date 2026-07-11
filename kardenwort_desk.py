@@ -1489,6 +1489,21 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
     if selected_rows:
         rows_str = ",".join(str(r) for r in selected_rows)
         cmd.extend(["--selected-rows", rows_str])
+        
+    try:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        headers = []
+        with open(tsv_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not line.startswith('#'):
+                    headers = [h.strip() for h in line.split('\t')]
+                    break
+        role_fields = get_role_fields(mapping, headers)
+        target_field = role_fields.get('word_translation', 'WordDestination')
+        if target_field:
+            cmd.extend(["--target-field", target_field])
+    except Exception:
+        pass
     
     timeout = config.getint('timeouts', 'intellifiller_timeout', fallback=120)
     logger.info(f"Running headless IntelliFiller command: {' '.join(cmd)}")
