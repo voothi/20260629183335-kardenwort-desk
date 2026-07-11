@@ -26,14 +26,15 @@ def _write_tsv(path: Path, headers: list, rows: list) -> None:
 
 
 def _make_wordfill_cfg(tmp_path, scan_roots=None, search_depth=1,
-                       data_mode='all', min_quality='any', max_scan_files=500,
-                       enabled=True):
+                       data_mode='all', min_quality='any', effort='fallback',
+                       max_scan_files=500, enabled=True):
     return {
         'enabled': enabled,
         'scan_roots': scan_roots or [tmp_path],
         'search_depth': search_depth,
         'data_mode': data_mode,
         'min_quality': min_quality,
+        'effort': effort,
         'max_scan_files': max_scan_files,
     }
 
@@ -259,6 +260,47 @@ def _row(quotation='', lemma='', inflected='', ipa='', morph='', dest=''):
 
 class TestFindWordfillMatch:
 
+    def test_find_wordfill_effort_fallback(self, tmp_path):
+        """When effort=fallback, it should return the highest quality sub-minimum match if minimum isn't met."""
+        (tmp_path / "20260710120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t\t\tKatze", encoding='utf-8')  # bare (0)
+        (tmp_path / "20260709120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t/kæt/\t\tKatze", encoding='utf-8')  # partial (1)
+        (tmp_path / "20260708120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t\t\tKatze", encoding='utf-8')  # bare (0)
+
+        wordfill_cfg = {
+            'enabled': True,
+            'scan_roots': [tmp_path],
+            'search_depth': 0,
+            'data_mode': 'all',
+            'min_quality': 'full',  # Requires tier 2 (IPA + Morphology)
+            'effort': 'fallback',
+            'language_strict': True,
+            'max_scan_files': 10
+        }
+        # It should scan all three, fail to find 'full', but fallback to the 'partial' (1) from 0709
+        result = desk.find_wordfill_match('cat', 'en', wordfill_cfg, None)
+        assert result is not None
+        assert result.get('WordSourceIPA') == '/kæt/'
+        assert 'WordSourceMorphologyAI' not in result or result['WordSourceMorphologyAI'] == ''
+
+    def test_find_wordfill_effort_strict(self, tmp_path):
+        """When effort=strict, it should return None if minimum isn't met."""
+        (tmp_path / "20260710120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t\t\tKatze", encoding='utf-8')  # bare
+        (tmp_path / "20260709120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t/kæt/\t\tKatze", encoding='utf-8')  # partial
+
+        wordfill_cfg = {
+            'enabled': True,
+            'scan_roots': [tmp_path],
+            'search_depth': 0,
+            'data_mode': 'all',
+            'min_quality': 'full',
+            'effort': 'strict',
+            'language_strict': True,
+            'max_scan_files': 10
+        }
+        # It should scan both, fail to find 'full', and return None because of strict
+        result = desk.find_wordfill_match('cat', 'en', wordfill_cfg, None)
+        assert result is None
+
     def test_disabled_returns_none(self, tmp_path):
         cfg = _make_wordfill_cfg(tmp_path, enabled=False)
         assert desk.find_wordfill_match('run', 'en', cfg) is None
@@ -326,12 +368,12 @@ class TestFindWordfillMatch:
         assert result is not None
         assert result.get('WordSourceIPA') == '/rʌn/'
 
-    def test_min_quality_full_rejects_partial(self, tmp_path):
-        """min_quality='full' must reject a row with only IPA filled."""
+    def test_min_quality_full_rejects_partial_when_strict(self, tmp_path):
+        """min_quality='full' with effort='strict' must reject a row with only IPA filled."""
         tsv = tmp_path / "20260710120000-session.en.tsv"
         _write_tsv(tsv, FULL_HEADERS,
                    [_row(lemma='run', ipa='/rʌn/', morph='')])
-        cfg = _make_wordfill_cfg(tmp_path, min_quality='full')
+        cfg = _make_wordfill_cfg(tmp_path, min_quality='full', effort='strict')
         result = desk.find_wordfill_match('run', 'en', cfg)
         assert result is None
 

@@ -377,6 +377,7 @@ def load_config(config_path=None):
         wordfill['search_depth'] = wf.getint('search_depth', fallback=1)
         wordfill['data_mode'] = wf.get('data_mode', 'merged').strip().lower()
         wordfill['min_quality'] = wf.get('min_quality', 'any').strip().lower()
+        wordfill['effort'] = wf.get('effort', 'fallback').strip().lower()
         wordfill['language_strict'] = wf.getboolean('language_strict', fallback=True)
         wordfill['max_scan_files'] = wf.getint('max_scan_files', fallback=500)
     else:
@@ -385,6 +386,7 @@ def load_config(config_path=None):
         wordfill['search_depth'] = 1
         wordfill['data_mode'] = 'merged'
         wordfill['min_quality'] = 'any'
+        wordfill['effort'] = 'fallback'
         wordfill['language_strict'] = True
         wordfill['max_scan_files'] = 500
 
@@ -4444,6 +4446,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     search_depth = wordfill_cfg.get('search_depth', 1)
     data_mode = wordfill_cfg.get('data_mode', 'merged')
     min_quality = wordfill_cfg.get('min_quality', 'any')
+    effort = wordfill_cfg.get('effort', 'fallback')
     language_strict = wordfill_cfg.get('language_strict', True)
     max_scan_files = wordfill_cfg.get('max_scan_files', 500)
 
@@ -4458,8 +4461,8 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
         language_strict=language_strict
     )
 
-    best_score = -1          # quality_tier (within the matched file)
-    best_match = None        # dict of column->value
+    best_fallback_score = -1
+    best_fallback_match = None
 
     for file_rank, tsv_path in enumerate(candidates):
         if exclude_path and tsv_path.resolve() == Path(exclude_path).resolve():
@@ -4468,14 +4471,18 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
         try:
             _comments, headers, data_rows = load_tsv_rows(tsv_path)
         except Exception as e:
-            logger.warning(f"wordfill: skipping unreadable file {tsv_path}: {e}")
+            logger.warning(f"Failed to load candidate {tsv_path}: {e}")
             continue
 
-        # Determine matching columns
         lemma_idx = headers.index('WordSource') if 'WordSource' in headers else -1
         inflected_idx = headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in headers else -1
-        # Some files use 'Quotation' as the first column (inflected surface form)
         quotation_idx = headers.index('Quotation') if 'Quotation' in headers else -1
+
+        if lemma_idx == -1 and inflected_idx == -1 and quotation_idx == -1:
+            continue
+
+        file_best_score = -1
+        file_best_match = None
 
         for row in data_rows:
             # Check lemma match
@@ -4487,8 +4494,6 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                 continue
 
             tier = score_wordfill_row(row, headers)
-            if tier < min_quality_tier:
-                continue
 
             match_dict = {}
             for col in WORDFILL_ELIGIBLE_FIELDS:
@@ -4500,17 +4505,29 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                             match_dict[col] = val
                             
             # Maximize quality within this file
-            if best_match is None or tier > best_score:
-                best_score = tier
-                best_match = match_dict
+            if file_best_match is None or tier > file_best_score:
+                file_best_score = tier
+                file_best_match = match_dict
 
-        # Early exit: candidates are strictly ordered by authority/age.
-        # If we found any valid match in this file (which passed min_quality),
-        # it is mathematically the most authoritative match. Stop searching.
-        if best_match is not None:
-            break
+        if file_best_match is not None:
+            if file_best_score >= min_quality_tier:
+                # We found a match that satisfies our minimum requirement!
+                # Since candidates are chronologically sorted, this is the most authoritative valid match.
+                # EXIT EARLY!
+                return file_best_match
+            else:
+                # This match does NOT satisfy min_quality, but it might be useful as a fallback.
+                # We want to maximize the fallback quality. Since files are chronologically sorted,
+                # we only update the fallback if the new tier is STRICTLY GREATER than the previous fallback tier.
+                if file_best_score > best_fallback_score:
+                    best_fallback_score = file_best_score
+                    best_fallback_match = file_best_match
 
-    return best_match if best_match else None
+    # Exhausted all candidates.
+    if effort == 'fallback':
+        return best_fallback_match
+    else:
+        return None
 
 
 def apply_wordfill_to_rows(data_rows, headers, match_row_dict):
