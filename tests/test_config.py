@@ -1,4 +1,4 @@
-import os
+﻿import os
 import tempfile
 import pytest
 from pathlib import Path
@@ -39,7 +39,7 @@ anki_mapping_file = ./anki-mapping.ini
         config_file.write_text(config_content)
         
         # Load the config using the desk core loader
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
         # Verify resolution
         assert resolved_paths["kardenwort_python"] == python_exe.resolve()
@@ -100,7 +100,7 @@ default_target_language = uk
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
         
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
         assert gd['format'] == 'html'
         assert gd['target_language'] == 'uk'
@@ -143,7 +143,7 @@ lemma_columns = lemma,translation
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
         
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
         assert gd['format'] == 'text'
         assert gd['target_language'] == 'en'
@@ -183,7 +183,7 @@ display_mode = monolithic
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
         
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
         assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
         assert config.get('pipeline', 'lemma_reprocess_provider') == 'none'
@@ -211,7 +211,7 @@ lemmas_translation = combined
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
         
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
         assert config.get('triggers', 'run_lemma_base_translation') == 'auto'
         assert config.get('triggers', 'run_lemma_enrichment') == 'manual'
@@ -241,7 +241,7 @@ enrichment_provider = intellifiller
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
         
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
         assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
         assert config.get('pipeline', 'lemma_reprocess_provider') == 'intellifiller'
@@ -268,7 +268,7 @@ enrichment_provider = combined
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
 
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
 
         assert config.get('rendering', 'display_mode') == 'monolithic'
         assert config.get('triggers', 'run_lemma_base_translation') == 'auto'
@@ -290,7 +290,7 @@ anki_mapping_file = ./anki-mapping.ini
 """
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         assert config.getint('settings', 'split_gap_limit') == 60
 
         # Scenario 2: split_gap_limit is integer (e.g. 15), should be parsed and returned
@@ -299,7 +299,7 @@ anki_mapping_file = ./anki-mapping.ini
 split_gap_limit = 15
 """
         config_file.write_text(config_content)
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         assert config.getint('settings', 'split_gap_limit') == 15
 
         # Scenario 3: split_gap_limit is non-integer, should fall back to 60 without raising error
@@ -308,6 +308,7 @@ anki_mapping_file = ./anki-mapping.ini
 split_gap_limit = abc
 """
         config_file.write_text(config_content)
-        config, resolved_paths, gd = kardenwort_desk.load_config(config_file)
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         assert config.getint('settings', 'split_gap_limit') == 60
+
 

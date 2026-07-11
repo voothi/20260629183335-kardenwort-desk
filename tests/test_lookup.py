@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 import subprocess
 import configparser
 import sys
@@ -63,10 +63,10 @@ WordDestination=translation
         'lemma_columns': ['lemma', 'translation']
     }
     
-    return config, resolved_paths, goldendict
+    return config, resolved_paths, goldendict, {}
 
 def test_lookup_cache_behavior(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
     
     mock_subprocess_run = MagicMock()
     
@@ -104,7 +104,7 @@ def test_lookup_cache_behavior(monkeypatch, tmp_path):
     assert mock_subprocess_run.call_count == 2
 
 def test_lookup_translation_failure(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
     goldendict['format'] = 'text'
     
     def mock_run(*args, **kwargs):
@@ -127,7 +127,7 @@ def test_lookup_translation_failure(monkeypatch, tmp_path):
     assert data_rows[0][headers.index('WordDestination')] == ""
 
 def test_lookup_intellifiller(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
     
     mock_run_headless_intellifiller = MagicMock()
     
@@ -173,10 +173,10 @@ def test_lookup_intellifiller(monkeypatch, tmp_path):
 
 def test_lookup_utf8_stdout(monkeypatch, tmp_path):
     import io
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
     
     def mock_load_config(*args, **kwargs):
-        return config, resolved_paths, goldendict
+        return config, resolved_paths, goldendict, {}
         
     monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
     
@@ -209,8 +209,8 @@ def test_lookup_utf8_stdout(monkeypatch, tmp_path):
     assert "тест" in decoded
 
 def test_progressive_worker_stages(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
     # Enable new triggers
     config.set('pipeline', 'lemma_base_provider', 'google')
@@ -287,8 +287,8 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     assert write_calls[5] == ('finished', 'success', 3)
 
 def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
     config.set('pipeline', 'lemma_base_provider', 'google')
     config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
@@ -339,8 +339,8 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     assert write_calls[3] == ('finished', 'success')
 
 def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
     config.set('pipeline', 'lemma_base_provider', 'google')
     config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
@@ -379,8 +379,8 @@ def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
     assert "enrichment" in write_calls
 
 def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
-    config, resolved_paths, goldendict = setup_test_env(tmp_path)
-    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict))
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
     config.set('pipeline', 'lemma_base_provider', 'google')
     config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
@@ -415,3 +415,5 @@ def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
     kardenwort_desk.cmd_progressive_worker(args)
     
     assert passed_text_mode == 'multi_line'
+
+

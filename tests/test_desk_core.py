@@ -1,4 +1,4 @@
-import os
+﻿import os
 import json
 import base64
 import tempfile
@@ -415,7 +415,7 @@ send_to_anki_after_export=false
         "tsv_path": str(working_tsv)
     }))
     
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     class Args:
         config = None
@@ -505,7 +505,7 @@ def test_cmd_merge_filters_tsv(monkeypatch, tmp_path):
     config = configparser.ConfigParser()
     config.add_section('settings')
     config.set('settings', 'merge_delete_sources', 'false')
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, {}, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, {}, {}, {}))
     
     # Run cmd_merge
     desk.cmd_merge(Args())
@@ -548,7 +548,7 @@ def test_cmd_merge_deduplicates_rows(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     
@@ -584,7 +584,7 @@ def test_cmd_merge_offsets_sentence_index(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     
@@ -624,7 +624,7 @@ def test_cmd_merge_single_paragraph_mapping(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     
@@ -667,7 +667,7 @@ def test_cmd_merge_delete_sources_cli(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     
@@ -706,7 +706,7 @@ def test_cmd_merge_folder_scanning(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     assert dest_tsv.exists()
@@ -744,7 +744,7 @@ def test_cmd_merge_range_selection(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     assert dest_tsv.exists()
@@ -787,7 +787,7 @@ def test_cmd_merge_multilingual(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     
@@ -839,7 +839,7 @@ def test_cmd_merge_non_tsv_mapping(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     
@@ -874,7 +874,7 @@ def test_cmd_merge_empty_sentence_index(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     
@@ -916,7 +916,7 @@ def test_cmd_merge_deduplicate_prioritization(monkeypatch, tmp_path):
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(ArgsNoDedup())
     assert dest_tsv.exists()
@@ -972,7 +972,7 @@ def test_cmd_merge_sort_frequency(monkeypatch, tmp_path):
         'kardenwort_python': sys.executable,
         'kardenwort_workspace': Path("U:/voothi/20241223170748-kardenwort").resolve()
     }
-    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
     
     desk.cmd_merge(Args())
     assert dest_tsv.exists()
@@ -987,6 +987,7 @@ def test_normalize_blank_lines():
     text = "\n\nline 1\n\n\n\nline 2\n\nline 3\n\n"
     res = desk.normalize_blank_lines(text)
     assert res == "line 1\n\nline 2\n\nline 3"
+
 
 
 

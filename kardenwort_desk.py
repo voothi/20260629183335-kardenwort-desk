@@ -359,9 +359,36 @@ def load_config(config_path=None):
         goldendict['heading_lemmas'] = ''
         goldendict['lemma_columns'] = ['inflected', 'lemma', 'translation']
 
+    wordfill = {}
+    if 'wordfill' in config:
+        wf = config['wordfill']
+        wordfill['enabled'] = wf.getboolean('enabled', fallback=False)
+        raw_roots = wf.get('scan_roots', '')
+        parsed_roots = []
+        for raw_root in raw_roots.split(','):
+            raw_root = raw_root.strip()
+            if not raw_root:
+                continue
+            if raw_root.startswith('../') or raw_root.startswith('./'):
+                parsed_roots.append((base_dir / raw_root).resolve())
+            else:
+                parsed_roots.append(Path(raw_root).resolve())
+        wordfill['scan_roots'] = parsed_roots
+        wordfill['search_depth'] = wf.getint('search_depth', fallback=1)
+        wordfill['data_mode'] = wf.get('data_mode', 'merged').strip().lower()
+        wordfill['min_quality'] = wf.get('min_quality', 'any').strip().lower()
+        wordfill['max_scan_files'] = wf.getint('max_scan_files', fallback=500)
+    else:
+        wordfill['enabled'] = False
+        wordfill['scan_roots'] = []
+        wordfill['search_depth'] = 1
+        wordfill['data_mode'] = 'merged'
+        wordfill['min_quality'] = 'any'
+        wordfill['max_scan_files'] = 500
+
     _migrate_config(config)
     _validate_translation_config(config)
-    return config, resolved_paths, goldendict
+    return config, resolved_paths, goldendict, wordfill
 
 def load_kardenwort_config(kardenwort_workspace):
     kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
@@ -3802,7 +3829,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     return html_page
 
-def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid, text_mode='single'):
+def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid, text_mode='single', wordfill_cfg=None):
     import hashlib
     import time
     
@@ -3911,7 +3938,33 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                 for row in data_rows:
                     if len(row) > col_idx:
                         row[col_idx] = ""
-                        
+
+    # --- Word-fill pre-fill step ---
+    # Runs after any IPA/morphology clearing so wordfill data is preserved.
+    if wordfill_cfg and wordfill_cfg.get('enabled', False):
+        try:
+            col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
+            if col_lemma_wf != -1:
+                # Collect unique lemmas
+                seen_lemmas = {}
+                for i, row in enumerate(data_rows):
+                    if len(row) > col_lemma_wf:
+                        lemma_val = row[col_lemma_wf].strip()
+                        if lemma_val:
+                            seen_lemmas.setdefault(lemma_val, []).append(i)
+                # Query and apply per unique lemma
+                for lemma_val, row_indices in seen_lemmas.items():
+                    match = find_wordfill_match(lemma_val, language, wordfill_cfg)
+                    if match:
+                        lemma_rows = [data_rows[i] for i in row_indices]
+                        apply_wordfill_to_rows(lemma_rows, headers, match)
+                        logger.info(
+                            f"wordfill: pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
+                            f"from corpus."
+                        )
+        except Exception as wf_err:
+            logger.warning(f"wordfill: pre-fill step failed, continuing without it: {wf_err}")
+
     return comments, headers, data_rows, sentence_translation
 
 def normalize_blank_lines(text):
@@ -4218,13 +4271,198 @@ def render_lookup_combined(text, language, target_lang, config, resolved_paths, 
         "text": text_out
     }, ensure_ascii=False)
 
+# ---------------------------------------------------------------------------
+# Word-fill engine
+# ---------------------------------------------------------------------------
+
+WORDFILL_ELIGIBLE_FIELDS = (
+    'WordSourceIPA',
+    'WordSourceMorphologyAI',
+    'WordDestination',
+    'WordSourceMorphemeFirst',
+    'WordSourceMorphemeFirstDefinition',
+    'WordSourceMorphemeSecond',
+    'WordSourceMorphemeSecondDefinition',
+    'WordSourceMorphemeThird',
+    'WordSourceMorphemeThirdDefinition',
+    'WordSourceMorphemeFourth',
+    'WordSourceMorphemeFourthDefinition',
+    'WordSourceMorphemeFifth',
+    'WordSourceMorphemeFifthDefinition',
+    'WordSourceDefinitionFirst',
+    'WordSourceDefinitionFirstClipping',
+    'WordSourceDefinitionSecond',
+)
+
+def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_scan_files=500):
+    """Return a list of candidate TSV Paths, sorted newest-ZID-first, capped at max_scan_files."""
+    lang_suffix = f'.{language.lower()}.tsv'
+    candidates = []
+
+    for root in scan_roots:
+        root = Path(root)
+        if not root.is_dir():
+            continue
+        # Level 0: files directly in root
+        for f in root.iterdir():
+            if not f.is_file():
+                continue
+            name_lower = f.name.lower()
+            if not name_lower.endswith(lang_suffix):
+                continue
+            if data_mode == 'merged' and '-merged.' not in f.name:
+                continue
+            candidates.append(f)
+        # Level 1: one subdirectory deep
+        if search_depth >= 1:
+            for sub in root.iterdir():
+                if not sub.is_dir():
+                    continue
+                for f in sub.iterdir():
+                    if not f.is_file():
+                        continue
+                    name_lower = f.name.lower()
+                    if not name_lower.endswith(lang_suffix):
+                        continue
+                    if data_mode == 'merged' and '-merged.' not in f.name:
+                        continue
+                    candidates.append(f)
+
+    # Sort newest ZID first (ZID is in the filename prefix)
+    candidates.sort(key=lambda p: extract_zid(p), reverse=True)
+
+    if len(candidates) > max_scan_files:
+        logger.warning(
+            f"wordfill: candidate file count {len(candidates)} exceeds max_scan_files={max_scan_files}; "
+            f"scanning only the {max_scan_files} most recent."
+        )
+        candidates = candidates[:max_scan_files]
+
+    return candidates
+
+
+def score_wordfill_row(row, headers):
+    """Return quality tier: 2=full (IPA+morphology), 1=partial (one of them), 0=bare."""
+    ipa_idx = headers.index('WordSourceIPA') if 'WordSourceIPA' in headers else -1
+    morph_idx = headers.index('WordSourceMorphologyAI') if 'WordSourceMorphologyAI' in headers else -1
+
+    has_ipa = ipa_idx != -1 and len(row) > ipa_idx and bool(row[ipa_idx].strip())
+    has_morph = morph_idx != -1 and len(row) > morph_idx and bool(row[morph_idx].strip())
+
+    if has_ipa and has_morph:
+        return 2
+    if has_ipa or has_morph:
+        return 1
+    return 0
+
+
+def find_wordfill_match(word, language, wordfill_cfg):
+    """
+    Scan configured TSV corpus for the best matching row for *word* in *language*.
+    Returns a dict {column: value} for non-empty eligible fields, or None.
+    Priority: newest ZID file first, then quality tier (full > partial > bare).
+    """
+    if not wordfill_cfg.get('enabled', False):
+        return None
+
+    scan_roots = wordfill_cfg.get('scan_roots', [])
+    search_depth = wordfill_cfg.get('search_depth', 1)
+    data_mode = wordfill_cfg.get('data_mode', 'merged')
+    min_quality = wordfill_cfg.get('min_quality', 'any')
+    max_scan_files = wordfill_cfg.get('max_scan_files', 500)
+
+    min_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(min_quality, 0)
+
+    word_lower = word.strip().lower()
+    if not word_lower:
+        return None
+
+    candidates = collect_candidate_files(scan_roots, search_depth, data_mode, language, max_scan_files)
+
+    best_score = -1          # (file_rank encoded as negative index, quality_tier)
+    best_match = None        # dict of column->value
+
+    for file_rank, tsv_path in enumerate(candidates):
+        try:
+            _comments, headers, data_rows = load_tsv_rows(tsv_path)
+        except Exception as e:
+            logger.warning(f"wordfill: skipping unreadable file {tsv_path}: {e}")
+            continue
+
+        # Determine matching columns
+        lemma_idx = headers.index('WordSource') if 'WordSource' in headers else -1
+        inflected_idx = headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in headers else -1
+        # Some files use 'Quotation' as the first column (inflected surface form)
+        quotation_idx = headers.index('Quotation') if 'Quotation' in headers else -1
+
+        for row in data_rows:
+            # Check lemma match
+            lemma_val = row[lemma_idx].strip().lower() if lemma_idx != -1 and len(row) > lemma_idx else ''
+            inflected_val = row[inflected_idx].strip().lower() if inflected_idx != -1 and len(row) > inflected_idx else ''
+            quotation_val = row[quotation_idx].strip().lower() if quotation_idx != -1 and len(row) > quotation_idx else ''
+
+            if word_lower not in (lemma_val, inflected_val, quotation_val):
+                continue
+
+            tier = score_wordfill_row(row, headers)
+            if tier < min_quality_tier:
+                continue
+
+            # Score: lower file_rank = newer = better; higher tier = better quality
+            # Compare as tuple: we want maximize quality within same file, prefer newer files
+            row_score = (-file_rank, tier)
+            if best_match is None or row_score > best_score:
+                best_score = row_score
+                # Build result dict: only eligible, non-empty fields
+                match_dict = {}
+                for col in WORDFILL_ELIGIBLE_FIELDS:
+                    if col in headers:
+                        col_idx = headers.index(col)
+                        if len(row) > col_idx:
+                            val = row[col_idx].strip()
+                            if val:
+                                match_dict[col] = val
+                best_match = match_dict
+
+    return best_match if best_match else None
+
+
+def apply_wordfill_to_rows(data_rows, headers, match_row_dict):
+    """
+    For each row in data_rows, if it has a non-empty WordSource value that
+    matches the match (checked externally), copy eligible empty fields from match_row_dict.
+    The caller is responsible for calling this once per unique lemma with the appropriate match.
+    This function copies into ALL rows provided (assumes caller pre-filtered by lemma).
+    Only empty target cells are filled; existing values are preserved.
+    """
+    for col_name, fill_value in match_row_dict.items():
+        if col_name not in WORDFILL_ELIGIBLE_FIELDS:
+            continue
+        if col_name not in headers:
+            continue
+        col_idx = headers.index(col_name)
+        for row in data_rows:
+            # Extend row if needed
+            while len(row) <= col_idx:
+                row.append('')
+            if not row[col_idx].strip():
+                row[col_idx] = fill_value
+
+
+def cmd_wordfill(args):
+    config, resolved_paths, goldendict, wordfill_cfg = load_config(args.config)
+    match = find_wordfill_match(args.word, args.language, wordfill_cfg)
+    emit_payload({'match': match})
+    sys.exit(0)
+
+
 def cmd_lookup(args):
     import datetime, sys, subprocess, configparser
     zid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
     logger.info("Lookup subcommand invoked", extra={"zid": zid})
     
     try:
-        config, resolved_paths, goldendict = load_config(args.config)
+        config, resolved_paths, goldendict, wordfill_cfg = load_config(args.config)
         
         if args.format:
             goldendict['format'] = args.format
@@ -4265,7 +4503,8 @@ def cmd_lookup(args):
                 args.text = "\n".join(new_lines)
             
         comments, headers, data_rows, sentence_translation = run_lookup_flow(
-            args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode
+            args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode,
+            wordfill_cfg=wordfill_cfg
         )
         
         fmt = goldendict['format']
@@ -4302,7 +4541,7 @@ def cmd_lookup(args):
 
 def cmd_render(args):
     logger.info("Render subcommand invoked", extra={"zid": args.zid})
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     
     if not args.text:
         if not sys.stdin.isatty():
@@ -4343,7 +4582,7 @@ def cmd_render(args):
 
 def cmd_export(args):
     logger.info("Export subcommand invoked")
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -4516,7 +4755,7 @@ def cmd_export(args):
 
 def cmd_reprocess(args):
     logger.info("Reprocess subcommand invoked")
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -4698,7 +4937,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
     return data_rows
 
 def cmd_reprocess_worker(args):
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     tsv_path = Path(args.tsv)
     
     rows_str = args.rows
@@ -5031,7 +5270,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
 
 def cmd_retext(args):
     logger.info("Retext subcommand invoked")
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -5110,7 +5349,7 @@ def cmd_retext(args):
     emit_payload({"retext_started": True})
 
 def cmd_retext_worker(args):
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     tsv_path = Path(args.tsv)
     language = args.language
     text_mode = args.text_mode
@@ -5181,7 +5420,7 @@ def cmd_progressive_worker(args):
             sys.stderr.write(f"Warning: Failed to setup progressive-worker log file: {log_err}\n")
             
         logger.info("Progressive-worker subcommand invoked")
-        config, resolved_paths, goldendict = load_config(args.config)
+        config, resolved_paths, goldendict, _wordfill = load_config(args.config)
         import os
         os.environ["KARDEN_ACTIVE_TEXT_MODE"] = args.text_mode
         
@@ -5236,7 +5475,7 @@ def cmd_progressive_worker(args):
 
 def cmd_edit_save(args):
     logger.info("Edit-save subcommand invoked", extra={"zid": args.zid})
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
@@ -5324,7 +5563,7 @@ def cmd_edit_save(args):
 
 def cmd_merge(args):
     logger.info("Merge subcommand invoked")
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     deduplicate = getattr(args, 'deduplicate', False)
     if not deduplicate:
         if config and config.has_section('settings'):
@@ -5746,7 +5985,7 @@ def spawn_ahk(args_list, base_dir):
 
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     
     file_list = args.file if isinstance(args.file, list) else [args.file]
     
@@ -5887,7 +6126,7 @@ def cmd_restore(args):
 
 def cmd_desk(args):
     logger.info("Desk subcommand invoked")
-    config, resolved_paths, goldendict = load_config(args.config)
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     
     file_list = args.file if isinstance(args.file, list) else [args.file]
     
@@ -6089,6 +6328,11 @@ def main():
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
     p_desk.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
 
+    # wordfill
+    p_wordfill = subparsers.add_parser("wordfill")
+    p_wordfill.add_argument("--word", required=True, help="Word to look up (lemma or inflected form)")
+    p_wordfill.add_argument("--language", required=True, help="Source language code (e.g. en, de)")
+
     try:
         args = parser.parse_args()
     except SystemExit as e:
@@ -6112,6 +6356,7 @@ def main():
         "merge": cmd_merge,
         "restore": cmd_restore,
         "desk": cmd_desk,
+        "wordfill": cmd_wordfill,
     }
 
     try:

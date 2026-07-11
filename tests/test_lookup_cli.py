@@ -1,4 +1,4 @@
-import pytest
+﻿import pytest
 import sys
 import argparse
 from unittest.mock import MagicMock
@@ -44,7 +44,7 @@ en_lemma_override=en_over
             'lookup_ttl_seconds': 3600,
             'sections': ['source', 'translation', 'lemmas'],
             'lemma_columns': ['inflected', 'lemma', 'translation']
-        }
+        }, {}
         
     monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
     
@@ -107,7 +107,7 @@ en_prompt=en_prompt
             'lookup_ttl_seconds': 3600,
             'sections': ['source', 'translation', 'lemmas'],
             'lemma_columns': ['inflected', 'lemma', 'translation']
-        }
+        }, {}
     monkeypatch.setattr(kardenwort_desk, 'load_config', mock_load_config)
     monkeypatch.setattr(kardenwort_desk, 'translate_source_text', lambda *a, **kw: {0: "test"})
     monkeypatch.setattr(kardenwort_desk, 'run_lookup_flow', lambda *a, **kw: ([], ['WordSource', 'WordDestination'], [['running', 'test']], "test"))
@@ -129,3 +129,4 @@ en_prompt=en_prompt
     assert '<div class="kw-source-text"' not in out_str
     assert "<h3>" not in out_str
     assert "Lemma" in out_str
+
