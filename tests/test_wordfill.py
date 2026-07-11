@@ -170,6 +170,46 @@ class TestCollectCandidateFiles:
         assert result[0].name.startswith("20260711")
         assert result[1].name.startswith("20260710")
 
+    def test_language_strict_true_excludes_foreign(self, tmp_path):
+        """language_strict=True must exclude files whose suffix doesn't match the language."""
+        (tmp_path / "20260710120000-session.en.tsv").touch()
+        (tmp_path / "20260710120000-session.de.tsv").touch()
+        (tmp_path / "20260710120000-session.fr.tsv").touch()
+
+        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+                                              data_mode='all', language='en',
+                                              language_strict=True)
+        names = [f.name for f in result]
+        assert "20260710120000-session.en.tsv" in names
+        assert "20260710120000-session.de.tsv" not in names
+        assert "20260710120000-session.fr.tsv" not in names
+
+    def test_language_strict_false_includes_all_languages(self, tmp_path):
+        """language_strict=False must include .tsv files of any language suffix."""
+        (tmp_path / "20260710120000-session.en.tsv").touch()
+        (tmp_path / "20260710120000-session.de.tsv").touch()
+        (tmp_path / "20260710120000-session.fr.tsv").touch()
+
+        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+                                              data_mode='all', language='en',
+                                              language_strict=False)
+        names = [f.name for f in result]
+        assert "20260710120000-session.en.tsv" in names
+        assert "20260710120000-session.de.tsv" in names
+        assert "20260710120000-session.fr.tsv" in names
+
+    def test_language_strict_default_is_true(self, tmp_path):
+        """Default value of language_strict must be True (strict matching)."""
+        (tmp_path / "20260710120000-session.en.tsv").touch()
+        (tmp_path / "20260710120000-session.de.tsv").touch()
+
+        # Call without language_strict kwarg — default must behave as strict=True
+        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+                                              data_mode='all', language='en')
+        names = [f.name for f in result]
+        assert "20260710120000-session.en.tsv" in names
+        assert "20260710120000-session.de.tsv" not in names
+
 
 # ---------------------------------------------------------------------------
 # 5.2  score_wordfill_row

@@ -377,6 +377,7 @@ def load_config(config_path=None):
         wordfill['search_depth'] = wf.getint('search_depth', fallback=1)
         wordfill['data_mode'] = wf.get('data_mode', 'merged').strip().lower()
         wordfill['min_quality'] = wf.get('min_quality', 'any').strip().lower()
+        wordfill['language_strict'] = wf.getboolean('language_strict', fallback=True)
         wordfill['max_scan_files'] = wf.getint('max_scan_files', fallback=500)
     else:
         wordfill['enabled'] = False
@@ -384,6 +385,7 @@ def load_config(config_path=None):
         wordfill['search_depth'] = 1
         wordfill['data_mode'] = 'merged'
         wordfill['min_quality'] = 'any'
+        wordfill['language_strict'] = True
         wordfill['max_scan_files'] = 500
 
     _migrate_config(config)
@@ -4294,9 +4296,15 @@ WORDFILL_ELIGIBLE_FIELDS = (
     'WordSourceDefinitionSecond',
 )
 
-def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_scan_files=500):
+def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_scan_files=500, language_strict=True):
     """
     Return a list of candidate TSV Paths, sorted and capped at max_scan_files.
+
+    language_strict=True (default): only files whose name ends with '.{language}.tsv'
+        are included. Prevents cross-language homograph matches (e.g. German "Bank"
+        returned when searching English "bank").
+    language_strict=False: any '.tsv' file is eligible regardless of its language suffix.
+        Useful for mixed-language corpora.
 
     Sort order (primary → secondary):
       1. Newest ZID first — a file whose name starts with a later timestamp wins.
@@ -4309,6 +4317,11 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
     lang_suffix = f'.{language.lower()}.tsv'
     candidates = []
 
+    def _lang_ok(name_lower):
+        if language_strict:
+            return name_lower.endswith(lang_suffix)
+        return name_lower.endswith('.tsv')
+
     for root in scan_roots:
         root = Path(root)
         if not root.is_dir():
@@ -4318,7 +4331,7 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
             if not f.is_file():
                 continue
             name_lower = f.name.lower()
-            if not name_lower.endswith(lang_suffix):
+            if not _lang_ok(name_lower):
                 continue
             if data_mode == 'merged' and '-merged.' not in f.name:
                 continue
@@ -4332,7 +4345,7 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
                     if not f.is_file():
                         continue
                     name_lower = f.name.lower()
-                    if not name_lower.endswith(lang_suffix):
+                    if not _lang_ok(name_lower):
                         continue
                     if data_mode == 'merged' and '-merged.' not in f.name:
                         continue
@@ -4387,6 +4400,7 @@ def find_wordfill_match(word, language, wordfill_cfg):
     search_depth = wordfill_cfg.get('search_depth', 1)
     data_mode = wordfill_cfg.get('data_mode', 'merged')
     min_quality = wordfill_cfg.get('min_quality', 'any')
+    language_strict = wordfill_cfg.get('language_strict', True)
     max_scan_files = wordfill_cfg.get('max_scan_files', 500)
 
     min_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(min_quality, 0)
@@ -4395,7 +4409,10 @@ def find_wordfill_match(word, language, wordfill_cfg):
     if not word_lower:
         return None
 
-    candidates = collect_candidate_files(scan_roots, search_depth, data_mode, language, max_scan_files)
+    candidates = collect_candidate_files(
+        scan_roots, search_depth, data_mode, language, max_scan_files,
+        language_strict=language_strict
+    )
 
     best_score = -1          # (file_rank encoded as negative index, quality_tier)
     best_match = None        # dict of column->value
