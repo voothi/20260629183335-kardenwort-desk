@@ -27,7 +27,7 @@ def _write_tsv(path: Path, headers: list, rows: list) -> None:
 
 def _make_wordfill_cfg(tmp_path, scan_roots=None, search_depth=1,
                        scan_scope='all', target_quality='any', target_fallback=True,
-                       scan_max_files=500, enabled=True):
+                       scan_sort_order='chronological', scan_max_files=500, enabled=True):
     return {
         'enabled': enabled,
         'scan_roots': scan_roots or [tmp_path],
@@ -35,6 +35,7 @@ def _make_wordfill_cfg(tmp_path, scan_roots=None, search_depth=1,
         'scan_scope': scan_scope,
         'target_quality': target_quality,
         'target_fallback': target_fallback,
+        'scan_sort_order': scan_sort_order,
         'scan_max_files': scan_max_files,
     }
 
@@ -151,7 +152,7 @@ class TestCollectCandidateFiles:
 
     def test_merged_before_session_same_zid(self, tmp_path):
         """In scan_scope='all', a merged file with the same ZID prefix must rank
-        before a session file with the same ZID prefix."""
+        before a session file with the same ZID prefix (chronological default)."""
         (tmp_path / "20260710120000-session.en.tsv").touch()
         (tmp_path / "20260710120000-merged.en.tsv").touch()
 
@@ -159,6 +160,19 @@ class TestCollectCandidateFiles:
                                               scan_scope='all', language='en')
         assert result[0].name == "20260710120000-merged.en.tsv"
         assert result[1].name == "20260710120000-session.en.tsv"
+
+    def test_scan_sort_order_merged_first(self, tmp_path):
+        """scan_sort_order='merged_first' must rank ALL merged files before ANY session file."""
+        (tmp_path / "20260710120000-session.en.tsv").touch() # Newest
+        (tmp_path / "20260701120000-merged.en.tsv").touch()  # Older, but merged
+        (tmp_path / "20250101120000-session.en.tsv").touch() # Oldest
+
+        result = desk.collect_candidate_files([tmp_path], search_depth=0,
+                                              scan_scope='all', language='en',
+                                              scan_sort_order='merged_first')
+        assert result[0].name == "20260701120000-merged.en.tsv"
+        assert result[1].name == "20260710120000-session.en.tsv"
+        assert result[2].name == "20250101120000-session.en.tsv"
 
     def test_newer_session_beats_older_merged(self, tmp_path):
         """A session file from a later ZID must still rank above a merged file

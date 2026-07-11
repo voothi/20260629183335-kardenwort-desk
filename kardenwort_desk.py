@@ -376,6 +376,7 @@ def load_config(config_path=None):
         wordfill['scan_roots'] = parsed_roots
         wordfill['search_depth'] = wf.getint('search_depth', fallback=1)
         wordfill['scan_scope'] = wf.get('scan_scope', 'merged').strip().lower()
+        wordfill['scan_sort_order'] = wf.get('scan_sort_order', 'chronological').strip().lower()
         wordfill['scan_match_language'] = wf.getboolean('scan_match_language', fallback=True)
         wordfill['scan_max_files'] = wf.getint('scan_max_files', fallback=500)
         wordfill['target_quality'] = wf.get('target_quality', 'any').strip().lower()
@@ -385,6 +386,7 @@ def load_config(config_path=None):
         wordfill['scan_roots'] = []
         wordfill['search_depth'] = 1
         wordfill['scan_scope'] = 'merged'
+        wordfill['scan_sort_order'] = 'chronological'
         wordfill['scan_match_language'] = True
         wordfill['scan_max_files'] = 500
         wordfill['target_quality'] = 'any'
@@ -4345,7 +4347,7 @@ WORDFILL_ELIGIBLE_FIELDS = (
     'WordSourceDefinitionSecond',
 )
 
-def collect_candidate_files(scan_roots, search_depth, scan_scope, language, scan_max_files=500, scan_match_language=True):
+def collect_candidate_files(scan_roots, search_depth, scan_scope, language, scan_sort_order='chronological', scan_max_files=500, scan_match_language=True):
     """
     Return a list of candidate TSV Paths, sorted and capped at max_scan_files.
 
@@ -4356,10 +4358,13 @@ def collect_candidate_files(scan_roots, search_depth, scan_scope, language, scan
         Useful for mixed-language corpora.
 
     Sort order:
-      Primary:   merged before session — ALL merged files are ranked before ANY session files.
-                 With reverse=True, higher primary key wins (merged → 1, session → 0).
-      Secondary: newest ZID first (later timestamp = higher priority).
-    In data_mode='merged' only merged files are present, so primary key is moot.
+      If scan_sort_order == 'chronological' (default):
+          Primary:   newest ZID first (later timestamp = higher priority).
+          Secondary: merged before session — within the SAME ZID, merged files are ranked before session files.
+      If scan_sort_order == 'merged_first':
+          Primary:   merged before session — ALL merged files are ranked before ANY session files.
+          Secondary: newest ZID first (later timestamp = higher priority).
+    In scan_scope='merged' only merged files are present, so the primary/secondary distinction doesn't change the outcome.
     """
     candidates = []
 
@@ -4390,15 +4395,22 @@ def collect_candidate_files(scan_roots, search_depth, scan_scope, language, scan
                         continue
                     candidates.append(f)
 
-    # Sort order:
-    #   Primary:   newest ZID first (later timestamp = higher priority).
-    #   Secondary: merged before session — within the SAME ZID, merged files are ranked before session files.
-    #              With reverse=True, higher secondary key wins (merged → 1, session → 0).
-    # In scan_scope='merged' only merged files are present, so secondary key is moot.
-    candidates.sort(
-        key=lambda p: (extract_zid(p), 1 if '-merged.' in p.name else 0),
-        reverse=True
-    )
+    # Sort candidates
+    if scan_sort_order == 'merged_first':
+        # Primary: merged before session
+        # Secondary: newest ZID first
+        candidates.sort(
+            key=lambda p: (1 if '-merged.' in p.name else 0, extract_zid(p)),
+            reverse=True
+        )
+    else:
+        # Default: chronological
+        # Primary: newest ZID first
+        # Secondary: merged before session (within SAME ZID)
+        candidates.sort(
+            key=lambda p: (extract_zid(p), 1 if '-merged.' in p.name else 0),
+            reverse=True
+        )
 
     if len(candidates) > scan_max_files:
         logger.warning(
@@ -4437,6 +4449,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     scan_roots = wordfill_cfg.get('scan_roots', [])
     search_depth = wordfill_cfg.get('search_depth', 1)
     scan_scope = wordfill_cfg.get('scan_scope', 'merged')
+    scan_sort_order = wordfill_cfg.get('scan_sort_order', 'chronological')
     scan_match_language = wordfill_cfg.get('scan_match_language', True)
     scan_max_files = wordfill_cfg.get('scan_max_files', 500)
     target_quality = wordfill_cfg.get('target_quality', 'any')
@@ -4449,7 +4462,9 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
         return None
 
     candidates = collect_candidate_files(
-        scan_roots, search_depth, scan_scope, language, scan_max_files,
+        scan_roots, search_depth, scan_scope, language,
+        scan_sort_order=scan_sort_order,
+        scan_max_files=scan_max_files,
         scan_match_language=scan_match_language
     )
 
