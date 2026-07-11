@@ -4957,14 +4957,29 @@ def cmd_reprocess(args):
                 fields_to_clear.append(col)
             
     cleared_count = 0
+    valid_selected = []
+    source_col = role_fields.get('word_source', 'WordSource')
+    source_idx = headers.index(source_col) if source_col in headers else -1
+
     for row_id in selected_rows:
         if 0 <= row_id < len(data_rows):
+            row = data_rows[row_id]
+            # Check if row is not completely empty
+            if not any(str(cell).strip() for cell in row):
+                continue
+            # If we have a source column, ensure it's not empty
+            if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
+                continue
+                
+            valid_selected.append(row_id)
             for col in fields_to_clear:
                 if col in headers:
                     col_idx = headers.index(col)
                     if len(data_rows[row_id]) > col_idx:
                         data_rows[row_id][col_idx] = ""
             cleared_count += 1
+            
+    selected_rows = valid_selected
             
     if cleared_count == 0:
         emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
@@ -5414,6 +5429,25 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
+            
+        # Protection against empty lines slipping through to IntelliFiller
+        valid_selected = []
+        source_col = role_fields.get('word_source', 'WordSource')
+        source_idx = headers.index(source_col) if source_col in headers else -1
+        
+        for r in selected_rows:
+            if r < len(data_rows):
+                row = data_rows[r]
+                # Check if row is not completely empty
+                if not any(str(cell).strip() for cell in row):
+                    continue
+                # If we have a source column, ensure it's not empty
+                if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
+                    continue
+                valid_selected.append(r)
+                
+        selected_rows = valid_selected
+        
         for i in range(0, len(selected_rows), batch_size):
             batch = selected_rows[i:i + batch_size]
             logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
