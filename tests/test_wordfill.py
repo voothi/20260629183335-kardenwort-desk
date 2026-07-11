@@ -26,16 +26,16 @@ def _write_tsv(path: Path, headers: list, rows: list) -> None:
 
 
 def _make_wordfill_cfg(tmp_path, scan_roots=None, search_depth=1,
-                       data_mode='all', min_quality='any', effort='fallback',
-                       max_scan_files=500, enabled=True):
+                       scan_scope='all', target_quality='any', target_fallback=True,
+                       scan_max_files=500, enabled=True):
     return {
         'enabled': enabled,
         'scan_roots': scan_roots or [tmp_path],
         'search_depth': search_depth,
-        'data_mode': data_mode,
-        'min_quality': min_quality,
-        'effort': effort,
-        'max_scan_files': max_scan_files,
+        'scan_scope': scan_scope,
+        'target_quality': target_quality,
+        'target_fallback': target_fallback,
+        'scan_max_files': scan_max_files,
     }
 
 
@@ -56,7 +56,7 @@ class TestCollectCandidateFiles:
         (subdir / "20260702120100-sub.en.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
         assert "20260702120100-sub.en.tsv" not in names
@@ -71,29 +71,29 @@ class TestCollectCandidateFiles:
         sub_file.touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=1,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
         assert "20260702120100-sub.en.tsv" in names
 
-    def test_data_mode_merged_filters_non_merged(self, tmp_path):
-        """data_mode='merged' should only include files whose name contains '-merged.'."""
+    def test_scan_scope_merged_filters_non_merged(self, tmp_path):
+        """scan_scope='merged' should only include files whose name contains '-merged.'."""
         (tmp_path / "20260701120000-session.en.tsv").touch()
         (tmp_path / "20260701130000-merged.en.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='merged', language='en')
+                                              scan_scope='merged', language='en')
         names = [f.name for f in result]
         assert "20260701130000-merged.en.tsv" in names
         assert "20260701120000-session.en.tsv" not in names
 
-    def test_data_mode_all_includes_session_files(self, tmp_path):
-        """data_mode='all' should include both session and merged files."""
+    def test_scan_scope_all_includes_session_files(self, tmp_path):
+        """scan_scope='all' should include both session and merged files."""
         (tmp_path / "20260701120000-session.en.tsv").touch()
         (tmp_path / "20260701130000-merged.en.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
         assert "20260701130000-merged.en.tsv" in names
@@ -104,7 +104,7 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260701120000-session.de.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-session.en.tsv" in names
         assert "20260701120000-session.de.tsv" not in names
@@ -118,10 +118,10 @@ class TestCollectCandidateFiles:
         import logging
         with caplog.at_level(logging.WARNING, logger='root'):
             result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                                  data_mode='all', language='en',
-                                                  max_scan_files=5)
+                                                  scan_scope='all', language='en',
+                                                  scan_max_files=5)
         assert len(result) == 5
-        assert any("max_scan_files" in rec.message or "most recent" in rec.message
+        assert any("scan_max_files" in rec.message or "most recent" in rec.message
                    for rec in caplog.records)
 
     def test_multiple_scan_roots(self, tmp_path):
@@ -134,7 +134,7 @@ class TestCollectCandidateFiles:
         (root_b / "20260701130000-b.en.tsv").touch()
 
         result = desk.collect_candidate_files([root_a, root_b], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260701120000-a.en.tsv" in names
         assert "20260701130000-b.en.tsv" in names
@@ -145,18 +145,18 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260710000000-new.en.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         assert result[0].name.startswith("20260710")
         assert result[1].name.startswith("20260701")
 
     def test_merged_before_session_same_zid(self, tmp_path):
-        """In data_mode='all', a merged file with the same ZID prefix must rank
+        """In scan_scope='all', a merged file with the same ZID prefix must rank
         before a session file with the same ZID prefix."""
         (tmp_path / "20260710120000-session.en.tsv").touch()
         (tmp_path / "20260710120000-merged.en.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         assert result[0].name == "20260710120000-merged.en.tsv"
         assert result[1].name == "20260710120000-session.en.tsv"
 
@@ -167,46 +167,46 @@ class TestCollectCandidateFiles:
         (tmp_path / "20260711000000-session.en.tsv").touch()  # newer, session
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         assert result[0].name.startswith("20260711")
         assert result[1].name.startswith("20260710")
 
-    def test_language_strict_true_excludes_foreign(self, tmp_path):
-        """language_strict=True must exclude files whose suffix doesn't match the language."""
+    def test_scan_match_language_true_excludes_foreign(self, tmp_path):
+        """scan_match_language=True must exclude files whose suffix doesn't match the language."""
         (tmp_path / "20260710120000-session.en.tsv").touch()
         (tmp_path / "20260710120000-session.de.tsv").touch()
         (tmp_path / "20260710120000-session.fr.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en',
-                                              language_strict=True)
+                                              scan_scope='all', language='en',
+                                              scan_match_language=True)
         names = [f.name for f in result]
         assert "20260710120000-session.en.tsv" in names
         assert "20260710120000-session.de.tsv" not in names
         assert "20260710120000-session.fr.tsv" not in names
 
-    def test_language_strict_false_includes_all_languages(self, tmp_path):
-        """language_strict=False must include .tsv files of any language suffix."""
+    def test_scan_match_language_false_includes_all_languages(self, tmp_path):
+        """scan_match_language=False must include .tsv files of any language suffix."""
         (tmp_path / "20260710120000-session.en.tsv").touch()
         (tmp_path / "20260710120000-session.de.tsv").touch()
         (tmp_path / "20260710120000-session.fr.tsv").touch()
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en',
-                                              language_strict=False)
+                                              scan_scope='all', language='en',
+                                              scan_match_language=False)
         names = [f.name for f in result]
         assert "20260710120000-session.en.tsv" in names
         assert "20260710120000-session.de.tsv" in names
         assert "20260710120000-session.fr.tsv" in names
 
-    def test_language_strict_default_is_true(self, tmp_path):
-        """Default value of language_strict must be True (strict matching)."""
+    def test_scan_match_language_default_is_true(self, tmp_path):
+        """Default value of scan_match_language must be True (strict matching)."""
         (tmp_path / "20260710120000-session.en.tsv").touch()
         (tmp_path / "20260710120000-session.de.tsv").touch()
 
-        # Call without language_strict kwarg — default must behave as strict=True
+        # Call without scan_match_language kwarg — default must behave as strict=True
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
-                                              data_mode='all', language='en')
+                                              scan_scope='all', language='en')
         names = [f.name for f in result]
         assert "20260710120000-session.en.tsv" in names
         assert "20260710120000-session.de.tsv" not in names
@@ -260,8 +260,8 @@ def _row(quotation='', lemma='', inflected='', ipa='', morph='', dest=''):
 
 class TestFindWordfillMatch:
 
-    def test_find_wordfill_effort_fallback(self, tmp_path):
-        """When effort=fallback, it should return the highest quality sub-minimum match if minimum isn't met."""
+    def test_find_wordfill_target_fallback_fallback(self, tmp_path):
+        """When target_fallback=fallback, it should return the highest quality sub-minimum match if minimum isn't met."""
         (tmp_path / "20260710120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t\t\tKatze", encoding='utf-8')  # bare (0)
         (tmp_path / "20260709120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t/kæt/\t\tKatze", encoding='utf-8')  # partial (1)
         (tmp_path / "20260708120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t\t\tKatze", encoding='utf-8')  # bare (0)
@@ -270,11 +270,11 @@ class TestFindWordfillMatch:
             'enabled': True,
             'scan_roots': [tmp_path],
             'search_depth': 0,
-            'data_mode': 'all',
-            'min_quality': 'full',  # Requires tier 2 (IPA + Morphology)
-            'effort': 'fallback',
-            'language_strict': True,
-            'max_scan_files': 10
+            'scan_scope': 'all',
+            'target_quality': 'full',  # Requires tier 2 (IPA + Morphology)
+            'target_fallback': True,
+            'scan_match_language': True,
+            'scan_max_files': 10
         }
         # It should scan all three, fail to find 'full', but fallback to the 'partial' (1) from 0709
         result = desk.find_wordfill_match('cat', 'en', wordfill_cfg, None)
@@ -282,8 +282,8 @@ class TestFindWordfillMatch:
         assert result.get('WordSourceIPA') == '/kæt/'
         assert 'WordSourceMorphologyAI' not in result or result['WordSourceMorphologyAI'] == ''
 
-    def test_find_wordfill_effort_strict(self, tmp_path):
-        """When effort=strict, it should return None if minimum isn't met."""
+    def test_find_wordfill_target_fallback_strict(self, tmp_path):
+        """When target_fallback=strict, it should return None if minimum isn't met."""
         (tmp_path / "20260710120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t\t\tKatze", encoding='utf-8')  # bare
         (tmp_path / "20260709120000-session.en.tsv").write_text("WordSource\tWordSourceIPA\tWordSourceMorphologyAI\tWordDestination\ncat\t/kæt/\t\tKatze", encoding='utf-8')  # partial
 
@@ -291,11 +291,11 @@ class TestFindWordfillMatch:
             'enabled': True,
             'scan_roots': [tmp_path],
             'search_depth': 0,
-            'data_mode': 'all',
-            'min_quality': 'full',
-            'effort': 'strict',
-            'language_strict': True,
-            'max_scan_files': 10
+            'scan_scope': 'all',
+            'target_quality': 'full',
+            'target_fallback': False,
+            'scan_match_language': True,
+            'scan_max_files': 10
         }
         # It should scan both, fail to find 'full', and return None because of strict
         result = desk.find_wordfill_match('cat', 'en', wordfill_cfg, None)
@@ -368,21 +368,21 @@ class TestFindWordfillMatch:
         assert result is not None
         assert result.get('WordSourceIPA') == '/rʌn/'
 
-    def test_min_quality_full_rejects_partial_when_strict(self, tmp_path):
-        """min_quality='full' with effort='strict' must reject a row with only IPA filled."""
+    def test_target_quality_full_rejects_partial_when_strict(self, tmp_path):
+        """target_quality='full' with target_fallback=False must reject a row with only IPA filled."""
         tsv = tmp_path / "20260710120000-session.en.tsv"
         _write_tsv(tsv, FULL_HEADERS,
                    [_row(lemma='run', ipa='/rʌn/', morph='')])
-        cfg = _make_wordfill_cfg(tmp_path, min_quality='full', effort='strict')
+        cfg = _make_wordfill_cfg(tmp_path, target_quality='full', target_fallback=False)
         result = desk.find_wordfill_match('run', 'en', cfg)
         assert result is None
 
-    def test_min_quality_partial_accepts_partial(self, tmp_path):
-        """min_quality='partial' must accept a row with only IPA filled."""
+    def test_target_quality_partial_accepts_partial(self, tmp_path):
+        """target_quality='partial' must accept a row with only IPA filled."""
         tsv = tmp_path / "20260710120000-session.en.tsv"
         _write_tsv(tsv, FULL_HEADERS,
                    [_row(lemma='run', ipa='/rʌn/', morph='')])
-        cfg = _make_wordfill_cfg(tmp_path, min_quality='partial')
+        cfg = _make_wordfill_cfg(tmp_path, target_quality='partial')
         result = desk.find_wordfill_match('run', 'en', cfg)
         assert result is not None
         assert result.get('WordSourceIPA') == '/rʌn/'
@@ -517,10 +517,10 @@ class TestWordfillIntegration:
             'enabled': True,
             'scan_roots': [tmp_path],
             'search_depth': 0,
-            'data_mode': 'all',
-            'min_quality': 'any',
-            'max_scan_files': 500,
-            'language_strict': True,
+            'scan_scope': 'all',
+            'target_quality': 'any',
+            'scan_max_files': 500,
+            'scan_match_language': True,
         }
 
         # Mock find_wordfill_match to return a full match for 'test'

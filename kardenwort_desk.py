@@ -375,20 +375,20 @@ def load_config(config_path=None):
                 parsed_roots.append(Path(raw_root).resolve())
         wordfill['scan_roots'] = parsed_roots
         wordfill['search_depth'] = wf.getint('search_depth', fallback=1)
-        wordfill['data_mode'] = wf.get('data_mode', 'merged').strip().lower()
-        wordfill['min_quality'] = wf.get('min_quality', 'any').strip().lower()
-        wordfill['effort'] = wf.get('effort', 'fallback').strip().lower()
-        wordfill['language_strict'] = wf.getboolean('language_strict', fallback=True)
-        wordfill['max_scan_files'] = wf.getint('max_scan_files', fallback=500)
+        wordfill['scan_scope'] = wf.get('scan_scope', 'merged').strip().lower()
+        wordfill['scan_match_language'] = wf.getboolean('scan_match_language', fallback=True)
+        wordfill['scan_max_files'] = wf.getint('scan_max_files', fallback=500)
+        wordfill['target_quality'] = wf.get('target_quality', 'any').strip().lower()
+        wordfill['target_fallback'] = wf.getboolean('target_fallback', fallback=True)
     else:
         wordfill['enabled'] = False
         wordfill['scan_roots'] = []
         wordfill['search_depth'] = 1
-        wordfill['data_mode'] = 'merged'
-        wordfill['min_quality'] = 'any'
-        wordfill['effort'] = 'fallback'
-        wordfill['language_strict'] = True
-        wordfill['max_scan_files'] = 500
+        wordfill['scan_scope'] = 'merged'
+        wordfill['scan_match_language'] = True
+        wordfill['scan_max_files'] = 500
+        wordfill['target_quality'] = 'any'
+        wordfill['target_fallback'] = True
 
     _migrate_config(config)
     _validate_translation_config(config)
@@ -4345,14 +4345,14 @@ WORDFILL_ELIGIBLE_FIELDS = (
     'WordSourceDefinitionSecond',
 )
 
-def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_scan_files=500, language_strict=True):
+def collect_candidate_files(scan_roots, search_depth, scan_scope, language, scan_max_files=500, scan_match_language=True):
     """
     Return a list of candidate TSV Paths, sorted and capped at max_scan_files.
 
-    language_strict=True (default): only files whose name ends with '.{language}.tsv'
+    scan_match_language=True (default): only files whose name ends with '.{language}.tsv'
         are included. Prevents cross-language homograph matches (e.g. German "Bank"
         returned when searching English "bank").
-    language_strict=False: any '.tsv' file is eligible regardless of its language suffix.
+    scan_match_language=False: any '.tsv' file is eligible regardless of its language suffix.
         Useful for mixed-language corpora.
 
     Sort order:
@@ -4361,13 +4361,7 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
       Secondary: newest ZID first (later timestamp = higher priority).
     In data_mode='merged' only merged files are present, so primary key is moot.
     """
-    lang_suffix = f'.{language.lower()}.tsv'
     candidates = []
-
-    def _lang_ok(name_lower):
-        if language_strict:
-            return name_lower.endswith(lang_suffix)
-        return name_lower.endswith('.tsv')
 
     for root in scan_roots:
         root = Path(root)
@@ -4377,10 +4371,9 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
         for f in root.iterdir():
             if not f.is_file():
                 continue
-            name_lower = f.name.lower()
-            if not _lang_ok(name_lower):
+            if scan_match_language and not f.name.endswith(f'.{language}.tsv'):
                 continue
-            if data_mode == 'merged' and '-merged.' not in f.name:
+            if scan_scope == 'merged' and '-merged.' not in f.name:
                 continue
             candidates.append(f)
         # Level 1: one subdirectory deep
@@ -4391,10 +4384,9 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
                 for f in sub.iterdir():
                     if not f.is_file():
                         continue
-                    name_lower = f.name.lower()
-                    if not _lang_ok(name_lower):
+                    if scan_match_language and not f.name.endswith(f'.{language}.tsv'):
                         continue
-                    if data_mode == 'merged' and '-merged.' not in f.name:
+                    if scan_scope == 'merged' and '-merged.' not in f.name:
                         continue
                     candidates.append(f)
 
@@ -4402,18 +4394,18 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
     #   Primary:   newest ZID first (later timestamp = higher priority).
     #   Secondary: merged before session — within the SAME ZID, merged files are ranked before session files.
     #              With reverse=True, higher secondary key wins (merged → 1, session → 0).
-    # In data_mode='merged' only merged files are present, so secondary key is moot.
+    # In scan_scope='merged' only merged files are present, so secondary key is moot.
     candidates.sort(
         key=lambda p: (extract_zid(p), 1 if '-merged.' in p.name else 0),
         reverse=True
     )
 
-    if len(candidates) > max_scan_files:
+    if len(candidates) > scan_max_files:
         logger.warning(
-            f"wordfill: candidate file count {len(candidates)} exceeds max_scan_files={max_scan_files}; "
-            f"scanning only the {max_scan_files} most recent."
+            f"wordfill: candidate file count {len(candidates)} exceeds scan_max_files={scan_max_files}; "
+            f"scanning only the {scan_max_files} most recent."
         )
-        candidates = candidates[:max_scan_files]
+        candidates = candidates[:scan_max_files]
 
     return candidates
 
@@ -4444,21 +4436,21 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
 
     scan_roots = wordfill_cfg.get('scan_roots', [])
     search_depth = wordfill_cfg.get('search_depth', 1)
-    data_mode = wordfill_cfg.get('data_mode', 'merged')
-    min_quality = wordfill_cfg.get('min_quality', 'any')
-    effort = wordfill_cfg.get('effort', 'fallback')
-    language_strict = wordfill_cfg.get('language_strict', True)
-    max_scan_files = wordfill_cfg.get('max_scan_files', 500)
+    scan_scope = wordfill_cfg.get('scan_scope', 'merged')
+    scan_match_language = wordfill_cfg.get('scan_match_language', True)
+    scan_max_files = wordfill_cfg.get('scan_max_files', 500)
+    target_quality = wordfill_cfg.get('target_quality', 'any')
+    target_fallback = wordfill_cfg.get('target_fallback', True)
 
-    min_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(min_quality, 0)
+    target_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(target_quality, 0)
 
     word_lower = word.strip().lower()
     if not word_lower:
         return None
 
     candidates = collect_candidate_files(
-        scan_roots, search_depth, data_mode, language, max_scan_files,
-        language_strict=language_strict
+        scan_roots, search_depth, scan_scope, language, scan_max_files,
+        scan_match_language=scan_match_language
     )
 
     best_fallback_score = -1
@@ -4510,13 +4502,13 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                 file_best_match = match_dict
 
         if file_best_match is not None:
-            if file_best_score >= min_quality_tier:
-                # We found a match that satisfies our minimum requirement!
+            if file_best_score >= target_quality_tier:
+                # We found a match that satisfies our target quality!
                 # Since candidates are chronologically sorted, this is the most authoritative valid match.
                 # EXIT EARLY!
                 return file_best_match
             else:
-                # This match does NOT satisfy min_quality, but it might be useful as a fallback.
+                # This match does NOT satisfy target_quality, but it might be useful as a fallback.
                 # We want to maximize the fallback quality. Since files are chronologically sorted,
                 # we only update the fallback if the new tier is STRICTLY GREATER than the previous fallback tier.
                 if file_best_score > best_fallback_score:
@@ -4524,7 +4516,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                     best_fallback_match = file_best_match
 
     # Exhausted all candidates.
-    if effort == 'fallback':
+    if target_fallback:
         return best_fallback_match
     else:
         return None
