@@ -4986,7 +4986,7 @@ def cmd_reprocess(args):
             
     cleared_count = 0
     valid_selected = []
-    source_col = role_fields.get('word_source', 'WordSource')
+    source_col = role_fields.get('lemma', 'WordSource')
     source_idx = headers.index(source_col) if source_col in headers else -1
 
     for row_id in selected_rows:
@@ -5071,7 +5071,7 @@ def cmd_reprocess(args):
 
 def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang):
     col_lemma_name = role_fields.get('lemma', 'WordSource')
-    col_word_dest_name = role_fields.get('word_translation', 'WordRussian')
+    col_word_dest_name = role_fields.get('word_translation', 'WordDestination')
     
     col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
     col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
@@ -5465,7 +5465,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
 
         # Protection against empty lines slipping through to IntelliFiller
         valid_selected = []
-        source_col = role_fields.get('word_source', 'WordSource')
+        source_col = role_fields.get('lemma', 'WordSource')
         source_idx = headers.index(source_col) if source_col in headers else -1
 
         for r in selected_rows:
