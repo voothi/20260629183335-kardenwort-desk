@@ -5375,34 +5375,51 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                 lemmas_to_translate = list(reversed(lemmas_to_translate))
             if lemmas_to_translate:
                 provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
-                chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
-                if chunk_size > 0:
-                    chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
+                if provider == 'intellifiller':
+                    selected_rows = []
+                    for i, row in enumerate(data_rows):
+                        if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
+                            selected_rows.append(i)
+                            
+                    if selected_rows:
+                        batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
+                        for i in range(0, len(selected_rows), batch_size):
+                            batch = selected_rows[i:i + batch_size]
+                            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+                            
+                            comments, headers, data_rows = load_tsv_rows(tsv_path)
+                            write_update_js(tsv_path, data_rows, headers, role_fields, stage=None)
+                            
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
                 else:
-                    chunks = [lemmas_to_translate]
-                    
-                for chunk in chunks:
-                    lemma_translations = translate_lemmas_fast_path(chunk, args.language, args.target_lang, config, resolved_paths, provider)
-                    
-                    with file_lock(tsv_path):
-                        comments, headers, current_rows = load_tsv_rows(tsv_path)
-                        for row in current_rows:
-                            if col_lemma != -1 and len(row) > col_lemma:
-                                lemma_val = row[col_lemma]
-                                if col_word_dest != -1:
-                                    while len(row) <= col_word_dest:
-                                        row.append("")
-                                    if not row[col_word_dest].strip():
-                                        if lemma_val in lemma_translations:
-                                            row[col_word_dest] = lemma_translations[lemma_val]
-                        save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
-                        data_rows = current_rows
+                    chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
+                    if chunk_size > 0:
+                        chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
+                    else:
+                        chunks = [lemmas_to_translate]
                         
-                    # Push table row updates only — don't rebuild TRANSLATE section on each chunk
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage=None)
-                    
-                # Final update with stage=translated to render TRANSLATE section once all lemmas are done
-                write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+                    for chunk in chunks:
+                        lemma_translations = translate_lemmas_fast_path(chunk, args.language, args.target_lang, config, resolved_paths, provider)
+                        
+                        with file_lock(tsv_path):
+                            comments, headers, current_rows = load_tsv_rows(tsv_path)
+                            for row in current_rows:
+                                if col_lemma != -1 and len(row) > col_lemma:
+                                    lemma_val = row[col_lemma]
+                                    if col_word_dest != -1:
+                                        while len(row) <= col_word_dest:
+                                            row.append("")
+                                        if not row[col_word_dest].strip():
+                                            if lemma_val in lemma_translations:
+                                                row[col_word_dest] = lemma_translations[lemma_val]
+                            save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                            data_rows = current_rows
+                            
+                        # Push table row updates only — don't rebuild TRANSLATE section on each chunk
+                        write_update_js(tsv_path, data_rows, headers, role_fields, stage=None)
+                        
+                    # Final update with stage=translated to render TRANSLATE section once all lemmas are done
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
             else:
                 write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
         else:
