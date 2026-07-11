@@ -476,24 +476,28 @@ send_to_anki_after_export=false
 
 
 def test_cmd_merge_filters_tsv(monkeypatch, tmp_path):
-    # Create files: TSVs, TXT, LOG
+    # Create files: TSVs, TXT (en, ru), LOG
     tsv1 = tmp_path / "20260630000000-part1.en.tsv"
-    txt1 = tmp_path / "20260630000000-part1.txt"
+    txt1_en = tmp_path / "20260630000000-part1.en.txt"
+    txt1_ru = tmp_path / "20260630000000-part1.ru.txt"
     log1 = tmp_path / "20260630000000-part1.log"
     
     tsv1.write_text("Header1\tHeader2\nv1\tv2\n", encoding='utf-8')
-    txt1.write_text("Text one", encoding='utf-8')
+    txt1_en.write_text("Text one EN", encoding='utf-8')
+    txt1_ru.write_text("Text one RU", encoding='utf-8')
     log1.write_text("Log one", encoding='utf-8')
     
     tsv2 = tmp_path / "20260630000001-part2.en.tsv"
-    txt2 = tmp_path / "20260630000001-part2.txt"
+    txt2_en = tmp_path / "20260630000001-part2.en.txt"
+    txt2_ru = tmp_path / "20260630000001-part2.ru.txt"
     tsv2.write_text("Header1\tHeader2\nv3\tv4\n", encoding='utf-8')
-    txt2.write_text("Text two", encoding='utf-8')
+    txt2_en.write_text("Text two EN", encoding='utf-8')
+    txt2_ru.write_text("Text two RU", encoding='utf-8')
 
     dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
     
     class Args:
-        files = [str(tsv1), str(txt1), str(log1), str(tsv2)]
+        files = [str(tsv1), str(txt1_en), str(txt1_ru), str(log1), str(tsv2)]
         target = str(dest_tsv)
         config = None
 
@@ -511,4 +515,13 @@ def test_cmd_merge_filters_tsv(monkeypatch, tmp_path):
     _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
     assert final_headers == ["Header1", "Header2"]
     assert final_rows == [["v1", "v2"], ["v3", "v4"]]
+
+    # Verify both language text files are merged
+    dest_txt_en = tmp_path / "20260711000000-merged.en.txt"
+    dest_txt_ru = tmp_path / "20260711000000-merged.ru.txt"
+    assert dest_txt_en.exists()
+    assert dest_txt_ru.exists()
+    assert dest_txt_en.read_text(encoding='utf-8') == "Text one EN\n\nText two EN"
+    assert dest_txt_ru.read_text(encoding='utf-8') == "Text one RU\n\nText two RU"
+
 

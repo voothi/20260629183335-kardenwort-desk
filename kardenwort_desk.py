@@ -5269,9 +5269,13 @@ def cmd_merge(args):
             print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
             sys.exit(1)
             
+    def extract_lang_from_txt(path):
+        match = re.search(r'\.([a-z]{2})\.txt$', path.name.lower())
+        return match.group(1) if match else ""
+
     all_comments = []
     all_data_rows = []
-    sibling_texts = []
+    texts_by_lang = {}
     
     for f in files:
         comments, _, rows = load_tsv_rows(f)
@@ -5286,15 +5290,17 @@ def cmd_merge(args):
             base_txt = f.with_suffix('.txt')
             if base_txt.exists():
                 txt_files = [base_txt]
-        if txt_files:
+                
+        for t in txt_files:
+            lang_key = extract_lang_from_txt(t)
             try:
-                content = txt_files[0].read_text(encoding='utf-8')
-                sibling_texts.append(content)
+                content = t.read_text(encoding='utf-8')
+                if lang_key not in texts_by_lang:
+                    texts_by_lang[lang_key] = []
+                texts_by_lang[lang_key].append(content)
             except Exception as e:
-                logger.warning(f"Failed to read sibling text {txt_files[0]}: {e}")
-        else:
-            logger.warning(f"No sibling .txt found for {f.name}")
-            
+                logger.warning(f"Failed to read sibling text {t}: {e}")
+                
     dest_dir = files[0].parent
     
     if args.target == "new":
@@ -5304,31 +5310,34 @@ def cmd_merge(args):
         if lang_match:
             lang = lang_match.group(1)
         dest_tsv_path = dest_dir / f"{timestamp_id}-merged.{lang}.tsv"
-        dest_txt_path = dest_dir / f"{timestamp_id}-merged.txt"
     elif args.target == "first":
         dest_tsv_path = files[0]
-        zid = extract_zid(files[0])
-        txt_files = list(files[0].parent.glob(f"{zid}-*.txt"))
-        if txt_files:
-            dest_txt_path = txt_files[0]
-        else:
-            dest_txt_path = files[0].with_suffix('.txt')
     else:
         dest_tsv_path = Path(args.target).resolve()
-        zid = extract_zid(dest_tsv_path)
-        txt_files = list(dest_tsv_path.parent.glob(f"{zid}-*.txt"))
-        if txt_files:
-            dest_txt_path = txt_files[0]
+        
+    def get_dest_txt_path(dest_tsv_path, lang_key):
+        name = dest_tsv_path.name
+        lang_match = re.search(r'\.([a-z]{2})\.tsv$', name)
+        if lang_match:
+            prefix = name[:lang_match.start()]
         else:
-            dest_txt_path = dest_tsv_path.with_suffix('.txt')
+            prefix = dest_tsv_path.stem
             
-    merged_text = "\n\n".join(sibling_texts)
+        if lang_key:
+            return dest_tsv_path.parent / f"{prefix}.{lang_key}.txt"
+        else:
+            return dest_tsv_path.parent / f"{prefix}.txt"
+
+    written_txt_paths = set()
     
     try:
         with file_lock(dest_tsv_path):
             save_tsv_rows_safely(dest_tsv_path, all_comments, first_headers, all_data_rows)
             
-        if dest_txt_path:
+        for lang_key, sibling_texts in texts_by_lang.items():
+            dest_txt_path = get_dest_txt_path(dest_tsv_path, lang_key)
+            merged_text = "\n\n".join(sibling_texts)
+            
             with file_lock(dest_txt_path):
                 temp_txt = dest_txt_path.with_suffix('.txt.tmp')
                 bak_txt = dest_txt_path.with_suffix('.txt.bak')
@@ -5349,6 +5358,7 @@ def cmd_merge(args):
                             os.remove(bak_txt)
                         except OSError:
                             pass
+                    written_txt_paths.add(dest_txt_path)
                 except Exception as e:
                     if temp_txt.exists():
                         try:
@@ -5366,12 +5376,13 @@ def cmd_merge(args):
                     os.remove(f)
                     zid = extract_zid(f)
                     for t_file in f.parent.glob(f"{zid}-*.txt"):
-                        if t_file != dest_txt_path:
+                        if t_file not in written_txt_paths:
                             os.remove(t_file)
                 except Exception as e:
                     logger.warning(f"Failed to delete merged source {f.name}: {e}")
                     
-        emit_payload(f"SUCCESS: Merged TSV: {dest_tsv_path}, Merged TXT: {dest_txt_path}", raw=True)
+        dest_txt_str = ", ".join(str(p) for p in sorted(written_txt_paths))
+        emit_payload(f"SUCCESS: Merged TSV: {dest_tsv_path}, Merged TXT files: {dest_txt_str}", raw=True)
     except Exception as e:
         print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
         sys.exit(1)
