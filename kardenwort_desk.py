@@ -4396,8 +4396,13 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
                         continue
                     candidates.append(f)
 
+    # Sort order:
+    #   Primary:   newest ZID first (later timestamp = higher priority).
+    #   Secondary: merged before session — within the SAME ZID, merged files are ranked before session files.
+    #              With reverse=True, higher secondary key wins (merged → 1, session → 0).
+    # In data_mode='merged' only merged files are present, so secondary key is moot.
     candidates.sort(
-        key=lambda p: (1 if '-merged.' in p.name else 0, extract_zid(p)),
+        key=lambda p: (extract_zid(p), 1 if '-merged.' in p.name else 0),
         reverse=True
     )
 
