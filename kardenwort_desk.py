@@ -5261,7 +5261,27 @@ def cmd_merge(args):
             else:
                 expanded_files.append(path)
                 
-        files = [f for f in expanded_files if f.suffix.lower() == '.tsv']
+        def map_to_tsv(path):
+            if path.suffix.lower() == '.tsv':
+                return path
+            zid = extract_zid(path)
+            if zid:
+                parent = path.parent
+                matches = []
+                for pattern in (f"{zid}-*.tsv", f"{zid}.*.tsv", f"{zid}.tsv"):
+                    for m in parent.glob(pattern):
+                        m_res = m.resolve()
+                        if m_res not in matches:
+                            matches.append(m_res)
+                if matches:
+                    return matches[0]
+            return None
+
+        files = []
+        for f in expanded_files:
+            tsv_path = map_to_tsv(f)
+            if tsv_path and tsv_path not in files:
+                files.append(tsv_path)
         
         if len(files) == 2 and files[0].parent == files[1].parent:
             parent_dir = files[0].parent

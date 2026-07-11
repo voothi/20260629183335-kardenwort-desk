@@ -809,6 +809,46 @@ def test_cmd_merge_multilingual(monkeypatch, tmp_path):
     assert len(zids) == 2
 
 
+def test_cmd_merge_non_tsv_mapping(monkeypatch, tmp_path):
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    log1 = tmp_path / "20260630000000-import.log"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv1\tv2\t1\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+    log1.touch()
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    log2 = tmp_path / "20260630000001-import.log"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv3\tv4\t1\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
+    log2.touch()
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        # We select only the log files, which should be mapped to the tsv files
+        files = [str(log1), str(log2)]
+        target = str(dest_tsv)
+        config = None
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    assert len(final_rows) == 2
+
+
+
 
 
 
