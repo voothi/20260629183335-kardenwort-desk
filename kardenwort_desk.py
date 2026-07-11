@@ -2253,8 +2253,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 sentence_htmls.append("<div>&nbsp;</div>")
         sentence_html = "".join(sentence_htmls)
     
-    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields else -1
-    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields else -1
+    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
 
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
     table_header_html = "<tr>" + "".join(f"<th>{h}</th>" for h in header_cols) + "</tr>"
@@ -4000,8 +4000,8 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     eff_mode = _effective_text_mode(text, text_mode)
     _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=True)
     
-    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields else -1
-    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields else -1
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     
     if col_lemma != -1 and col_word_dest != -1:
         lemmas_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
