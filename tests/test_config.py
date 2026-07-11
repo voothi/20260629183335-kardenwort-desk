@@ -1,4 +1,4 @@
-﻿import os
+import os
 import tempfile
 import pytest
 from pathlib import Path
@@ -156,6 +156,36 @@ lemma_columns = lemma,translation
         assert gd['heading_translation'] == 'Custom'
         assert gd['heading_lemmas'] == 'None'
         assert gd['lemma_columns'] == ['lemma', 'translation']
+
+def test_wordfill_config_multiline_scan_roots():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        desk_dir = tmp_path / "kardenwort-desk"
+        desk_dir.mkdir()
+        
+        anki_mapping = desk_dir / "anki-mapping.ini"
+        anki_mapping.write_text("")
+        
+        config_content = """[settings]
+anki_mapping_file = ./anki-mapping.ini
+
+[wordfill]
+enabled = true
+scan_roots = 
+    ../repo1
+    ./repo2, ../repo3
+"""
+        config_file = desk_dir / "config.ini"
+        config_file.write_text(config_content)
+        
+        config, resolved_paths, gd, wf = kardenwort_desk.load_config(config_file)
+        
+        assert wf['enabled'] is True
+        assert len(wf['scan_roots']) == 3
+        assert wf['scan_roots'][0] == (desk_dir / "../repo1").resolve()
+        assert wf['scan_roots'][1] == (desk_dir / "./repo2").resolve()
+        assert wf['scan_roots'][2] == (desk_dir / "../repo3").resolve()
+
 
 def test_orthogonal_config_parsing():
     with tempfile.TemporaryDirectory() as tmpdir:

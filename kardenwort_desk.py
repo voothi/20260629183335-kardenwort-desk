@@ -365,7 +365,8 @@ def load_config(config_path=None):
         wordfill['enabled'] = wf.getboolean('enabled', fallback=False)
         raw_roots = wf.get('scan_roots', '')
         parsed_roots = []
-        for raw_root in raw_roots.split(','):
+        import re
+        for raw_root in re.split(r'[\n,]+', raw_roots):
             raw_root = raw_root.strip()
             if not raw_root:
                 continue
