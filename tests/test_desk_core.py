@@ -559,4 +559,45 @@ def test_cmd_merge_deduplicates_rows(monkeypatch, tmp_path):
     assert final_rows == [["v1", "v2"], ["v3", "v4"]]
 
 
+def test_cmd_merge_offsets_sentence_index(monkeypatch, tmp_path):
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv1\tv2\t1\nv3\tv4\t2\n", encoding='utf-8')
+    txt1.write_text("Line one\nLine two\n", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv5\tv6\t1\nv7\tv8\t2\n", encoding='utf-8')
+    txt2.write_text("Line three\nLine four\n", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    assert final_headers == ["WordSourceInflectedForm", "WordSource", "SentenceSourceIndex"]
+    assert final_rows == [
+        ["v1", "v2", "1"],
+        ["v3", "v4", "2"],
+        ["v5", "v6", "3"],
+        ["v7", "v8", "4"]
+    ]
+
+
+
 

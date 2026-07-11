@@ -5282,12 +5282,14 @@ def cmd_merge(args):
     all_data_rows = []
     texts_by_lang = {}
     
+    current_line_offset = 0
+    col_index = first_headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in first_headers else -1
+    
     for f in files:
         comments, _, rows = load_tsv_rows(f)
         if not all_comments:
             all_comments = comments
-        all_data_rows.extend(rows)
-        
+            
         zid = extract_zid(f)
         parent_dir = f.parent
         txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
@@ -5295,6 +5297,14 @@ def cmd_merge(args):
             base_txt = f.with_suffix('.txt')
             if base_txt.exists():
                 txt_files = [base_txt]
+                
+        non_empty_lines = 0
+        if txt_files:
+            try:
+                txt_content = txt_files[0].read_text(encoding='utf-8')
+                non_empty_lines = sum(1 for line in txt_content.splitlines() if line.strip())
+            except Exception as e:
+                logger.warning(f"Failed to read/count lines in sibling text {txt_files[0]}: {e}")
                 
         for t in txt_files:
             lang_key = extract_lang_from_txt(t)
@@ -5305,7 +5315,20 @@ def cmd_merge(args):
                 texts_by_lang[lang_key].append(content)
             except Exception as e:
                 logger.warning(f"Failed to read sibling text {t}: {e}")
-                
+
+        # Offset the SentenceSourceIndex values for this file's rows
+        if col_index != -1 and current_line_offset > 0:
+            for row in rows:
+                if len(row) > col_index and row[col_index].strip():
+                    try:
+                        orig_idx = int(row[col_index])
+                        row[col_index] = str(orig_idx + current_line_offset)
+                    except ValueError:
+                        pass
+                        
+        all_data_rows.extend(rows)
+        current_line_offset += non_empty_lines
+        
     dest_dir = files[0].parent
     
     if args.target == "new":
