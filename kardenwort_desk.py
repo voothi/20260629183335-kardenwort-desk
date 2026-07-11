@@ -4402,24 +4402,66 @@ def cmd_export(args):
     exported_rows = []
     for row_id in actual_export_rows:
         if 0 <= row_id < len(data_rows):
-            exported_rows.append(data_rows[row_id])
+            exported_rows.append(list(data_rows[row_id]))  # copy so we can mutate independently
         else:
             logger.warning(f"Export row index {row_id} is out of bounds (total rows: {len(data_rows)})")
-            
+
     if not exported_rows:
         emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
         sys.exit(0)
-        
+
+    # Resolve the DeskSelected column so we can stamp selections on export
+    # and auto-save selections back to the source TSV (no manual Save required).
+    selected_col_name = 'DeskSelected'
+    if 'DeskSelected' in headers:
+        selected_col_name = 'DeskSelected'
+    try:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        _rf = get_role_fields(mapping, headers)
+        selected_col_name = _rf.get('selected', selected_col_name)
+    except Exception:
+        pass
+
+    selected_col_idx = headers.index(selected_col_name) if selected_col_name in headers else -1
+
+    if selected_col_idx != -1:
+        # 1. Stamp DeskSelected=1 on every exported (favorites) row copy
+        for row in exported_rows:
+            if len(row) > selected_col_idx:
+                row[selected_col_idx] = '1'
+            else:
+                row.extend([''] * (selected_col_idx - len(row) + 1))
+                row[selected_col_idx] = '1'
+
+        # 2. Auto-save DeskSelected=1 back into the source TSV so the
+        #    window does not need to be manually saved after Send to Anki.
+        try:
+            selected_row_set = set(actual_export_rows)
+            for row_id, row in enumerate(data_rows):
+                if row is None:
+                    continue
+                if row_id in selected_row_set:
+                    if len(row) > selected_col_idx:
+                        row[selected_col_idx] = '1'
+                    else:
+                        row.extend([''] * (selected_col_idx - len(row) + 1))
+                        row[selected_col_idx] = '1'
+            with file_lock(tsv_path):
+                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            logger.info(f"Auto-saved DeskSelected state to source TSV: {tsv_path}")
+        except Exception as e:
+            logger.warning(f"Failed to auto-save DeskSelected to source TSV: {e}")
+
     fav_dir = resolved_paths['favorites_output_dir']
     fav_dir.mkdir(parents=True, exist_ok=True)
-    
+
     fav_prefix = config.get('settings', 'favorites_prefix', fallback='')
     dest_filename = f"{fav_prefix}{tsv_path.name}"
     dest_path = fav_dir / dest_filename
-    
+
     save_to_favorites = config.getboolean('settings', 'save_to_favorites_on_export', fallback=True)
     import_path = dest_path if save_to_favorites else (results_dir / f"temp_import_{dest_filename}")
-    
+
     try:
         with file_lock(import_path):
             save_tsv_rows_safely(import_path, comments, headers, exported_rows)
