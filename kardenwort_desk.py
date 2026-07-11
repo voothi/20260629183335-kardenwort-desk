@@ -5435,12 +5435,13 @@ def cmd_merge(args):
                 # Offset the SentenceSourceIndex values for this file's rows
                 if col_index != -1:
                     for row in rows:
-                        if len(row) > col_index and row[col_index].strip():
+                        if len(row) > col_index:
+                            val = row[col_index].strip()
                             try:
+                                orig_idx = int(val) if val else 1
                                 if non_empty_lines == 1:
                                     row[col_index] = str(current_line_offset + 1)
-                                elif current_line_offset > 0:
-                                    orig_idx = int(row[col_index])
+                                else:
                                     row[col_index] = str(orig_idx + current_line_offset)
                             except ValueError:
                                 pass

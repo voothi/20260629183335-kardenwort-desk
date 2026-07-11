@@ -848,6 +848,46 @@ def test_cmd_merge_non_tsv_mapping(monkeypatch, tmp_path):
     assert len(final_rows) == 2
 
 
+def test_cmd_merge_empty_sentence_index(monkeypatch, tmp_path):
+    # Setup two single-line tsvs with empty SentenceSourceIndex fields
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv1\tv2\t\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv3\tv4\t\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    col_idx = final_headers.index("SentenceSourceIndex")
+    # Row 1 should be offset to "1"
+    assert final_rows[0][col_idx] == "1"
+    # Row 2 should be offset to "2"
+    assert final_rows[1][col_idx] == "2"
+
+
+
 
 
 
