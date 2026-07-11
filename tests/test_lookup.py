@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import subprocess
 import configparser
 import sys
@@ -7,6 +7,10 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 import kardenwort_desk
+
+@pytest.fixture(autouse=True)
+def mock_progressive_worker(monkeypatch):
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
 
 def setup_test_env(tmp_path):
     config = configparser.ConfigParser()

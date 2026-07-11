@@ -4353,13 +4353,11 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
     language_strict=False: any '.tsv' file is eligible regardless of its language suffix.
         Useful for mixed-language corpora.
 
-    Sort order (primary → secondary):
-      1. Newest ZID first — a file whose name starts with a later timestamp wins.
-      2. Merged before session — when two files share the same ZID prefix,
-         '*-merged.*' files are ranked before plain session files (key=1 > key=0
-         with reverse=True).
-         This applies in data_mode='all'; in data_mode='merged' only merged
-         files are collected so the secondary key has no effect.
+    Sort order:
+      Primary:   merged before session — ALL merged files are ranked before ANY session files.
+                 With reverse=True, higher primary key wins (merged → 1, session → 0).
+      Secondary: newest ZID first (later timestamp = higher priority).
+    In data_mode='merged' only merged files are present, so primary key is moot.
     """
     lang_suffix = f'.{language.lower()}.tsv'
     candidates = []
@@ -4398,14 +4396,8 @@ def collect_candidate_files(scan_roots, search_depth, data_mode, language, max_s
                         continue
                     candidates.append(f)
 
-    # Sort order:
-    #   Primary:   newest ZID first   (later timestamp = higher priority)
-    #   Secondary: merged before session — within the same ZID, merged files win.
-    #              With reverse=True, higher secondary key wins:
-    #              merged → 1, session → 0, so merged floats to the top.
-    # In data_mode='merged' only merged files are present, so secondary key is moot.
     candidates.sort(
-        key=lambda p: (extract_zid(p), 1 if '-merged.' in p.name else 0),
+        key=lambda p: (1 if '-merged.' in p.name else 0, extract_zid(p)),
         reverse=True
     )
 
@@ -4461,7 +4453,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
         language_strict=language_strict
     )
 
-    best_score = -1          # (file_rank encoded as negative index, quality_tier)
+    best_score = -1          # quality_tier (within the matched file)
     best_match = None        # dict of column->value
 
     for file_rank, tsv_path in enumerate(candidates):
@@ -4493,7 +4485,6 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
             if tier < min_quality_tier:
                 continue
 
-            # Score: lower file_rank = newer = better; higher tier = better quality
             match_dict = {}
             for col in WORDFILL_ELIGIBLE_FIELDS:
                 if col in headers:
@@ -4503,11 +4494,16 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                         if val:
                             match_dict[col] = val
                             
-            # Compare as tuple: we want maximize quality within same file, prefer newer files
-            row_score = (-file_rank, tier)
-            if best_match is None or row_score > best_score:
-                best_score = row_score
+            # Maximize quality within this file
+            if best_match is None or tier > best_score:
+                best_score = tier
                 best_match = match_dict
+
+        # Early exit: candidates are strictly ordered by authority/age.
+        # If we found any valid match in this file (which passed min_quality),
+        # it is mathematically the most authoritative match. Stop searching.
+        if best_match is not None:
+            break
 
     return best_match if best_match else None
 

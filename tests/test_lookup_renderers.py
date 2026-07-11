@@ -1,5 +1,10 @@
 import pytest
+import kardenwort_desk
 from kardenwort_desk import render_section, render_lookup_html, render_lookup_text
+
+@pytest.fixture(autouse=True)
+def mock_progressive_worker(monkeypatch):
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
 
 def test_render_section_lemmas(caplog):
     ctx = {
@@ -233,10 +238,13 @@ def test_d2_render_source_translated_pending(tmp_path):
     assert '<div class="skeleton-loader" data-pending="true"' in html_out
     assert 'container.querySelector(\'[data-pending="true"]\')' in html_out
 
-def test_separable_verb_anchoring_scenarios(tmp_path):
+def test_separable_verb_anchoring_scenarios(tmp_path, monkeypatch):
     import configparser
     import sys
     from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
 
     # Setup base config
     config = configparser.ConfigParser()

@@ -159,16 +159,16 @@ class TestCollectCandidateFiles:
         assert result[0].name == "20260710120000-merged.en.tsv"
         assert result[1].name == "20260710120000-session.en.tsv"
 
-    def test_newer_session_beats_older_merged(self, tmp_path):
-        """A session file from a later ZID must still rank above a merged file
-        from an earlier ZID — ZID is the primary sort key."""
+    def test_older_merged_beats_newer_session(self, tmp_path):
+        """A merged file from an earlier ZID must rank above a session file
+        from a later ZID — is_merged is the primary sort key."""
         (tmp_path / "20260710120000-merged.en.tsv").touch()   # older, merged
         (tmp_path / "20260711000000-session.en.tsv").touch()  # newer, session
 
         result = desk.collect_candidate_files([tmp_path], search_depth=0,
                                               data_mode='all', language='en')
-        assert result[0].name.startswith("20260711")
-        assert result[1].name.startswith("20260710")
+        assert result[0].name.startswith("20260710")
+        assert result[1].name.startswith("20260711")
 
     def test_language_strict_true_excludes_foreign(self, tmp_path):
         """language_strict=True must exclude files whose suffix doesn't match the language."""
