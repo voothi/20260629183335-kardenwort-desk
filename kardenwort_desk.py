@@ -5336,12 +5336,15 @@ def cmd_merge(args):
                 logger.warning(f"Failed to read sibling text {t}: {e}")
 
         # Offset the SentenceSourceIndex values for this file's rows
-        if col_index != -1 and current_line_offset > 0:
+        if col_index != -1:
             for row in rows:
                 if len(row) > col_index and row[col_index].strip():
                     try:
-                        orig_idx = int(row[col_index])
-                        row[col_index] = str(orig_idx + current_line_offset)
+                        if non_empty_lines == 1:
+                            row[col_index] = str(current_line_offset + 1)
+                        elif current_line_offset > 0:
+                            orig_idx = int(row[col_index])
+                            row[col_index] = str(orig_idx + current_line_offset)
                     except ValueError:
                         pass
                         
