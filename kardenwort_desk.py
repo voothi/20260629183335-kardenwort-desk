@@ -422,6 +422,18 @@ def get_role_fields(mapping, headers):
         role_fields['ipa'] = 'WordSourceIPA'
     if 'DeskSelected' in headers and 'selected' not in role_fields:
         role_fields['selected'] = 'DeskSelected'
+        
+    sentence_index_col = "SentenceSourceIndex"
+    if 'fields_mapping.word' in mapping:
+        for col, role in mapping['fields_mapping.word'].items():
+            if role == 'sentence_index':
+                sentence_index_col = col
+                break
+    role_fields['sentence_index'] = sentence_index_col
+    
+    if 'sentence_source' not in role_fields and 'SentenceSource' in headers:
+        role_fields['sentence_source'] = 'SentenceSource'
+        
     return role_fields
 
 # Setup structured logging
@@ -620,9 +632,21 @@ def is_tsv_llm_filled(headers, data_rows, mapping):
                 return True
         return False
         
-    fallback_cols = ['WordRussian', 'WordEnglish']
-    for col in fallback_cols:
+    role_fields = get_role_fields(mapping, headers)
+    dest_cols = []
+    if 'word_translation' in role_fields:
+        dest_cols.append(role_fields['word_translation'])
+    if 'sentence_destination' in role_fields:
+        dest_cols.append(role_fields['sentence_destination'])
+        
+    for col in dest_cols:
         if col in headers:
+            col_idx = headers.index(col)
+            if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
+                return True
+                
+    for col in headers:
+        if col.startswith('Word') and col not in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2'):
             col_idx = headers.index(col)
             if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
                 return True
@@ -1769,8 +1793,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         if apply_padding and working_tsv_path.exists():
             try:
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-                col_src_idx = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
-                col_src_sent = headers.index('SentenceSource') if 'SentenceSource' in headers else -1
+                role_fields = get_role_fields(mapping, headers)
+                col_src_idx = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+                col_src_sent = headers.index(role_fields.get('sentence_source', 'SentenceSource')) if role_fields.get('sentence_source', 'SentenceSource') in headers else -1
                 if col_src_idx != -1 and col_src_sent != -1:
                     if eff_mode == 'single':
                         sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
@@ -1905,7 +1930,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     # --- Word-fill early pre-fill step ---
     if wordfill_cfg and wordfill_cfg.get('enabled', False):
         try:
-            col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
+            col_lemma_wf = col_lemma if col_lemma != -1 else (headers.index('WordSource') if 'WordSource' in headers else -1)
             if col_lemma_wf != -1:
                 seen_lemmas = {}
                 for i, row in enumerate(data_rows):
@@ -1927,13 +1952,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         except Exception as wf_err:
             logger.warning(f"wordfill (desk): early pre-fill step failed, continuing: {wf_err}")
 
-    sentence_index_col = "SentenceSourceIndex"
-    if 'fields_mapping.word' in mapping:
-        for col, role in mapping['fields_mapping.word'].items():
-            if role == 'sentence_index':
-                sentence_index_col = col
-                break
-    col_index = headers.index(sentence_index_col) if sentence_index_col in headers else -1
+    col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
     auto_inject_updates = config.getboolean('rendering', 'auto_inject_updates', fallback=True)
@@ -2129,7 +2148,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
     paired_rows = {row_id for row_id, pos_set in anchored_positions.items() if pos_set}
     
-    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+    col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     row_to_c_idx = {}
     if col_index != -1:
         for row_id, row in enumerate(data_rows):
@@ -3916,13 +3935,15 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     
     # --- Word-fill early pre-fill step ---
     # Runs at the start so that existing translations are filled before slow translations run.
     filled_lemmas = set()
     if wordfill_cfg and wordfill_cfg.get('enabled', False):
         try:
-            col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
+            col_lemma_wf = col_lemma if col_lemma != -1 else (headers.index('WordSource') if 'WordSource' in headers else -1)
             if col_lemma_wf != -1:
                 # Collect unique lemmas
                 seen_lemmas = {}
@@ -3948,7 +3969,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         except Exception as wf_err:
             logger.warning(f"wordfill: early pre-fill step failed, continuing: {wf_err}")
     
-    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+    col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     
     sentence_translation = resolve_translations(
@@ -4016,7 +4037,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                 for row in data_rows:
                     if len(row) > col_idx:
                         # Clear only if the lemma was not early pre-filled by wordfill
-                        col_lemma_wf = headers.index('WordSource') if 'WordSource' in headers else -1
+                        col_lemma_wf = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
                         lemma_val = row[col_lemma_wf].strip() if col_lemma_wf != -1 and len(row) > col_lemma_wf else ""
                         if lemma_val not in filled_lemmas:
                             row[col_idx] = ""
@@ -4069,12 +4090,13 @@ def render_section(token, ctx):
         html_output += make_heading("lemmas", "Lemmas")
         html_output += '<table class="kw-lemmas-table">\n'
         
+        role_fields = ctx.get('role_fields', {})
         COLUMN_TOKEN_MAP = {
-            'inflected': 'WordSourceInflectedForm',
-            'lemma': 'WordSource',
-            'ipa': 'WordSourceIPA',
-            'morphology': 'WordSourceMorphologyAI',
-            'translation': 'WordDestination'
+            'inflected': role_fields.get('inflected', 'WordSourceInflectedForm'),
+            'lemma': role_fields.get('lemma', 'WordSource'),
+            'ipa': role_fields.get('ipa', 'WordSourceIPA'),
+            'morphology': role_fields.get('morphology', 'WordSourceMorphologyAI'),
+            'translation': role_fields.get('word_translation', 'WordDestination')
         }
         
         valid_tokens = []
@@ -4119,6 +4141,11 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         'lemmas': goldendict.get('heading_lemmas', '')
     }
     
+    role_fields = {}
+    if resolved_paths and 'anki_mapping_file' in resolved_paths:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, headers)
+    
     ctx = {
         'text': text,
         'sentence_translation': sentence_translation,
@@ -4128,7 +4155,8 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         'target_lang': target_lang,
         'run_intellifiller': goldendict['run_intellifiller'],
         'column_tokens': column_tokens,
-        'headings': headings
+        'headings': headings,
+        'role_fields': role_fields
     }
     
     html_output = '<div class="kw-lookup-container">\n'
@@ -4264,6 +4292,11 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
         'lemmas': goldendict.get('heading_lemmas', '')
     }
     
+    role_fields = {}
+    if resolved_paths and 'anki_mapping_file' in resolved_paths:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, headers)
+    
     out = []
     
     def add_heading(key, default):
@@ -4286,11 +4319,11 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
             add_heading("lemmas", "Lemmas")
             
             COLUMN_TOKEN_MAP = {
-                'inflected': 'WordSourceInflectedForm',
-                'lemma': 'WordSource',
-                'ipa': 'WordSourceIPA',
-                'morphology': 'WordSourceMorphologyAI',
-                'translation': 'WordDestination'
+                'inflected': role_fields.get('inflected', 'WordSourceInflectedForm'),
+                'lemma': role_fields.get('lemma', 'WordSource'),
+                'ipa': role_fields.get('ipa', 'WordSourceIPA'),
+                'morphology': role_fields.get('morphology', 'WordSourceMorphologyAI'),
+                'translation': role_fields.get('word_translation', 'WordDestination')
             }
             
             valid_tokens = []
@@ -4337,7 +4370,7 @@ def is_wordfill_eligible(col_name):
     We avoid hardcoding explicit fields. Instead we fill Word-level attributes,
     while avoiding Sentence-level attributes and the primary WordSource itself.
     """
-    if col_name == 'WordSource':
+    if col_name in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2'):
         return False
     if col_name.startswith('Sentence'):
         return False
@@ -4911,12 +4944,12 @@ def cmd_reprocess(args):
         sys.exit(1)
         
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-    ai_cols = ['WordSourceMorphologyAI', 'WordSourceIPA', 'WordRussian', 'WordEnglish', 'WordUkrainian']
     editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
-    fields_to_clear = [c for c in editable_cols if c not in ('WordSource', 'WordSourceInflectedForm')]
-    for col in ai_cols:
-        if col not in fields_to_clear:
-            fields_to_clear.append(col)
+    fields_to_clear = [c for c in editable_cols if c not in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2')]
+    for col in headers:
+        if col.startswith('Word') and col not in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2'):
+            if col not in fields_to_clear:
+                fields_to_clear.append(col)
             
     cleared_count = 0
     for row_id in selected_rows:
@@ -5152,7 +5185,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
 
         if translated_text is None:
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
-            col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+            col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
             if col_sentence_dest != -1:
                 idx_to_sentence = {}
                 for row in data_rows:
@@ -5250,7 +5283,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
                 main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
-                col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+                col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 try:
                     def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest):
                         c, h, curr_rows = load_tsv_rows(tsv_path)
@@ -5507,7 +5540,7 @@ def cmd_retext_worker(args):
         
         comments, headers, data_rows = load_tsv_rows(tsv_path)
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
-        col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
+        col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
         
         resolve_translations(
             text, text_mode, data_rows, col_index, col_sentence_dest,
@@ -5834,12 +5867,7 @@ def cmd_merge(args):
             try:
                 mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
                 role_fields = get_role_fields(mapping, first_headers)
-                sentence_index_col = "SentenceSourceIndex"
-                if 'fields_mapping.word' in mapping:
-                    for col, role in mapping['fields_mapping.word'].items():
-                        if role == 'sentence_index':
-                            sentence_index_col = col
-                            break
+                sentence_index_col = role_fields.get('sentence_index', 'SentenceSourceIndex')
                 col_index = first_headers.index(sentence_index_col) if sentence_index_col in first_headers else -1
             except Exception as e:
                 logger.warning(f"Failed to load sentence_index mapping: {e}")
