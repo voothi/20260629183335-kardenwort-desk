@@ -5261,6 +5261,11 @@ def cmd_merge(args):
             deduplicate = config.getboolean('settings', 'merge_deduplicate', fallback=True)
         else:
             deduplicate = True
+            
+    sort_frequency = getattr(args, 'sort_frequency', False)
+    if not sort_frequency:
+        if config and config.has_section('settings'):
+            sort_frequency = config.getboolean('settings', 'merge_sort_frequency', fallback=False)
     
     try:
         # Expand any folders in the input list
@@ -5493,6 +5498,58 @@ def cmd_merge(args):
                         best_row = max(enumerate(rows_list), key=lambda x: (sum(1 for cell in x[1] if cell.strip()), -x[0]))[1]
                         unique_data_rows.append(best_row)
                     all_data_rows = unique_data_rows
+
+            # Sort by frequency if requested
+            if sort_frequency:
+                try:
+                    col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
+                except Exception:
+                    col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
+                
+                if col_lemma != -1:
+                    lemmas_to_sort = sorted(list(set(row[col_lemma].strip() for row in all_data_rows if len(row) > col_lemma and row[col_lemma].strip())))
+                    if lemmas_to_sort:
+                        try:
+                            python_exe = resolved_paths['kardenwort_python']
+                            kardenwort_workspace = resolved_paths['kardenwort_workspace']
+                            kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
+                            
+                            lemma_index_rel = config.get('languages', f'{lang}_lemma_index', fallback="")
+                            if lemma_index_rel:
+                                lemma_index_file = kardenwort_workspace / lemma_index_rel
+                                cmd = [
+                                    str(python_exe),
+                                    str(kardenwort_script),
+                                    "--type", "sort-frequency",
+                                    "--language", lang,
+                                    "--lemma-index-file", str(lemma_index_file)
+                                ]
+                                stdin_data = "\n".join(lemmas_to_sort)
+                                logger.info(f"Sorting {len(lemmas_to_sort)} lemmas via core sort-frequency")
+                                res = subprocess.run(
+                                    cmd,
+                                    input=stdin_data,
+                                    capture_output=True,
+                                    text=True,
+                                    encoding='utf-8',
+                                    check=True
+                                )
+                                sorted_lemmas = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+                                sorted_order = {word.lower(): idx for idx, word in enumerate(sorted_lemmas)}
+                                
+                                all_data_rows.sort(
+                                    key=lambda r: (
+                                        r[col_lemma].strip().lower() not in sorted_order,
+                                        sorted_order.get(r[col_lemma].strip().lower(), 0),
+                                        r[col_lemma].strip().lower()
+                                    )
+                                )
+                            else:
+                                logger.warning(f"No lemma index file configured for language '{lang}', skipping frequency sort.")
+                        except Exception as sort_err:
+                            stderr_str = getattr(sort_err, 'stderr', '')
+                            stdout_str = getattr(sort_err, 'stdout', '')
+                            logger.error(f"Failed to sort lemmas by frequency: {sort_err}. Stderr: {stderr_str}. Stdout: {stdout_str}")
 
             written_txt_paths = set()
             try:
@@ -5947,6 +6004,7 @@ def main():
     p_merge.add_argument("--target", default="new", help="Merge target path, new, or first")
     p_merge.add_argument("--delete-sources", action="store_true", help="Delete source files after merge")
     p_merge.add_argument("--deduplicate", action="store_true", help="Deduplicate by (inflected, lemma) pair, prioritizing the row with most fields filled")
+    p_merge.add_argument("--sort-frequency", action="store_true", help="Sort the merged TSV rows by lemma frequency from Kardenwort Core")
 
     # restore
     p_restore = subparsers.add_parser("restore")

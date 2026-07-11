@@ -938,6 +938,51 @@ def test_cmd_merge_deduplicate_prioritization(monkeypatch, tmp_path):
     assert final_rows[0][final_headers.index("WordMorphology")] == "morphology"
 
 
+def test_cmd_merge_sort_frequency(monkeypatch, tmp_path):
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nuncommon\tuncommon\t1\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nthe\tthe\t1\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+        sort_frequency = True
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section('languages')
+    
+    mock_index = tmp_path / "mock-en-index.csv"
+    mock_index.write_text("the\nand\nuncommon\n", encoding='utf-8')
+    config.set('languages', 'en_lemma_index', str(mock_index))
+    
+    import sys
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve()),
+        'kardenwort_python': sys.executable,
+        'kardenwort_workspace': Path("U:/voothi/20241223170748-kardenwort").resolve()
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    assert len(final_rows) == 2
+    
+    assert final_rows[0][0] == "the"
+    assert final_rows[1][0] == "uncommon"
+
+
 
 
 
