@@ -1962,11 +1962,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         if eff_mode == 'single':
             sentence_translations[0] = " ".join(translation_lines)
         else:
-            for a_idx, ln in enumerate(translation_lines):
-                sentence_translations[a_idx] = ln
-            # fill missing lines just in case
-            for a_idx in range(len(text.splitlines())):
-                if a_idx not in sentence_translations:
+            clean_translations = [ln.strip() for ln in translation_lines if ln.strip()]
+            c_idx = 0
+            for a_idx, ln in enumerate(text.splitlines()):
+                if ln.strip():
+                    if c_idx < len(clean_translations):
+                        sentence_translations[a_idx] = clean_translations[c_idx]
+                    else:
+                        sentence_translations[a_idx] = ""
+                    c_idx += 1
+                else:
                     sentence_translations[a_idx] = ""
     else:
         if eff_mode == 'single':
