@@ -2127,7 +2127,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     if is_progressive and run_text == 'auto' and not has_real_text:
         sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
     else:
+        max_non_empty_idx = -1
+        for idx, trans in sentence_translations.items():
+            if trans and str(trans).strip():
+                if idx > max_non_empty_idx:
+                    max_non_empty_idx = idx
         for idx in sorted(sentence_translations.keys()):
+            if idx > max_non_empty_idx:
+                continue
             trans = sentence_translations[idx]
             if trans:
                 safe_trans = html.escape(trans)
