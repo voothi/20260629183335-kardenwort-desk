@@ -742,52 +742,6 @@ def is_network_online_multi(hosts, port=53, timeout=1.0):
                 return True
         return False
 
-def run_intellifiller_translation(text, source, target, config, resolved_paths):
-    python_exe = resolved_paths['kardenwort_python']
-    headless_script = resolved_paths['intellifiller_headless']
-    
-    prompt_name = config.get('languages', f'{target}_prompt', fallback=None)
-    if not prompt_name:
-        prompt_name = config.get('languages', 'en_prompt', fallback='English Vocabulary Analysis and Translation (JSON)')
-        
-    import tempfile, os, csv
-    fd, tsv_path = tempfile.mkstemp(suffix='.tsv')
-    os.close(fd)
-    try:
-        with open(tsv_path, 'w', encoding='utf-8', newline='') as f:
-            writer = csv.writer(f, delimiter='\t', lineterminator='\n')
-            writer.writerow(['WordSource', 'WordDestination', 'WordSourceIPA', 'WordSourceMorphologyAI'])
-            writer.writerow([text, '', '', ''])
-            
-        cmd = [
-            str(python_exe),
-            str(headless_script),
-            "--tsv", tsv_path,
-            "--prompt", prompt_name,
-        ]
-        
-        timeout = config.getint('timeouts', 'intellifiller_timeout', fallback=120)
-        logger.info(f"Running IntelliFiller as base provider: {' '.join(cmd)}")
-        
-        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
-        if res.returncode == 0:
-            with open(tsv_path, 'r', encoding='utf-8') as f:
-                reader = csv.reader(f, delimiter='\t')
-                headers = next(reader)
-                row = next(reader)
-                if len(row) > 1 and row[1].strip():
-                    return row[1].strip()
-                else:
-                    raise Exception("IntelliFiller returned an empty translation.")
-        else:
-            raise Exception(f"IntelliFiller translation failed: {res.stderr}")
-    finally:
-        if os.path.exists(tsv_path):
-            try:
-                os.remove(tsv_path)
-            except Exception:
-                pass
-
 def translate_text(text, source, target, config, resolved_paths, provider):
     auto_fallback = config.getboolean('pipeline', 'auto_offline_fallback', fallback=True)
     
@@ -810,9 +764,7 @@ def translate_text(text, source, target, config, resolved_paths, provider):
             return run_deepl_translation(text, source, target, config, resolved_paths)
         elif provider == 'argos':
             return run_argos_translation(text, source, target, config, resolved_paths)
-        elif provider == 'intellifiller':
-            return run_intellifiller_translation(text, source, target, config, resolved_paths)
-        elif provider == 'combined':
+        elif provider in ('combined', 'intellifiller'):
             try:
                 return run_google_translation(text, source, target, config, resolved_paths)
             except Exception as e:
@@ -5376,21 +5328,9 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             if lemmas_to_translate:
                 provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
                 if provider == 'intellifiller':
-                    selected_rows = []
-                    for i, row in enumerate(data_rows):
-                        if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
-                            selected_rows.append(i)
-                            
-                    if selected_rows:
-                        batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
-                        for i in range(0, len(selected_rows), batch_size):
-                            batch = selected_rows[i:i + batch_size]
-                            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
-                            
-                            comments, headers, data_rows = load_tsv_rows(tsv_path)
-                            write_update_js(tsv_path, data_rows, headers, role_fields, stage=None)
-                            
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+                    data_rows = _progressive_worker_stage_enrichment(
+                        tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated"
+                    )
                 else:
                     chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
                     if chunk_size > 0:
@@ -5429,7 +5369,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
     return data_rows
 
-def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment"):
     try:
         batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
         selected_rows = list(range(len(data_rows)))
@@ -5440,10 +5380,10 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             
             # reload data rows after each batch
             comments, headers, data_rows = load_tsv_rows(tsv_path)
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment")
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name)
     except Exception as e:
-        logger.error(f"Failing in enrichment stage: {e}")
-        write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment", status="failed")
+        logger.error(f"Failing in {stage_name} stage: {e}")
+        write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, status="failed")
     return data_rows
 
 def cmd_retext(args):
