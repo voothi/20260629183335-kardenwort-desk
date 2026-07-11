@@ -5251,9 +5251,34 @@ def cmd_merge(args):
     logger.info("Merge subcommand invoked")
     config, resolved_paths, goldendict = load_config(args.config)
     
-    files = [Path(f).resolve() for f in args.files]
-    files = [f for f in files if f.suffix.lower() == '.tsv']
+    # Expand any folders in the input list
+    expanded_files = []
+    for f in args.files:
+        path = Path(f).resolve()
+        if path.is_dir():
+            expanded_files.extend(list(path.glob("*.tsv")))
+        else:
+            expanded_files.append(path)
+            
+    files = [f for f in expanded_files if f.suffix.lower() == '.tsv']
     
+    if len(files) == 2 and files[0].parent == files[1].parent:
+        parent_dir = files[0].parent
+        all_tsvs = sorted(list(parent_dir.glob("*.tsv")), key=extract_zid)
+        
+        files.sort(key=extract_zid)
+        start_zid = extract_zid(files[0])
+        end_zid = extract_zid(files[1])
+        
+        if start_zid and end_zid:
+            range_files = []
+            for f in all_tsvs:
+                f_zid = extract_zid(f)
+                if f_zid and start_zid <= f_zid <= end_zid:
+                    range_files.append(f)
+            if range_files:
+                files = range_files
+
     if not files:
         print_structured_error("INVALID_ARGS", "No TSV files found in the selection to merge.")
         sys.exit(1)

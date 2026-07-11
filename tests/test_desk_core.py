@@ -679,6 +679,85 @@ def test_cmd_merge_delete_sources_cli(monkeypatch, tmp_path):
     assert not txt2.exists()
 
 
+def test_cmd_merge_folder_scanning(monkeypatch, tmp_path):
+    sub = tmp_path / "folder"
+    sub.mkdir()
+    tsv1 = sub / "20260630000000-part1.en.tsv"
+    txt1 = sub / "20260630000000-part1.txt"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv1\tv2\t1\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+    
+    tsv2 = sub / "20260630000001-part2.en.tsv"
+    txt2 = sub / "20260630000001-part2.txt"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv3\tv4\t1\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(sub)]
+        target = str(dest_tsv)
+        config = None
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    assert dest_tsv.exists()
+
+
+def test_cmd_merge_range_selection(monkeypatch, tmp_path):
+    # Create 3 tsv files
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv1\tv2\t1\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv3\tv4\t1\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
+
+    tsv3 = tmp_path / "20260630000002-part3.en.tsv"
+    txt3 = tmp_path / "20260630000002-part3.txt"
+    tsv3.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv5\tv6\t1\n", encoding='utf-8')
+    txt3.write_text("Line three.", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        # We select only start (tsv1) and end (tsv3) files. The middle file (tsv2) should be dynamically merged.
+        files = [str(tsv1), str(tsv3)]
+        target = str(dest_tsv)
+        config = None
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    assert dest_tsv.exists()
+    
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    # Verify that all 3 rows (from tsv1, tsv2, tsv3) are in the merged file
+    assert len(final_rows) == 3
+    assert final_rows[0] == ["v1", "v2", "1"]
+    assert final_rows[1] == ["v3", "v4", "2"]
+    assert final_rows[2] == ["v5", "v6", "3"]
+
+
+
 
 
 
