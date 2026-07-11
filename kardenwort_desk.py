@@ -4331,24 +4331,19 @@ def render_lookup_combined(text, language, target_lang, config, resolved_paths, 
 # Word-fill engine
 # ---------------------------------------------------------------------------
 
-WORDFILL_ELIGIBLE_FIELDS = (
-    'WordSourceIPA',
-    'WordSourceMorphologyAI',
-    'WordDestination',
-    'WordSourceMorphemeFirst',
-    'WordSourceMorphemeFirstDefinition',
-    'WordSourceMorphemeSecond',
-    'WordSourceMorphemeSecondDefinition',
-    'WordSourceMorphemeThird',
-    'WordSourceMorphemeThirdDefinition',
-    'WordSourceMorphemeFourth',
-    'WordSourceMorphemeFourthDefinition',
-    'WordSourceMorphemeFifth',
-    'WordSourceMorphemeFifthDefinition',
-    'WordSourceDefinitionFirst',
-    'WordSourceDefinitionFirstClipping',
-    'WordSourceDefinitionSecond',
-)
+def is_wordfill_eligible(col_name):
+    """
+    Determine if a column should be filled from the word-fill engine.
+    We avoid hardcoding explicit fields. Instead we fill Word-level attributes,
+    while avoiding Sentence-level attributes and the primary WordSource itself.
+    """
+    if col_name == 'WordSource':
+        return False
+    if col_name.startswith('Sentence'):
+        return False
+    if col_name.startswith('Word'):
+        return True
+    return False
 
 def collect_candidate_files(scan_roots, scan_depth, scan_scope, language, scan_sort_order='chronological', scan_max_files=500, scan_match_language=True):
     """
@@ -4506,9 +4501,8 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
             tier = score_wordfill_row(row, headers)
 
             match_dict = {}
-            for col in WORDFILL_ELIGIBLE_FIELDS:
-                if col in headers:
-                    col_idx = headers.index(col)
+            for col_idx, col in enumerate(headers):
+                if is_wordfill_eligible(col):
                     if len(row) > col_idx:
                         val = row[col_idx].strip()
                         if val:
@@ -4549,7 +4543,7 @@ def apply_wordfill_to_rows(data_rows, headers, match_row_dict):
     Only empty target cells are filled; existing values are preserved.
     """
     for col_name, fill_value in match_row_dict.items():
-        if col_name not in WORDFILL_ELIGIBLE_FIELDS:
+        if not is_wordfill_eligible(col_name):
             continue
         if col_name not in headers:
             continue
