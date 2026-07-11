@@ -5251,234 +5251,264 @@ def cmd_merge(args):
     logger.info("Merge subcommand invoked")
     config, resolved_paths, goldendict = load_config(args.config)
     
-    # Expand any folders in the input list
-    expanded_files = []
-    for f in args.files:
-        path = Path(f).resolve()
-        if path.is_dir():
-            expanded_files.extend(list(path.glob("*.tsv")))
-        else:
-            expanded_files.append(path)
-            
-    files = [f for f in expanded_files if f.suffix.lower() == '.tsv']
-    
-    if len(files) == 2 and files[0].parent == files[1].parent:
-        parent_dir = files[0].parent
-        all_tsvs = sorted(list(parent_dir.glob("*.tsv")), key=extract_zid)
-        
-        files.sort(key=extract_zid)
-        start_zid = extract_zid(files[0])
-        end_zid = extract_zid(files[1])
-        
-        if start_zid and end_zid:
-            range_files = []
-            for f in all_tsvs:
-                f_zid = extract_zid(f)
-                if f_zid and start_zid <= f_zid <= end_zid:
-                    range_files.append(f)
-            if range_files:
-                files = range_files
-
-    if not files:
-        print_structured_error("INVALID_ARGS", "No TSV files found in the selection to merge.")
-        sys.exit(1)
-        
-    files.sort(key=extract_zid)
-    
-    first_headers = None
-    for f in files:
-        if not f.exists():
-            print_structured_error("INVALID_ARGS", f"File not found: {f}")
-            sys.exit(1)
-        try:
-            _, headers, _ = load_tsv_rows(f)
-            if first_headers is None:
-                first_headers = headers
+    try:
+        # Expand any folders in the input list
+        expanded_files = []
+        for f in args.files:
+            path = Path(f).resolve()
+            if path.is_dir():
+                expanded_files.extend(list(path.glob("*.tsv")))
             else:
-                if headers != first_headers:
-                    print_structured_error(
-                        "MERGE_SCHEMA_MISMATCH",
-                        f"Schema mismatch in file: {f.name}. All files must share the same header."
-                    )
-                    sys.exit(1)
-        except Exception as e:
-            print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
+                expanded_files.append(path)
+                
+        files = [f for f in expanded_files if f.suffix.lower() == '.tsv']
+        
+        if len(files) == 2 and files[0].parent == files[1].parent:
+            parent_dir = files[0].parent
+            all_tsvs = sorted(list(parent_dir.glob("*.tsv")), key=extract_zid)
+            
+            files.sort(key=extract_zid)
+            start_zid = extract_zid(files[0])
+            end_zid = extract_zid(files[1])
+            
+            if start_zid and end_zid:
+                range_files = []
+                for f in all_tsvs:
+                    f_zid = extract_zid(f)
+                    if f_zid and start_zid <= f_zid <= end_zid:
+                        range_files.append(f)
+                if range_files:
+                    files = range_files
+
+        if not files:
+            print_structured_error("INVALID_ARGS", "No TSV files found in the selection to merge.")
             sys.exit(1)
             
-    def extract_lang_from_txt(path):
-        match = re.search(r'\.([a-z]{2})\.txt$', path.name.lower())
-        return match.group(1) if match else ""
+        files.sort(key=extract_zid)
 
-    all_comments = []
-    all_data_rows = []
-    texts_by_lang = {}
-    
-    try:
-        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = get_role_fields(mapping, first_headers)
-        sentence_index_col = "SentenceSourceIndex"
-        if 'fields_mapping.word' in mapping:
-            for col, role in mapping['fields_mapping.word'].items():
-                if role == 'sentence_index':
-                    sentence_index_col = col
-                    break
-        col_index = first_headers.index(sentence_index_col) if sentence_index_col in first_headers else -1
-    except Exception as e:
-        logger.warning(f"Failed to load sentence_index mapping: {e}")
-        col_index = first_headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in first_headers else -1
-        role_fields = {}
-    
-    current_line_offset = 0
-    for f in files:
-        comments, _, rows = load_tsv_rows(f)
-        if not all_comments:
-            all_comments = comments
-            
-        zid = extract_zid(f)
-        parent_dir = f.parent
-        txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
-        if not txt_files:
-            base_txt = f.with_suffix('.txt')
-            if base_txt.exists():
-                txt_files = [base_txt]
-                
-        non_empty_lines = 0
-        if txt_files:
-            try:
-                txt_content = txt_files[0].read_text(encoding='utf-8')
-                non_empty_lines = sum(1 for line in txt_content.splitlines() if line.strip())
-            except Exception as e:
-                logger.warning(f"Failed to read/count lines in sibling text {txt_files[0]}: {e}")
-                
-        for t in txt_files:
-            lang_key = extract_lang_from_txt(t)
-            try:
-                content = t.read_text(encoding='utf-8')
-                if lang_key not in texts_by_lang:
-                    texts_by_lang[lang_key] = []
-                texts_by_lang[lang_key].append(content)
-            except Exception as e:
-                logger.warning(f"Failed to read sibling text {t}: {e}")
+        default_lang = config.get('settings', 'default_language', fallback='en')
+        def extract_lang_from_tsv(path):
+            match = re.search(r'\.([a-z]{2})\.tsv$', path.name.lower())
+            return match.group(1) if match else default_lang
 
-        # Offset the SentenceSourceIndex values for this file's rows
-        if col_index != -1:
-            for row in rows:
-                if len(row) > col_index and row[col_index].strip():
-                    try:
-                        if non_empty_lines == 1:
-                            row[col_index] = str(current_line_offset + 1)
-                        elif current_line_offset > 0:
-                            orig_idx = int(row[col_index])
-                            row[col_index] = str(orig_idx + current_line_offset)
-                    except ValueError:
-                        pass
-                        
-        all_data_rows.extend(rows)
-        current_line_offset += non_empty_lines
-        
-    dest_dir = files[0].parent
-    
-    if args.target == "new":
+        def extract_lang_from_txt(path):
+            match = re.search(r'\.([a-z]{2})\.txt$', path.name.lower())
+            return match.group(1) if match else ""
+
+        def get_dest_tsv_path(target, lang, lang_files, dest_dir, timestamp_id):
+            if target == "new":
+                return dest_dir / f"{timestamp_id}-merged.{lang}.tsv"
+            elif target == "first":
+                return lang_files[0]
+            else:
+                path = Path(target).resolve()
+                parent = path.parent
+                name = path.name
+                match = re.search(r'\.([a-z]{2})\.tsv$', name.lower())
+                if match:
+                    new_name = name[:match.start()] + f".{lang}.tsv"
+                else:
+                    new_name = path.stem + f".{lang}.tsv"
+                return parent / new_name
+
+        def get_dest_txt_path(dest_tsv_path, lang_key):
+            name = dest_tsv_path.name
+            lang_match = re.search(r'\.([a-z]{2})\.tsv$', name)
+            if lang_match:
+                prefix = name[:lang_match.start()]
+            else:
+                prefix = dest_tsv_path.stem
+                
+            if lang_key:
+                return dest_tsv_path.parent / f"{prefix}.{lang_key}.txt"
+            else:
+                return dest_tsv_path.parent / f"{prefix}.txt"
+
+        # Group files by language
+        files_by_lang = {}
+        for f in files:
+            lang = extract_lang_from_tsv(f)
+            if lang not in files_by_lang:
+                files_by_lang[lang] = []
+            files_by_lang[lang].append(f)
+
+        all_written_tsvs = []
+        all_written_txts = []
         timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
-        lang = "en"
-        lang_match = re.search(r'\.([a-z]{2})\.tsv$', files[0].name)
-        if lang_match:
-            lang = lang_match.group(1)
-        dest_tsv_path = dest_dir / f"{timestamp_id}-merged.{lang}.tsv"
-    elif args.target == "first":
-        dest_tsv_path = files[0]
-    else:
-        dest_tsv_path = Path(args.target).resolve()
-        
-    def get_dest_txt_path(dest_tsv_path, lang_key):
-        name = dest_tsv_path.name
-        lang_match = re.search(r'\.([a-z]{2})\.tsv$', name)
-        if lang_match:
-            prefix = name[:lang_match.start()]
-        else:
-            prefix = dest_tsv_path.stem
-            
-        if lang_key:
-            return dest_tsv_path.parent / f"{prefix}.{lang_key}.txt"
-        else:
-            return dest_tsv_path.parent / f"{prefix}.txt"
 
-    written_txt_paths = set()
-    
-    # Deduplicate rows by unique (inflected, lemma) pairs
-    try:
-        col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
-        col_inflected = first_headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in first_headers else -1
-    except Exception as e:
-        logger.warning(f"Failed to load lemma/inflected mapping for deduplication: {e}")
-        col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
-        col_inflected = first_headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in first_headers else -1
-        
-    if col_lemma != -1 and col_inflected != -1:
-        seen_pairs = set()
-        unique_data_rows = []
-        for row in all_data_rows:
-            lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
-            inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
-            pair = (inflected_val, lemma_val)
-            if pair not in seen_pairs:
-                seen_pairs.add(pair)
-                unique_data_rows.append(row)
-        all_data_rows = unique_data_rows
-
-    try:
-        with file_lock(dest_tsv_path):
-            save_tsv_rows_safely(dest_tsv_path, all_comments, first_headers, all_data_rows)
-            
-        for lang_key, sibling_texts in texts_by_lang.items():
-            dest_txt_path = get_dest_txt_path(dest_tsv_path, lang_key)
-            merged_text = "\n\n".join(sibling_texts)
-            
-            with file_lock(dest_txt_path):
-                temp_txt = dest_txt_path.with_suffix('.txt.tmp')
-                bak_txt = dest_txt_path.with_suffix('.txt.bak')
+        for lang, lang_files in sorted(files_by_lang.items()):
+            # Validate schema for this language group
+            first_headers = None
+            for f in lang_files:
+                if not f.exists():
+                    print_structured_error("INVALID_ARGS", f"File not found: {f}")
+                    sys.exit(1)
                 try:
-                    temp_txt.write_text(merged_text, encoding='utf-8')
-                    if dest_txt_path.exists():
-                        if bak_txt.exists():
-                            os.remove(bak_txt)
-                        os.rename(dest_txt_path, bak_txt)
+                    _, headers, _ = load_tsv_rows(f)
+                    if first_headers is None:
+                        first_headers = headers
+                    else:
+                        if headers != first_headers:
+                            print_structured_error(
+                                "MERGE_SCHEMA_MISMATCH",
+                                f"Schema mismatch in file: {f.name} for language '{lang}'. All files of the same language must share the same header."
+                            )
+                            sys.exit(1)
+                except Exception as e:
+                    print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
+                    sys.exit(1)
+
+            all_comments = []
+            all_data_rows = []
+            texts_by_lang = {}
+            
+            try:
+                mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+                role_fields = get_role_fields(mapping, first_headers)
+                sentence_index_col = "SentenceSourceIndex"
+                if 'fields_mapping.word' in mapping:
+                    for col, role in mapping['fields_mapping.word'].items():
+                        if role == 'sentence_index':
+                            sentence_index_col = col
+                            break
+                col_index = first_headers.index(sentence_index_col) if sentence_index_col in first_headers else -1
+            except Exception as e:
+                logger.warning(f"Failed to load sentence_index mapping: {e}")
+                col_index = first_headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in first_headers else -1
+                role_fields = {}
+            
+            current_line_offset = 0
+            for f in lang_files:
+                comments, _, rows = load_tsv_rows(f)
+                if not all_comments:
+                    all_comments = comments
+                    
+                zid = extract_zid(f)
+                parent_dir = f.parent
+                txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
+                if not txt_files:
+                    base_txt = f.with_suffix('.txt')
+                    if base_txt.exists():
+                        txt_files = [base_txt]
+                        
+                non_empty_lines = 0
+                if txt_files:
                     try:
-                        os.rename(temp_txt, dest_txt_path)
+                        txt_content = txt_files[0].read_text(encoding='utf-8')
+                        non_empty_lines = sum(1 for line in txt_content.splitlines() if line.strip())
                     except Exception as e:
-                        if bak_txt.exists():
-                            os.rename(bak_txt, dest_txt_path)
-                        raise e
-                    if bak_txt.exists():
-                        try:
-                            os.remove(bak_txt)
-                        except OSError:
-                            pass
-                    written_txt_paths.add(dest_txt_path)
-                except Exception as e:
-                    if temp_txt.exists():
-                        try:
-                            os.remove(temp_txt)
-                        except OSError:
-                            pass
-                    raise e
+                        logger.warning(f"Failed to read/count lines in sibling text {txt_files[0]}: {e}")
+                        
+                for t in txt_files:
+                    lang_key = extract_lang_from_txt(t) or lang
+                    try:
+                        content = t.read_text(encoding='utf-8')
+                        if lang_key not in texts_by_lang:
+                            texts_by_lang[lang_key] = []
+                        texts_by_lang[lang_key].append(content)
+                    except Exception as e:
+                        logger.warning(f"Failed to read sibling text {t}: {e}")
+                
+                # Offset the SentenceSourceIndex values for this file's rows
+                if col_index != -1:
+                    for row in rows:
+                        if len(row) > col_index and row[col_index].strip():
+                            try:
+                                if non_empty_lines == 1:
+                                    row[col_index] = str(current_line_offset + 1)
+                                elif current_line_offset > 0:
+                                    orig_idx = int(row[col_index])
+                                    row[col_index] = str(orig_idx + current_line_offset)
+                            except ValueError:
+                                pass
+                                
+                all_data_rows.extend(rows)
+                current_line_offset += non_empty_lines
+                
+            dest_dir = lang_files[0].parent
+            dest_tsv_path = get_dest_tsv_path(args.target, lang, lang_files, dest_dir, timestamp_id)
+
+            # Deduplicate rows by unique (inflected, lemma) pairs
+            try:
+                col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
+                col_inflected = first_headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in first_headers else -1
+            except Exception as e:
+                logger.warning(f"Failed to load lemma/inflected mapping for deduplication: {e}")
+                col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
+                col_inflected = first_headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in first_headers else -1
+                
+            if col_lemma != -1 and col_inflected != -1:
+                seen_pairs = set()
+                unique_data_rows = []
+                for row in all_data_rows:
+                    lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
+                    inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
+                    pair = (inflected_val, lemma_val)
+                    if pair not in seen_pairs:
+                        seen_pairs.add(pair)
+                        unique_data_rows.append(row)
+                all_data_rows = unique_data_rows
+
+            written_txt_paths = set()
+            try:
+                with file_lock(dest_tsv_path):
+                    save_tsv_rows_safely(dest_tsv_path, all_comments, first_headers, all_data_rows)
+                all_written_tsvs.append(dest_tsv_path)
+                
+                for lang_key, sibling_texts in texts_by_lang.items():
+                    dest_txt_path = get_dest_txt_path(dest_tsv_path, lang_key)
+                    merged_text = "\n\n".join(sibling_texts)
                     
-        delete_sources = getattr(args, 'delete_sources', False) or config.getboolean('settings', 'merge_delete_sources', fallback=False)
-        if delete_sources:
-            for f in files:
-                if f == dest_tsv_path:
-                    continue
-                try:
-                    os.remove(f)
-                    zid = extract_zid(f)
-                    for t_file in f.parent.glob(f"{zid}-*.txt"):
-                        if t_file not in written_txt_paths:
-                            os.remove(t_file)
-                except Exception as e:
-                    logger.warning(f"Failed to delete merged source {f.name}: {e}")
-                    
-        dest_txt_str = ", ".join(str(p) for p in sorted(written_txt_paths))
-        emit_payload(f"SUCCESS: Merged TSV: {dest_tsv_path}, Merged TXT files: {dest_txt_str}", raw=True)
+                    with file_lock(dest_txt_path):
+                        temp_txt = dest_txt_path.with_suffix('.txt.tmp')
+                        bak_txt = dest_txt_path.with_suffix('.txt.bak')
+                        try:
+                            temp_txt.write_text(merged_text, encoding='utf-8')
+                            if dest_txt_path.exists():
+                                if bak_txt.exists():
+                                    os.remove(bak_txt)
+                                os.rename(dest_txt_path, bak_txt)
+                            try:
+                                os.rename(temp_txt, dest_txt_path)
+                            except Exception as e:
+                                if bak_txt.exists():
+                                    os.rename(bak_txt, dest_txt_path)
+                                raise e
+                            if bak_txt.exists():
+                                try:
+                                    os.remove(bak_txt)
+                                except OSError:
+                                    pass
+                            written_txt_paths.add(dest_txt_path)
+                            all_written_txts.append(dest_txt_path)
+                        except Exception as e:
+                            if temp_txt.exists():
+                                try:
+                                    os.remove(temp_txt)
+                                except OSError:
+                                    pass
+                            raise e
+                            
+                delete_sources = getattr(args, 'delete_sources', False) or config.getboolean('settings', 'merge_delete_sources', fallback=False)
+                if delete_sources:
+                    for f in lang_files:
+                        if f == dest_tsv_path:
+                            continue
+                        try:
+                            os.remove(f)
+                            zid = extract_zid(f)
+                            for t_file in f.parent.glob(f"{zid}-*.txt"):
+                                if t_file not in written_txt_paths:
+                                    os.remove(t_file)
+                        except Exception as e:
+                            logger.warning(f"Failed to delete merged source {f.name}: {e}")
+            except Exception as e:
+                print_structured_error("MERGE_FAILED", f"Merge execution failed for '{lang}': {e}")
+                sys.exit(1)
+
+        dest_tsv_str = ", ".join(str(p) for p in sorted(all_written_tsvs))
+        dest_txt_str = ", ".join(str(p) for p in sorted(all_written_txts))
+        emit_payload(f"SUCCESS: Merged TSVs: {dest_tsv_str}, Merged TXT files: {dest_txt_str}", raw=True)
     except Exception as e:
         print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
         sys.exit(1)

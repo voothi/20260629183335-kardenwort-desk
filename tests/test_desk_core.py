@@ -757,6 +757,55 @@ def test_cmd_merge_range_selection(monkeypatch, tmp_path):
     assert final_rows[2] == ["v5", "v6", "3"]
 
 
+def test_cmd_merge_multilingual(monkeypatch, tmp_path):
+    # Create English and German tsv/txt files
+    en_tsv = tmp_path / "20260630000000-part1.en.tsv"
+    en_txt = tmp_path / "20260630000000-part1.txt"
+    en_tsv.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nen_inf\ten_lem\t1\n", encoding='utf-8')
+    en_txt.write_text("English line.", encoding='utf-8')
+
+    de_tsv = tmp_path / "20260630000001-part2.de.tsv"
+    de_txt = tmp_path / "20260630000001-part2.txt"
+    de_tsv.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nde_inf\tde_lem\t1\n", encoding='utf-8')
+    de_txt.write_text("Deutsche Zeile.", encoding='utf-8')
+
+    dest_tsv_pattern = tmp_path / "custom.tsv"
+    
+    class Args:
+        files = [str(en_tsv), str(de_tsv)]
+        target = str(dest_tsv_pattern)
+        config = None
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    
+    # It should have written separate merged files for en and de
+    dest_en_tsv = tmp_path / "custom.en.tsv"
+    dest_de_tsv = tmp_path / "custom.de.tsv"
+    dest_en_txt = tmp_path / "custom.en.txt"
+    dest_de_txt = tmp_path / "custom.de.txt"
+
+    assert dest_en_tsv.exists()
+    assert dest_de_tsv.exists()
+    assert dest_en_txt.exists()
+    assert dest_de_txt.exists()
+
+    _, _, en_rows = desk.load_tsv_rows(dest_en_tsv)
+    assert en_rows == [["en_inf", "en_lem", "1"]]
+    
+    _, _, de_rows = desk.load_tsv_rows(dest_de_tsv)
+    assert de_rows == [["de_inf", "de_lem", "1"]]
+
+
+
 
 
 
