@@ -5328,9 +5328,17 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             if lemmas_to_translate:
                 provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
                 if provider == 'intellifiller':
-                    data_rows = _progressive_worker_stage_enrichment(
-                        tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated"
-                    )
+                    selected_rows_to_translate = []
+                    for i, row in enumerate(data_rows):
+                        if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
+                            selected_rows_to_translate.append(i)
+                            
+                    if selected_rows_to_translate:
+                        data_rows = _progressive_worker_stage_enrichment(
+                            tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_translate
+                        )
+                    else:
+                        write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
                 else:
                     chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
                     if chunk_size > 0:
@@ -5369,10 +5377,11 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
     return data_rows
 
-def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment"):
+def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     try:
         batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
-        selected_rows = list(range(len(data_rows)))
+        if selected_rows is None:
+            selected_rows = list(range(len(data_rows)))
         for i in range(0, len(selected_rows), batch_size):
             batch = selected_rows[i:i + batch_size]
             logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
