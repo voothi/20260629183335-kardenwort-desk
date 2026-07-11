@@ -4806,11 +4806,8 @@ def cmd_export(args):
         emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
         sys.exit(0)
 
-    # Resolve the DeskSelected column so we can stamp selections on export
-    # and auto-save selections back to the source TSV (no manual Save required).
+    # Resolve the selected column name from mapping config.
     selected_col_name = 'DeskSelected'
-    if 'DeskSelected' in headers:
-        selected_col_name = 'DeskSelected'
     try:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         _rf = get_role_fields(mapping, headers)
