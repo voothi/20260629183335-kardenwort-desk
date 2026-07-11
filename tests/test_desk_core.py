@@ -640,6 +640,46 @@ def test_cmd_merge_single_paragraph_mapping(monkeypatch, tmp_path):
     ]
 
 
+def test_cmd_merge_delete_sources_cli(monkeypatch, tmp_path):
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    tsv1.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv1\tv2\t1\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("WordSourceInflectedForm\tWordSource\tSentenceSourceIndex\nv3\tv4\t1\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
+
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        delete_sources = True
+        config = None
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    # Config has delete sources set to false, but CLI option is True and should override it
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}))
+    
+    desk.cmd_merge(Args())
+    
+    assert dest_tsv.exists()
+    # The source files must have been deleted
+    assert not tsv1.exists()
+    assert not tsv2.exists()
+    assert not txt1.exists()
+    assert not txt2.exists()
+
+
+
 
 
 

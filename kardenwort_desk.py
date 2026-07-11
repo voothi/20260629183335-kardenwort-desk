@@ -5438,7 +5438,7 @@ def cmd_merge(args):
                             pass
                     raise e
                     
-        delete_sources = config.getboolean('settings', 'merge_delete_sources', fallback=False)
+        delete_sources = getattr(args, 'delete_sources', False) or config.getboolean('settings', 'merge_delete_sources', fallback=False)
         if delete_sources:
             for f in files:
                 if f == dest_tsv_path:
@@ -5845,6 +5845,7 @@ def main():
     p_merge = subparsers.add_parser("merge")
     p_merge.add_argument("--files", nargs="+", required=True, help="List of TSV files to merge")
     p_merge.add_argument("--target", default="new", help="Merge target path, new, or first")
+    p_merge.add_argument("--delete-sources", action="store_true", help="Delete source files after merge")
 
     # restore
     p_restore = subparsers.add_parser("restore")
