@@ -1865,6 +1865,14 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     
+    sentence_index_col = "SentenceSourceIndex"
+    if 'fields_mapping.word' in mapping:
+        for col, role in mapping['fields_mapping.word'].items():
+            if role == 'sentence_index':
+                sentence_index_col = col
+                break
+    col_index = headers.index(sentence_index_col) if sentence_index_col in headers else -1
+    
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
     auto_inject_updates = config.getboolean('rendering', 'auto_inject_updates', fallback=True)
     run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
@@ -1891,7 +1899,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             
     # If monolithic mode and run_base is auto, run base translation synchronously
     if not is_progressive and run_base == 'auto':
-        col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
         try:
             if not sentence_translated:
                 sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, base_provider)
@@ -1937,7 +1944,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
     
     extracted_translations = {}
-    col_index = headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1
     for row in data_rows:
         content_line_idx = 0
         if col_index != -1 and len(row) > col_index:
@@ -5282,9 +5288,22 @@ def cmd_merge(args):
     all_data_rows = []
     texts_by_lang = {}
     
-    current_line_offset = 0
-    col_index = first_headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in first_headers else -1
+    try:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, first_headers)
+        sentence_index_col = "SentenceSourceIndex"
+        if 'fields_mapping.word' in mapping:
+            for col, role in mapping['fields_mapping.word'].items():
+                if role == 'sentence_index':
+                    sentence_index_col = col
+                    break
+        col_index = first_headers.index(sentence_index_col) if sentence_index_col in first_headers else -1
+    except Exception as e:
+        logger.warning(f"Failed to load sentence_index mapping: {e}")
+        col_index = first_headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in first_headers else -1
+        role_fields = {}
     
+    current_line_offset = 0
     for f in files:
         comments, _, rows = load_tsv_rows(f)
         if not all_comments:
@@ -5360,24 +5379,24 @@ def cmd_merge(args):
     
     # Deduplicate rows by unique (inflected, lemma) pairs
     try:
-        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        role_fields = get_role_fields(mapping, first_headers)
         col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
         col_inflected = first_headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in first_headers else -1
-        
-        if col_lemma != -1 and col_inflected != -1:
-            seen_pairs = set()
-            unique_data_rows = []
-            for row in all_data_rows:
-                lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
-                inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
-                pair = (inflected_val, lemma_val)
-                if pair not in seen_pairs:
-                    seen_pairs.add(pair)
-                    unique_data_rows.append(row)
-            all_data_rows = unique_data_rows
     except Exception as e:
-        logger.warning(f"Failed to deduplicate merged TSV rows: {e}")
+        logger.warning(f"Failed to load lemma/inflected mapping for deduplication: {e}")
+        col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
+        col_inflected = first_headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in first_headers else -1
+        
+    if col_lemma != -1 and col_inflected != -1:
+        seen_pairs = set()
+        unique_data_rows = []
+        for row in all_data_rows:
+            lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
+            inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
+            pair = (inflected_val, lemma_val)
+            if pair not in seen_pairs:
+                seen_pairs.add(pair)
+                unique_data_rows.append(row)
+        all_data_rows = unique_data_rows
 
     try:
         with file_lock(dest_tsv_path):
