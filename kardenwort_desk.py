@@ -5817,12 +5817,34 @@ def cmd_merge(args):
             sort_frequency = config.getboolean('settings', 'merge_sort_frequency', fallback=False)
     
     try:
-        # Expand any folders in the input list
+        input_paths = [Path(f).resolve() for f in args.files]
+        if not input_paths:
+            print_structured_error("INVALID_ARGS", "No inputs provided.")
+            sys.exit(1)
+            
+        base_dest_dir = input_paths[0].parent
+        
+        if len(input_paths) == 2 and input_paths[0].parent == input_paths[1].parent:
+            parent_dir = input_paths[0].parent
+            start_zid = extract_zid(input_paths[0])
+            end_zid = extract_zid(input_paths[1])
+            
+            if start_zid and end_zid:
+                if start_zid > end_zid:
+                    start_zid, end_zid = end_zid, start_zid
+                    
+                all_items = []
+                for child in parent_dir.iterdir():
+                    child_zid = extract_zid(child)
+                    if child_zid and start_zid <= child_zid <= end_zid:
+                        all_items.append(child)
+                if all_items:
+                    input_paths = all_items
+                    
         expanded_files = []
-        for f in args.files:
-            path = Path(f).resolve()
+        for path in input_paths:
             if path.is_dir():
-                expanded_files.extend(list(path.glob("*.tsv")))
+                expanded_files.extend(list(path.rglob("*.tsv")))
             else:
                 expanded_files.append(path)
                 
@@ -5847,23 +5869,6 @@ def cmd_merge(args):
             tsv_path = map_to_tsv(f)
             if tsv_path and tsv_path not in files:
                 files.append(tsv_path)
-        
-        if len(files) == 2 and files[0].parent == files[1].parent:
-            parent_dir = files[0].parent
-            all_tsvs = sorted(list(parent_dir.glob("*.tsv")), key=extract_zid)
-            
-            files.sort(key=extract_zid)
-            start_zid = extract_zid(files[0])
-            end_zid = extract_zid(files[1])
-            
-            if start_zid and end_zid:
-                range_files = []
-                for f in all_tsvs:
-                    f_zid = extract_zid(f)
-                    if f_zid and start_zid <= f_zid <= end_zid:
-                        range_files.append(f)
-                if range_files:
-                    files = range_files
 
         if not files:
             print_structured_error("INVALID_ARGS", "No TSV files found in the selection to merge.")
@@ -6009,7 +6014,7 @@ def cmd_merge(args):
                 all_data_rows.extend(rows)
                 current_line_offset += non_empty_lines
                 
-            dest_dir = lang_files[0].parent
+            dest_dir = base_dest_dir
             dest_tsv_path = get_dest_tsv_path(args.target, lang, lang_files, dest_dir, timestamp_id)
 
             # Deduplicate rows by unique (inflected, lemma) pairs if requested
