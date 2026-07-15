@@ -384,3 +384,72 @@ def test_separable_verb_anchoring_scenarios(tmp_path, monkeypatch):
     assert 'class="word highlight-purple" data-word-idx="3" data-line-idx="0" data-lower-clean="geht">geht</span>' in html
     assert 'class="word highlight-purple" data-word-idx="5" data-line-idx="0" data-lower-clean="an">an</span>' in html
 
+def test_run_render_flow_with_classification(tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+    
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+    
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'default_target_language', 'ru')
+    config.add_section('rendering')
+    config.set('rendering', 'display_mode', 'monolithic')
+    config.add_section('triggers')
+    config.set('triggers', 'run_lemma_base_translation', 'auto')
+    config.set('triggers', 'run_lemma_enrichment', 'manual')
+    config.add_section('environment')
+    config.set('environment', 'kardenwort_workspace', str(tmp_path))
+    config.add_section('languages')
+    config.set('languages', 'en_lemma_index', 'en_idx')
+    config.set('languages', 'en_lemma_override', 'en_over')
+    config.set('languages', 'en_prompt', 'en_prompt')
+    
+    config.add_section('classification')
+    config.set('classification', 'enabled', 'true')
+    config.set('classification', 'dictionaries', 'oxford=path/to/oxford.tsv, cambridge=path/to/cambridge.tsv')
+    
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+    mapping.set('desk_columns', 'ClassificationOxford', 'oxford')
+    mapping.set('desk_columns', 'ClassificationCambridge', 'cambridge')
+    
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir()
+    
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordDestination\tClassificationOxford\tClassificationCambridge\nword1\ttrans1\tB2\tC1\n", encoding='utf-8')
+    
+    html = run_render_flow(
+        text="word1",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+    
+    assert "<th>Oxford</th>" in html
+    assert "<th>Cambridge</th>" in html
+    assert "B2" in html
+    assert "C1" in html
+
+

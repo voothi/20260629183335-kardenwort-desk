@@ -1781,6 +1781,18 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 "--de-dictionary-file", str(de_dict_path),
             ])
             
+        if config.has_section('classification') and config.getboolean('classification', 'enabled', fallback=False):
+            dicts = config.get('classification', 'dictionaries', fallback='')
+            if dicts:
+                for d in dicts.split(','):
+                    d = d.strip()
+                    if not d: continue
+                    if '=' in d:
+                        name, rel_path = d.split('=', 1)
+                        full_path = kardenwort_workspace / rel_path.strip()
+                        cmd.extend(["--classify", f"{name.strip()}={full_path}"])
+                        
+            
         kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
@@ -2257,6 +2269,25 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
 
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
+    
+    dynamic_roles = []
+    if config.has_section('classification') and config.getboolean('classification', 'enabled', fallback=False):
+        dicts = config.get('classification', 'dictionaries', fallback='')
+        if dicts:
+            for d in dicts.split(','):
+                d = d.strip()
+                if not d: continue
+                if '=' in d:
+                    name, _ = d.split('=', 1)
+                    name = name.strip()
+                    dynamic_roles.append(name)
+                    header_cols.append(name.capitalize())
+
+    dynamic_cols_indices = []
+    for role in dynamic_roles:
+        c_idx = headers.index(role_fields[role]) if role in role_fields and role_fields[role] in headers else -1
+        dynamic_cols_indices.append(c_idx)
+
     table_header_html = "<tr>" + "".join(f"<th>{h}</th>" for h in header_cols) + "</tr>"
 
     table_rows = []
@@ -2288,6 +2319,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             if highlighted_val.strip().lower() in ["1", "true"]:
                 is_selected = "1"
 
+        dynamic_tds = ""
+        for d_idx in dynamic_cols_indices:
+            val = row[d_idx] if d_idx != -1 and len(row) > d_idx else ""
+            dynamic_tds += f'<td><div class="scrollable-cell">{val}</div></td>'
+
         table_rows.append(
             f'<tr data-row-id="{row_id}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="WordSourceInflectedForm"><div class="scrollable-cell">{inflected_val}</div></td>'
@@ -2295,6 +2331,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             f'<td class="{trans_class}" data-col="WordDestination"><div class="scrollable-cell">{trans_val}</div></td>'
             f'<td><div class="scrollable-cell">{ipa_val}</div></td>'
             f'<td><div class="scrollable-cell">{morph_val}</div></td>'
+            f'{dynamic_tds}'
             f'</tr>'
         )
     table_rows_html = "\n".join(table_rows)
