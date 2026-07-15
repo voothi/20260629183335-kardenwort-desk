@@ -1780,6 +1780,10 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 "--de-fix-genitive",
                 "--de-dictionary-file", str(de_dict_path),
             ])
+        desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
+        if not desk_classification_enabled:
+            cmd.append("--disable-classification")
+            
         kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
@@ -2258,7 +2262,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
     
     dynamic_roles = []
-    if kw_config.has_section('classification') and kw_config.getboolean('classification', 'enabled', fallback=False):
+    desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
+    
+    if desk_classification_enabled and kw_config.has_section('classification') and kw_config.getboolean('classification', 'enabled', fallback=False):
         dicts = kw_config.get('classification', 'dictionaries', fallback='')
         if dicts:
             for d in dicts.split(','):
