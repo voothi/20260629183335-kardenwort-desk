@@ -5289,6 +5289,14 @@ def cmd_reprocess_worker(args):
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
         
+        run_lemmatizer = config.getboolean('pipeline', 'run_lemmatizer', fallback=True)
+        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+        original_lemmas = {}
+        if not run_lemmatizer and col_lemma != -1:
+            for row_id in selected_rows:
+                if 0 <= row_id < len(data_rows):
+                    original_lemmas[row_id] = data_rows[row_id][col_lemma]
+        
         if lemmas_provider in ('combined', 'google', 'deepl'):
             try:
                 data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang)
@@ -5301,6 +5309,16 @@ def cmd_reprocess_worker(args):
                 data_rows = _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows)
             except Exception as e:
                 logger.error(f"Failed IntelliFiller stage during reprocess: {e}")
+                
+        # Restore original lemmas if run_lemmatizer is disabled
+        if not run_lemmatizer and col_lemma != -1 and original_lemmas:
+            with file_lock(tsv_path):
+                comments_latest, headers_latest, data_rows_latest = load_tsv_rows(tsv_path)
+                for row_id, orig_val in original_lemmas.items():
+                    if 0 <= row_id < len(data_rows_latest):
+                        data_rows_latest[row_id][col_lemma] = orig_val
+                save_tsv_rows_safely(tsv_path, comments_latest, headers_latest, data_rows_latest)
+                data_rows = data_rows_latest
                 
         # Update classification fields if enabled
         try:
