@@ -21,6 +21,11 @@
 			"path": "U:/voothi/20241223170748-kardenwort"
 		},
 		{
+			"name": "oxford-3000-5000",
+			"desc": "(Wordlists) (Kardenwort Core) (TSV)",
+			"path": "U:/voothi/20260715190122-oxford-3000-5000"
+		},
+		{
 			"name": "anki-templates",
 			"desc": "(Anki) (Templates) (Kardenwort Core)",
 			"path": "U:/voothi/20241106211123-anki-templates"
