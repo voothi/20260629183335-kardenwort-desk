@@ -2846,6 +2846,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                             var tds = tr.getElementsByTagName('td');
                             var rowData = rowsData[rowId];
                             if (tds.length >= 5) {
+                                if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
+                                    var div = tds[1].querySelector('.scrollable-cell');
+                                    var val = rowData.lemma || "";
+                                    var oldVal = div ? div.textContent : (tds[1].classList.contains('editing') ? null : tds[1].textContent);
+                                    var shouldUpdate = (oldVal !== val);
+                                    if (shouldUpdate) {
+                                        if (div) div.textContent = val;
+                                        else if (!tds[1].classList.contains('editing')) tds[1].textContent = val;
+                                        updated = true;
+                                    }
+                                }
                                 if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
                                     var div = tds[2].querySelector('.scrollable-cell');
                                     var val = rowData.trans || "";
@@ -5367,10 +5378,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     
     rows_data = {}
     for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
         rows_data[row_id] = {
+            "lemma": lemma_val,
             "trans": trans_val,
             "ipa": ipa_val,
             "morph": morph_val
@@ -5386,7 +5399,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         # Inline snapshot — only emit rows that have at least one non-empty field
         update_data = {
             row_id: d for row_id, d in rows_data.items()
-            if d["trans"] or d["ipa"] or d["morph"]
+            if d["trans"] or d["ipa"] or d["morph"] or d["lemma"]
         }
     else:
         if source_text is None:
