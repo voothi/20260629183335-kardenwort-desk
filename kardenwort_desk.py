@@ -2549,16 +2549,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
   body:not(.maximized) #lemma-table th,
   body:not(.maximized) #lemma-table td {
-    width: 16%;
+    width: 15%;
     padding-right: 12px;
   }
   body:not(.maximized) #lemma-table th.col-translation,
   body:not(.maximized) #lemma-table td.col-translation {
-    width: 22%;
+    width: 20%;
   }
   body:not(.maximized) #lemma-table th.col-morphology,
   body:not(.maximized) #lemma-table td.col-morphology {
-    width: 26%;
+    width: 27%;
   }
   body:not(.maximized) #lemma-table th.col-classification,
   body:not(.maximized) #lemma-table td.col-classification {
