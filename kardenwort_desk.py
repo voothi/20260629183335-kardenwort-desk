@@ -1780,19 +1780,6 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 "--de-fix-genitive",
                 "--de-dictionary-file", str(de_dict_path),
             ])
-            
-        if config.has_section('classification') and config.getboolean('classification', 'enabled', fallback=False):
-            dicts = config.get('classification', 'dictionaries', fallback='')
-            if dicts:
-                for d in dicts.split(','):
-                    d = d.strip()
-                    if not d: continue
-                    if '=' in d:
-                        name, rel_path = d.split('=', 1)
-                        full_path = kardenwort_workspace / rel_path.strip()
-                        cmd.extend(["--classify", f"{name.strip()}={full_path}"])
-                        
-            
         kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
@@ -2271,8 +2258,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
     
     dynamic_roles = []
-    if config.has_section('classification') and config.getboolean('classification', 'enabled', fallback=False):
-        dicts = config.get('classification', 'dictionaries', fallback='')
+    if kw_config.has_section('classification') and kw_config.getboolean('classification', 'enabled', fallback=False):
+        dicts = kw_config.get('classification', 'dictionaries', fallback='')
         if dicts:
             for d in dicts.split(','):
                 d = d.strip()
@@ -2280,8 +2267,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 if '=' in d:
                     name, _ = d.split('=', 1)
                     name = name.strip()
-                    dynamic_roles.append(name)
-                    header_cols.append(name.capitalize())
+                    if name not in dynamic_roles:
+                        dynamic_roles.append(name)
+                        header_cols.append(name.capitalize())
 
     dynamic_cols_indices = []
     for role in dynamic_roles:

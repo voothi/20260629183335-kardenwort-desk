@@ -407,9 +407,14 @@ def test_run_render_flow_with_classification(tmp_path, monkeypatch):
     config.set('languages', 'en_lemma_override', 'en_over')
     config.set('languages', 'en_prompt', 'en_prompt')
     
-    config.add_section('classification')
-    config.set('classification', 'enabled', 'true')
-    config.set('classification', 'dictionaries', 'oxford=path/to/oxford.tsv, cambridge=path/to/cambridge.tsv')
+    # kw_config goes to the core kardenwort folder. For tests, kardenwort_desk searches in `kardenwort_workspace` parent or similar. 
+    # Let's write the core config.ini in tmp_path (which represents the kardenwort_workspace)
+    kw_config = configparser.ConfigParser()
+    kw_config.add_section('classification')
+    kw_config.set('classification', 'enabled', 'true')
+    kw_config.set('classification', 'dictionaries', 'oxford=path/to/oxford.tsv, cambridge=path/to/cambridge.tsv')
+    with open(tmp_path / "config.ini", 'w') as f:
+        kw_config.write(f)
     
     mapping = configparser.ConfigParser()
     mapping.optionxform = str
