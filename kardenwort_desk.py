@@ -2329,12 +2329,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             val = row[d_idx] if d_idx != -1 and len(row) > d_idx else ""
             display_val = val
             span_class = ""
-            if val.startswith("3k:"):
-                display_val = val[3:]
-                span_class = "level-3k"
-            elif val.startswith("5k:"):
-                display_val = val[3:]
-                span_class = "level-5k"
+            if ":" in val:
+                parts = val.split(":", 1)
+                possible_prefix = parts[0].strip()
+                if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
+                    display_val = parts[1].strip()
+                    span_class = f"level-{possible_prefix.lower()}"
             
             if span_class:
                 inner_html = f'<span class="{span_class}">{display_val}</span>'

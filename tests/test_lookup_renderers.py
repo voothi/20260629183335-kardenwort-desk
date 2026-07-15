@@ -440,7 +440,7 @@ def test_run_render_flow_with_classification(tmp_path, monkeypatch):
     res_dir.mkdir()
     
     tsv_path = res_dir / "123-test-slug.en.tsv"
-    tsv_path.write_text("WordSource\tWordDestination\tClassificationOxford\tClassificationCambridge\nword1\ttrans1\tB2\tC1\n", encoding='utf-8')
+    tsv_path.write_text("WordSource\tWordDestination\tClassificationOxford\tClassificationCambridge\nword1\ttrans1\t3k:B2\t5k:C1\n", encoding='utf-8')
     
     html = run_render_flow(
         text="word1",
@@ -454,7 +454,7 @@ def test_run_render_flow_with_classification(tmp_path, monkeypatch):
     
     assert '<th class="col-classification">Oxford</th>' in html
     assert '<th class="col-classification">Cambridge</th>' in html
-    assert "B2" in html
-    assert "C1" in html
+    assert '<span class="level-3k">B2</span>' in html
+    assert '<span class="level-5k">C1</span>' in html
 
 
