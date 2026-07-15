@@ -2544,8 +2544,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     white-space: nowrap;
     padding-right: 24px;
   }
+  #lemma-table th.col-morphology, #lemma-table td.col-morphology {
+    width: auto;
+  }
   #lemma-table th:last-child, #lemma-table td:last-child {
     width: auto;
+    padding-right: 12px;
+  }
+  #lemma-table th.col-classification:last-child, #lemma-table td.col-classification:last-child {
+    width: 1%;
     padding-right: 12px;
   }
   .scrollable-cell {
