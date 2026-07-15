@@ -5329,18 +5329,20 @@ def cmd_reprocess_worker(args):
                 classifications = load_classification_dictionaries(classify_args)
                 col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
                 if col_lemma != -1:
-                    for name, c_dict in classifications.items():
-                        if name in role_fields and role_fields[name] in headers:
-                            col_idx = headers.index(role_fields[name])
-                            class_cols.append((name, col_idx))
-                            for row_id in selected_rows:
-                                if 0 <= row_id < len(data_rows):
-                                    lemma = data_rows[row_id][col_lemma].strip().lower()
-                                    val = c_dict.get(lemma, "")
-                                    data_rows[row_id][col_idx] = val
-                                    
-                    # Save updated rows back
                     with file_lock(tsv_path):
+                        comments, headers, data_rows = load_tsv_rows(tsv_path)
+                        for name, c_dict in classifications.items():
+                            if name in role_fields and role_fields[name] in headers:
+                                col_idx = headers.index(role_fields[name])
+                                class_cols.append((name, col_idx))
+                                for row_id in selected_rows:
+                                    if 0 <= row_id < len(data_rows):
+                                        lemma = data_rows[row_id][col_lemma].strip().lower()
+                                        val = c_dict.get(lemma, "")
+                                        while len(data_rows[row_id]) <= col_idx:
+                                            data_rows[row_id].append("")
+                                        data_rows[row_id][col_idx] = val
+                                        
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
         except Exception as e_class:
             logger.error(f"Failed to update classification fields during reprocess: {e_class}")
