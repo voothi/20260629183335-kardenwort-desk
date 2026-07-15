@@ -452,8 +452,8 @@ def test_run_render_flow_with_classification(tmp_path, monkeypatch):
         tsv_path=tsv_path
     )
     
-    assert "<th>Oxford</th>" in html
-    assert "<th>Cambridge</th>" in html
+    assert '<th class="col-classification">Oxford</th>' in html
+    assert '<th class="col-classification">Cambridge</th>' in html
     assert "B2" in html
     assert "C1" in html
 

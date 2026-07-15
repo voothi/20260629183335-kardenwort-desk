@@ -2282,7 +2282,18 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         c_idx = headers.index(role_fields[role]) if role in role_fields and role_fields[role] in headers else -1
         dynamic_cols_indices.append(c_idx)
 
-    table_header_html = "<tr>" + "".join(f"<th>{h}</th>" for h in header_cols) + "</tr>"
+    th_elements = []
+    for h in header_cols:
+        h_lower = h.lower()
+        if h_lower in [r.lower() for r in dynamic_roles]:
+            th_elements.append(f'<th class="col-classification">{h}</th>')
+        elif h_lower == "translation":
+            th_elements.append(f'<th class="col-translation">{h}</th>')
+        elif h_lower == "morphology":
+            th_elements.append(f'<th class="col-morphology">{h}</th>')
+        else:
+            th_elements.append(f'<th>{h}</th>')
+    table_header_html = "<tr>" + "".join(th_elements) + "</tr>"
 
     table_rows = []
     for row_id, row in enumerate(data_rows):
@@ -2316,15 +2327,15 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         dynamic_tds = ""
         for d_idx in dynamic_cols_indices:
             val = row[d_idx] if d_idx != -1 and len(row) > d_idx else ""
-            dynamic_tds += f'<td><div class="scrollable-cell">{val}</div></td>'
+            dynamic_tds += f'<td class="col-classification"><div class="scrollable-cell">{val}</div></td>'
 
         table_rows.append(
             f'<tr data-row-id="{row_id}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="WordSourceInflectedForm"><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class}" data-col="WordSource"><div class="scrollable-cell">{lemma_val}</div></td>'
-            f'<td class="{trans_class}" data-col="WordDestination"><div class="scrollable-cell">{trans_val}</div></td>'
+            f'<td class="{trans_class} col-translation" data-col="WordDestination"><div class="scrollable-cell">{trans_val}</div></td>'
             f'<td><div class="scrollable-cell">{ipa_val}</div></td>'
-            f'<td><div class="scrollable-cell">{morph_val}</div></td>'
+            f'<td class="col-morphology"><div class="scrollable-cell">{morph_val}</div></td>'
             f'{dynamic_tds}'
             f'</tr>'
         )
@@ -2538,13 +2549,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
   body:not(.maximized) #lemma-table th,
   body:not(.maximized) #lemma-table td {
-    width: 18%;
+    width: 16%;
     padding-right: 12px;
   }
-  body:not(.maximized) #lemma-table th:last-child,
-  body:not(.maximized) #lemma-table td:last-child {
-    width: 28%;
-    padding-right: 12px;
+  body:not(.maximized) #lemma-table th.col-translation,
+  body:not(.maximized) #lemma-table td.col-translation {
+    width: 22%;
+  }
+  body:not(.maximized) #lemma-table th.col-morphology,
+  body:not(.maximized) #lemma-table td.col-morphology {
+    width: 26%;
+  }
+  body:not(.maximized) #lemma-table th.col-classification,
+  body:not(.maximized) #lemma-table td.col-classification {
+    width: 8%;
   }
   body:not(.maximized) .scrollable-cell {
     overflow-x: auto;
