@@ -2571,11 +2571,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
   body:not(.maximized) #lemma-table th.col-morphology,
   body:not(.maximized) #lemma-table td.col-morphology {
-    width: 27%;
+    width: 26%;
   }
   body:not(.maximized) #lemma-table th.col-classification,
   body:not(.maximized) #lemma-table td.col-classification {
-    width: 8%;
+    width: 10%;
+  }
+  th.col-classification,
+  td.col-classification {
+    text-align: center !important;
+    padding-left: 0px !important;
+    padding-right: 0px !important;
   }
   body:not(.maximized) .scrollable-cell {
     overflow-x: auto;
