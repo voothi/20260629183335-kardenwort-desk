@@ -322,6 +322,15 @@ def load_config(config_path=None):
             
         if not resolved_paths['anki_mapping_file'].exists():
             raise ConfigError(f"anki_mapping_file path configured for 'anki_mapping_file' does not exist: {resolved_paths['anki_mapping_file']}")
+
+    # 3. Project structure paths
+    if 'project_structure' in config:
+        res_dir = config['project_structure'].get('generated_results_dir')
+        if res_dir:
+            if res_dir.startswith('../') or res_dir.startswith('./'):
+                resolved_paths['generated_results_dir'] = (base_dir / res_dir).resolve()
+            else:
+                resolved_paths['generated_results_dir'] = Path(res_dir).resolve()
             
     goldendict = {}
     if 'goldendict' in config:
@@ -401,6 +410,13 @@ def load_kardenwort_config(kardenwort_workspace):
     kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     kw_config.read(kardenwort_workspace / "config.ini", encoding='utf-8')
     return kw_config
+
+def resolve_results_dir(resolved_paths, kw_config):
+    if 'generated_results_dir' in resolved_paths:
+        return resolved_paths['generated_results_dir']
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    return (kardenwort_workspace / results_dir_name).resolve()
 
 def load_anki_mapping(mapping_path):
     mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
@@ -1663,8 +1679,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
-    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
     results_dir.mkdir(parents=True, exist_ok=True)
     
     working_tsv_path = results_dir / cache_key
@@ -1910,8 +1925,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
-    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
     
     slug = generate_slug(text)
     cache_key = f"{zid}-{slug}.{language}.tsv"
@@ -3994,8 +4008,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
-    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
     
     slug = generate_slug(text)
     cache_key = f"{zid}-{slug}.{language}.tsv"
@@ -4823,8 +4836,7 @@ def cmd_export(args):
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
-    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
     
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
@@ -4993,8 +5005,7 @@ def cmd_reprocess(args):
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
-    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
     
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
@@ -5590,8 +5601,7 @@ def cmd_retext(args):
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
-    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
     
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
@@ -5810,8 +5820,7 @@ def cmd_edit_save(args):
         print_structured_error("INVALID_ARGS", f"Failed to parse deltas: {e}")
         sys.exit(1)
         
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
-    results_dir = (kardenwort_workspace / results_dir_name).resolve()
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
     
     lang = args.language or config.get('settings', 'default_language', fallback='en')
     
