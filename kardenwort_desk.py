@@ -2897,7 +2897,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                                 if (val.indexOf(':') !== -1) {
                                                     var parts = val.split(':', 2);
                                                     var possiblePrefix = parts[0].trim();
-                                                    if (possiblePrefix.length <= 5 && possiblePrefix.indexOf('/') === -1 && possiblePrefix.indexOf('\\') === -1) {
+                                                    if (possiblePrefix.length <= 5 && possiblePrefix.indexOf('/') === -1 && possiblePrefix.indexOf('\\\\') === -1) {
                                                         displayVal = parts[1].trim();
                                                         spanClass = "level-" + possiblePrefix.toLowerCase();
                                                     }
