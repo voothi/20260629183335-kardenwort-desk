@@ -431,7 +431,16 @@ def build_field_mapping(mapping, mode):
     return field_mapping
 
 def get_role_fields(mapping, headers):
-    role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers} if 'desk_columns' in mapping else {}
+    role_fields = {}
+    if 'desk_columns' in mapping:
+        headers_lower = {h.lower(): h for h in headers}
+        for field, role in mapping['desk_columns'].items():
+            field_lower = field.lower()
+            if field_lower in headers_lower:
+                role_fields[role] = headers_lower[field_lower]
+                
+    if 'WordSource' in headers and 'lemma' not in role_fields:
+        role_fields['lemma'] = 'WordSource'
     if 'WordSourceMorphologyAI' in headers and 'morphology' not in role_fields:
         role_fields['morphology'] = 'WordSourceMorphologyAI'
     if 'WordSourceIPA' in headers and 'ipa' not in role_fields:
@@ -2339,7 +2348,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 is_selected = "1"
 
         dynamic_tds = ""
-        for d_idx in dynamic_cols_indices:
+        for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
             val = row[d_idx] if d_idx != -1 and len(row) > d_idx else ""
             display_val = val
             span_class = ""
@@ -2354,7 +2363,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                 inner_html = f'<span class="{span_class}">{display_val}</span>'
             else:
                 inner_html = display_val
-            dynamic_tds += f'<td class="col-classification"><div class="scrollable-cell">{inner_html}</div></td>'
+            dynamic_tds += f'<td class="col-classification" data-col="{role}"><div class="scrollable-cell">{inner_html}</div></td>'
 
         table_rows.append(
             f'<tr data-row-id="{row_id}" data-selected="{is_selected}" class="{row_highlight_class}">'
@@ -2874,6 +2883,34 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                         if (div) div.innerHTML = val;
                                         else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
                                         updated = true;
+                                    }
+                                }
+                                if (rowData.hasOwnProperty('classifications') && rowData.classifications !== undefined) {
+                                    for (var class_name in rowData.classifications) {
+                                        if (rowData.classifications.hasOwnProperty(class_name)) {
+                                            var val = rowData.classifications[class_name] || "";
+                                            var cell = tr.querySelector('td[data-col="' + class_name + '"]');
+                                            if (cell) {
+                                                var div = cell.querySelector('.scrollable-cell');
+                                                var displayVal = val;
+                                                var spanClass = "";
+                                                if (val.indexOf(':') !== -1) {
+                                                    var parts = val.split(':', 2);
+                                                    var possiblePrefix = parts[0].trim();
+                                                    if (possiblePrefix.length <= 5 && possiblePrefix.indexOf('/') === -1 && possiblePrefix.indexOf('\\') === -1) {
+                                                        displayVal = parts[1].trim();
+                                                        spanClass = "level-" + possiblePrefix.toLowerCase();
+                                                    }
+                                                }
+                                                var innerHtml = spanClass ? '<span class="' + spanClass + '">' + displayVal + '</span>' : displayVal;
+                                                var oldHtml = div ? div.innerHTML : cell.innerHTML;
+                                                if (oldHtml !== innerHtml) {
+                                                    if (div) div.innerHTML = innerHtml;
+                                                    else cell.innerHTML = innerHtml;
+                                                    updated = true;
+                                                }
+                                            }
+                                        }
                                     }
                                 }
                             }
@@ -5232,6 +5269,7 @@ def cmd_reprocess_worker(args):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
     data_rows, headers, role_fields = [], [], {}
+    class_cols = []
     
     try:
         with file_lock(tsv_path):
@@ -5253,15 +5291,69 @@ def cmd_reprocess_worker(args):
             except Exception as e:
                 logger.error(f"Failed IntelliFiller stage during reprocess: {e}")
                 
+        # Update classification fields if enabled
+        try:
+            desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
+            kardenwort_workspace = resolved_paths['kardenwort_workspace']
+            kw_config = load_kardenwort_config(kardenwort_workspace)
+            if desk_classification_enabled and kw_config.has_section('classification') and kw_config.getboolean('classification', 'enabled', fallback=False):
+                # Import core kardenwort loaders
+                import sys
+                if str(kardenwort_workspace / "src") not in sys.path:
+                    sys.path.append(str(kardenwort_workspace / "src"))
+                from kardenwort.core.kardenwort import load_classification_dictionaries
+                
+                # Build classify args
+                dicts = kw_config.get('classification', 'dictionaries', fallback='')
+                classify_args = []
+                if dicts:
+                    for d in dicts.split(','):
+                        d = d.strip()
+                        if d and '=' in d:
+                            name, path_str = d.split('=', 1)
+                            name = name.strip()
+                            path_str = path_str.strip()
+                            
+                            # Support prefix path e.g. 3k:data/en/oxford.tsv
+                            prefix = ""
+                            if ":" in path_str:
+                                parts = path_str.split(":", 1)
+                                possible_prefix = parts[0].strip()
+                                if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
+                                    prefix = possible_prefix + ":"
+                                    path_str = parts[1].strip()
+                                    
+                            resolved_path = (kardenwort_workspace / path_str).resolve()
+                            classify_args.append(f"{name}={prefix}{resolved_path}")
+                            
+                classifications = load_classification_dictionaries(classify_args)
+                col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+                if col_lemma != -1:
+                    for name, c_dict in classifications.items():
+                        if name in role_fields and role_fields[name] in headers:
+                            col_idx = headers.index(role_fields[name])
+                            class_cols.append((name, col_idx))
+                            for row_id in selected_rows:
+                                if 0 <= row_id < len(data_rows):
+                                    lemma = data_rows[row_id][col_lemma].strip().lower()
+                                    val = c_dict.get(lemma, "")
+                                    data_rows[row_id][col_idx] = val
+                                    
+                    # Save updated rows back
+                    with file_lock(tsv_path):
+                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        except Exception as e_class:
+            logger.error(f"Failed to update classification fields during reprocess: {e_class}")
+            
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
     finally:
         try:
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", class_cols=class_cols)
         except Exception as e:
             logger.error(f"Failed to write finished event in reprocess: {e}")
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None):
     import time
     update_js_path = tsv_path.with_suffix('.update.js')
     
@@ -5281,6 +5373,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             "ipa": ipa_val,
             "morph": morph_val
         }
+        if class_cols:
+            class_vals = {}
+            for name, col_idx in class_cols:
+                val = row[col_idx] if len(row) > col_idx else ""
+                class_vals[name] = val
+            rows_data[row_id]["classifications"] = class_vals
         
     if stage is None:
         # Inline snapshot — only emit rows that have at least one non-empty field
@@ -5573,8 +5671,6 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                     continue
                 
                 has_dest = col_word_dest != -1 and len(row) > col_word_dest and str(row[col_word_dest]).strip()
-                if col_word_dest != -1 and has_dest:
-                    continue
                 
                 has_ipa = col_ipa != -1 and len(row) > col_ipa and str(row[col_ipa]).strip()
                 has_morph = col_morph != -1 and len(row) > col_morph and str(row[col_morph]).strip()

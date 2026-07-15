@@ -282,13 +282,14 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     # 4. enrichment (batch 1, rows 0-1)
     # 5. enrichment (batch 2, row 2)
     # 6. finished
-    assert len(write_calls) == 6
+    assert len(write_calls) == 7
     assert write_calls[0] == ('source', 'success', 3)
     assert write_calls[1] == ('translated_text', 'success', 3)
-    assert write_calls[2] == ('translated', 'success', 3)
-    assert write_calls[3] == ('enrichment', 'success', 3)
+    assert write_calls[2] == (None, 'success', 3)
+    assert write_calls[3] == ('translated', 'success', 3)
     assert write_calls[4] == ('enrichment', 'success', 3)
-    assert write_calls[5] == ('finished', 'success', 3)
+    assert write_calls[5] == ('enrichment', 'success', 3)
+    assert write_calls[6] == ('finished', 'success', 3)
 
 def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
@@ -419,5 +420,102 @@ def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
     kardenwort_desk.cmd_progressive_worker(args)
     
     assert passed_text_mode == 'multi_line'
+
+def test_reprocess_worker_classification_update(monkeypatch, tmp_path):
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
+    
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    
+    # Overwrite the anki mapping file with oxford role
+    mapping = configparser.ConfigParser()
+    mapping.read_string("""
+[fields]
+WordSource=lemma
+WordDestination=word_translation
+WordSourceMorphologyAI=morphology
+WordSourceIPA=ipa
+ClassificationOxford=oxford
+[desk_columns]
+WordSource=lemma
+WordDestination=word_translation
+WordSourceMorphologyAI=morphology
+WordSourceIPA=ipa
+ClassificationOxford=oxford
+[fields_mapping.word]
+WordSource=lemma
+WordDestination=translation
+ClassificationOxford=oxford
+""")
+    with open(resolved_paths['anki_mapping_file'], 'w') as f:
+        mapping.write(f)
+        
+    # Enable classification section in local config and mock load_kardenwort_config
+    config.add_section('classification')
+    config.set('classification', 'enabled', 'true')
+    
+    kw_config = MagicMock()
+    kw_config.has_section.return_value = True
+    kw_config.getboolean.return_value = True
+    kw_config.get.return_value = "oxford=data/en/oxford.tsv"
+    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda *a: kw_config)
+    
+    # Mock load_classification_dictionaries
+    mock_classifications = {"oxford": {"word1": "3k:A1", "word2": "5k:B2"}}
+    
+    # Mock import from core kardenwort
+    import sys
+    class MockKardenwortCore:
+        @staticmethod
+        def load_classification_dictionaries(classify_args):
+            return mock_classifications
+            
+    sys.modules['kardenwort'] = MagicMock()
+    sys.modules['kardenwort.core'] = MagicMock()
+    sys.modules['kardenwort.core.kardenwort'] = MockKardenwortCore
+    
+    # Create working TSV containing columns
+    tsv_path = kardenwort_workspace / "results" / "test_reproc.tsv"
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    tsv_path.write_text("WordSource\tWordSourceMorphologyAI\tWordSourceIPA\tWordDestination\tClassificationOxford\nword1\t\t\t\t\nword2\t\t\t\t\n", encoding='utf-8')
+    
+    # Sibling text file
+    tsv_path.with_suffix('.txt').write_text("word1 word2", encoding='utf-8')
+    
+    # Mock _reprocess_worker_stage_intellifiller to do nothing
+    monkeypatch.setattr(kardenwort_desk, '_reprocess_worker_stage_intellifiller', lambda *a, **kw: a[4])
+    
+    # Mock write_update_js
+    write_calls = []
+    def mock_write_update_js(tsv_p, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None):
+        write_calls.append(class_cols)
+        
+    monkeypatch.setattr(kardenwort_desk, 'write_update_js', mock_write_update_js)
+    
+    mock_logger = MagicMock()
+    monkeypatch.setattr(kardenwort_desk, 'logger', mock_logger)
+    
+    args = MagicMock()
+    args.tsv = str(tsv_path)
+    args.rows = "0,1"
+    args.config = None
+    args.language = 'en'
+    
+    kardenwort_desk.cmd_reprocess_worker(args)
+    
+    # Print logger errors if any
+    for call in mock_logger.error.call_args_list:
+        print(f"LOGGER ERROR: {call}")
+        
+    # Verify TSV was updated with classification values
+    comments, headers, data_rows = kardenwort_desk.load_tsv_rows(tsv_path)
+    col_idx = headers.index("ClassificationOxford")
+    assert data_rows[0][col_idx] == "3k:A1"
+    assert data_rows[1][col_idx] == "5k:B2"
+    
+    # Verify write_update_js received the classification columns
+    assert len(write_calls) == 1
+    assert write_calls[0] == [("oxford", col_idx)]
+
 
 
