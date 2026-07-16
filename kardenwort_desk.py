@@ -2674,11 +2674,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
   }
   .level-3k {
     color: {level_3k_color};
-    font-weight: bold;
   }
   .level-5k {
     color: {level_5k_color};
-    font-weight: bold;
   }
 </style>
 </head>
