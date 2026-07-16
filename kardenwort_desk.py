@@ -2288,8 +2288,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
     
     if desk_classification_enabled and kw_config.has_section('classification') and kw_config.getboolean('classification', 'enabled', fallback=False):
-        dicts = kw_config.get('classification', f'dictionaries_{language}', fallback='')
-        if not dicts:
+        if kw_config.has_option('classification', f'dictionaries_{language}'):
+            dicts = kw_config.get('classification', f'dictionaries_{language}', fallback='')
+        else:
             dicts = kw_config.get('classification', 'dictionaries', fallback='')
         if dicts:
             for d in dicts.split(','):
@@ -5332,8 +5333,9 @@ def cmd_reprocess_worker(args):
                     sys.path.append(str(kardenwort_workspace / "src"))
                 from kardenwort.core.kardenwort import load_classification_dictionaries
                 
-                dicts = kw_config.get('classification', f'dictionaries_{language}', fallback='')
-                if not dicts:
+                if kw_config.has_option('classification', f'dictionaries_{language}'):
+                    dicts = kw_config.get('classification', f'dictionaries_{language}', fallback='')
+                else:
                     dicts = kw_config.get('classification', 'dictionaries', fallback='')
                 classify_args = []
                 if dicts:
