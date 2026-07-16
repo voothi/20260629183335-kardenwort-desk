@@ -1,4 +1,4 @@
-﻿import os
+import os
 import json
 import base64
 import tempfile
@@ -989,12 +989,45 @@ def test_normalize_blank_lines():
     assert res == "line 1\n\nline 2\n\nline 3"
 
 
+def test_cmd_merge_resilient_schema_union(monkeypatch, tmp_path):
+    tsv1 = tmp_path / "20260630000000-part1.en.tsv"
+    txt1 = tmp_path / "20260630000000-part1.txt"
+    tsv1.write_text("WordSource\tWordDestination\tSentenceSourceIndex\napple\tyabloko\t1\n", encoding='utf-8')
+    txt1.write_text("Line one.", encoding='utf-8')
+    
+    tsv2 = tmp_path / "20260630000001-part2.en.tsv"
+    txt2 = tmp_path / "20260630000001-part2.txt"
+    tsv2.write_text("WordSource\tWordDestination\tSentenceSourceIndex\tClassificationOxford\nbanana\tbanan\t1\t3k:A1\n", encoding='utf-8')
+    txt2.write_text("Line two.", encoding='utf-8')
 
+    dest_tsv = tmp_path / "20260711000000-merged.en.tsv"
+    
+    class Args:
+        files = [str(tsv1), str(tsv2)]
+        target = str(dest_tsv)
+        config = None
+        sort_frequency = False
+        deduplicate = False
 
-
-
-
-
-
-
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'merge_delete_sources', 'false')
+    
+    resolved_paths = {
+        'anki_mapping_file': str(Path("anki-mapping.ini").resolve()),
+    }
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
+    
+    desk.cmd_merge(Args())
+    assert dest_tsv.exists()
+    _, final_headers, final_rows = desk.load_tsv_rows(dest_tsv)
+    
+    # Headers should be the union
+    assert final_headers == ["WordSource", "WordDestination", "SentenceSourceIndex", "ClassificationOxford"]
+    assert len(final_rows) == 2
+    
+    # Apple row: padded ClassificationOxford with ""
+    assert final_rows[0] == ["apple", "yabloko", "1", ""]
+    # Banana row: SentenceSourceIndex offset to 2 (due to 1 non-empty line in part1.txt) and ClassificationOxford preserved
+    assert final_rows[1] == ["banana", "banan", "2", "3k:A1"]
 

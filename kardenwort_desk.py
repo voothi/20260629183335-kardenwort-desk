@@ -6154,26 +6154,26 @@ def cmd_merge(args):
             if idx > 0:
                 time.sleep(1.1)
             timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
-            # Validate schema for this language group
-            first_headers = None
+            # Load headers and files, and compute union headers
+            loaded_files = []
+            union_headers = []
+            union_headers_set = set()
             for f in lang_files:
                 if not f.exists():
                     print_structured_error("INVALID_ARGS", f"File not found: {f}")
                     sys.exit(1)
                 try:
-                    _, headers, _ = load_tsv_rows(f)
-                    if first_headers is None:
-                        first_headers = headers
-                    else:
-                        if headers != first_headers:
-                            print_structured_error(
-                                "MERGE_SCHEMA_MISMATCH",
-                                f"Schema mismatch in file: {f.name} for language '{lang}'. All files of the same language must share the same header."
-                            )
-                            sys.exit(1)
+                    comments, headers, rows = load_tsv_rows(f)
+                    loaded_files.append((f, comments, headers, rows))
+                    for h in headers:
+                        if h not in union_headers_set:
+                            union_headers.append(h)
+                            union_headers_set.add(h)
                 except Exception as e:
                     print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
                     sys.exit(1)
+
+            first_headers = union_headers
 
             all_comments = []
             all_data_rows = []
@@ -6190,8 +6190,7 @@ def cmd_merge(args):
                 role_fields = {}
             
             current_line_offset = 0
-            for f in lang_files:
-                comments, _, rows = load_tsv_rows(f)
+            for f, comments, headers, rows in loaded_files:
                 if not all_comments:
                     all_comments = comments
                     
@@ -6221,9 +6220,21 @@ def cmd_merge(args):
                     except Exception as e:
                         logger.warning(f"Failed to read sibling text {t}: {e}")
                 
+                # Align rows to the union header schema
+                aligned_rows = []
+                for row in rows:
+                    aligned_row = []
+                    for h in union_headers:
+                        if h in headers:
+                            h_idx = headers.index(h)
+                            aligned_row.append(row[h_idx] if h_idx < len(row) else "")
+                        else:
+                            aligned_row.append("")
+                    aligned_rows.append(aligned_row)
+
                 # Offset the SentenceSourceIndex values for this file's rows
                 if col_index != -1:
-                    for row in rows:
+                    for row in aligned_rows:
                         if len(row) > col_index:
                             val = row[col_index].strip()
                             try:
@@ -6235,7 +6246,7 @@ def cmd_merge(args):
                             except ValueError:
                                 pass
                                 
-                all_data_rows.extend(rows)
+                all_data_rows.extend(aligned_rows)
                 current_line_offset += non_empty_lines
                 
             dest_dir = base_dest_dir
