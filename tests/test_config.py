@@ -342,3 +342,40 @@ split_gap_limit = abc
         assert config.getint('settings', 'split_gap_limit') == 60
 
 
+def test_audio_config():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        desk_dir = tmp_path / "kardenwort-desk"
+        desk_dir.mkdir()
+        anki_mapping = desk_dir / "anki-mapping.ini"
+        anki_mapping.write_text("")
+        
+        # Sibling project for anki-tts-cli
+        cli_dir = tmp_path / "anki-tts-cli"
+        cli_dir.mkdir()
+        cli_script = cli_dir / "anki-tts-cli.py"
+        cli_script.touch()
+
+        config_content = f"""[environment]
+anki_tts_cli = ../anki-tts-cli/anki-tts-cli.py
+
+[settings]
+anki_mapping_file = ./anki-mapping.ini
+
+[audio]
+lmb_play = true
+lmb_source = inflection
+rmb_play = false
+"""
+        config_file = desk_dir / "config.ini"
+        config_file.write_text(config_content)
+
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
+        
+        assert resolved_paths["anki_tts_cli"] == cli_script.resolve()
+        assert config.getboolean('audio', 'lmb_play') is True
+        assert config.get('audio', 'lmb_source') == 'inflection'
+        assert config.getboolean('audio', 'rmb_play') is False
+
+
+
