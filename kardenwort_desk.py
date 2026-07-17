@@ -3057,7 +3057,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         function playAudio(text, lang) {
             if (!text || !lang) return;
             if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
-                var escapedText = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                var sanitizedText = text.replace(/\r?\n|\r/g, ' ');
+                var escapedText = sanitizedText.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
                 window.ahkCall('play', audioPythonExe + "\n" + audioAnkiTtsCli + "\n" + lang + "\n" + escapedText);
             }
         }
