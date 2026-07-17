@@ -3058,7 +3058,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             if (!text || !lang) return;
             if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
                 var escapedText = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
-                window.ahkCall('play', escapedText + "\n" + lang + "\n" + audioAnkiTtsCli + "\n" + audioPythonExe);
+                window.ahkCall('play', audioPythonExe + "\n" + audioAnkiTtsCli + "\n" + lang + "\n" + escapedText);
             }
         }
 
@@ -4178,8 +4178,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{audio_lmb_play}", lmb_play_val)
     html_page = html_page.replace("{audio_lmb_source}", f'"{lmb_source_val}"')
     html_page = html_page.replace("{audio_rmb_play}", rmb_play_val)
-    html_page = html_page.replace("{audio_anki_tts_cli}", anki_tts_cli_path)
-    html_page = html_page.replace("{audio_python_exe}", python_exe_path)
+    html_page = html_page.replace("{audio_anki_tts_cli}", anki_tts_cli_path.replace("\\", "\\\\"))
+    html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if eff_mode == "multi" else "normal")
     
