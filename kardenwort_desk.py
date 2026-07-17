@@ -1932,6 +1932,24 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     
+    # Resolve audio playback configuration
+    lmb_play_val = "false"
+    lmb_source_val = "lemma"
+    rmb_play_val = "false"
+    if config.has_section('audio'):
+        lmb_play_val = "true" if config.getboolean('audio', 'lmb_play', fallback=False) else "false"
+        lmb_source_val = config.get('audio', 'lmb_source', fallback='lemma').strip().lower()
+        rmb_play_val = "true" if config.getboolean('audio', 'rmb_play', fallback=False) else "false"
+
+    anki_tts_cli_path = ""
+    if 'anki_tts_cli' in resolved_paths:
+        anki_tts_cli_path = str(resolved_paths['anki_tts_cli']).replace('\\', '/')
+
+    python_exe_path = ""
+    if 'kardenwort_python' in resolved_paths:
+        python_exe_path = str(resolved_paths['kardenwort_python']).replace('\\', '/')
+
+    
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     results_dir = resolve_results_dir(resolved_paths, kw_config)
@@ -2717,6 +2735,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <script id="llm-filled" type="text/plain">{llm_filled_js}</script>
 <script id="session-zid" type="text/plain">{zid}</script>
 <script id="session-lang" type="text/plain">{language}</script>
+<script id="session-target-lang" type="text/plain">{target_language}</script>
 <script id="display-mode" type="text/plain">{display_mode_js}</script>
 <script id="auto-inject-updates" type="text/plain">{auto_inject_updates_js}</script>
 <script id="run-enrichment" type="text/plain">{run_enrichment_js}</script>
@@ -3029,7 +3048,70 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             }
             return translations.join(', ');
         }
-        
+        var audioLmbPlay = {audio_lmb_play};
+        var audioLmbSource = {audio_lmb_source};
+        var audioRmbPlay = {audio_rmb_play};
+        var audioAnkiTtsCli = "{audio_anki_tts_cli}";
+        var audioPythonExe = "{audio_python_exe}";
+
+        function playAudio(text, lang) {
+            if (!text || !lang) return;
+            if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
+                var escapedText = text.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+                window.ahkCall('play', escapedText + "\n" + lang + "\n" + audioAnkiTtsCli + "\n" + audioPythonExe);
+            }
+        }
+
+        function getWordLemma(span) {
+            var tokenData = findTokenData(span);
+            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                return (span.textContent || span.innerText || "").trim();
+            }
+            var rowId = tokenData.row_ids[0];
+            var tr = null;
+            for (var k = 0; k < tableRows.length; k++) {
+                if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                    tr = tableRows[k];
+                    break;
+                }
+            }
+            if (tr) {
+                var tds = tr.getElementsByTagName('td');
+                for (var m = 0; m < tds.length; m++) {
+                    if (tds[m].getAttribute('data-col') === 'WordSource') {
+                        var val = (tds[m].textContent || tds[m].innerText || "").trim();
+                        if (val) return val;
+                    }
+                }
+            }
+            return (span.textContent || span.innerText || "").trim();
+        }
+
+        function getWordInflectedForm(span) {
+            var tokenData = findTokenData(span);
+            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                return (span.textContent || span.innerText || "").trim();
+            }
+            var rowId = tokenData.row_ids[0];
+            var tr = null;
+            for (var k = 0; k < tableRows.length; k++) {
+                if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                    tr = tableRows[k];
+                    break;
+                }
+            }
+            if (tr) {
+                var tds = tr.getElementsByTagName('td');
+                for (var m = 0; m < tds.length; m++) {
+                    if (tds[m].getAttribute('data-col') === 'WordSourceInflectedForm') {
+                        var val = (tds[m].textContent || tds[m].innerText || "").trim();
+                        if (val) return val;
+                    }
+                }
+            }
+            return (span.textContent || span.innerText || "").trim();
+        }
+
         for (var i = 0; i < tokenSpans.length; i++) {
             (function(span) {
                 addEvent(span, 'mousedown', function(e) {
@@ -3079,6 +3161,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         updateRowStyles();
                         updateBidirectionalHighlights();
                         
+                        if (audioLmbPlay && tokenDragMode) {
+                            var textToPlay = (audioLmbSource === 'inflection') ? getWordInflectedForm(span) : getWordLemma(span);
+                            var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                            playAudio(textToPlay, sourceLang);
+                        }
+                        
                         if (e.preventDefault) {
                             e.preventDefault();
                         } else {
@@ -3104,6 +3192,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         
                         rmbFlipMode = !span.classList.contains('flipped');
                         flipWord(span, rmbFlipMode);
+                        
+                        if (audioRmbPlay && rmbFlipMode) {
+                            var textToPlay = getWordTranslation(span);
+                            var targetLang = (document.getElementById('session-target-lang').textContent || document.getElementById('session-target-lang').innerText || 'ru').trim();
+                            playAudio(textToPlay, targetLang);
+                        }
                         
                         if (e.preventDefault) {
                             e.preventDefault();
@@ -3234,61 +3328,99 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     if (target && target.tagName === 'INPUT') {
                         return;
                     }
-                    if (e.button !== 0) {
+                    if (e.button !== 0 && e.button !== 2) {
                         return;
                     }
                     var rowId = parseInt(row.getAttribute('data-row-id'));
                     var rowIdStr = String(rowId);
                     
-                    isDragSelecting = true;
-                    dragOccurred = false;
-                    
-                    if (e.shiftKey && lastClickedRowId !== null) {
-                        dragStartRowId = lastClickedRowId;
-                        dragSelectMode = true;
+                    if (e.button === 0) { // LMB
+                        isDragSelecting = true;
+                        dragOccurred = false;
                         
-                        initialSelectedMap = {};
-                        for (var key in selectedRowIdsMap) {
-                            if (selectedRowIdsMap.hasOwnProperty(key)) {
-                                initialSelectedMap[key] = selectedRowIdsMap[key];
-                            }
-                        }
-                        
-                        var start = Math.min(parseInt(lastClickedRowId), parseInt(rowId));
-                        var end = Math.max(parseInt(lastClickedRowId), parseInt(rowId));
-                        for (var j = start; j <= end; j++) {
-                            selectedRowIdsMap[String(j)] = true;
-                        }
-                        lastClickedRowId = rowId;
-                    } else {
-                        dragStartRowId = rowId;
-                        
-                        initialSelectedMap = {};
-                        for (var key in selectedRowIdsMap) {
-                            if (selectedRowIdsMap.hasOwnProperty(key)) {
-                                initialSelectedMap[key] = selectedRowIdsMap[key];
-                            }
-                        }
-                        
-                        if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
-                            delete selectedRowIdsMap[rowIdStr];
-                            dragSelectMode = false;
-                        } else {
-                            selectedRowIdsMap[rowIdStr] = true;
+                        if (e.shiftKey && lastClickedRowId !== null) {
+                            dragStartRowId = lastClickedRowId;
                             dragSelectMode = true;
+                            
+                            initialSelectedMap = {};
+                            for (var key in selectedRowIdsMap) {
+                                if (selectedRowIdsMap.hasOwnProperty(key)) {
+                                    initialSelectedMap[key] = selectedRowIdsMap[key];
+                                }
+                            }
+                            
+                            var start = Math.min(parseInt(lastClickedRowId), parseInt(rowId));
+                            var end = Math.max(parseInt(lastClickedRowId), parseInt(rowId));
+                            for (var j = start; j <= end; j++) {
+                                selectedRowIdsMap[String(j)] = true;
+                            }
+                            lastClickedRowId = rowId;
+                        } else {
+                            dragStartRowId = rowId;
+                            
+                            initialSelectedMap = {};
+                            for (var key in selectedRowIdsMap) {
+                                if (selectedRowIdsMap.hasOwnProperty(key)) {
+                                    initialSelectedMap[key] = selectedRowIdsMap[key];
+                                }
+                            }
+                            
+                            if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
+                                delete selectedRowIdsMap[rowIdStr];
+                                dragSelectMode = false;
+                            } else {
+                                selectedRowIdsMap[rowIdStr] = true;
+                                dragSelectMode = true;
+                            }
+                            lastClickedRowId = rowId;
                         }
-                        lastClickedRowId = rowId;
+                        
+                        focusedRowId = rowId;
+                        updateRowStyles();
+                        updateBidirectionalHighlights();
+                        
+                        if (audioLmbPlay && dragSelectMode) {
+                            var tds = row.getElementsByTagName('td');
+                            var lemma = "";
+                            var inflection = "";
+                            for (var m = 0; m < tds.length; m++) {
+                                if (tds[m].getAttribute('data-col') === 'WordSource') {
+                                    lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                                }
+                                if (tds[m].getAttribute('data-col') === 'WordSourceInflectedForm') {
+                                    inflection = (tds[m].textContent || tds[m].innerText || "").trim();
+                                }
+                            }
+                            var textToPlay = (audioLmbSource === 'inflection' && inflection) ? inflection : lemma;
+                            if (!textToPlay) textToPlay = lemma || inflection;
+                            var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                            playAudio(textToPlay, sourceLang);
+                        }
+                    } else if (e.button === 2) { // RMB
+                        if (audioRmbPlay) {
+                            var tds = row.getElementsByTagName('td');
+                            var translation = "";
+                            for (var m = 0; m < tds.length; m++) {
+                                if (tds[m].getAttribute('data-col') === 'WordDestination') {
+                                    translation = (tds[m].textContent || tds[m].innerText || "").trim();
+                                }
+                            }
+                            var targetLang = (document.getElementById('session-target-lang').textContent || document.getElementById('session-target-lang').innerText || 'ru').trim();
+                            playAudio(translation, targetLang);
+                        }
                     }
-                    
-                    focusedRowId = rowId;
-                    updateRowStyles();
-                    updateBidirectionalHighlights();
                     
                     if (e.preventDefault) {
                         e.preventDefault();
                     } else {
                         e.returnValue = false;
                     }
+                });
+                
+                addEvent(row, 'contextmenu', function(e) {
+                    e = e || window.event;
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                    return false;
                 });
                 
                 addEvent(row, 'mouseover', function(e) {
@@ -4042,6 +4174,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     html_page = html_page.replace("{worker_launched_js}", "true" if worker_launched else "false")
 
     html_page = html_page.replace("{language}", language)
+    html_page = html_page.replace("{target_language}", target_lang)
+    html_page = html_page.replace("{audio_lmb_play}", lmb_play_val)
+    html_page = html_page.replace("{audio_lmb_source}", f'"{lmb_source_val}"')
+    html_page = html_page.replace("{audio_rmb_play}", rmb_play_val)
+    html_page = html_page.replace("{audio_anki_tts_cli}", anki_tts_cli_path)
+    html_page = html_page.replace("{audio_python_exe}", python_exe_path)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if eff_mode == "multi" else "normal")
     
