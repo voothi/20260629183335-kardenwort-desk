@@ -2029,7 +2029,22 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         row.append("")
                     row[col_sentence_dest] = translated_sentences[row_sent_idx]
                     
-        save_tsv_rows_safely(master_tsv_path, comments, headers, data_rows)
+        col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
+        master_data_rows = []
+        if col_word_source != -1:
+            seen_words = set()
+            for row in data_rows:
+                if len(row) > col_word_source:
+                    w = row[col_word_source].strip().lower()
+                    if w and w in seen_words:
+                        continue
+                    if w:
+                        seen_words.add(w)
+                master_data_rows.append(row)
+        else:
+            master_data_rows = list(data_rows)
+            
+        save_tsv_rows_safely(master_tsv_path, comments, headers, master_data_rows)
 
         kardenwort_workspace = resolved_paths['kardenwort_workspace']
         kw_config = load_kardenwort_config(kardenwort_workspace)
