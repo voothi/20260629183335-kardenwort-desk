@@ -2056,7 +2056,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             
             sub_slug = generate_slug(sub_text)
             
-            sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.txt"
+            sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.txt"
             sub_txt_path.write_text(sub_text, encoding='utf-8')
             
             sub_trans_path = results_dir / f"{sub_zid}-{sub_slug}.{target_lang}.txt"
@@ -2106,7 +2106,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             except Exception:
                 pass
             try:
-                master_txt_path = results_dir / f"{zid}-{master_slug}.txt"
+                master_txt_path = results_dir / f"{zid}-{master_slug}.{language}.txt"
                 if master_txt_path.exists():
                     master_txt_path.unlink()
             except Exception:
