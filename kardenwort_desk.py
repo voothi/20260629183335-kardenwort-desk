@@ -1940,6 +1940,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    children_tsv_paths = []
     
     sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
     min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
@@ -2008,10 +2009,34 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else -1
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
         
+        # Populate translations back into master TSV
+        for row in data_rows:
+            row_sent_idx = -1
+            if col_index != -1 and len(row) > col_index:
+                try:
+                    row_sent_idx = int(row[col_index]) - 1
+                except ValueError:
+                    pass
+            if 0 <= row_sent_idx < len(source_sentences):
+                if col_sentence_source != -1:
+                    while len(row) <= col_sentence_source:
+                        row.append("")
+                    row[col_sentence_source] = source_sentences[row_sent_idx]
+                if col_sentence_dest != -1:
+                    while len(row) <= col_sentence_dest:
+                        row.append("")
+                    row[col_sentence_dest] = translated_sentences[row_sent_idx]
+                    
+        save_tsv_rows_safely(master_tsv_path, comments, headers, data_rows)
+
         kardenwort_workspace = resolved_paths['kardenwort_workspace']
         kw_config = load_kardenwort_config(kardenwort_workspace)
         results_dir = resolve_results_dir(resolved_paths, kw_config)
         results_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Write master translation file
+        master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
+        master_trans_path.write_text(translated_paragraph, encoding='utf-8')
         
         sub_tsv_paths = []
         import datetime as dt_mod
@@ -2068,36 +2093,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             ahk_args.extend(["--restore", str(path)])
         spawn_ahk(ahk_args, resolved_paths['base_dir'])
         
-        bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
-        text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
-        self_closing_html = f"""<!DOCTYPE html>
-<html>
-<head>
-<meta charset="utf-8">
-<style>
-html, body {{
-    overflow: hidden;
-    margin: 0;
-    padding: 0;
-    width: 100%;
-    height: 100%;
-    background-color: {bg_color};
-}}
-</style>
-<script>
-window.onload = function() {{
-    if (window.ahkCall) {{
-        window.ahkCall("close", "");
-    }}
-}};
-</script>
-</head>
-<body style="color: {text_color}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; text-align: center; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
-    <div style="font-size: 16px; font-weight: 500;">Splitting paragraph into separate sentence windows...</div>
-</body>
-</html>
-"""
-        return self_closing_html
+        # Override tsv_path and children_tsv_paths to let the render flow continue
+        tsv_path = master_tsv_path
+        children_tsv_paths = sub_tsv_paths
 
     
     # Resolve audio playback configuration
@@ -4365,6 +4363,10 @@ window.onload = function() {{
     for key, val in theme_colors.items():
         html_page = html_page.replace('{' + key + '}', val)
 
+    if children_tsv_paths:
+        paths_str = ",".join(str(path) for path in children_tsv_paths)
+        children_div = f'<div id="kardenwort-children" style="display:none;">{paths_str}</div>'
+        html_page = html_page.replace("</body>", f"{children_div}</body>")
     
     return html_page
 
