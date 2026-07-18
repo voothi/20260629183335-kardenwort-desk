@@ -1945,6 +1945,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
     min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
     alignment_method = config.get('sentences_mode', 'alignment_method', fallback='auto') if config.has_section('sentences_mode') else 'auto'
+    spawn_order = config.get('sentences_mode', 'spawn_order', fallback='normal') if config.has_section('sentences_mode') else 'normal'
     
     abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
     abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
@@ -2089,7 +2090,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             sub_tsv_paths.append(sub_tsv_path)
             
         ahk_args = []
-        for path in sub_tsv_paths:
+        paths_to_spawn = list(sub_tsv_paths)
+        if spawn_order == 'reverse':
+            paths_to_spawn.reverse()
+        for path in paths_to_spawn:
             ahk_args.extend(["--restore", str(path)])
         spawn_ahk(ahk_args, resolved_paths['base_dir'])
         
