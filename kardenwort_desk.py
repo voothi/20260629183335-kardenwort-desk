@@ -2120,7 +2120,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
             bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
             text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
-            self_closing_html = f"""<!DOCTYPE html>
+            self_closing_html = f"""<!-- KARDENWORT_CLOSE -->
+<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
