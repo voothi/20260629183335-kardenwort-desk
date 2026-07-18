@@ -2030,16 +2030,20 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     row[col_sentence_dest] = translated_sentences[row_sent_idx]
                     
         col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
+        col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
         master_data_rows = []
-        if col_word_source != -1:
+        dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
+        if col_word_source != -1 and dedup_scope_cfg != 'none':
             seen_words = set()
             for row in data_rows:
                 if len(row) > col_word_source:
                     w = row[col_word_source].strip().lower()
-                    if w and w in seen_words:
+                    pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
+                    key = (w, pos)
+                    if w and key in seen_words:
                         continue
                     if w:
-                        seen_words.add(w)
+                        seen_words.add(key)
                 master_data_rows.append(row)
         else:
             master_data_rows = list(data_rows)
