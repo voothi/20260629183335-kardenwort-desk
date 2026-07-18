@@ -1766,6 +1766,15 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
         if not terminators.strip():
             terminators = ".!?:"
+            
+        sentences_mode_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
+        min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
+        dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence') if config.has_section('sentences_mode') else 'sentence'
+
+        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+        is_sentences_mode_run = sentences_mode_enabled and len(sentences) >= min_sentences
+        dedup_scope = dedup_scope_cfg if is_sentences_mode_run else "global"
+
         use_temp = (eff_mode == 'single') or (not save_source_text)
         if use_temp:
             if eff_mode == 'single':
@@ -1786,7 +1795,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             str(kardenwort_script),
             "--type", "word",
             "--language", language,
-            "--deduplication-scope", "global",
+            "--deduplication-scope", dedup_scope,
             "--lemma-index-file", str(lemma_index_file),
             "--lemma-override-file", str(lemma_override_file),
             "--sentence-context-size", "0",
@@ -1931,6 +1940,155 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    
+    sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
+    min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
+    alignment_method = config.get('sentences_mode', 'alignment_method', fallback='auto') if config.has_section('sentences_mode') else 'auto'
+    
+    abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
+    abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
+    terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+    if not terminators.strip():
+        terminators = ".!?:"
+    wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
+    
+    source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+    
+    if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
+        main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
+        
+        # Translate paragraph holistically
+        translated_sentences = []
+        translated_paragraph = ""
+        try:
+            translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider)
+            translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=terminators)
+        except Exception as e:
+            logger.warning(f"Holistic translation failed: {e}")
+            
+        # Fallback to newline_join block translation
+        do_fallback = (len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join')
+        if do_fallback and alignment_method != 'proportion':
+            try:
+                translations_dict = translate_source_text(
+                    "\n".join(source_sentences), language, target_lang, 'multi',
+                    config, resolved_paths, main_text_provider
+                )
+                translated_sentences = [translations_dict.get(i, "").strip() for i in range(len(source_sentences))]
+            except Exception as e:
+                logger.error(f"Newline-join alignment fallback failed: {e}")
+                
+        # Final proportional safety net fallback
+        if len(translated_sentences) != len(source_sentences):
+            if not translated_paragraph:
+                try:
+                    translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider)
+                except Exception:
+                    translated_paragraph = "[Translation Error]"
+            lengths = [len(s) for s in source_sentences]
+            translated_sentences = split_by_proportion(translated_paragraph, lengths)
+            
+        while len(translated_sentences) < len(source_sentences):
+            translated_sentences.append("")
+        translated_sentences = translated_sentences[:len(source_sentences)]
+        
+        # Extract master TSV
+        master_slug = generate_slug(text)
+        master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
+        master_tsv_path = prepare_lookup_tsv(
+            text, language, target_lang, config, resolved_paths, zid,
+            ttl_seconds=0, cache_key=master_cache_key, text_mode=text_mode
+        )
+        
+        comments, headers, data_rows = load_tsv_rows(master_tsv_path)
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, headers)
+        
+        col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+        col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else -1
+        col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+        
+        kardenwort_workspace = resolved_paths['kardenwort_workspace']
+        kw_config = load_kardenwort_config(kardenwort_workspace)
+        results_dir = resolve_results_dir(resolved_paths, kw_config)
+        results_dir.mkdir(parents=True, exist_ok=True)
+        
+        sub_tsv_paths = []
+        import datetime as dt_mod
+        try:
+            master_time = dt_mod.datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
+        except Exception:
+            master_time = dt_mod.datetime.now()
+            
+        for i in range(len(source_sentences)):
+            sub_text = source_sentences[i]
+            sub_trans = translated_sentences[i]
+            
+            sub_dt = master_time + dt_mod.timedelta(seconds=i+1)
+            sub_zid = sub_dt.strftime('%Y%m%d%H%M%S')
+            
+            sub_slug = generate_slug(sub_text)
+            
+            sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.txt"
+            sub_txt_path.write_text(sub_text, encoding='utf-8')
+            
+            sub_trans_path = results_dir / f"{sub_zid}-{sub_slug}.{target_lang}.txt"
+            sub_trans_path.write_text(sub_trans, encoding='utf-8')
+            
+            sub_rows = []
+            for row in data_rows:
+                row_sent_idx = -1
+                if col_index != -1 and len(row) > col_index:
+                    try:
+                        row_sent_idx = int(row[col_index]) - 1
+                    except ValueError:
+                        pass
+                if row_sent_idx == i:
+                    sub_row = list(row)
+                    if col_index != -1:
+                        while len(sub_row) <= col_index:
+                            sub_row.append("")
+                        sub_row[col_index] = "1"
+                    if col_sentence_source != -1:
+                        while len(sub_row) <= col_sentence_source:
+                            sub_row.append("")
+                        sub_row[col_sentence_source] = sub_text
+                    if col_sentence_dest != -1:
+                        while len(sub_row) <= col_sentence_dest:
+                            sub_row.append("")
+                        sub_row[col_sentence_dest] = sub_trans
+                    sub_rows.append(sub_row)
+                    
+            sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
+            save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
+            sub_tsv_paths.append(sub_tsv_path)
+            
+        ahk_args = []
+        for path in sub_tsv_paths:
+            ahk_args.extend(["--restore", str(path)])
+        spawn_ahk(ahk_args, resolved_paths['base_dir'])
+        
+        bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
+        text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
+        self_closing_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<script>
+window.onload = function() {{
+    if (window.ahkCall) {{
+        window.ahkCall("close", "");
+    }}
+}};
+</script>
+</head>
+<body style="background-color: {bg_color}; color: {text_color}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; text-align: center; padding: 40px; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; box-sizing: border-box;">
+    <div style="font-size: 16px; font-weight: 500;">Splitting paragraph into separate sentence windows...</div>
+</body>
+</html>
+"""
+        return self_closing_html
+
     
     # Resolve audio playback configuration
     lmb_play_val = "false"
