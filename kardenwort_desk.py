@@ -2092,7 +2092,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             
         master_seq = seq_num if seq_num is not None else 1
         ahk_args = []
-        paths_to_spawn = [(master_seq + i + 1, path) for i, path in enumerate(sub_tsv_paths)]
+        start_offset = 0 if parent_mode == 'stub' else 1
+        paths_to_spawn = [(master_seq + i + start_offset, path) for i, path in enumerate(sub_tsv_paths)]
         if spawn_order == 'reverse':
             paths_to_spawn.reverse()
         for child_seq, path in paths_to_spawn:
