@@ -2129,6 +2129,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <html>
 <head>
 <meta charset="utf-8">
+<meta http-equiv="X-UA-Compatible" content="IE=edge">
 <style>
 html, body {{
     overflow: hidden;
