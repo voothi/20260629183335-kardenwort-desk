@@ -2074,6 +2074,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <html>
 <head>
 <meta charset="utf-8">
+<style>
+html, body {{
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: {bg_color};
+}}
+</style>
 <script>
 window.onload = function() {{
     if (window.ahkCall) {{
@@ -2082,7 +2092,7 @@ window.onload = function() {{
 }};
 </script>
 </head>
-<body style="background-color: {bg_color}; color: {text_color}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; text-align: center; padding: 40px; margin: 0; display: flex; align-items: center; justify-content: center; height: 100vh; box-sizing: border-box;">
+<body style="color: {text_color}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; text-align: center; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
     <div style="font-size: 16px; font-weight: 500;">Splitting paragraph into separate sentence windows...</div>
 </body>
 </html>
