@@ -1938,7 +1938,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 
     return selected_positions, len(selected_positions) > 0
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     children_tsv_paths = []
     
@@ -2089,12 +2089,13 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
             sub_tsv_paths.append(sub_tsv_path)
             
+        master_seq = seq_num if seq_num is not None else 1
         ahk_args = []
-        paths_to_spawn = list(sub_tsv_paths)
+        paths_to_spawn = [(master_seq + i + 1, path) for i, path in enumerate(sub_tsv_paths)]
         if spawn_order == 'reverse':
             paths_to_spawn.reverse()
-        for path in paths_to_spawn:
-            ahk_args.extend(["--restore", str(path)])
+        for child_seq, path in paths_to_spawn:
+            ahk_args.extend(["--seq-num", str(child_seq), "--restore", str(path)])
         spawn_ahk(ahk_args, resolved_paths['base_dir'])
         
         # Override tsv_path and children_tsv_paths to let the render flow continue
@@ -5195,7 +5196,7 @@ def cmd_render(args):
     try:
         zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
         split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint('settings', 'split_gap_limit', fallback=60)
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill)
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill, seq_num=getattr(args, 'seq_num', None))
         from b64util import encode
         emit_payload(encode(html), raw=True)
     except Exception as e:
@@ -7051,6 +7052,7 @@ def main():
     p_render.add_argument("--tsv", default=None, help="Path to TSV file to render")
     p_render.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
     p_render.add_argument("--split-gap-limit", type=int, default=None, help="Maximum source-word index distance allowed between parts of a split/separable verb construct")
+    p_render.add_argument("--seq-num", type=int, default=None, help="Parent window sequence number")
 
     # export
     p_export = subparsers.add_parser("export")
