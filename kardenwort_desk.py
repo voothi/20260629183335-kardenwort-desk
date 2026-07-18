@@ -2120,7 +2120,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 
             bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
             text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
-            self_closing_html = f"""<!DOCTYPE html>
+            
+            paths_str = ",".join(str(path) for path in sub_tsv_paths)
+            children_div = f'<div id="kardenwort-children" style="display:none;">{paths_str}</div>'
+            stub_div = '<div id="kardenwort-is-stub" style="display:none;">1</div>'
+            
+            stub_html = f"""<!DOCTYPE html>
 <html>
 <head>
 <meta charset="utf-8">
@@ -2134,20 +2139,15 @@ html, body {{
     background-color: {bg_color};
 }}
 </style>
-<script>
-window.onload = function() {{
-    if (window.ahkCall) {{
-        window.ahkCall("close", "");
-    }}
-}};
-</script>
 </head>
 <body style="color: {text_color}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; text-align: center; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
     <div style="font-size: 16px; font-weight: 500;">Splitting paragraph into separate sentence windows...</div>
+    {children_div}
+    {stub_div}
 </body>
 </html>
 """
-            return self_closing_html
+            return stub_html
 
         # Override tsv_path and children_tsv_paths to let the render flow continue
         tsv_path = master_tsv_path
