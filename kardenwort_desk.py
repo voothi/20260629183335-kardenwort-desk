@@ -2137,6 +2137,7 @@ html, body {{
 <script>
 window.onload = function() {{
     if (window.ahkCall) {{
+        window.ahkCall("hide_buttons", "");
         window.ahkCall("close", "");
     }}
 }};
