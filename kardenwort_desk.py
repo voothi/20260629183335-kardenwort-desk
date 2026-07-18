@@ -1946,6 +1946,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
     alignment_method = config.get('sentences_mode', 'alignment_method', fallback='auto') if config.has_section('sentences_mode') else 'auto'
     spawn_order = config.get('sentences_mode', 'spawn_order', fallback='normal') if config.has_section('sentences_mode') else 'normal'
+    parent_mode = config.get('sentences_mode', 'parent_mode', fallback='full') if config.has_section('sentences_mode') else 'full'
     
     abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
     abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
@@ -2098,6 +2099,56 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             ahk_args.extend(["--seq-num", str(child_seq), "--restore", str(path)])
         spawn_ahk(ahk_args, resolved_paths['base_dir'])
         
+        if parent_mode == 'stub':
+            try:
+                if master_tsv_path.exists():
+                    master_tsv_path.unlink()
+            except Exception:
+                pass
+            try:
+                master_txt_path = results_dir / f"{zid}-{master_slug}.txt"
+                if master_txt_path.exists():
+                    master_txt_path.unlink()
+            except Exception:
+                pass
+            try:
+                master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
+                if master_trans_path.exists():
+                    master_trans_path.unlink()
+            except Exception:
+                pass
+
+            bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
+            text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
+            self_closing_html = f"""<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<style>
+html, body {{
+    overflow: hidden;
+    margin: 0;
+    padding: 0;
+    width: 100%;
+    height: 100%;
+    background-color: {bg_color};
+}}
+</style>
+<script>
+window.onload = function() {{
+    if (window.ahkCall) {{
+        window.ahkCall("close", "");
+    }}
+}};
+</script>
+</head>
+<body style="color: {text_color}; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Helvetica, Arial, sans-serif; text-align: center; display: flex; align-items: center; justify-content: center; box-sizing: border-box;">
+    <div style="font-size: 16px; font-weight: 500;">Splitting paragraph into separate sentence windows...</div>
+</body>
+</html>
+"""
+            return self_closing_html
+
         # Override tsv_path and children_tsv_paths to let the render flow continue
         tsv_path = master_tsv_path
         children_tsv_paths = sub_tsv_paths
