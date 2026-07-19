@@ -968,7 +968,7 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:")
     
     if not sentences:
         return []
-    if len(sentences) <= 1 and len(text) > max_chars:
+    if len(sentences) <= 1 and max_chars > 0 and len(text) > max_chars:
         return _split_long_line(text, max_chars)
     return sentences
 
@@ -1976,7 +1976,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             source_sentences = []
             for line in text.splitlines():
                 if line.strip():
-                    source_sentences.extend(split_single_mode_text(line, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators))
+                    # Pass max_chars=0 to disable arbitrary length wrapping for multi mode paragraphs
+                    source_sentences.extend(split_single_mode_text(line, 0, abbrevs=abbrev_set, terminators=terminators))
                 else:
                     source_sentences.append(line)
             
