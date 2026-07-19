@@ -1955,6 +1955,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     alignment_method = config.get('sentences_mode', 'alignment_method', fallback='auto') if config.has_section('sentences_mode') else 'auto'
     spawn_order = config.get('sentences_mode', 'spawn_order', fallback='normal') if config.has_section('sentences_mode') else 'normal'
     parent_mode = config.get('sentences_mode', 'parent_mode', fallback='full') if config.has_section('sentences_mode') else 'full'
+    multi_mode_decompose = config.getboolean('sentences_mode', 'multi_mode_sentence_decomposition', fallback=False) if config.has_section('sentences_mode') else False
     
     abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
     abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
@@ -1971,8 +1972,16 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     if eff_mode == 'single':
         source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
     else:
-        # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
-        source_sentences = text.splitlines()
+        if multi_mode_decompose:
+            source_sentences = []
+            for line in text.splitlines():
+                if line.strip():
+                    source_sentences.extend(split_single_mode_text(line, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators))
+                else:
+                    source_sentences.append(line)
+        else:
+            # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
+            source_sentences = text.splitlines()
     
     if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
         main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
