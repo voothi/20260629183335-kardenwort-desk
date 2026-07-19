@@ -924,13 +924,13 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:")
         }
     
     escaped_terms = "".join(re.escape(c) for c in terminators)
-    candidates = list(re.finditer(f'(?<=[{escaped_terms}])\\s+', text))
+    candidates = list(re.finditer(rf'(?<=[{escaped_terms}])\s+|[\r\n]+', text))
     
     splits = []
     last_idx = 0
     for m in candidates:
         split_pos = m.start()
-        punc = text[split_pos - 1]
+        punc = text[split_pos - 1] if split_pos > 0 else ''
         
         if punc == '.':
             preceding_part = text[last_idx:split_pos]
