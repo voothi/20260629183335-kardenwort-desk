@@ -968,7 +968,9 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:")
     
     if not sentences:
         return []
-    if len(sentences) <= 1 and max_chars > 0 and len(text) > max_chars:
+        
+    has_punctuation = any(t in text for t in terminators)
+    if len(sentences) <= 1 and max_chars > 0 and len(text) > max_chars and not has_punctuation:
         return _split_long_line(text, max_chars)
     return sentences
 
