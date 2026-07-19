@@ -1095,6 +1095,8 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
 
 
 def _effective_text_mode(text, configured_text_mode=None):
+    if configured_text_mode == 'multi':
+        return 'multi'
     stripped = text.strip()
     return 'multi' if ('\n' in stripped or '\r' in stripped) else 'single'
 

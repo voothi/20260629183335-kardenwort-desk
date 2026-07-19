@@ -249,3 +249,28 @@ def test_punctuation_marks_prevent_wrapping():
     res_wrap = desk.split_single_mode_text(text, max_chars=90, punctuation_marks=".")
     assert len(res_wrap) > 1
 
+def test_single_mode_punctuation_no_recursion(monkeypatch):
+    import configparser
+    config = configparser.ConfigParser()
+    config.add_section('translation')
+    config.set('translation', 'translation_wrap_max_chars', '50')
+    
+    # 60 character sentence containing a comma (punctuation).
+    # Since it contains punctuation, it should not wrap/split.
+    text = "Here is a sentence with a comma, which is over 50 characters."
+    
+    translate_called = 0
+    def mock_translate(t, source_lang, target_lang, cfg, paths, provider):
+        nonlocal translate_called
+        translate_called += 1
+        # Avoid infinite loops during test runs
+        if translate_called > 10:
+            raise RecursionError("Infinite recursion detected")
+        return t.upper()
+        
+    monkeypatch.setattr(desk, "translate_text", mock_translate)
+    
+    res = desk.translate_source_text(text, "en", "ru", "single", config, {}, "google")
+    assert res == {0: text.upper()}
+    assert translate_called == 1
+
