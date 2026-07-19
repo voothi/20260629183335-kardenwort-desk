@@ -1967,7 +1967,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         terminators = ".!?:"
     wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
     
-    source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+    eff_mode = _effective_text_mode(text, text_mode)
+    if eff_mode == 'single':
+        source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+    else:
+        # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
+        source_sentences = text.splitlines()
     
     if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
         main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
