@@ -913,7 +913,7 @@ def _split_long_line(line, max_chars=90):
     out.append(cur)
     return out
 
-def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:"):
+def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:", punctuation_marks=".,;:!?()\"[]{}—–"):
     import re
     if abbrevs is None:
         abbrevs = {
@@ -969,7 +969,7 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:")
     if not sentences:
         return []
         
-    has_punctuation = any(t in text for t in terminators)
+    has_punctuation = any(char in punctuation_marks for char in text)
     if len(sentences) <= 1 and max_chars > 0 and len(text) > max_chars and not has_punctuation:
         return _split_long_line(text, max_chars)
     return sentences
@@ -1317,7 +1317,13 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 terminators = terminators.strip('\'"')
             if not terminators.strip():
                 terminators = ".!?:"
-            pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+            
+            punctuation_marks = config.get('sentences_mode', 'punctuation_marks', fallback=None) if config.has_section('sentences_mode') else None
+            if punctuation_marks is None:
+                punctuation_marks = ".,;:!?()\"[]{}—–"
+            else:
+                punctuation_marks = punctuation_marks.strip('\'"')
+            pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
             words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
             words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
             max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
@@ -1777,11 +1783,17 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         if not terminators.strip():
             terminators = ".!?:"
             
+        punctuation_marks = config.get('sentences_mode', 'punctuation_marks', fallback=None) if config.has_section('sentences_mode') else None
+        if punctuation_marks is None:
+            punctuation_marks = ".,;:!?()\"[]{}—–"
+        else:
+            punctuation_marks = punctuation_marks.strip('\'"')
+            
         sentences_mode_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
         min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
         dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence') if config.has_section('sentences_mode') else 'sentence'
 
-        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
         is_sentences_mode_run = sentences_mode_enabled and len(sentences) >= min_sentences
         dedup_scope = dedup_scope_cfg if is_sentences_mode_run else "global"
 
@@ -1968,18 +1980,25 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         terminators = terminators.strip('\'"')
     if not terminators.strip():
         terminators = ".!?:"
+        
+    punctuation_marks = config.get('sentences_mode', 'punctuation_marks', fallback=None) if config.has_section('sentences_mode') else None
+    if punctuation_marks is None:
+        punctuation_marks = ".,;:!?()\"[]{}—–"
+    else:
+        punctuation_marks = punctuation_marks.strip('\'"')
+        
     wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
     
     eff_mode = _effective_text_mode(text, text_mode)
     if eff_mode == 'single':
-        source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+        source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
     else:
         if multi_mode_decompose:
             source_sentences = []
             for line in text.splitlines():
                 if line.strip():
                     # Pass max_chars=0 to disable arbitrary length wrapping for multi mode paragraphs
-                    source_sentences.extend(split_single_mode_text(line, 0, abbrevs=abbrev_set, terminators=terminators))
+                    source_sentences.extend(split_single_mode_text(line, 0, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks))
                 else:
                     source_sentences.append(line)
             
@@ -2000,7 +2019,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         translated_paragraph = ""
         try:
             translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider)
-            translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=terminators)
+            translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=terminators, punctuation_marks=punctuation_marks)
         except Exception as e:
             logger.warning(f"Holistic translation failed: {e}")
             

@@ -236,3 +236,16 @@ def test_context_truncation():
     # TargetSentence (1 word) + 2 words left + 2 words right = 5 words total
     assert res[0] == "word2 word3 TargetSentence word4 word5"
 
+def test_punctuation_marks_prevent_wrapping():
+    # Long text with a comma but no terminators (.!?)
+    text = "Here is why this synchronization is only necessary for multi mode, whereas single mode handles it implicitly"
+    
+    # Under standard wrap limit of 90, if we do not check punctuation, it would wrap/split.
+    # Since it contains a comma (,), and by default comma is in punctuation_marks, it should NOT wrap.
+    res = desk.split_single_mode_text(text, max_chars=90)
+    assert res == [text]
+
+    # If we pass custom punctuation_marks that does NOT include comma, it should wrap.
+    res_wrap = desk.split_single_mode_text(text, max_chars=90, punctuation_marks=".")
+    assert len(res_wrap) > 1
+
