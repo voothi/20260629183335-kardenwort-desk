@@ -1802,7 +1802,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         use_temp = (eff_mode == 'single') or (not save_source_text)
         if use_temp:
             if eff_mode == 'single':
-                split_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+                split_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
                 temp_content = "\n".join(split_lines)
             else:
                 temp_content = text
@@ -1875,7 +1875,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 col_src_sent = headers.index(role_fields.get('sentence_source', 'SentenceSource')) if role_fields.get('sentence_source', 'SentenceSource') in headers else -1
                 if col_src_idx != -1 and col_src_sent != -1:
                     if eff_mode == 'single':
-                        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
+                        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
                     else:
                         sentences = [ln.strip() for ln in text.splitlines()]
                     padded_sentences = pad_sentences(sentences, text, words_before, words_after, max_words=max_words)
