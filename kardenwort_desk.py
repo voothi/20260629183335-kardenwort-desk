@@ -1308,7 +1308,11 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
         else:
             abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
             abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
-            terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+            terminators = config.get('sentences_mode', 'terminators', fallback=None) if config.has_section('sentences_mode') else None
+            if terminators is None:
+                terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+            if terminators:
+                terminators = terminators.strip('\'"')
             if not terminators.strip():
                 terminators = ".!?:"
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators)
@@ -1763,7 +1767,11 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     try:
         abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
         abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
-        terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+        terminators = config.get('sentences_mode', 'terminators', fallback=None) if config.has_section('sentences_mode') else None
+        if terminators is None:
+            terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+        if terminators:
+            terminators = terminators.strip('\'"')
         if not terminators.strip():
             terminators = ".!?:"
             
@@ -1950,7 +1958,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     
     abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
     abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
-    terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+    terminators = config.get('sentences_mode', 'terminators', fallback=None) if config.has_section('sentences_mode') else None
+    if terminators is None:
+        terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+    if terminators:
+        terminators = terminators.strip('\'"')
     if not terminators.strip():
         terminators = ".!?:"
     wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
