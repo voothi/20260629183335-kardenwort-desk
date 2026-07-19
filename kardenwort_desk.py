@@ -1979,6 +1979,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     source_sentences.extend(split_single_mode_text(line, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators))
                 else:
                     source_sentences.append(line)
+            
+            # CRITICAL: Overwrite the original text with joined flattened sentences.
+            # In multi mode, kardenwort.py core determines data array length strictly by newlines via splitlines().
+            # If we don't sync this string, the core will generate fewer items than the frontend expects,
+            # causing fatal misalignments between generated sentence windows and TSV lemma mappings.
+            text = "\n".join(source_sentences)
         else:
             # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
             source_sentences = text.splitlines()
