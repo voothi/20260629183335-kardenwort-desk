@@ -5394,10 +5394,14 @@ def cmd_export(args):
     else:
         actual_export_rows = selected_rows
         
+    execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui=True, data_rows=data_rows, headers=headers, comments=comments)
+
+def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui, data_rows, headers, comments, save_to_favorites_override=None, send_to_anki_override=None):
     if not actual_export_rows:
         logger.warning("No rows to export based on selection mode.")
-        emit_payload({"status": "skipped", "message": "Warning: No rows to export based on selection mode. Export skipped."})
-        sys.exit(0)
+        if is_from_ui:
+            emit_payload({"status": "skipped", "message": "Warning: No rows to export based on selection mode. Export skipped."})
+        return
         
     exported_rows = []
     for row_id in actual_export_rows:
@@ -5407,8 +5411,9 @@ def cmd_export(args):
             logger.warning(f"Export row index {row_id} is out of bounds (total rows: {len(data_rows)})")
 
     if not exported_rows:
-        emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
-        sys.exit(0)
+        if is_from_ui:
+            emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
+        return
 
     # Resolve the selected column name from mapping config.
     selected_col_name = 'DeskSelected'
@@ -5456,7 +5461,7 @@ def cmd_export(args):
     dest_filename = f"{fav_prefix}{tsv_path.name}"
     dest_path = fav_dir / dest_filename
 
-    save_to_favorites = config.getboolean('settings', 'save_to_favorites_on_export', fallback=True)
+    save_to_favorites = config.getboolean('settings', 'save_to_favorites_on_export', fallback=True) if save_to_favorites_override is None else save_to_favorites_override
     import_path = dest_path if save_to_favorites else (results_dir / f"temp_import_{dest_filename}")
 
     try:
@@ -5478,38 +5483,125 @@ def cmd_export(args):
         else:
             logger.info(f"Exported temporary file for Anki import to {import_path}")
         
-        send_to_anki = config.getboolean('settings', 'send_to_anki_after_export', fallback=False)
+        send_to_anki = config.getboolean('settings', 'send_to_anki_after_export', fallback=False) if send_to_anki_override is None else send_to_anki_override
         if send_to_anki:
             detach = config.getboolean('settings', 'detach_import_on_send', fallback=True)
             show_window = config.getboolean('settings', 'show_import_window', fallback=False)
             if detach:
                 show_window = False
                 pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
-                response = {
-                    "import_started": True,
-                    "show_window": show_window,
-                    "pid": pid,
-                    "log": log_path,
-                    "tsv": str(import_path),
-                    "note": "safe to close the window"
-                }
-                emit_payload(response)
+                if is_from_ui:
+                    response = {
+                        "import_started": True,
+                        "show_window": show_window,
+                        "pid": pid,
+                        "log": log_path,
+                        "tsv": str(import_path),
+                        "note": "safe to close the window"
+                    }
+                    emit_payload(response)
             else:
                 success, output = run_synchronous_import(import_path, config, resolved_paths)
-                if success:
-                    emit_payload({"import_complete": True, "show_window": show_window, "output": output})
+                if is_from_ui:
+                    if success:
+                        emit_payload({"import_complete": True, "show_window": show_window, "output": output})
+                    else:
+                        print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
+                        sys.exit(1)
                 else:
-                    print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
-                    sys.exit(1)
+                    if not success:
+                        logger.error(f"Anki import failed synchronously: {output}")
         else:
             if save_to_favorites:
                 show_window = config.getboolean('settings', 'show_import_window', fallback=False)
-                emit_payload({"import_complete": True, "show_window": show_window, "output": f"SUCCESS: Exported to {import_path}"})
+                if is_from_ui:
+                    emit_payload({"import_complete": True, "show_window": show_window, "output": f"SUCCESS: Exported to {import_path}"})
             else:
-                emit_payload({"status": "success", "message": "SUCCESS: Ready for Anki (no favorites file created)"})
+                if is_from_ui:
+                    emit_payload({"status": "success", "message": "SUCCESS: Ready for Anki (no favorites file created)"})
     except Exception as e:
-        print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
-        sys.exit(1)
+        if is_from_ui:
+            print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
+            sys.exit(1)
+        else:
+            logger.error(f"Failed to save exported favorites: {e}")
+
+def execute_selected_pipeline(args, force_send_to_anki: bool):
+    logger.info(f"Selected pipeline invoked (force_send_to_anki={force_send_to_anki})")
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
+    
+    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    
+    mapping = None
+    try:
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+    except Exception:
+        pass
+
+    if not hasattr(args, 'files') or not args.files:
+        logger.warning("No files provided for selected pipeline.")
+        return
+
+    for tsv_path_str in args.files:
+        tsv_path = Path(tsv_path_str).resolve()
+        if not tsv_path.exists():
+            logger.error(f"File not found: {tsv_path}")
+            continue
+            
+        zid = extract_zid(tsv_path)
+        if not zid:
+            logger.warning(f"Could not extract ZID from {tsv_path.name}. Using default.")
+            zid = "00000000000000"
+            
+        try:
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        except Exception as e:
+            logger.error(f"Failed to read TSV {tsv_path}: {e}")
+            continue
+            
+        selected_col_name = 'DeskSelected'
+        if mapping:
+            _rf = get_role_fields(mapping, headers)
+            selected_col_name = _rf.get('selected', selected_col_name)
+            
+        selected_col_idx = headers.index(selected_col_name) if selected_col_name in headers else -1
+        if selected_col_idx == -1:
+            logger.warning(f"No {selected_col_name} column found in {tsv_path}. Skipping.")
+            continue
+            
+        actual_export_rows = []
+        for i, row in enumerate(data_rows):
+            if row and len(row) > selected_col_idx and row[selected_col_idx] == '1':
+                actual_export_rows.append(i)
+                
+        if not actual_export_rows:
+            logger.info(f"No selected rows found in {tsv_path.name}. Skipping.")
+            continue
+            
+        execute_export(
+            tsv_path=tsv_path,
+            actual_export_rows=actual_export_rows,
+            config=config,
+            resolved_paths=resolved_paths,
+            results_dir=results_dir,
+            zid=zid,
+            lang=lang,
+            is_from_ui=False,
+            data_rows=data_rows,
+            headers=headers,
+            comments=comments,
+            save_to_favorites_override=True,
+            send_to_anki_override=force_send_to_anki
+        )
+
+def cmd_export_selected(args):
+    execute_selected_pipeline(args, force_send_to_anki=False)
+
+def cmd_import_selected(args):
+    execute_selected_pipeline(args, force_send_to_anki=True)
 
 def cmd_reprocess(args):
     logger.info("Reprocess subcommand invoked")
@@ -7201,6 +7293,14 @@ def main():
     p_export.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_export.add_argument("--language", required=True, help="Language code")
 
+    p_export_selected = subparsers.add_parser("export-selected")
+    p_export_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
+    p_export_selected.add_argument("--language", default=None, help="Language code")
+
+    p_import_selected = subparsers.add_parser("import-selected")
+    p_import_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
+    p_import_selected.add_argument("--language", default=None, help="Language code")
+
     # reprocess
     p_reprocess = subparsers.add_parser("reprocess")
     p_reprocess.add_argument("--selection-manifest", required=True, help="Selection manifest path")
@@ -7282,6 +7382,8 @@ def main():
         "lookup": cmd_lookup,
         "render": cmd_render,
         "export": cmd_export,
+        "export-selected": cmd_export_selected,
+        "import-selected": cmd_import_selected,
         "reprocess": cmd_reprocess,
         "retext": cmd_retext,
         "batch-worker": cmd_reprocess_worker,
