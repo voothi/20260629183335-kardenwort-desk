@@ -6733,10 +6733,13 @@ def cmd_merge(args):
                     unique_data_rows = []
                     for pair in seen_pairs:
                         rows_list = grouped_rows[pair]
-                        # Prioritize the option with the most fields filled in.
-                        # Ties are resolved in favor of the first encountered option (stable choice).
-                        best_row = max(enumerate(rows_list), key=lambda x: (sum(1 for cell in x[1] if cell.strip()), -x[0]))[1]
-                        unique_data_rows.append(best_row)
+                        # Merge rows by overlaying non-empty fields from oldest to newest
+                        merged_row = [""] * len(first_headers)
+                        for r in rows_list:
+                            for i, cell in enumerate(r):
+                                if i < len(merged_row) and cell.strip():
+                                    merged_row[i] = cell
+                        unique_data_rows.append(merged_row)
                     all_data_rows = unique_data_rows
 
             # Sort by frequency if requested
