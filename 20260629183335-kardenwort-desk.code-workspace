@@ -24,7 +24,8 @@
 			"name": "oxford-3000-5000",
 			"desc": "(Wordlists) (Kardenwort Core) (TSV)",
 			"path": "U:/voothi/20260715190122-oxford-3000-5000"
-		},		{
+		},
+		{
 			"name": "german-5000",
 			"desc": "(Wordlists) (Kardenwort Core) (TSV)",
 			"path": "U:/voothi/20260716201616-german-5000"
@@ -173,6 +174,11 @@
 			"name": "default",
 			"desc": "(Default)",
 			"path": "U:/voothi/20260531201104-default"
+		},
+		{
+			"name": "english-deutsch",
+			"desc": "(Anki) (Template)",
+			"path": "U:/voothi/20260723121135-english-deutsch"
 		}
 	],
 	"settings": {
