@@ -3093,176 +3093,194 @@ html, body {{
             }
         } catch(e) {}
         
-        window.receiveUpdate = function(data) {
-            if (!data) return;
-            
-            if (data.stage === 'finished') {
-                if (window.pollInterval) {
-                    clearInterval(window.pollInterval);
-                    window.pollInterval = null;
+        window.AppState = {
+            rows: {},
+            sourceText: null,
+            translatedText: null,
+            stage: null,
+            applyDeltas: function(data) {
+                if (!data) return;
+                
+                if (data.stage === 'finished') {
+                    if (window.pollInterval) {
+                        clearInterval(window.pollInterval);
+                        window.pollInterval = null;
+                    }
+                    if (window.ahkCall) {
+                        window.ahkCall('finished', '');
+                    }
                 }
-                if (window.ahkCall) {
-                    window.ahkCall('finished', '');
+                
+                var updated = false;
+                
+                if (data.sourceText !== undefined) {
+                    window.AppState.sourceText = data.sourceText;
+                    if (window.AppView.renderSourceText()) {
+                        updated = true;
+                    }
                 }
-            }
-            
-            var updated = false;
-            if (data.sourceText) {
-                var container = document.getElementById('source-container');
-                if (container) {
-                    var pendingNode = container.querySelector('[data-pending="true"]');
-                    var hasSpans = container.querySelector('span.word') !== null;
-                    if (pendingNode || !hasSpans) {
-                        // Only apply when in skeleton/pending state or no spans rendered yet.
-                        // Do NOT replace if spans already exist — wiping textContent destroys
-                        // all span DOM nodes that MVPBookmark holds live references to.
-                        var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
-                        var newText = data.sourceText.trim().replace(/\\s+/g, ' ');
-                        if (pendingNode || currentText !== newText) {
-                            container.textContent = data.sourceText;
-                            if (typeof tokenSpans !== 'undefined') {
-                                tokenSpans = [];
+                if (data.translatedText !== undefined) {
+                    window.AppState.translatedText = data.translatedText;
+                    if (window.AppView.renderTranslatedText()) {
+                        updated = true;
+                    }
+                }
+                
+                var rowsData = null;
+                if (data.stage) {
+                    if (data.rows) rowsData = data.rows;
+                } else {
+                    rowsData = data;
+                }
+                
+                if (rowsData) {
+                    for (var rowId in rowsData) {
+                        if (rowsData.hasOwnProperty(rowId)) {
+                            if (!window.AppState.rows[rowId]) window.AppState.rows[rowId] = {};
+                            var delta = rowsData[rowId];
+                            for (var key in delta) {
+                                window.AppState.rows[rowId][key] = delta[key];
                             }
-                            updated = true;
+                            if (window.AppView.renderRow(rowId, data.stage)) {
+                                updated = true;
+                            }
                         }
                     }
                 }
+                
+                if (updated) {
+                    if (window.clearMVPBookmarks) window.clearMVPBookmarks();
+                    if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
+                }
             }
-            if (data.translatedText !== undefined) {
+        };
+
+        window.AppView = {
+            renderSourceText: function() {
+                var container = document.getElementById('source-container');
+                if (!container) return false;
+                var pendingNode = container.querySelector('[data-pending="true"]');
+                var hasSpans = container.querySelector('span.word') !== null;
+                if (pendingNode || !hasSpans) {
+                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                    var newText = (window.AppState.sourceText || "").trim().replace(/\s+/g, ' ');
+                    if (pendingNode || currentText !== newText) {
+                        container.textContent = window.AppState.sourceText;
+                        if (typeof tokenSpans !== 'undefined') {
+                            tokenSpans = [];
+                        }
+                        return true;
+                    }
+                }
+                return false;
+            },
+            renderTranslatedText: function() {
                 var container = document.getElementById('translation-container');
-                if (container) {
-                    var pendingNode = container.querySelector('[data-pending="true"]');
-                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
-                    var tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = data.translatedText;
-                    var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
-                    if (newText || !pendingNode) {
-                        if (pendingNode || currentText !== newText) {
-                            container.innerHTML = data.translatedText;
+                if (!container) return false;
+                var pendingNode = container.querySelector('[data-pending="true"]');
+                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                var tempDiv = document.createElement('div');
+                tempDiv.innerHTML = window.AppState.translatedText;
+                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
+                if (newText || !pendingNode) {
+                    if (pendingNode || currentText !== newText) {
+                        container.innerHTML = window.AppState.translatedText;
+                        return true;
+                    }
+                }
+                return false;
+            },
+            renderRow: function(rowId, globalStage) {
+                var updated = false;
+                var rowData = window.AppState.rows[rowId];
+                var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                if (!tr) return false;
+                var tds = tr.getElementsByTagName('td');
+                if (tds.length >= 5) {
+                    if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
+                        var div = tds[1].querySelector('.scrollable-cell');
+                        var val = rowData.lemma || "";
+                        var oldVal = div ? div.textContent : (tds[1].classList.contains('editing') ? null : tds[1].textContent);
+                        if (oldVal !== val) {
+                            if (div) div.textContent = val;
+                            else if (!tds[1].classList.contains('editing')) tds[1].textContent = val;
                             updated = true;
                         }
                     }
-                }
-            }
-            
-            if (updated) {
-                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
-                if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
-            }
-            
-            var rowsData = null;
-            if (data.stage) {
-                if (data.rows) {
-                    rowsData = data.rows;
-                }
-            } else {
-                rowsData = data;
-            }
-            
-            if (rowsData) {
-                for (var rowId in rowsData) {
-                    if (rowsData.hasOwnProperty(rowId)) {
-                        var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
-                        if (tr) {
-                            var tds = tr.getElementsByTagName('td');
-                            var rowData = rowsData[rowId];
-                            if (tds.length >= 5) {
-                                if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
-                                    var div = tds[1].querySelector('.scrollable-cell');
-                                    var val = rowData.lemma || "";
-                                    var oldVal = div ? div.textContent : (tds[1].classList.contains('editing') ? null : tds[1].textContent);
-                                    var shouldUpdate = (oldVal !== val);
-                                    if (shouldUpdate) {
-                                        if (div) div.textContent = val;
-                                        else if (!tds[1].classList.contains('editing')) tds[1].textContent = val;
-                                        updated = true;
-                                    }
-                                }
-                                if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
-                                    var div = tds[2].querySelector('.scrollable-cell');
-                                    var val = rowData.trans || "";
-                                    var oldVal = div ? div.textContent : (tds[2].classList.contains('editing') ? null : tds[2].textContent);
-                                    var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
-                                    var shouldUpdate = (oldVal !== val);
-                                    if (hasSkeleton) shouldUpdate = (val !== "") || (data.stage === 'finished');
-                                    if (shouldUpdate) {
-                                        if (div) div.textContent = val;
-                                        else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
-                                        updated = true;
-                                    }
-                                }
-                                if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
-                                    var div = tds[3].querySelector('.scrollable-cell');
-                                    var val = rowData.ipa || "";
-                                    var oldVal = div ? div.textContent : (tds[3].classList.contains('editing') ? null : tds[3].textContent);
-                                    var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
-                                    var shouldUpdate = (oldVal !== val);
-                                    if (hasSkeleton) shouldUpdate = (val !== "") || (data.stage === 'finished');
-                                    if (shouldUpdate) {
-                                        if (div) div.textContent = val;
-                                        else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
-                                        updated = true;
-                                    }
-                                }
-                                if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
-                                    var div = tds[4].querySelector('.scrollable-cell');
-                                    var val = rowData.morph || "";
-                                    var oldVal = div ? div.innerHTML : (tds[4].classList.contains('editing') ? null : tds[4].innerHTML);
-                                    var hasSkeleton = (div || tds[4]).querySelector('.skeleton-loader') !== null;
-                                    var shouldUpdate = (oldVal !== val);
-                                    if (hasSkeleton) shouldUpdate = (val !== "") || (data.stage === 'finished');
-                                    if (shouldUpdate) {
-                                        if (div) div.innerHTML = val;
-                                        else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
-                                        updated = true;
-                                    }
-                                }
-                                if (rowData.hasOwnProperty('classifications') && rowData.classifications !== undefined) {
-                                    for (var class_name in rowData.classifications) {
-                                        if (rowData.classifications.hasOwnProperty(class_name)) {
-                                            var val = rowData.classifications[class_name] || "";
-                                            var cell = tr.querySelector('td[data-col="' + class_name + '"]');
-                                            if (cell) {
-                                                var div = cell.querySelector('.scrollable-cell');
-                                                var displayVal = val;
-                                                var spanClass = "";
-                                                if (val.indexOf(':') !== -1) {
-                                                    var parts = val.split(':', 2);
-                                                    var possiblePrefix = parts[0].trim();
-                                                    if (possiblePrefix.length <= 5 && possiblePrefix.indexOf('/') === -1 && possiblePrefix.indexOf('\\\\') === -1) {
-                                                        displayVal = parts[1].trim();
-                                                        spanClass = "level-" + possiblePrefix.toLowerCase();
-                                                    }
-                                                }
-                                                var innerHtml = spanClass ? '<span class="' + spanClass + '">' + displayVal + '</span>' : displayVal;
-                                                var oldHtml = div ? div.innerHTML : cell.innerHTML;
-                                                if (oldHtml !== innerHtml) {
-                                                    if (div) div.innerHTML = innerHtml;
-                                                    else cell.innerHTML = innerHtml;
-                                                    updated = true;
-                                                }
-                                            }
+                    if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
+                        var div = tds[2].querySelector('.scrollable-cell');
+                        var val = rowData.trans || "";
+                        var oldVal = div ? div.textContent : (tds[2].classList.contains('editing') ? null : tds[2].textContent);
+                        var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
+                        var shouldUpdate = (oldVal !== val);
+                        if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished');
+                        if (shouldUpdate) {
+                            if (div) div.textContent = val;
+                            else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
+                            updated = true;
+                        }
+                    }
+                    if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
+                        var div = tds[3].querySelector('.scrollable-cell');
+                        var val = rowData.ipa || "";
+                        var oldVal = div ? div.textContent : (tds[3].classList.contains('editing') ? null : tds[3].textContent);
+                        var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
+                        var shouldUpdate = (oldVal !== val);
+                        if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished');
+                        if (shouldUpdate) {
+                            if (div) div.textContent = val;
+                            else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
+                            updated = true;
+                        }
+                    }
+                    if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
+                        var div = tds[4].querySelector('.scrollable-cell');
+                        var val = rowData.morph || "";
+                        var oldVal = div ? div.innerHTML : (tds[4].classList.contains('editing') ? null : tds[4].innerHTML);
+                        var hasSkeleton = (div || tds[4]).querySelector('.skeleton-loader') !== null;
+                        var shouldUpdate = (oldVal !== val);
+                        if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished');
+                        if (shouldUpdate) {
+                            if (div) div.innerHTML = val;
+                            else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
+                            updated = true;
+                        }
+                    }
+                    if (rowData.hasOwnProperty('classifications') && rowData.classifications !== undefined) {
+                        for (var class_name in rowData.classifications) {
+                            if (rowData.classifications.hasOwnProperty(class_name)) {
+                                var val = rowData.classifications[class_name] || "";
+                                var cell = tr.querySelector('td[data-col="' + class_name + '"]');
+                                if (cell) {
+                                    var div = cell.querySelector('.scrollable-cell');
+                                    var displayVal = val;
+                                    var spanClass = "";
+                                    if (val.indexOf(':') !== -1) {
+                                        var parts = val.split(':', 2);
+                                        var possiblePrefix = parts[0].trim();
+                                        if (possiblePrefix.length <= 5 && possiblePrefix.indexOf('/') === -1 && possiblePrefix.indexOf('\\\\') === -1) {
+                                            displayVal = parts[1].trim();
+                                            spanClass = "level-" + possiblePrefix.toLowerCase();
                                         }
                                     }
+                                    var innerHtml = spanClass ? '<span class="' + spanClass + '">' + displayVal + '</span>' : displayVal;
+                                    var oldHtml = div ? div.innerHTML : cell.innerHTML;
+                                    if (oldHtml !== innerHtml) {
+                                        if (div) div.innerHTML = innerHtml;
+                                        else cell.innerHTML = innerHtml;
+                                        updated = true;
+                                    }
                                 }
                             }
                         }
                     }
                 }
+                return updated;
             }
-            
-            // Force IE11 layout reflow to fix table rendering glitches
-            if (updated) {
-                var table = document.getElementById('lemma-table');
-                if (table) {
-                    var scrollY = window.pageYOffset || document.documentElement.scrollTop || document.body.scrollTop;
-                    var disp = table.style.display;
-                    table.style.display = 'none';
-                    table.offsetHeight; // trigger reflow
-                    table.style.display = disp;
-                    window.scrollTo(0, scrollY);
-                }
-            }
+        };
+
+        window.receiveUpdate = function(data) {
+            window.AppState.applyDeltas(data);
         };
 
         window.startPolling = function() {
