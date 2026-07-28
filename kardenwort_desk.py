@@ -3101,7 +3101,7 @@ html, body {{
             applyDeltas: function(data) {
                 if (!data) return;
                 
-                if (data.stage === 'finished') {
+                if (data.stage === 'finished' || data.status === 'failed' || data.status === 'partial_persisted') {
                     if (window.pollInterval) {
                         clearInterval(window.pollInterval);
                         window.pollInterval = null;
