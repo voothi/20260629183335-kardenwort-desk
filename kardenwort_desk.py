@@ -3987,6 +3987,7 @@ html, body {{
         window.clearAllSelectionsAndNotify = function() {
             clearAllSelections();
             notifyAHKSelection();
+            document.body.className = document.body.className;
         };
         
         function toggleRowSelection(rowId, forceState) {
@@ -4119,6 +4120,7 @@ html, body {{
                 cell.appendChild(div);
                 cell.classList.remove('editing');
                 window.cancelActiveEdit = null;
+                document.body.className = document.body.className;
             };
             
             function commit() {
@@ -4143,6 +4145,7 @@ html, body {{
                     rebuildDeltas();
                     touchedCells[rowId + '_' + colName] = true;
                 }
+                document.body.className = document.body.className;
             }
             window.commitActiveEdit = commit;
             
@@ -4194,15 +4197,16 @@ html, body {{
         };
         
         window.setSelectedRows = function(rowsJsonStr) {
-            selectedRowIdsMap = {};
             try {
                 var arr = JSON.parse(rowsJsonStr);
-                for (var k = 0; k < arr.length; k++) {
-                    selectedRowIdsMap[String(arr[k])] = true;
+                selectedRowIdsMap = {};
+                for (var i = 0; i < arr.length; i++) {
+                    selectedRowIdsMap[String(arr[i])] = true;
                 }
+                updateRowStyles();
+                updateBidirectionalHighlights();
+                document.body.className = document.body.className;
             } catch(e) {}
-            updateRowStyles();
-            updateBidirectionalHighlights();
         };
         
         window.deleteSelectedRows = function() {
@@ -4331,6 +4335,9 @@ html, body {{
             if (window.ahkCall) {
                 window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
             }
+            
+            // Force MSHTML repaint/reflow after undo/redo
+            document.body.className = document.body.className;
         }
         
         window.getDeltas = function() {
@@ -4423,6 +4430,7 @@ html, body {{
             if (cellToEdit) {
                 makeEditable(cellToEdit);
             }
+            document.body.className = document.body.className;
         };
         
         window.selectAllInActiveEdit = function() {
