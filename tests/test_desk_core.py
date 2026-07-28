@@ -1069,3 +1069,20 @@ def test_cmd_merge_resilient_schema_union(monkeypatch, tmp_path):
     # Banana row: SentenceSourceIndex offset to 2 (due to 1 non-empty line in part1.txt) and ClassificationOxford preserved
     assert final_rows[1] == ["banana", "banan", "2", "3k:A1"]
 
+
+def test_write_update_js_finished_stage(tmp_path):
+    tsv_path = tmp_path / "test.tsv"
+    data_rows = [["der", "тот", "", ""]]
+    headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+    
+    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="Source Text", translated_text="Translated Text")
+    
+    update_js_path = tsv_path.with_suffix(".update.js")
+    assert update_js_path.exists()
+    content = update_js_path.read_text(encoding="utf-8")
+    assert '"stage": "finished"' in content
+    assert '"sourceText": "Source Text"' in content
+    assert '"translatedText": "Translated Text"' in content
+
+
