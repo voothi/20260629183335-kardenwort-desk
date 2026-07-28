@@ -7,6 +7,44 @@ from pathlib import Path
 import pytest
 import kardenwort_desk as desk
 
+def test_write_update_js(tmp_path):
+    tsv_path = tmp_path / "data.tsv"
+    data_rows = [["Apple", "Apfel", "ˈapfl̩", "N"]]
+    headers = ["Word", "Translation", "IPA", "POS"]
+    role_fields = {
+        "lemma": "Word",
+        "word_translation": "Translation",
+        "ipa": "IPA",
+        "morphology": "POS"
+    }
+    
+    desk.write_update_js(
+        tsv_path, 
+        data_rows, 
+        headers, 
+        role_fields, 
+        stage="translated", 
+        status="success"
+    )
+    
+    update_js = tmp_path / "data.update.js"
+    assert update_js.exists()
+    
+    content = update_js.read_text(encoding="utf-8")
+    assert "window.receiveUpdate" in content
+    
+    match = __import__('re').search(r"window\.receiveUpdate\((.*)\);", content, __import__('re').DOTALL)
+    assert match
+    
+    payload = json.loads(match.group(1))
+    assert payload["stage"] == "translated"
+    assert payload["status"] == "success"
+    assert "0" in payload["rows"]
+    assert payload["rows"]["0"]["lemma"] == "Apple"
+    assert payload["rows"]["0"]["trans"] == "Apfel"
+    assert payload["rows"]["0"]["ipa"] == "ˈapfl̩"
+    assert payload["rows"]["0"]["morph"] == "N"
+
 def test_deobfuscation():
     # Setup simulated settings and secrets files
     with tempfile.TemporaryDirectory() as tmpdir:

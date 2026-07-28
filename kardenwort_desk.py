@@ -3115,13 +3115,13 @@ html, body {{
                 
                 if (data.sourceText !== undefined) {
                     window.AppState.sourceText = data.sourceText;
-                    if (window.AppView.renderSourceText()) {
+                    if (window.AppView.renderSourceText(data.stage)) {
                         updated = true;
                     }
                 }
                 if (data.translatedText !== undefined) {
                     window.AppState.translatedText = data.translatedText;
-                    if (window.AppView.renderTranslatedText()) {
+                    if (window.AppView.renderTranslatedText(data.stage)) {
                         updated = true;
                     }
                 }
@@ -3174,7 +3174,7 @@ html, body {{
                 }
                 return false;
             },
-            renderTranslatedText: function() {
+            renderTranslatedText: function(globalStage) {
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
                 var pendingNode = container.querySelector('[data-pending="true"]');
@@ -3182,8 +3182,9 @@ html, body {{
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText;
                 var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
-                if (newText || !pendingNode) {
-                    if (pendingNode || currentText !== newText) {
+                var forceUpdate = (globalStage === 'finished' || globalStage === 'translated');
+                if (newText || !pendingNode || forceUpdate) {
+                    if (pendingNode || currentText !== newText || forceUpdate) {
                         container.innerHTML = window.AppState.translatedText;
                         return true;
                     }
