@@ -3162,8 +3162,8 @@ html, body {{
                 var pendingNode = container.querySelector('[data-pending="true"]');
                 var hasSpans = container.querySelector('span.word') !== null;
                 if (pendingNode || !hasSpans) {
-                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
-                    var newText = (window.AppState.sourceText || "").trim().replace(/\s+/g, ' ');
+                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
+                    var newText = (window.AppState.sourceText || "").trim().replace(/\\s+/g, ' ');
                     if (pendingNode || currentText !== newText) {
                         container.textContent = window.AppState.sourceText;
                         if (typeof tokenSpans !== 'undefined') {
@@ -3178,10 +3178,10 @@ html, body {{
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
                 var pendingNode = container.querySelector('[data-pending="true"]');
-                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText;
-                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
+                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
                 if (newText || !pendingNode) {
                     if (pendingNode || currentText !== newText) {
                         container.innerHTML = window.AppState.translatedText;
