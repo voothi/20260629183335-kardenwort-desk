@@ -3116,17 +3116,17 @@ html, body {{
                 
                 var updated = false;
                 
-                if (data.sourceText !== undefined) {
+                if (data.sourceText !== undefined && data.sourceText !== "") {
                     window.AppState.sourceText = data.sourceText;
+                    if (window.AppView.renderSourceText(data.stage)) {
+                        updated = true;
+                    }
                 }
-                if (window.AppView.renderSourceText(data.stage)) {
-                    updated = true;
-                }
-                if (data.translatedText !== undefined) {
+                if (data.translatedText !== undefined && data.translatedText !== "") {
                     window.AppState.translatedText = data.translatedText;
-                }
-                if (window.AppView.renderTranslatedText(data.stage)) {
-                    updated = true;
+                    if (window.AppView.renderTranslatedText(data.stage)) {
+                        updated = true;
+                    }
                 }
                 
                 var rowsData = null;
@@ -6121,11 +6121,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         update_data = {
             "stage": stage,
             "status": status,
-            "sourceText": source_text or "",
-            "translatedText": translated_text or ""
+            "rows": rows_data
         }
-        if stage != "source":
-            update_data["rows"] = rows_data
+        if source_text:
+            update_data["sourceText"] = source_text
+        if translated_text:
+            update_data["translatedText"] = translated_text
         
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
