@@ -3115,15 +3115,15 @@ html, body {{
                 
                 if (data.sourceText !== undefined) {
                     window.AppState.sourceText = data.sourceText;
-                    if (window.AppView.renderSourceText(data.stage)) {
-                        updated = true;
-                    }
+                }
+                if (window.AppView.renderSourceText(data.stage)) {
+                    updated = true;
                 }
                 if (data.translatedText !== undefined) {
                     window.AppState.translatedText = data.translatedText;
-                    if (window.AppView.renderTranslatedText(data.stage)) {
-                        updated = true;
-                    }
+                }
+                if (window.AppView.renderTranslatedText(data.stage)) {
+                    updated = true;
                 }
                 
                 var rowsData = null;
@@ -3151,21 +3151,27 @@ html, body {{
                 if (updated) {
                     if (window.clearMVPBookmarks) window.clearMVPBookmarks();
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
+                    
+                    // Force MSHTML repaint/reflow
+                    document.body.className = document.body.className;
                 }
             }
         };
 
         window.AppView = {
-            renderSourceText: function() {
+            renderSourceText: function(globalStage) {
                 var container = document.getElementById('source-container');
                 if (!container) return false;
                 var pendingNode = container.querySelector('[data-pending="true"]');
                 var hasSpans = container.querySelector('span.word') !== null;
-                if (pendingNode || !hasSpans) {
-                    var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
-                    var newText = (window.AppState.sourceText || "").trim().replace(/\\s+/g, ' ');
-                    if (pendingNode || currentText !== newText) {
-                        container.textContent = window.AppState.sourceText;
+                var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
+                var tempDiv = document.createElement('div');
+                tempDiv.innerHTML = window.AppState.sourceText || "";
+                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
+                var forceUpdate = (globalStage === 'finished' || globalStage === 'translated');
+                if (newText || !pendingNode || !hasSpans || forceUpdate) {
+                    if (pendingNode || currentText !== newText || forceUpdate) {
+                        container.innerHTML = window.AppState.sourceText || "";
                         if (typeof tokenSpans !== 'undefined') {
                             tokenSpans = [];
                         }
@@ -3180,12 +3186,12 @@ html, body {{
                 var pendingNode = container.querySelector('[data-pending="true"]');
                 var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
-                tempDiv.innerHTML = window.AppState.translatedText;
+                tempDiv.innerHTML = window.AppState.translatedText || "";
                 var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
                 var forceUpdate = (globalStage === 'finished' || globalStage === 'translated');
                 if (newText || !pendingNode || forceUpdate) {
                     if (pendingNode || currentText !== newText || forceUpdate) {
-                        container.innerHTML = window.AppState.translatedText;
+                        container.innerHTML = window.AppState.translatedText || "";
                         return true;
                     }
                 }
