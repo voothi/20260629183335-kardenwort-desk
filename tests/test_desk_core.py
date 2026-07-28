@@ -1085,4 +1085,20 @@ def test_write_update_js_finished_stage(tmp_path):
     assert '"sourceText": "Source Text"' in content
     assert '"translatedText": "Translated Text"' in content
 
+def test_write_update_js_source_stage(tmp_path):
+    tsv_path = tmp_path / "test_src.tsv"
+    data_rows = [["Haus", "дом", "", ""]]
+    headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+
+    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="source", source_text="Das Haus")
+
+    update_js_path = tsv_path.with_suffix(".update.js")
+    assert update_js_path.exists()
+    content = update_js_path.read_text(encoding="utf-8")
+    assert '"stage": "source"' in content
+    assert '"sourceText": "Das Haus"' in content
+    assert "window.receiveUpdate" in content
+
+
 
