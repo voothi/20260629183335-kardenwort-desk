@@ -333,3 +333,114 @@ def test_cancel_edit(page, tmp_path):
     import json
     deltas = json.loads(deltas_json)
     assert len(deltas) == 0
+
+def test_global_undo_redo_shortcuts(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    row = page.locator("tr[data-row-id='0']")
+    row.click()
+    page.keyboard.press("Delete")
+    
+    # Verify row is hidden
+    assert row.evaluate("el => window.getComputedStyle(el).display") == "none"
+    
+    # Press Ctrl+Z
+    page.keyboard.press("Control+z")
+    
+    # Verify row is visible again
+    assert row.evaluate("el => window.getComputedStyle(el).display") != "none"
+    
+    # Press Ctrl+Y
+    page.keyboard.press("Control+y")
+    
+    # Verify row is hidden again
+    assert row.evaluate("el => window.getComputedStyle(el).display") == "none"
+
+def test_global_select_all_shortcut(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    # Add a second row to test select all
+    html = html.replace('</tbody>', '<tr data-row-id="1"><td class="col-checkbox" data-col="DeskSelected"></td><td data-col="WordSource"><div class="scrollable-cell">Hund</div></td><td data-col="WordDestination" class="editable"><div class="scrollable-cell">собака</div></td><td data-col="WordSourceIPA"><div class="scrollable-cell"></div></td><td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell"></div></td><td data-col="Oxford"><div class="scrollable-cell"></div></td></tr></tbody>')
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Press Ctrl+A
+    page.keyboard.press("Control+a")
+    
+    # Verify both rows are selected
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+    
+    assert "selected" in row0.get_attribute("class")
+    assert "selected" in row1.get_attribute("class")
+
+def test_keyboard_row_navigation_and_space_toggle(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    html = html.replace('</tbody>', '<tr data-row-id="1"><td class="col-checkbox" data-col="DeskSelected"></td><td data-col="WordSource"><div class="scrollable-cell">Hund</div></td><td data-col="WordDestination" class="editable"><div class="scrollable-cell">собака</div></td><td data-col="WordSourceIPA"><div class="scrollable-cell"></div></td><td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell"></div></td><td data-col="Oxford"><div class="scrollable-cell"></div></td></tr></tbody>')
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Focus table by pressing ArrowDown
+    page.keyboard.press("ArrowDown")
+    
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+    
+    # Verify row 0 is focused (has outline style set)
+    assert "solid" in row0.evaluate("el => el.style.outline")
+    
+    # Press Space to toggle selection of row 0
+    page.keyboard.press("Space")
+    assert "selected" in row0.get_attribute("class")
+    
+    # Press ArrowDown to navigate to row 1
+    page.keyboard.press("ArrowDown")
+    assert "solid" in row1.evaluate("el => el.style.outline")
+    
+    # Press Space to toggle selection of row 1
+    page.keyboard.press("Space")
+    assert "selected" in row1.get_attribute("class")
+
+
+def test_f2_shortcut_editing(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Click the destination cell to set lastClickedCell and focus
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    page.evaluate("window.__selectableTextMode = false;")
+    cell.click()
+    
+    # Press F2
+    page.keyboard.press("F2")
+    
+    # Verify input element appears
+    input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
+    input_el.wait_for(state="visible", timeout=2000)
+    assert input_el.is_visible() is True
+
+
+def test_dirty_cell_class(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    page.evaluate("window.__selectableTextMode = false;")
+    cell.dblclick()
+    
+    input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
+    input_el.wait_for(state="visible", timeout=2000)
+    input_el.fill("новый дом")
+    input_el.press("Enter")
+    
+    # Verify td has dirty class
+    assert "dirty" in cell.get_attribute("class")
+    
+    # Undo edit
+    page.evaluate("window.undo()")
+    
+    # Verify dirty class is removed
+    assert "dirty" not in (cell.get_attribute("class") or "")
