@@ -3245,15 +3245,19 @@ html, body {{
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.sourceText || "";
                 var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
+                
+                // Do not destroy perfectly good span.word tags if the text hasn't changed
+                if (hasSpans && !pendingNode && currentText === newText) {
+                    return false;
+                }
+                
                 var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
-                if (newText || !pendingNode || !hasSpans || forceUpdate) {
-                    if (pendingNode || currentText !== newText || forceUpdate) {
-                        container.innerHTML = window.AppState.sourceText || "";
-                        if (typeof tokenSpans !== 'undefined') {
-                            tokenSpans = [];
-                        }
-                        return true;
+                if (pendingNode || currentText !== newText || (forceUpdate && !hasSpans)) {
+                    container.innerHTML = window.AppState.sourceText || "";
+                    if (typeof tokenSpans !== 'undefined') {
+                        tokenSpans = [];
                     }
+                    return true;
                 }
                 return false;
             },
