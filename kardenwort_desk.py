@@ -6130,10 +6130,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 if d["trans"] or d["ipa"] or d["morph"] or d["lemma"]
             }
         else:
-            if source_text is None:
-                # Do not fallback to reading .txt, as sending plain text destroys the span DOM in the frontend
-                pass
-                    
+            # Note: We intentionally do not fallback to reading source_text from .txt when it is None
+            # because sending plain text destroys the span DOM established in the frontend.
             if translated_text is None:
                 if tsv_path:
                     try:
