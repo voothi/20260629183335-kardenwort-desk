@@ -3120,15 +3120,16 @@ html, body {{
                 
                 if (data.sourceText !== undefined && data.sourceText !== "") {
                     window.AppState.sourceText = data.sourceText;
+                    if (window.AppView.renderSourceText(data.stage)) updated = true;
+                } else if (document.getElementById('source-container') && document.getElementById('source-container').querySelector('[data-pending="true"]')) {
+                    if (window.AppView.renderSourceText(data.stage)) updated = true;
                 }
-                if (window.AppView.renderSourceText(data.stage)) {
-                    updated = true;
-                }
+                
                 if (data.translatedText !== undefined && data.translatedText !== "") {
                     window.AppState.translatedText = data.translatedText;
-                }
-                if (window.AppView.renderTranslatedText(data.stage)) {
-                    updated = true;
+                    if (window.AppView.renderTranslatedText(data.stage)) updated = true;
+                } else if (document.getElementById('translation-container') && document.getElementById('translation-container').querySelector('[data-pending="true"]')) {
+                    if (window.AppView.renderTranslatedText(data.stage)) updated = true;
                 }
                 
                 var rowsData = null;
