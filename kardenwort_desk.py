@@ -649,8 +649,8 @@ def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
 
 def is_tsv_llm_filled(headers, data_rows, mapping):
     role_fields = get_role_fields(mapping, headers)
-    col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
-    col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields.get('word_translation', 'WordDestination') in headers else -1
+    col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
+    col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
     
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
@@ -670,6 +670,21 @@ def is_tsv_llm_filled(headers, data_rows, mapping):
                         return False
                         
     return True
+
+
+def is_base_translation_finished(headers, data_rows, role_fields):
+    if not data_rows:
+        return True
+    col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
+    col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
+    
+    if col_lemma != -1 and col_word_dest != -1:
+        for row in data_rows:
+            if len(row) > col_lemma and row[col_lemma].strip():
+                if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                    return False
+    return True
+
 
 
 def find_working_tsv(results_dir, zid, language):
@@ -6514,7 +6529,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
     if not zid_match: return
     my_zid = zid_match.group(1)
     
-    max_wait = 45
+    max_wait = 15
     start_wait = time.time()
     
     while time.time() - start_wait < max_wait:
@@ -6538,13 +6553,13 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
                     if not is_base_translation_finished(headers, data_rows, role_fields):
                         all_filled = False
                         break
-            except Exception:
-                all_filled = False
-                break
+            except Exception as e:
+                logger.warning(f"Error checking sibling TSV {sibling}: {e}")
+                pass
                 
         if all_filled:
             break
-        time.sleep(2)
+        time.sleep(1)
 
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
@@ -6561,7 +6576,7 @@ def cmd_progressive_worker(args):
         logger.info("Progressive-worker subcommand invoked")
         config, resolved_paths, goldendict, _wordfill = load_config(args.config)
         import os
-        os.environ["KARDEN_ACTIVE_TEXT_MODE"] = args.text_mode
+        os.environ["KARDEN_ACTIVE_TEXT_MODE"] = getattr(args, 'text_mode', 'single')
         
         if not tsv_path.exists():
             return
@@ -6573,16 +6588,18 @@ def cmd_progressive_worker(args):
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             
-        wait_for_older_siblings_in_batch(tsv_path, mapping)
+        # Write initial source stage immediately so UI renders without delay
+        write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
+            
+        if getattr(args, 'text_mode', 'single') == 'multi':
+            wait_for_older_siblings_in_batch(tsv_path, mapping)
             
         try:
             run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
             run_text = config.get('triggers', 'run_text_translation', fallback='auto')
             run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
             enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
-            
-            # Write initial source stage
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
+
             
             # 1. Base Translation Stage
             if run_base == 'auto' or run_text == 'auto':

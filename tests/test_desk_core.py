@@ -1101,4 +1101,39 @@ def test_write_update_js_source_stage(tmp_path):
     assert "window.receiveUpdate" in content
 
 
+def test_is_base_translation_finished():
+    headers = ["WordSource", "WordDestination"]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination"}
+
+    # Finished base translation
+    rows_finished = [["Haus", "house"]]
+    assert desk.is_base_translation_finished(headers, rows_finished, role_fields) is True
+
+    # Unfinished base translation
+    rows_unfinished = [["Haus", ""]]
+    assert desk.is_base_translation_finished(headers, rows_unfinished, role_fields) is False
+
+    # Empty rows
+    assert desk.is_base_translation_finished(headers, [], role_fields) is True
+
+
+def test_wait_for_older_siblings_in_batch(tmp_path):
+    # Setup older filled sibling TSV and younger working TSV
+    sibling_tsv = tmp_path / "20260729010000-part1.tsv"
+    sibling_tsv.write_text("WordSource\tWordDestination\nHaus\thouse\n", encoding="utf-8")
+
+    working_tsv = tmp_path / "20260729010005-part2.tsv"
+    working_tsv.write_text("WordSource\tWordDestination\nAuto\t\n", encoding="utf-8")
+
+    mapping = {"desk_columns": {"WordSource": "lemma", "WordDestination": "word_translation"}}
+
+    # Should complete almost instantly without exception because sibling is base translation finished
+    import time
+    start = time.time()
+    desk.wait_for_older_siblings_in_batch(working_tsv, mapping)
+    duration = time.time() - start
+    assert duration < 5.0
+
+
+
 
