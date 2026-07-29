@@ -458,3 +458,70 @@ def test_run_render_flow_with_classification(tmp_path, monkeypatch):
     assert '<span class="level-5k">C1</span>' in html
 
 
+def test_orthogonal_tsv_column_mapping(tmp_path, monkeypatch):
+    import configparser
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+    
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+    
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'default_target_language', 'ru')
+    config.add_section('rendering')
+    config.set('rendering', 'display_mode', 'monolithic')
+    config.add_section('triggers')
+    config.add_section('environment')
+    config.set('environment', 'kardenwort_workspace', str(tmp_path))
+    config.add_section('languages')
+    config.set('languages', 'en_lemma_index', 'en_idx')
+    
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(tmp_path / "anki_mapping.ini")
+    }
+    
+    mapping = configparser.ConfigParser()
+    mapping.add_section('fields')
+    mapping.add_section('desk_columns')
+    # Use totally custom column names
+    mapping.set('desk_columns', 'MyCustomLemma', 'lemma')
+    mapping.set('desk_columns', 'MyCustomTranslation', 'word_translation')
+    mapping.set('desk_columns', 'MyCustomInflection', 'inflected')
+    mapping.set('desk_columns', 'MyCustomIPA', 'ipa')
+    
+    # Set editable columns to match
+    mapping.add_section('desk_editable')
+    mapping.set('desk_editable', 'editable_columns', 'MyCustomLemma, MyCustomTranslation, MyCustomInflection')
+    
+    with open(tmp_path / "anki_mapping.ini", 'w') as f:
+        mapping.write(f)
+        
+    res_dir = tmp_path / "results"
+    res_dir.mkdir()
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("MyCustomLemma\tMyCustomTranslation\tMyCustomInflection\tMyCustomIPA\nword1\ttrans1\tinf1\tipa1\n", encoding='utf-8')
+    
+    html_out = run_render_flow(
+        text="word1",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+    
+    # Assert orthogonal columns are injected into data-col attributes
+    assert 'data-col="MyCustomLemma"' in html_out
+    assert 'data-col="MyCustomTranslation"' in html_out
+    assert 'data-col="MyCustomInflection"' in html_out
+    assert 'data-col="MyCustomIPA"' in html_out
+    
+    # Assert JavaScript variables correctly use the custom lemma
+    assert "getAttribute('data-col') === 'MyCustomLemma'" in html_out
+    assert "getAttribute('data-col') === 'MyCustomInflection'" in html_out
+    
+    # Assert editable classes are properly resolved
+    assert 'class="editable" data-col="MyCustomLemma"' in html_out
+    assert 'class="editable" data-col="MyCustomInflection"' in html_out
