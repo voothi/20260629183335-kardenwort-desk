@@ -2497,8 +2497,12 @@ html, body {{
         if is_progressive:
             if (run_text == 'auto' and not sentence_translated) or (run_base == 'auto' and has_untranslated_lemmas) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
-                run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, str(has_untranslated_lemmas), skip_intellifiller, eff_mode)
-                worker_launched = True
+                try:
+                    run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, str(has_untranslated_lemmas), skip_intellifiller, eff_mode)
+                    worker_launched = True
+                except Exception as e:
+                    logger.error(f"Failed to launch progressive worker async: {e}")
+                    worker_launched = False
         else:
             # Monolithic mode enrichment
             if run_enrich == 'auto' and enrich_provider == 'intellifiller':
@@ -5906,25 +5910,29 @@ def cmd_reprocess(args):
     except Exception:
         log_file = subprocess.DEVNULL
         
-    if sys.platform == 'win32':
-        creationflags = 0x08000000 | 0x00000200
-        subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=log_file,
-            creationflags=creationflags,
-            close_fds=True
-        )
-    else:
-        subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=log_file,
-            close_fds=True
-        )
-    emit_payload({"reprocess_started": True, "rows": cleared_count})
+    try:
+        if sys.platform == 'win32':
+            creationflags = 0x08000000 | 0x00000200
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=log_file,
+                creationflags=creationflags,
+                close_fds=True
+            )
+        else:
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=log_file,
+                close_fds=True
+            )
+        emit_payload({"reprocess_started": True, "rows": cleared_count})
+    except Exception as e:
+        logger.error(f"Failed to launch reprocess worker: {e}")
+        emit_payload({"status": "skipped", "message": f"Failed to launch worker: {e}"})
 
 def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang):
     col_lemma_name = role_fields.get('lemma', 'WordSource')
@@ -6516,25 +6524,30 @@ def cmd_retext(args):
     except Exception:
         log_file = subprocess.DEVNULL
         
-    if sys.platform == 'win32':
-        creationflags = 0x08000000 | 0x00000200
-        subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=log_file,
-            creationflags=creationflags,
-            close_fds=True
-        )
-    else:
-        subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=log_file,
-            close_fds=True
-        )
-    emit_payload({"retext_started": True})
+    try:
+        if sys.platform == 'win32':
+            creationflags = 0x08000000 | 0x00000200
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=log_file,
+                creationflags=creationflags,
+                close_fds=True
+            )
+        else:
+            subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=log_file,
+                close_fds=True
+            )
+        emit_payload({"retext_started": True})
+    except Exception as e:
+        logger.error(f"Failed to launch retext worker: {e}")
+        print_structured_error("DESK_FAILED", f"Failed to launch worker: {e}")
+        sys.exit(1)
 
 def cmd_retext_worker(args):
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
@@ -6581,20 +6594,19 @@ def cmd_retext_worker(args):
             sentence_translations, tsv_path, comments, headers,
             persist=True, return_single=False
         )
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
-        # source_text="" because retext never changes the source text;
-        # sending it would cause receiveUpdate to wipe the span DOM.
-        write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_retext_worker: {e}")
+    finally:
         try:
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
+            # source_text="" because retext never changes the source text;
+            # sending it would cause receiveUpdate to wipe the span DOM.
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
-        except Exception:
-            pass
+        except Exception as fe:
+            logger.error(f"Failed to write finished event in retext: {fe}")
 def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
     import time
     from datetime import datetime
