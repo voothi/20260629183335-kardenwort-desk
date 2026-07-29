@@ -1104,6 +1104,26 @@ def test_write_update_js_source_stage(tmp_path):
     assert '"sourceText": "Das Haus"' in content
     assert "window.receiveUpdate" in content
 
+def test_write_update_js_empty_payload(tmp_path):
+    tsv_path = tmp_path / "test_empty.tsv"
+    data_rows = [["Haus", "дом", "", ""]]
+    headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+
+    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True)
+
+    updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
+    js_files = list(updates_dir.glob("*.js"))
+    assert len(js_files) == 1
+    
+    with open(js_files[0], 'r', encoding='utf-8') as f:
+        content = f.read()
+    
+    assert '"stage": "finished"' in content
+    assert '"rows": {}' in content
+    assert 'Haus' not in content
+    assert 'дом' not in content
+
 
 def test_is_base_translation_finished():
     headers = ["WordSource", "WordDestination"]
