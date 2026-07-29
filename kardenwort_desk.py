@@ -3107,6 +3107,17 @@ html, body {{
             el['on' + type] = fn;
         }
     }
+    
+    window.forceRepaint = function() {
+        if (window.forceRepaint) window.forceRepaint();
+        var _reflow = document.body.offsetHeight;
+        var el = document.documentElement;
+        if (el) {
+            var st = el.scrollTop;
+            el.scrollTop = st ? st : 1;
+            el.scrollTop = st;
+        }
+    };
 
     function init() {
         var selectedRowIdsMap = {};
@@ -3225,13 +3236,7 @@ html, body {{
                     // Force complete MSHTML layout reflow and graphics repaint
                     if (window._repaintTimer) clearTimeout(window._repaintTimer);
                     window._repaintTimer = setTimeout(function() {
-                        document.body.className = document.body.className;
-                        var _reflow = document.body.offsetHeight;
-                        // Force MSHTML compositing surface flush via scrollTop cycle
-                        var el = document.documentElement;
-                        var st = el.scrollTop;
-                        el.scrollTop = st ? st : 1;
-                        el.scrollTop = st;
+                        if (window.forceRepaint) window.forceRepaint();
                     }, 50);
                     
                     if (window.AppState.isFinished) {
@@ -3256,7 +3261,7 @@ html, body {{
                                         else if (pp.tagName === 'TD') pp.innerHTML = "";
                                     }
                                 }
-                                document.body.className = document.body.className;
+                                if (window.forceRepaint) window.forceRepaint();
                             }
                         }, 1000);
                     }
@@ -4100,7 +4105,7 @@ html, body {{
         window.clearAllSelectionsAndNotify = function() {
             clearAllSelections();
             notifyAHKSelection();
-            document.body.className = document.body.className;
+            if (window.forceRepaint) window.forceRepaint();
         };
         
         function toggleRowSelection(rowId, forceState) {
@@ -4233,7 +4238,7 @@ html, body {{
                 cell.appendChild(div);
                 cell.classList.remove('editing');
                 window.cancelActiveEdit = null;
-                document.body.className = document.body.className;
+                if (window.forceRepaint) window.forceRepaint();
             };
             
             function commit() {
@@ -4258,7 +4263,7 @@ html, body {{
                     rebuildDeltas();
                     touchedCells[rowId + '_' + colName] = true;
                 }
-                document.body.className = document.body.className;
+                if (window.forceRepaint) window.forceRepaint();
             }
             window.commitActiveEdit = commit;
             
@@ -4318,7 +4323,7 @@ html, body {{
                 }
                 updateRowStyles();
                 updateBidirectionalHighlights();
-                document.body.className = document.body.className;
+                if (window.forceRepaint) window.forceRepaint();
             } catch(e) {}
         };
         
@@ -4450,7 +4455,7 @@ html, body {{
             }
             
             // Force MSHTML repaint/reflow after undo/redo
-            document.body.className = document.body.className;
+            if (window.forceRepaint) window.forceRepaint();
         }
         
         window.getDeltas = function() {
@@ -4543,7 +4548,7 @@ html, body {{
             if (cellToEdit) {
                 makeEditable(cellToEdit);
             }
-            document.body.className = document.body.className;
+            if (window.forceRepaint) window.forceRepaint();
         };
         
         window.selectAllInActiveEdit = function() {
