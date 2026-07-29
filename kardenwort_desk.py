@@ -2316,7 +2316,7 @@ html, body {{
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
-    update_js_path = tsv_path.with_suffix('.update.js')
+    update_js_path = working_tsv_path.with_suffix('.update.js')
     if is_progressive and update_js_path.exists():
         try:
             with open(update_js_path, 'r', encoding='utf-8') as f:
@@ -5155,7 +5155,7 @@ def collect_candidate_files(scan_roots, scan_depth, scan_scope, language, scan_s
         )
 
     if len(candidates) > scan_max_files:
-        logger.warning(
+        logger.info(
             f"wordfill: candidate file count {len(candidates)} exceeds scan_max_files={scan_max_files}; "
             f"scanning only the {scan_max_files} most recent."
         )
