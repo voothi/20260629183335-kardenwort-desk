@@ -1,4 +1,4 @@
-﻿import pytest
+import pytest
 import sys
 import argparse
 from unittest.mock import MagicMock
@@ -130,3 +130,21 @@ en_prompt=en_prompt
     assert "<h3>" not in out_str
     assert "Lemma" in out_str
 
+
+def test_cmd_merge_cli(tmp_path, monkeypatch):
+    tsv1 = tmp_path / "20260729000000-file1.en.tsv"
+    tsv1.write_text("WordSource\tWordDestination\nHaus\thouse\nAuto\tcar\n", encoding="utf-8")
+    
+    tsv2 = tmp_path / "20260729000001-file2.en.tsv"
+    tsv2.write_text("WordSource\tWordDestination\nAuto\tcar\nHund\tdog\n", encoding="utf-8")
+    
+    monkeypatch.setattr(sys, 'argv', ['kardenwort_desk.py', 'merge', '--files', str(tsv1), str(tsv2), '--deduplicate'])
+    
+    import io
+    mock_out = io.StringIO()
+    monkeypatch.setattr(sys, '__stdout__', mock_out)
+    monkeypatch.setattr(sys, 'stdout', mock_out)
+    
+    main()
+    out_str = mock_out.getvalue()
+    assert "SUCCESS: Merged TSVs" in out_str
