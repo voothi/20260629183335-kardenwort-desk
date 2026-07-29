@@ -107,6 +107,16 @@ import text_tokenizer as tok
 class ConfigError(Exception):
     pass
 
+_last_zid = None
+def generate_unique_zid():
+    global _last_zid
+    from datetime import datetime
+    current = datetime.now().strftime("%Y%m%d%H%M%S")
+    if _last_zid and current <= _last_zid:
+        current = str(int(_last_zid) + 1)
+    _last_zid = current
+    return current
+
 def parse_sections_list(raw, valid_tokens):
     if not raw or not raw.strip():
         return []
@@ -5364,7 +5374,7 @@ def cmd_wordfill(args):
 
 def cmd_lookup(args):
     import datetime, sys, subprocess, configparser
-    zid = datetime.datetime.now().strftime("%Y%m%d%H%M%S")
+    zid = generate_unique_zid()
     logger.info("Lookup subcommand invoked", extra={"zid": zid})
     
     try:
@@ -6576,15 +6586,21 @@ def cmd_retext_worker(args):
 def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
     import time
     from datetime import datetime
+    import threading
+    try:
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+        has_watchdog = True
+    except ImportError:
+        has_watchdog = False
+
     zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
     if not zid_match: return
     my_zid = zid_match.group(1)
     
     max_wait = 15
-    start_wait = time.time()
     
-    while time.time() - start_wait < max_wait:
-        all_filled = True
+    def check_siblings():
         for sibling in working_tsv_path.parent.glob("*.tsv"):
             if sibling == working_tsv_path: continue
             sib_match = re.match(r'^(\d{14})', sibling.name)
@@ -6602,15 +6618,44 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
                         _, headers, data_rows = load_tsv_rows(sibling)
                     role_fields = get_role_fields(mapping, headers)
                     if not is_base_translation_finished(headers, data_rows, role_fields):
-                        all_filled = False
-                        break
+                        return False
             except Exception as e:
                 logger.warning(f"Error checking sibling TSV {sibling}: {e}")
-                pass
-                
-        if all_filled:
-            break
-        time.sleep(1)
+        return True
+
+    if check_siblings():
+        return
+
+    if not has_watchdog:
+        start_wait = time.time()
+        while time.time() - start_wait < max_wait:
+            if check_siblings():
+                break
+            time.sleep(1)
+        return
+
+    event_cond = threading.Condition()
+    class SiblingChangeHandler(FileSystemEventHandler):
+        def on_modified(self, event):
+            if event.src_path.endswith('.tsv'):
+                with event_cond:
+                    event_cond.notify_all()
+                    
+    observer = Observer()
+    handler = SiblingChangeHandler()
+    observer.schedule(handler, path=str(working_tsv_path.parent), recursive=False)
+    observer.start()
+    
+    try:
+        start_wait = time.time()
+        with event_cond:
+            while time.time() - start_wait < max_wait:
+                if check_siblings():
+                    break
+                event_cond.wait(timeout=1.0)
+    finally:
+        observer.stop()
+        observer.join()
 
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
@@ -6895,9 +6940,7 @@ def cmd_merge(args):
         all_written_txts = []
 
         for idx, (lang, lang_files) in enumerate(sorted(files_by_lang.items())):
-            if idx > 0:
-                time.sleep(1.1)
-            timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
+            timestamp_id = generate_unique_zid()
             # Load headers and files, and compute union headers
             loaded_files = []
             union_headers = []
@@ -7439,7 +7482,7 @@ def cmd_desk(args):
         else:
             lang = config.get('settings', 'default_language', fallback='en')
             
-    timestamp_id = datetime.now().strftime('%Y%m%d%H%M%S')
+    timestamp_id = generate_unique_zid()
     
     try:
         theme_val = args.theme if hasattr(args, 'theme') else "dark"
