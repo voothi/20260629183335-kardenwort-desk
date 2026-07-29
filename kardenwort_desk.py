@@ -3227,6 +3227,11 @@ html, body {{
                     window._repaintTimer = setTimeout(function() {
                         document.body.className = document.body.className;
                         var _reflow = document.body.offsetHeight;
+                        // Force MSHTML compositing surface flush via scrollTop cycle
+                        var el = document.documentElement;
+                        var st = el.scrollTop;
+                        el.scrollTop = st ? st : 1;
+                        el.scrollTop = st;
                     }, 50);
                     
                     if (window.AppState.isFinished) {
