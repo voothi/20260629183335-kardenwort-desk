@@ -3166,10 +3166,6 @@ html, body {{
                 
                 if (data.stage === 'finished' || data.status === 'failed' || data.status === 'partial_persisted') {
                     window.AppState.isFinished = true;
-                    if (window.pollInterval) {
-                        clearInterval(window.pollInterval);
-                        window.pollInterval = null;
-                    }
                     if (window.ahkCall) {
                         window.ahkCall('finished', '');
                     }
