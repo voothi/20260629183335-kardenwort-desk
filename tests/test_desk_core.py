@@ -27,8 +27,10 @@ def test_write_update_js(tmp_path):
         status="success"
     )
     
-    update_js = tmp_path / "data.update.js"
-    assert update_js.exists()
+    updates_dir = tmp_path / "data.updates"
+    js_files = list(updates_dir.glob("*.js"))
+    assert len(js_files) == 1
+    update_js = js_files[0]
     
     content = update_js.read_text(encoding="utf-8")
     assert "window.receiveUpdate" in content
@@ -1078,9 +1080,10 @@ def test_write_update_js_finished_stage(tmp_path):
     
     desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="Source Text", translated_text="Translated Text")
     
-    update_js_path = tsv_path.with_suffix(".update.js")
-    assert update_js_path.exists()
-    content = update_js_path.read_text(encoding="utf-8")
+    updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
+    js_files = list(updates_dir.glob("*.js"))
+    assert len(js_files) == 1
+    content = js_files[0].read_text(encoding="utf-8")
     assert '"stage": "finished"' in content
     assert '"sourceText": "Source Text"' in content
     assert '"translatedText": "Translated Text"' in content
@@ -1093,9 +1096,10 @@ def test_write_update_js_source_stage(tmp_path):
 
     desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="source", source_text="Das Haus")
 
-    update_js_path = tsv_path.with_suffix(".update.js")
-    assert update_js_path.exists()
-    content = update_js_path.read_text(encoding="utf-8")
+    updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
+    js_files = list(updates_dir.glob("*.js"))
+    assert len(js_files) == 1
+    content = js_files[0].read_text(encoding="utf-8")
     assert '"stage": "source"' in content
     assert '"sourceText": "Das Haus"' in content
     assert "window.receiveUpdate" in content
