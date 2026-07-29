@@ -3202,6 +3202,29 @@ html, body {{
                         document.body.style.opacity = "0.999";
                         setTimeout(function() { document.body.style.opacity = oldO || ""; }, 0);
                     }
+                    
+                    if (window.AppState.isFinished) {
+                        setTimeout(function() {
+                            var leftover = document.querySelectorAll('td .skeleton-loader');
+                            if (leftover.length > 0) {
+                                for (var i = 0; i < leftover.length; i++) {
+                                    var p = leftover[i].parentNode;
+                                    var tr = p;
+                                    while (tr && tr.tagName !== 'TR') {
+                                        tr = tr.parentNode;
+                                    }
+                                    if (tr) {
+                                        var rid = tr.getAttribute('data-row-id');
+                                        if (rid && window.AppState.rows[rid]) {
+                                            window.AppView.renderRow(rid, 'finished');
+                                        }
+                                    }
+                                    if (p) p.innerHTML = "";
+                                }
+                                document.body.className = document.body.className;
+                            }
+                        }, 1000);
+                    }
                 }
             }
         };
@@ -6613,7 +6636,8 @@ def cmd_progressive_worker(args):
         # Write initial source stage immediately so UI renders without delay
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
             
-        wait_for_older_siblings_in_batch(tsv_path, mapping)
+        if getattr(args, 'text_mode', 'single') == 'multi':
+            wait_for_older_siblings_in_batch(tsv_path, mapping)
             
         try:
             run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
