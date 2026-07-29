@@ -6131,12 +6131,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             }
         else:
             if source_text is None:
-                source_txt_path = tsv_path.with_suffix('.txt')
-                if source_txt_path.exists():
-                    try:
-                        source_text = source_txt_path.read_text(encoding='utf-8')
-                    except Exception:
-                        pass
+                # Do not fallback to reading .txt, as sending plain text destroys the span DOM in the frontend
+                pass
                     
             if translated_text is None:
                 if tsv_path:
