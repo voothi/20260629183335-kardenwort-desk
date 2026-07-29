@@ -6538,7 +6538,8 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
                 if 0 < diff_sec <= 120:
                     with file_lock(sibling):
                         _, headers, data_rows = load_tsv_rows(sibling)
-                    if not is_tsv_llm_filled(headers, data_rows, mapping):
+                    role_fields = get_role_fields(mapping, headers)
+                    if not is_base_translation_finished(headers, data_rows, role_fields):
                         all_filled = False
                         break
             except Exception:
