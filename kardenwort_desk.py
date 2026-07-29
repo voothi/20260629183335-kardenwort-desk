@@ -6619,6 +6619,10 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
                 
                 # Check if it's an OLDER sibling from the SAME batch
                 if 0 < diff_sec <= 120:
+                    marker_file = sibling.with_suffix('.base_translation_done')
+                    if marker_file.exists():
+                        continue
+                        
                     with file_lock(sibling):
                         _, headers, data_rows = load_tsv_rows(sibling)
                     role_fields = get_role_fields(mapping, headers)
@@ -6642,7 +6646,11 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
     event_cond = threading.Condition()
     class SiblingChangeHandler(FileSystemEventHandler):
         def on_modified(self, event):
-            if event.src_path.endswith('.tsv'):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done'):
+                with event_cond:
+                    event_cond.notify_all()
+        def on_created(self, event):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done'):
                 with event_cond:
                     event_cond.notify_all()
                     
@@ -6705,6 +6713,11 @@ def cmd_progressive_worker(args):
             # 1. Base Translation Stage
             if run_base == 'auto' or run_text == 'auto':
                 data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                
+            try:
+                tsv_path.with_suffix('.base_translation_done').touch()
+            except Exception:
+                pass
                     
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
@@ -6722,6 +6735,8 @@ def cmd_progressive_worker(args):
             # 3. Finished Event
             try:
                 write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+                import os
+                os.utime(tsv_path, None)
             except Exception as e:
                 logger.error(f"Failed to write finished event: {e}")
     finally:
