@@ -2709,9 +2709,16 @@ html, body {{
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
                 morph_val = '<span class="skeleton-loader" style="width: 80px;"></span>'
         
-        lemma_class = "editable" if 'WordSource' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
-        trans_class = "editable" if 'WordDestination' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
-        inflected_class = "editable" if 'WordSourceInflectedForm' in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
+        # Extract resolved column names from role_fields for orthogonal behavior
+        lemma_col_name = role_fields.get('lemma', 'WordSource')
+        trans_col_name = role_fields.get('word_translation', 'WordDestination')
+        inflected_col_name = role_fields.get('inflected', 'WordSourceInflectedForm')
+        ipa_col_name = role_fields.get('ipa', 'WordSourceIPA')
+        morph_col_name = role_fields.get('morphology', 'WordSourceMorphologyAI')
+
+        lemma_class = "editable" if lemma_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
+        trans_class = "editable" if trans_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
+        inflected_class = "editable" if inflected_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
         row_highlight_class = "highlight-purple" if row_id in paired_rows else "highlight-orange"
         
@@ -2741,11 +2748,11 @@ html, body {{
 
         table_rows.append(
             f'<tr data-row-id="{row_id}" data-selected="{is_selected}" class="{row_highlight_class}">'
-            f'<td class="{inflected_class}" data-col="WordSourceInflectedForm"><div class="scrollable-cell">{inflected_val}</div></td>'
-            f'<td class="{lemma_class}" data-col="WordSource"><div class="scrollable-cell">{lemma_val}</div></td>'
-            f'<td class="{trans_class} col-translation" data-col="WordDestination"><div class="scrollable-cell">{trans_val}</div></td>'
-            f'<td><div class="scrollable-cell">{ipa_val}</div></td>'
-            f'<td class="col-morphology"><div class="scrollable-cell">{morph_val}</div></td>'
+            f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{inflected_val}</div></td>'
+            f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{lemma_val}</div></td>'
+            f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"><div class="scrollable-cell">{trans_val}</div></td>'
+            f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ipa_val}</div></td>'
+            f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{morph_val}</div></td>'
             f'{dynamic_tds}'
             f'</tr>'
         )
@@ -3538,7 +3545,7 @@ html, body {{
             if (tr) {
                 var tds = tr.getElementsByTagName('td');
                 for (var m = 0; m < tds.length; m++) {
-                    if (tds[m].getAttribute('data-col') === 'WordSource') {
+                    if (tds[m].getAttribute('data-col') === '{lemma_col_name}') {
                         var val = (tds[m].textContent || tds[m].innerText || "").trim();
                         if (val) return val;
                     }
@@ -3563,7 +3570,7 @@ html, body {{
             if (tr) {
                 var tds = tr.getElementsByTagName('td');
                 for (var m = 0; m < tds.length; m++) {
-                    if (tds[m].getAttribute('data-col') === 'WordSourceInflectedForm') {
+                    if (tds[m].getAttribute('data-col') === '{inflected_col_name}') {
                         var val = (tds[m].textContent || tds[m].innerText || "").trim();
                         if (val) return val;
                     }
@@ -3844,10 +3851,10 @@ html, body {{
                             var lemma = "";
                             var inflection = "";
                             for (var m = 0; m < tds.length; m++) {
-                                if (tds[m].getAttribute('data-col') === 'WordSource') {
+                                if (tds[m].getAttribute('data-col') === '{lemma_col_name}') {
                                     lemma = (tds[m].textContent || tds[m].innerText || "").trim();
                                 }
-                                if (tds[m].getAttribute('data-col') === 'WordSourceInflectedForm') {
+                                if (tds[m].getAttribute('data-col') === '{inflected_col_name}') {
                                     inflection = (tds[m].textContent || tds[m].innerText || "").trim();
                                 }
                             }
@@ -4643,6 +4650,8 @@ html, body {{
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{target_language}", target_lang)
+    html_page = html_page.replace("{lemma_col_name}", lemma_col_name)
+    html_page = html_page.replace("{inflected_col_name}", inflected_col_name)
     html_page = html_page.replace("{audio_lmb_play}", lmb_play_val)
     html_page = html_page.replace("{audio_lmb_source}", f'"{lmb_source_val}"')
     html_page = html_page.replace("{audio_rmb_play}", rmb_play_val)
@@ -7087,13 +7096,10 @@ def cmd_merge(args):
 
             # Deduplicate rows by unique (inflected, lemma) pairs if requested
             if deduplicate:
-                try:
-                    col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
-                    col_inflected = first_headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in first_headers else -1
-                except Exception as e:
-                    logger.warning(f"Failed to load lemma/inflected mapping for deduplication: {e}")
-                    col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
-                    col_inflected = first_headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in first_headers else -1
+                lemma_col = role_fields.get('lemma', 'WordSource') if isinstance(role_fields, dict) else 'WordSource'
+                inflected_col = role_fields.get('inflected', 'WordSourceInflectedForm') if isinstance(role_fields, dict) else 'WordSourceInflectedForm'
+                col_lemma = first_headers.index(lemma_col) if lemma_col in first_headers else -1
+                col_inflected = first_headers.index(inflected_col) if inflected_col in first_headers else -1
                     
                 if col_lemma != -1 and col_inflected != -1:
                     seen_pairs = []
@@ -7121,11 +7127,8 @@ def cmd_merge(args):
 
             # Sort by frequency if requested
             if sort_frequency:
-                try:
-                    col_lemma = first_headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in first_headers else -1
-                except Exception:
-                    col_lemma = first_headers.index('WordSource') if 'WordSource' in first_headers else -1
-                
+                lemma_col = role_fields.get('lemma', 'WordSource') if isinstance(role_fields, dict) else 'WordSource'
+                col_lemma = first_headers.index(lemma_col) if lemma_col in first_headers else -1
                 if col_lemma != -1:
                     lemmas_to_sort = sorted(list(set(row[col_lemma].strip() for row in all_data_rows if len(row) > col_lemma and row[col_lemma].strip())))
                     if lemmas_to_sort:
