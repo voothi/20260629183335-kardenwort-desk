@@ -591,3 +591,26 @@ def test_ahk_bridge_selected_rows_and_clear(page, tmp_path):
     selected_after = json.loads(selected_after_raw) if isinstance(selected_after_raw, str) else selected_after_raw
     assert len(selected_after) == 0
     assert "selected" not in (row0.get_attribute("class") or "")
+
+def test_ie_cache_busting_meta_header_and_in_place_updates(page, tmp_path):
+    html_output, _, _, headers, data_rows = get_base_html()
+    
+    # Inject X-UA-Compatible header if testing desk HTML generator template
+    html_output = html_output.replace('<head><meta charset="utf-8"></head>', '<head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"></head>')
+    
+    # Load into Playwright
+    page.set_content(html_output)
+    desk_js = extract_desk_js()
+    page.evaluate(desk_js)
+    
+    # Verify <meta http-equiv="X-UA-Compatible" content="IE=edge"> tag is loaded in DOM
+    meta_tag = page.locator("meta[http-equiv='X-UA-Compatible']")
+    assert meta_tag.get_attribute("content") == "IE=edge"
+    
+    # Verify in-place updates preserve the page URL (avoiding IE file re-navigation cache bugs)
+    initial_url = page.url
+    payload = {"stage": "finished", "status": "success", "rows": {"0": {"trans": "updated"}}}
+    import json
+    page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
+    
+    assert page.url == initial_url
