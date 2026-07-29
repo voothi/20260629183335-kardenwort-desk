@@ -6524,7 +6524,8 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
                         all_filled = False
                         break
             except Exception:
-                pass
+                all_filled = False
+                break
                 
         if all_filled:
             break
