@@ -469,7 +469,8 @@ This MVP overlay is designed as a host-side overlay. When the full `202607021541
 ├── docs/                   # Documentation and conversation logs
 ├── kardenwort_desk.py      # Main CLI entrypoint
 ├── b64util.py              # Base64 transport utility
-├── requirements.txt        # Python dependencies
+├── requirements.in         # Unpinned Python dependencies list
+├── requirements.txt        # Hashed, pip-compile generated lockfile
 ├── config.ini.template     # Configuration template
 ├── release-notes.md        # Release changelog and history
 └── README.md               # Project documentation
