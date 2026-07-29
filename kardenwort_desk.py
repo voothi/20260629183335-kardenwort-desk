@@ -3229,20 +3229,6 @@ html, body {{
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
                     
                     if (window.forceRepaint) window.forceRepaint();
-                    
-                    if (window.AppState.isFinished) {
-                        var leftover = document.querySelectorAll('td .skeleton-loader');
-                        if (leftover.length > 0) {
-                            for (var i = 0; i < leftover.length; i++) {
-                                var pp = leftover[i].parentNode;
-                                if (pp) {
-                                    if (pp.classList && pp.classList.contains('scrollable-cell')) pp.innerHTML = "";
-                                    else if (pp.tagName === 'TD') pp.innerHTML = "";
-                                }
-                            }
-                            if (window.forceRepaint) window.forceRepaint();
-                        }
-                    }
                 }
             }
         };
