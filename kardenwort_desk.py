@@ -5268,7 +5268,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                 if is_wordfill_eligible(col):
                     if len(row) > col_idx:
                         val = row[col_idx].strip()
-                        if val:
+                        if val and 'skeleton-loader' not in val:
                             match_dict[col] = val
                             
             # Maximize quality within this file
@@ -6318,8 +6318,9 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                                     if col_word_dest != -1:
                                         while len(row) <= col_word_dest:
                                             row.append("")
-                                        if not row[col_word_dest].strip():
-                                            if lemma_val in lemma_translations:
+                                        curr_dest = row[col_word_dest].strip()
+                                        if not curr_dest or 'skeleton-loader' in curr_dest:
+                                            if lemma_val in lemma_translations and lemma_translations[lemma_val]:
                                                 row[col_word_dest] = lemma_translations[lemma_val]
                             save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                             data_rows = current_rows
