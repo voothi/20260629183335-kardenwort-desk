@@ -477,6 +477,25 @@ This MVP overlay is designed as a host-side overlay. When the full `202607021541
 └── README.md               # Project documentation
 ```
 
+### Managing Dependencies
+
+This project natively supports a hybrid dependency model. You can either use a standard Python environment or a local vendored package for a zero-install runtime.
+
+**1. Package Environment (Standard)**
+If you add or update packages in `requirements.in`, regenerate the secure hashes for `requirements.txt` by running:
+```bash
+pip install pip-tools
+pip-compile --generate-hashes requirements.in -o requirements.txt
+```
+To install: `pip install --require-hashes -r requirements.txt`
+
+**2. Vendoring (Zero-Install)**
+To vendor dependencies locally (bypassing `pip` at runtime), install them directly into the `vendor/` directory:
+```bash
+pip install -r requirements.txt --target vendor/
+```
+The application will automatically prioritize loading packages from the local `vendor/` directory if it exists.
+
 [Return to Top](#table-of-contents)
 
 ## Kardenwort Ecosystem
