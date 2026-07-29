@@ -4195,17 +4195,19 @@ html, body {{
             } catch(e) {}
             
             window.cancelActiveEdit = function() {
+                window.cancelActiveEdit = null;
                 cell.innerHTML = '';
                 var div = document.createElement('div');
                 div.className = 'scrollable-cell';
                 div.appendChild(document.createTextNode(originalValue));
                 cell.appendChild(div);
                 cell.classList.remove('editing');
-                window.cancelActiveEdit = null;
                 if (window.forceRepaint) window.forceRepaint();
             };
             
             function commit() {
+                if (!window.cancelActiveEdit) return;
+                window.cancelActiveEdit = null;
                 var newValue = input.value;
                 cell.innerHTML = '';
                 var div = document.createElement('div');
@@ -4213,7 +4215,6 @@ html, body {{
                 div.appendChild(document.createTextNode(newValue));
                 cell.appendChild(div);
                 cell.classList.remove('editing');
-                window.cancelActiveEdit = null;
                 if (newValue !== originalValue) {
                     var action = {
                         type: 'edit',
