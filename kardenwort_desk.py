@@ -6075,9 +6075,16 @@ def cmd_reprocess_worker(args):
         except Exception as e:
             logger.error(f"Failed to write finished event in reprocess: {e}")
 
+_update_seq_counter = 0
+
 def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None):
     import time
-    update_js_path = tsv_path.with_suffix('.update.js')
+    global _update_seq_counter
+    _update_seq_counter += 1
+    
+    updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
+    updates_dir.mkdir(parents=True, exist_ok=True)
+    update_js_path = updates_dir / f"{_update_seq_counter:06d}.js"
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
@@ -6205,28 +6212,19 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
     temp_path = update_js_path.with_name(update_js_path.name + '.tmp')
-    with file_lock(update_js_path):
-        with open(temp_path, 'w', encoding='utf-8') as f:
-            f.write(js_content)
-        for attempt in range(10):
-            try:
-                os.replace(temp_path, update_js_path)
-                try:
-                    import time
-                    now = time.time()
-                    st = os.stat(update_js_path)
-                    new_mtime = max(now, st.st_mtime + 2.0)
-                    os.utime(update_js_path, (now, new_mtime))
-                except Exception as utime_err:
-                    logger.warning(f"Failed to set utime for {update_js_path}: {utime_err}")
-                break
-            except PermissionError:
-                time.sleep(0.1)
-            except Exception as e:
-                logger.error(f"Failed to replace update.js (attempt {attempt + 1}): {e}")
-                time.sleep(0.1)
-        else:
-            logger.error(f"Failed to atomically replace update.js after 10 retries: {update_js_path}")
+    with open(temp_path, 'w', encoding='utf-8') as f:
+        f.write(js_content)
+    for attempt in range(10):
+        try:
+            os.replace(temp_path, update_js_path)
+            break
+        except PermissionError:
+            time.sleep(0.1)
+        except Exception as e:
+            logger.error(f"Failed to move update js file (attempt {attempt + 1}): {e}")
+            time.sleep(0.1)
+    else:
+        logger.error(f"Failed to atomically move update js file after 10 retries: {update_js_path}")
 
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
