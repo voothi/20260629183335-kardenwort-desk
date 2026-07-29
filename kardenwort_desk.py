@@ -2636,10 +2636,8 @@ html, body {{
             if trans and str(trans).strip():
                 if idx > max_non_empty_idx:
                     max_non_empty_idx = idx
-        for idx in sorted(sentence_translations.keys()):
-            if idx > max_non_empty_idx:
-                continue
-            trans = sentence_translations[idx]
+        for idx in range(max_non_empty_idx + 1):
+            trans = sentence_translations.get(idx)
             if trans:
                 safe_trans = html.escape(trans)
                 sentence_htmls.append(f"<div>{safe_trans}</div>")
