@@ -3118,15 +3118,15 @@ html, body {{
                 
                 if (data.sourceText !== undefined && data.sourceText !== "") {
                     window.AppState.sourceText = data.sourceText;
-                    if (window.AppView.renderSourceText(data.stage)) {
-                        updated = true;
-                    }
+                }
+                if (window.AppView.renderSourceText(data.stage)) {
+                    updated = true;
                 }
                 if (data.translatedText !== undefined && data.translatedText !== "") {
                     window.AppState.translatedText = data.translatedText;
-                    if (window.AppView.renderTranslatedText(data.stage)) {
-                        updated = true;
-                    }
+                }
+                if (window.AppView.renderTranslatedText(data.stage)) {
+                    updated = true;
                 }
                 
                 var rowsData = null;
@@ -3172,6 +3172,7 @@ html, body {{
                 var container = document.getElementById('source-container');
                 if (!container) return false;
                 var pendingNode = container.querySelector('[data-pending="true"]');
+                if (window.AppState.sourceText === null && !pendingNode) return false;
                 var hasSpans = container.querySelector('span.word') !== null;
                 var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
@@ -3193,6 +3194,7 @@ html, body {{
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
                 var pendingNode = container.querySelector('[data-pending="true"]');
+                if (window.AppState.translatedText === null && !pendingNode) return false;
                 var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText || "";
