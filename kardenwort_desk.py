@@ -2510,7 +2510,7 @@ html, body {{
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
                 
     if is_progressive and not worker_launched:
-        write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished")
+        write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True)
 
                     
     token_to_rows = {}
@@ -6111,7 +6111,7 @@ def cmd_reprocess_worker(args):
 
 _update_seq_counter = 0
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False):
     import time
     global _update_seq_counter
     _update_seq_counter += 1
@@ -6120,45 +6120,52 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     updates_dir.mkdir(parents=True, exist_ok=True)
     update_js_path = updates_dir / f"{_update_seq_counter:06d}.js"
     
-    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
-    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
-    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
-    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
-    
-    rows_data = {}
-    for row_id, row in enumerate(data_rows):
-        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
-        trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
-        morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
-        ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
-        rows_data[row_id] = {
-            "lemma": lemma_val,
-            "trans": trans_val,
-            "ipa": ipa_val,
-            "morph": morph_val
-        }
-        if class_cols:
-            class_vals = {}
-            for name, col_idx in class_cols:
-                val = row[col_idx] if len(row) > col_idx else ""
-                class_vals[name] = val
-            rows_data[row_id]["classifications"] = class_vals
-        
-    if stage is None:
-        # Inline snapshot — only emit rows that have at least one non-empty field
+    if empty_payload:
         update_data = {
-            row_id: d for row_id, d in rows_data.items()
-            if d["trans"] or d["ipa"] or d["morph"] or d["lemma"]
+            "stage": stage,
+            "status": status,
+            "rows": {}
         }
     else:
-        if source_text is None:
-            source_txt_path = tsv_path.with_suffix('.txt')
-            if source_txt_path.exists():
-                try:
-                    source_text = source_txt_path.read_text(encoding='utf-8')
-                except Exception:
-                    pass
+        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+        col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
+        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+        col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+        col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+        
+        rows_data = {}
+        for row_id, row in enumerate(data_rows):
+            lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+            trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
+            morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
+            ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+            rows_data[row_id] = {
+                "lemma": lemma_val,
+                "trans": trans_val,
+                "ipa": ipa_val,
+                "morph": morph_val
+            }
+            if class_cols:
+                class_vals = {}
+                for name, col_idx in class_cols:
+                    val = row[col_idx] if len(row) > col_idx else ""
+                    class_vals[name] = val
+                rows_data[row_id]["classifications"] = class_vals
+            
+        if stage is None:
+            # Inline snapshot — only emit rows that have at least one non-empty field
+            update_data = {
+                row_id: d for row_id, d in rows_data.items()
+                if d["trans"] or d["ipa"] or d["morph"] or d["lemma"]
+            }
+        else:
+            if source_text is None:
+                source_txt_path = tsv_path.with_suffix('.txt')
+                if source_txt_path.exists():
+                    try:
+                        source_text = source_txt_path.read_text(encoding='utf-8')
+                    except Exception:
+                        pass
                     
         if translated_text is None:
             if tsv_path:
