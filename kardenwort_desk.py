@@ -5200,7 +5200,8 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
             continue
             
         try:
-            _comments, headers, data_rows = load_tsv_rows(tsv_path)
+            with file_lock(tsv_path):
+                _comments, headers, data_rows = load_tsv_rows(tsv_path)
         except Exception as e:
             logger.warning(f"Failed to load candidate {tsv_path}: {e}")
             continue
@@ -6492,6 +6493,43 @@ def cmd_retext_worker(args):
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
         except Exception:
             pass
+def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
+    import time
+    from datetime import datetime
+    zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
+    if not zid_match: return
+    my_zid = zid_match.group(1)
+    
+    max_wait = 45
+    start_wait = time.time()
+    
+    while time.time() - start_wait < max_wait:
+        all_filled = True
+        for sibling in working_tsv_path.parent.glob("*.tsv"):
+            if sibling == working_tsv_path: continue
+            sib_match = re.match(r'^(\d{14})', sibling.name)
+            if not sib_match: continue
+            sib_zid = sib_match.group(1)
+            
+            try:
+                dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+                dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
+                diff_sec = (dt_my - dt_sib).total_seconds()
+                
+                # Check if it's an OLDER sibling from the SAME batch
+                if 0 < diff_sec <= 120:
+                    with file_lock(sibling):
+                        _, headers, data_rows = load_tsv_rows(sibling)
+                    if not is_tsv_llm_filled(headers, data_rows, mapping):
+                        all_filled = False
+                        break
+            except Exception:
+                pass
+                
+        if all_filled:
+            break
+        time.sleep(2)
+
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
     log_path = tsv_path.with_suffix('.log')
@@ -6514,12 +6552,15 @@ def cmd_progressive_worker(args):
             
         comments, headers, data_rows = [], [], []
         role_fields = {}
-        
-        try:
+        with file_lock(tsv_path):
             comments, headers, data_rows = load_tsv_rows(tsv_path)
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             
+        if args.text_mode == 'multi':
+            wait_for_older_siblings_in_batch(tsv_path, mapping)
+            
+        try:
             run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
             run_text = config.get('triggers', 'run_text_translation', fallback='auto')
             run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
