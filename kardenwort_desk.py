@@ -1726,13 +1726,14 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     
     import time
     
-    # Clean up stale update.js files (> 5 minutes old) to prevent clutter
+    # Clean up stale .updates directories (> 5 minutes old) to prevent clutter
     try:
+        import shutil, time
         now = time.time()
-        for f in results_dir.rglob("*.update.js"):
-            if f.is_file() and (now - f.stat().st_mtime) > 300:
+        for d in results_dir.rglob("*.updates"):
+            if d.is_dir() and (now - d.stat().st_mtime) > 300:
                 try:
-                    f.unlink()
+                    shutil.rmtree(d)
                 except OSError:
                     pass
     except Exception:
@@ -1753,11 +1754,12 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                     if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
                         return cached_file
             
-    # Clean up any leftover update.js from previous sessions to avoid polling stale data
-    update_js_path = working_tsv_path.with_suffix('.update.js')
-    if update_js_path.exists():
+    # Clean up any leftover .updates from previous sessions to avoid polling stale data
+    updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
+    if updates_dir.exists():
         try:
-            os.remove(update_js_path)
+            import shutil
+            shutil.rmtree(updates_dir)
         except OSError:
             pass
             
@@ -2334,12 +2336,14 @@ html, body {{
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
-    update_js_path = working_tsv_path.with_suffix('.update.js')
-    if is_progressive and update_js_path.exists():
+    updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
+    if is_progressive and updates_dir.exists():
         try:
-            with open(update_js_path, 'r', encoding='utf-8') as f:
-                if '"stage": "finished"' in f.read():
-                    is_progressive = False
+            for js_file in updates_dir.glob("*.js"):
+                with open(js_file, 'r', encoding='utf-8') as f:
+                    if '"stage": "finished"' in f.read():
+                        is_progressive = False
+                        break
         except Exception:
             pass
     auto_inject_updates = config.getboolean('rendering', 'auto_inject_updates', fallback=True)
