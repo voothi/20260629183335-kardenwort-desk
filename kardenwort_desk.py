@@ -3177,10 +3177,10 @@ html, body {{
                 var pendingNode = container.querySelector('[data-pending="true"]');
                 if (window.AppState.sourceText === null && !pendingNode) return false;
                 var hasSpans = container.querySelector('span.word') !== null;
-                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.sourceText || "";
-                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
+                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
                 var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
                 if (newText || !pendingNode || !hasSpans || forceUpdate) {
                     if (pendingNode || currentText !== newText || forceUpdate) {
@@ -3198,10 +3198,10 @@ html, body {{
                 if (!container) return false;
                 var pendingNode = container.querySelector('[data-pending="true"]');
                 if (window.AppState.translatedText === null && !pendingNode) return false;
-                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText || "";
-                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
+                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
                 var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
                 if (newText || !pendingNode || forceUpdate) {
                     if (pendingNode || currentText !== newText || forceUpdate) {
@@ -6558,8 +6558,7 @@ def cmd_progressive_worker(args):
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             
-        if args.text_mode == 'multi':
-            wait_for_older_siblings_in_batch(tsv_path, mapping)
+        wait_for_older_siblings_in_batch(tsv_path, mapping)
             
         try:
             run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
