@@ -3109,7 +3109,7 @@ html, body {{
     }
     
     window.forceRepaint = function() {
-        if (window.forceRepaint) window.forceRepaint();
+        document.body.className = document.body.className;
         var _reflow = document.body.offsetHeight;
         var el = document.documentElement;
         if (el) {
