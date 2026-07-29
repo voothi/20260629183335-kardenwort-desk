@@ -6216,6 +6216,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                 sentence_translated = True
                 
+        translated_text_emitted = False
         if not sentence_translated and run_text == 'auto':
             source_txt_path = tsv_path.with_suffix('.txt')
             if source_txt_path.exists():
@@ -6253,6 +6254,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     
                     data_rows = current_rows
                     write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
+                    translated_text_emitted = True
                 except TranslationAlignmentError as tae:
                     logger.error(f"Progressive translation alignment error: {tae}")
                     comments, headers, current_rows = load_tsv_rows(tsv_path)
@@ -6271,9 +6273,14 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     
                     data_rows = current_rows
                     write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted")
+                    translated_text_emitted = True
                     
                     sys.exit(EXIT_PARTIAL_TRANSLATION_PERSISTED)
         
+        # Advance stage unconditionally to allow JS frontend to clear skeleton loaders properly
+        if not translated_text_emitted:
+            write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
+
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
         if word_translations_empty and col_lemma != -1 and run_base == 'auto':
@@ -6307,6 +6314,8 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                         write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
                 else:
                     chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
+                    if chunk_size == 0:
+                        chunk_size = 15  # Fallback to 15 to prevent huge chunks from freezing the progressive loading
                     if chunk_size > 0:
                         chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
                     else:
@@ -6604,8 +6613,7 @@ def cmd_progressive_worker(args):
         # Write initial source stage immediately so UI renders without delay
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
             
-        if getattr(args, 'text_mode', 'single') == 'multi':
-            wait_for_older_siblings_in_batch(tsv_path, mapping)
+        wait_for_older_siblings_in_batch(tsv_path, mapping)
             
         try:
             run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
