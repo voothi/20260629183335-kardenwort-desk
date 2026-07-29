@@ -3109,10 +3109,14 @@ html, body {{
     }
     
     window.forceRepaint = function() {
-        var el = document.documentElement;
+        if (document.body) {
+            document.body.className = document.body.className;
+            var _reflow = document.body.offsetHeight;
+        }
+        var el = document.documentElement || document.body;
         if (el) {
             var st = el.scrollTop;
-            el.scrollTop = st ? st : 1;
+            el.scrollTop = st + 1;
             el.scrollTop = st;
         }
     };
