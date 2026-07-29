@@ -3208,8 +3208,7 @@ html, body {{
                             var leftover = document.querySelectorAll('td .skeleton-loader');
                             if (leftover.length > 0) {
                                 for (var i = 0; i < leftover.length; i++) {
-                                    var p = leftover[i].parentNode;
-                                    var tr = p;
+                                    var tr = leftover[i].parentNode;
                                     while (tr && tr.tagName !== 'TR') {
                                         tr = tr.parentNode;
                                     }
@@ -3219,7 +3218,12 @@ html, body {{
                                             window.AppView.renderRow(rid, 'finished');
                                         }
                                     }
-                                    if (p) p.innerHTML = "";
+                                    // Re-check: if skeleton is still attached after renderRow, force-clear
+                                    var pp = leftover[i].parentNode;
+                                    if (pp) {
+                                        if (pp.classList && pp.classList.contains('scrollable-cell')) pp.innerHTML = "";
+                                        else if (pp.tagName === 'TD') pp.innerHTML = "";
+                                    }
                                 }
                                 document.body.className = document.body.className;
                             }
