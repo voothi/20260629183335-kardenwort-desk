@@ -3177,14 +3177,13 @@ html, body {{
                             }
                         }
                     }
-                }
-                if (window.AppState.isFinished) {
+                   if (window.AppState.isFinished) {
                     var skels = document.querySelectorAll('td .skeleton-loader');
                     if (skels.length > 0) {
                         for (var i = 0; i < skels.length; i++) {
                             var p = skels[i].parentNode;
-                            if (p && p.classList.contains('scrollable-cell')) p.textContent = "";
-                            else if (p && p.tagName === 'TD') p.textContent = "";
+                            if (p && p.classList.contains('scrollable-cell')) p.innerHTML = "";
+                            else if (p && p.tagName === 'TD') p.innerHTML = "";
                         }
                         updated = true;
                     }
@@ -3205,6 +3204,11 @@ html, body {{
                 }
             }
         };
+
+        function setCellText(el, text) {
+            if (!el) return;
+            el.innerHTML = text ? String(text).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+        }
 
         window.AppView = {
             renderSourceText: function(globalStage) {
@@ -3258,14 +3262,14 @@ html, body {{
                         var div = tds[1].querySelector('.scrollable-cell');
                         var val = rowData.lemma || "";
                         if (globalStage === 'translated_lemmas' || globalStage === 'translated' || globalStage === 'finished') {
-                            if (div) div.textContent = val;
-                            else if (!tds[1].classList.contains('editing')) tds[1].textContent = val;
+                            if (div) setCellText(div, val);
+                            else if (!tds[1].classList.contains('editing')) setCellText(tds[1], val);
                             updated = true;
                         } else {
-                            var oldVal = div ? div.textContent : (tds[1].classList.contains('editing') ? null : tds[1].textContent);
+                            var oldVal = div ? (div.textContent || div.innerText) : (tds[1].classList.contains('editing') ? null : (tds[1].textContent || tds[1].innerText));
                             if (oldVal !== val) {
-                                if (div) div.textContent = val;
-                                else if (!tds[1].classList.contains('editing')) tds[1].textContent = val;
+                                if (div) setCellText(div, val);
+                                else if (!tds[1].classList.contains('editing')) setCellText(tds[1], val);
                                 updated = true;
                             }
                         }
@@ -3274,17 +3278,17 @@ html, body {{
                         var div = tds[2].querySelector('.scrollable-cell');
                         var val = rowData.trans || "";
                         if (globalStage === 'translated_text' || globalStage === 'translated_words' || globalStage === 'translated' || globalStage === 'finished' || window.AppState.isFinished) {
-                            if (div) div.textContent = val;
-                            else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
+                            if (div) setCellText(div, val);
+                            else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
                             updated = true;
                         } else {
-                            var oldVal = div ? div.textContent : (tds[2].classList.contains('editing') ? null : tds[2].textContent);
+                            var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
                             var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
                             var shouldUpdate = (oldVal !== val);
                             if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'translated_text') || (globalStage === 'translated') || (globalStage === 'finished') || window.AppState.isFinished;
                             if (shouldUpdate) {
-                                if (div) div.textContent = val;
-                                else if (!tds[2].classList.contains('editing')) tds[2].textContent = val;
+                                if (div) setCellText(div, val);
+                                else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
                                 updated = true;
                             }
                         }
@@ -3293,17 +3297,17 @@ html, body {{
                         var div = tds[3].querySelector('.scrollable-cell');
                         var val = rowData.ipa || "";
                         if (globalStage === 'translated_text' || globalStage === 'translated_words' || globalStage === 'translated' || globalStage === 'finished' || window.AppState.isFinished) {
-                            if (div) div.textContent = val;
-                            else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
+                            if (div) setCellText(div, val);
+                            else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
                             updated = true;
                         } else {
-                            var oldVal = div ? div.textContent : (tds[3].classList.contains('editing') ? null : tds[3].textContent);
+                            var oldVal = div ? (div.textContent || div.innerText) : (tds[3].classList.contains('editing') ? null : (tds[3].textContent || tds[3].innerText));
                             var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
                             var shouldUpdate = (oldVal !== val);
                             if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'translated_text') || (globalStage === 'translated') || (globalStage === 'finished') || window.AppState.isFinished;
                             if (shouldUpdate) {
-                                if (div) div.textContent = val;
-                                else if (!tds[3].classList.contains('editing')) tds[3].textContent = val;
+                                if (div) setCellText(div, val);
+                                else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
                                 updated = true;
                             }
                         }
