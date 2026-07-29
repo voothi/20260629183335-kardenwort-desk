@@ -2239,9 +2239,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 <head>
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
 <style>
 html, body {{
     overflow: hidden;
@@ -2786,9 +2783,6 @@ html, body {{
 <head>
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
-<meta http-equiv="Pragma" content="no-cache">
-<meta http-equiv="Expires" content="0">
 <style>
   
 
@@ -3233,11 +3227,6 @@ html, body {{
                     window._repaintTimer = setTimeout(function() {
                         document.body.className = document.body.className;
                         var _reflow = document.body.offsetHeight;
-                        if (document.body.style) {
-                            var oldO = document.body.style.opacity;
-                            document.body.style.opacity = "0.999";
-                            setTimeout(function() { document.body.style.opacity = oldO || ""; }, 50);
-                        }
                     }, 50);
                     
                     if (window.AppState.isFinished) {
