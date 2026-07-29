@@ -432,7 +432,7 @@ def build_field_mapping(mapping, mode):
 
 def get_role_fields(mapping, headers):
     role_fields = {}
-    if 'desk_columns' in mapping:
+    if mapping and 'desk_columns' in mapping:
         headers_lower = {h.lower(): h for h in headers}
         for field, role in mapping['desk_columns'].items():
             field_lower = field.lower()
@@ -449,7 +449,7 @@ def get_role_fields(mapping, headers):
         role_fields['selected'] = 'DeskSelected'
         
     sentence_index_col = "SentenceSourceIndex"
-    if 'fields_mapping.word' in mapping:
+    if mapping and 'fields_mapping.word' in mapping:
         for col, role in mapping['fields_mapping.word'].items():
             if role == 'sentence_index':
                 sentence_index_col = col
@@ -655,7 +655,6 @@ def is_tsv_llm_filled(headers, data_rows, mapping):
             col_idx = headers.index(col)
             if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
                 return True
-        return False
         
     role_fields = get_role_fields(mapping, headers)
     dest_cols = []
@@ -2317,6 +2316,14 @@ html, body {{
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
     is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
+    update_js_path = tsv_path.with_suffix('.update.js')
+    if is_progressive and update_js_path.exists():
+        try:
+            with open(update_js_path, 'r', encoding='utf-8') as f:
+                if '"stage": "finished"' in f.read():
+                    is_progressive = False
+        except Exception:
+            pass
     auto_inject_updates = config.getboolean('rendering', 'auto_inject_updates', fallback=True)
     run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
     run_text = config.get('triggers', 'run_text_translation', fallback='auto')
@@ -3151,6 +3158,17 @@ html, body {{
                                 updated = true;
                             }
                         }
+                    }
+                }
+                if (window.AppState.isFinished) {
+                    var skels = document.querySelectorAll('td .skeleton-loader');
+                    if (skels.length > 0) {
+                        for (var i = 0; i < skels.length; i++) {
+                            var p = skels[i].parentNode;
+                            if (p && p.classList.contains('scrollable-cell')) p.textContent = "";
+                            else if (p && p.tagName === 'TD') p.textContent = "";
+                        }
+                        updated = true;
                     }
                 }
                 
