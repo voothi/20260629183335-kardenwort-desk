@@ -3109,8 +3109,6 @@ html, body {{
     }
     
     window.forceRepaint = function() {
-        document.body.className = document.body.className;
-        var _reflow = document.body.offsetHeight;
         var el = document.documentElement;
         if (el) {
             var st = el.scrollTop;
@@ -3240,30 +3238,17 @@ html, body {{
                     }, 50);
                     
                     if (window.AppState.isFinished) {
-                        setTimeout(function() {
-                            var leftover = document.querySelectorAll('td .skeleton-loader');
-                            if (leftover.length > 0) {
-                                for (var i = 0; i < leftover.length; i++) {
-                                    var tr = leftover[i].parentNode;
-                                    while (tr && tr.tagName !== 'TR') {
-                                        tr = tr.parentNode;
-                                    }
-                                    if (tr) {
-                                        var rid = tr.getAttribute('data-row-id');
-                                        if (rid && window.AppState.rows[rid]) {
-                                            window.AppView.renderRow(rid, 'finished');
-                                        }
-                                    }
-                                    // Re-check: if skeleton is still attached after renderRow, force-clear
-                                    var pp = leftover[i].parentNode;
-                                    if (pp) {
-                                        if (pp.classList && pp.classList.contains('scrollable-cell')) pp.innerHTML = "";
-                                        else if (pp.tagName === 'TD') pp.innerHTML = "";
-                                    }
+                        var leftover = document.querySelectorAll('td .skeleton-loader');
+                        if (leftover.length > 0) {
+                            for (var i = 0; i < leftover.length; i++) {
+                                var pp = leftover[i].parentNode;
+                                if (pp) {
+                                    if (pp.classList && pp.classList.contains('scrollable-cell')) pp.innerHTML = "";
+                                    else if (pp.tagName === 'TD') pp.innerHTML = "";
                                 }
-                                if (window.forceRepaint) window.forceRepaint();
                             }
-                        }, 1000);
+                            if (window.forceRepaint) window.forceRepaint();
+                        }
                     }
                 }
             }
