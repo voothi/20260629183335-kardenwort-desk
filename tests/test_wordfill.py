@@ -117,7 +117,7 @@ class TestCollectCandidateFiles:
             (tmp_path / f"{zid}-session.en.tsv").touch()
 
         import logging
-        with caplog.at_level(logging.WARNING, logger='root'):
+        with caplog.at_level(logging.INFO, logger='kardenwort_desk'):
             result = desk.collect_candidate_files([tmp_path], scan_depth=0,
                                                   scan_scope='all', language='en',
                                                   scan_max_files=5)
