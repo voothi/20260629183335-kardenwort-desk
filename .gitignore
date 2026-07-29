@@ -24,3 +24,4 @@ results/
 *.tmp
 *.bak
 *.log
+vendor/

@@ -17,6 +17,11 @@ import traceback
 from pathlib import Path
 from datetime import datetime, timezone
 
+# Add local vendor directory for third-party dependencies (e.g. watchdog)
+vendor_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
+if vendor_dir not in sys.path:
+    sys.path.insert(0, vendor_dir)
+
 sys.stdout = sys.stderr
 
 if sys.__stdout__ is not None and hasattr(sys.__stdout__, 'reconfigure'):
