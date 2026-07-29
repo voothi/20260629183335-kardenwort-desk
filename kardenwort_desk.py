@@ -3110,14 +3110,7 @@ html, body {{
     
     window.forceRepaint = function() {
         if (document.body) {
-            document.body.className = document.body.className;
             var _reflow = document.body.offsetHeight;
-        }
-        var el = document.documentElement || document.body;
-        if (el) {
-            var st = el.scrollTop;
-            el.scrollTop = st + 1;
-            el.scrollTop = st;
         }
     };
 
@@ -3235,11 +3228,7 @@ html, body {{
                     if (window.clearMVPBookmarks) window.clearMVPBookmarks();
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
                     
-                    // Force complete MSHTML layout reflow and graphics repaint
-                    if (window._repaintTimer) clearTimeout(window._repaintTimer);
-                    window._repaintTimer = setTimeout(function() {
-                        if (window.forceRepaint) window.forceRepaint();
-                    }, 50);
+                    if (window.forceRepaint) window.forceRepaint();
                     
                     if (window.AppState.isFinished) {
                         var leftover = document.querySelectorAll('td .skeleton-loader');
