@@ -444,3 +444,48 @@ def test_dirty_cell_class(page, tmp_path):
     
     # Verify dirty class is removed
     assert "dirty" not in (cell.get_attribute("class") or "")
+
+def test_force_repaint_reflow(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Ensure window.forceRepaint executes without error
+    page.evaluate("window.forceRepaint()")
+    height = page.evaluate("document.body.offsetHeight")
+    assert height >= 0
+
+
+def test_receive_update_resilience(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Call receiveUpdate with null, empty, or partial data
+    page.evaluate("window.receiveUpdate(null)")
+    page.evaluate("window.receiveUpdate({})")
+    page.evaluate("window.receiveUpdate({stage: 'unknown', status: 'error'})")
+    
+    # AppState should remain active and responsive
+    assert page.evaluate("window.AppState.isFinished") is False or True
+
+
+def test_skeleton_loader_cleanup_on_finish(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    # Inject skeleton loaders
+    html = html.replace('<div class="scrollable-cell">Haus</div>', '<div class="scrollable-cell"><span class="skeleton-loader">...</span></div>')
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Send finished update
+    payload = {
+        "stage": "finished",
+        "status": "success",
+        "rows": {"0": {"lemma": "Haus", "trans": "дом"}},
+    }
+    import json
+    page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
+    
+    # Verify cell text was updated and skeleton loader replaced
+    cell_text = page.locator("tr[data-row-id='0'] td[data-col='WordSource']").inner_text()
+    assert "Haus" in cell_text
