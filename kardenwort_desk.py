@@ -2504,6 +2504,10 @@ html, body {{
             if run_enrich == 'auto' and enrich_provider == 'intellifiller':
                 run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+                
+    if is_progressive and not worker_launched:
+        write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished")
+
                     
     token_to_rows = {}
     row_candidates = {}
