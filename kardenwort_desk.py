@@ -857,19 +857,26 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         return {}
         
     compact_line = "; ".join(lemmas)
+    translations = {}
     try:
         translated_line = translate_text(compact_line, source, target, config, resolved_paths, provider)
         parts = [p.strip() for p in translated_line.split(';')]
-        parts = [p for p in parts if p]
         if len(parts) == len(lemmas):
             logger.info("Fast-path lemma translation aligned successfully.")
-            return {lemmas[i]: parts[i] for i in range(len(lemmas))}
+            for i, lemma in enumerate(lemmas):
+                val = parts[i]
+                if not val:
+                    try:
+                        val = translate_text(lemma, source, target, config, resolved_paths, provider)
+                    except Exception:
+                        val = ""
+                translations[lemma] = val
+            return translations
         else:
             logger.warning(f"Fast-path alignment failure: expected {len(lemmas)} parts, got {len(parts)}. Falling back to individual calls.")
     except Exception as e:
         logger.warning(f"Fast-path translation failed: {e}. Falling back to individual calls.")
         
-    translations = {}
     for lemma in lemmas:
         try:
             translations[lemma] = translate_text(lemma, source, target, config, resolved_paths, provider)
