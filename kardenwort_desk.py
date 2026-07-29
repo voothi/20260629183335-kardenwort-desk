@@ -648,33 +648,29 @@ def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
         raise e
 
 def is_tsv_llm_filled(headers, data_rows, mapping):
+    role_fields = get_role_fields(mapping, headers)
+    col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
+    col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields.get('word_translation', 'WordDestination') in headers else -1
+    
+    if col_lemma != -1 and col_word_dest != -1:
+        for row in data_rows:
+            if len(row) > col_lemma and row[col_lemma].strip():
+                if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                    return False
+
     ai_cols = ['WordSourceMorphologyAI', 'WordSourceIPA']
     present_ai_cols = [col for col in ai_cols if col in headers]
     if present_ai_cols:
         for col in present_ai_cols:
             col_idx = headers.index(col)
-            if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
-                return True
-        
-    role_fields = get_role_fields(mapping, headers)
-    dest_cols = []
-    if 'word_translation' in role_fields:
-        dest_cols.append(role_fields['word_translation'])
-    if 'sentence_destination' in role_fields:
-        dest_cols.append(role_fields['sentence_destination'])
-        
-    for col in dest_cols:
-        if col in headers:
-            col_idx = headers.index(col)
-            if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
-                return True
-                
-    for col in headers:
-        if col.startswith('Word') and col not in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2'):
-            col_idx = headers.index(col)
-            if any(len(row) > col_idx and row[col_idx].strip() for row in data_rows):
-                return True
-    return False
+            for row in data_rows:
+                lemma = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ''
+                if len(lemma) > 3:
+                    if len(row) <= col_idx or not row[col_idx].strip():
+                        return False
+                        
+    return True
+
 
 def find_working_tsv(results_dir, zid, language):
     files = list(results_dir.glob(f"{zid}-*.{language}.tsv"))
