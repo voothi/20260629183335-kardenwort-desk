@@ -1141,3 +1141,14 @@ def test_wait_for_older_siblings_in_batch(tmp_path):
 
 
 
+
+def test_generate_unique_zid():
+    zid1 = desk.generate_unique_zid()
+    zid2 = desk.generate_unique_zid()
+    zid3 = desk.generate_unique_zid()
+    
+    assert len(zid1) >= 14
+    assert zid1 != zid2
+    assert zid2 != zid3
+    assert int(zid2) > int(zid1)
+    assert int(zid3) > int(zid2)
