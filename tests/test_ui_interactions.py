@@ -540,3 +540,54 @@ def test_smooth_partial_cell_update_without_full_rerender(page, tmp_path):
     
     # Verify source-container marker remains intact (page was not re-rendered)
     assert page.locator("#source-container").get_attribute("data-test-marker") == "active"
+
+def test_hand_tool_vs_select_text_mode(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    
+    # 1. Enable Select Text Mode (Hand Tool disabled)
+    page.evaluate("window.__selectableTextMode = true;")
+    cell.dblclick(force=True)
+    
+    # Verify cell editing is BLOCKED when in Select Text mode
+    assert page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input").count() == 0
+    
+    # 2. Disable Select Text Mode (Hand Tool active)
+    page.evaluate("window.__selectableTextMode = false;")
+    cell.dblclick(force=True)
+    
+    # Verify cell editing WORKS when Hand Tool is active
+    input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
+    input_el.wait_for(state="visible", timeout=2000)
+    assert input_el.is_visible() is True
+
+
+def test_ahk_bridge_selected_rows_and_clear(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Programmatically set selected rows via AHK bridge
+    import json
+    page.evaluate(f"window.setSelectedRows({json.dumps('[0]')})")
+    
+    # Verify row has selected class
+    row0 = page.locator("tr[data-row-id='0']")
+    assert "selected" in row0.get_attribute("class")
+    
+    # Verify getSelectedRows returns JSON string array with 0
+    selected_raw = page.evaluate("window.getSelectedRows()")
+    selected = json.loads(selected_raw) if isinstance(selected_raw, str) else selected_raw
+    assert selected == [0] or selected == ["0"]
+    
+    # Programmatically clear selections via AHK bridge
+    page.evaluate("window.clearAllSelectionsAndNotify()")
+    
+    # Verify selections are cleared
+    selected_after_raw = page.evaluate("window.getSelectedRows()")
+    selected_after = json.loads(selected_after_raw) if isinstance(selected_after_raw, str) else selected_after_raw
+    assert len(selected_after) == 0
+    assert "selected" not in (row0.get_attribute("class") or "")
