@@ -489,6 +489,11 @@ pip-compile --generate-hashes requirements.in -o requirements.txt
 ```
 To install: `pip install --require-hashes -r requirements.txt`
 
+If you plan to run the test suite locally, you must also install the Playwright browsers by running:
+```bash
+playwright install
+```
+
 **2. Vendoring (Zero-Install)**
 To vendor dependencies locally (bypassing `pip` at runtime), install them directly into the `vendor/` directory:
 ```bash
