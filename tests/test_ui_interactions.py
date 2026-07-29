@@ -489,3 +489,54 @@ def test_skeleton_loader_cleanup_on_finish(page, tmp_path):
     # Verify cell text was updated and skeleton loader replaced
     cell_text = page.locator("tr[data-row-id='0'] td[data-col='WordSource']").inner_text()
     assert "Haus" in cell_text
+
+def test_pending_stub_preservation_and_smooth_update(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    # Inject pending skeleton stub into translation container
+    html = html.replace('<div class="translation-text" id="translation-container">The house</div>', '<div class="translation-text" id="translation-container"><span data-pending="true" class="skeleton-loader">Loading translation...</span></div>')
+    page.set_content(html)
+    
+    desk_js = extract_desk_js()
+    page.evaluate(desk_js)
+    
+    # 1. Receive early intermediate stage with no translatedText yet
+    payload = {"stage": "init", "status": "processing"}
+    import json
+    page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
+    
+    # Verify the pending stub is preserved (did NOT collapse into empty blank space)
+    container = page.locator("#translation-container")
+    assert "Loading translation..." in container.inner_text()
+    assert container.locator("[data-pending='true']").count() == 1
+    
+    # 2. Receive actual translatedText payload
+    payload_translated = {"stage": "translated_text", "translatedText": "Дом был красивым."}
+    page.evaluate(f"window.receiveUpdate({json.dumps(payload_translated)})")
+    
+    # Verify smooth in-place update replaces stub with actual text
+    assert container.inner_text() == "Дом был красивым."
+    assert container.locator("[data-pending='true']").count() == 0
+
+
+def test_smooth_partial_cell_update_without_full_rerender(page, tmp_path):
+    html, _, _, headers, data_rows = get_base_html()
+    page.set_content(html)
+    init_appstate(page, data_rows, headers)
+    
+    # Add a custom attribute to source container to detect if it gets re-rendered
+    page.evaluate("document.getElementById('source-container').setAttribute('data-test-marker', 'active')")
+    
+    # Send row-only update for translation
+    payload = {
+        "stage": "translated_words",
+        "rows": {"0": {"trans": "строение"}}
+    }
+    import json
+    page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
+    
+    # Verify row 0 translation cell updated
+    trans_cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    assert "строение" in trans_cell.inner_text()
+    
+    # Verify source-container marker remains intact (page was not re-rendered)
+    assert page.locator("#source-container").get_attribute("data-test-marker") == "active"
