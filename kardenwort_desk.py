@@ -6165,88 +6165,88 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                     except Exception:
                         pass
                     
-        if translated_text is None:
-            if tsv_path:
-                try:
-                    parent = tsv_path.parent
-                    source_stem_full = tsv_path.stem
-                    source_stem = source_stem_full.rsplit('.', 1)[0] if '.' in source_stem_full else source_stem_full
-                    for f in parent.glob(f"{source_stem}.*.txt"):
-                        if f.stem != source_stem_full:
-                            txt_content = f.read_text(encoding='utf-8').strip()
-                            if txt_content:
-                                lines = [html.escape(line.strip()) for line in txt_content.splitlines()]
-                                is_single = True
-                                source_txt_path = tsv_path.with_suffix('.txt')
-                                if source_txt_path.exists():
+            if translated_text is None:
+                if tsv_path:
+                    try:
+                        parent = tsv_path.parent
+                        source_stem_full = tsv_path.stem
+                        source_stem = source_stem_full.rsplit('.', 1)[0] if '.' in source_stem_full else source_stem_full
+                        for f in parent.glob(f"{source_stem}.*.txt"):
+                            if f.stem != source_stem_full:
+                                txt_content = f.read_text(encoding='utf-8').strip()
+                                if txt_content:
+                                    lines = [html.escape(line.strip()) for line in txt_content.splitlines()]
+                                    is_single = True
+                                    source_txt_path = tsv_path.with_suffix('.txt')
+                                    if source_txt_path.exists():
+                                        try:
+                                            src_txt = source_txt_path.read_text(encoding='utf-8').strip()
+                                            if '\n' in src_txt or '\r' in src_txt:
+                                                is_single = False
+                                        except Exception:
+                                            pass
+                                    if is_single:
+                                        translated_text = f"<div>{' '.join(lines)}</div>"
+                                    else:
+                                        translated_text = "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+                                    break
+                    except Exception as e:
+                        logger.error(f"Failed to read clean translation text file in write_update_js: {e}")
+
+            if translated_text is None:
+                col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+                col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+                if col_sentence_dest != -1:
+                    idx_to_sentence = {}
+                    for row in data_rows:
+                        if len(row) > col_sentence_dest:
+                            s = row[col_sentence_dest].strip()
+                            if s:
+                                idx_val = 0
+                                if col_index != -1 and len(row) > col_index and row[col_index].strip():
                                     try:
-                                        src_txt = source_txt_path.read_text(encoding='utf-8').strip()
-                                        if '\n' in src_txt or '\r' in src_txt:
-                                            is_single = False
-                                    except Exception:
+                                        idx_val = int(row[col_index])
+                                    except ValueError:
                                         pass
-                                if is_single:
-                                    translated_text = f"<div>{' '.join(lines)}</div>"
-                                else:
-                                    translated_text = "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
-                                break
-                except Exception as e:
-                    logger.error(f"Failed to read clean translation text file in write_update_js: {e}")
+                                if idx_val not in idx_to_sentence:
+                                    idx_to_sentence[idx_val] = s
+                    
+                    sorted_keys = sorted(idx_to_sentence.keys())
+                    sentences = [idx_to_sentence[k] for k in sorted_keys]
+                    
+                    is_single = True
+                    if source_text:
+                        stripped_src = source_text.strip()
+                        if '\n' in stripped_src or '\r' in stripped_src:
+                            is_single = False
+                    else:
+                        source_txt_path = tsv_path.with_suffix('.txt')
+                        if source_txt_path.exists():
+                            try:
+                                txt = source_txt_path.read_text(encoding='utf-8')
+                                stripped_txt = txt.strip()
+                                if '\n' in stripped_txt or '\r' in stripped_txt:
+                                    is_single = False
+                            except Exception:
+                                pass
 
-        if translated_text is None:
-            col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
-            col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-            if col_sentence_dest != -1:
-                idx_to_sentence = {}
-                for row in data_rows:
-                    if len(row) > col_sentence_dest:
-                        s = row[col_sentence_dest].strip()
-                        if s:
-                            idx_val = 0
-                            if col_index != -1 and len(row) > col_index and row[col_index].strip():
-                                try:
-                                    idx_val = int(row[col_index])
-                                except ValueError:
-                                    pass
-                            if idx_val not in idx_to_sentence:
-                                idx_to_sentence[idx_val] = s
-                
-                sorted_keys = sorted(idx_to_sentence.keys())
-                sentences = [idx_to_sentence[k] for k in sorted_keys]
-                
-                is_single = True
-                if source_text:
-                    stripped_src = source_text.strip()
-                    if '\n' in stripped_src or '\r' in stripped_src:
-                        is_single = False
-                else:
-                    source_txt_path = tsv_path.with_suffix('.txt')
-                    if source_txt_path.exists():
-                        try:
-                            txt = source_txt_path.read_text(encoding='utf-8')
-                            stripped_txt = txt.strip()
-                            if '\n' in stripped_txt or '\r' in stripped_txt:
-                                is_single = False
-                        except Exception:
-                            pass
-
-                if is_single:
-                    non_empty = [s for s in sentences if s]
-                    if non_empty and all(s == non_empty[0] for s in non_empty):
-                        sentences = [non_empty[0]]
-                    translated_text = f"<div>{html.escape(' '.join(sentences))}</div>"
-                else:
-                    translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
-                
-        update_data = {
-            "stage": stage,
-            "status": status,
-            "rows": rows_data
-        }
-        if source_text:
-            update_data["sourceText"] = source_text
-        if translated_text:
-            update_data["translatedText"] = translated_text
+                    if is_single:
+                        non_empty = [s for s in sentences if s]
+                        if non_empty and all(s == non_empty[0] for s in non_empty):
+                            sentences = [non_empty[0]]
+                        translated_text = f"<div>{html.escape(' '.join(sentences))}</div>"
+                    else:
+                        translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
+                    
+            update_data = {
+                "stage": stage,
+                "status": status,
+                "rows": rows_data
+            }
+            if source_text:
+                update_data["sourceText"] = source_text
+            if translated_text:
+                update_data["translatedText"] = translated_text
         
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
