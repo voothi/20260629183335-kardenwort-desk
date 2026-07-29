@@ -3177,7 +3177,8 @@ html, body {{
                             }
                         }
                     }
-                   if (window.AppState.isFinished) {
+                }
+                if (window.AppState.isFinished) {
                     var skels = document.querySelectorAll('td .skeleton-loader');
                     if (skels.length > 0) {
                         for (var i = 0; i < skels.length; i++) {
