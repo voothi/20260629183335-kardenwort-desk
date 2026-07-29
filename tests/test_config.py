@@ -379,3 +379,41 @@ rmb_play = false
 
 
 
+
+def test_sentences_mode_and_export_selection_combinations():
+    with tempfile.TemporaryDirectory() as tmpdir:
+        tmp_path = Path(tmpdir)
+        desk_dir = tmp_path / "kardenwort-desk"
+        desk_dir.mkdir()
+        anki_mapping = desk_dir / "anki-mapping.ini"
+        anki_mapping.write_text("")
+
+        config_content = """[settings]
+anki_mapping_file = ./anki-mapping.ini
+export_selection_mode = unselected
+anki_context_mode = both
+save_to_favorites_on_export = true
+copy_source_txt_to_favorites_on_export = false
+
+[sentences_mode]
+enabled = true
+alignment_method = proportion
+min_sentences = 3
+spawn_order = reverse
+parent_mode = stub
+"""
+        config_file = desk_dir / "config.ini"
+        config_file.write_text(config_content)
+
+        config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
+
+        assert config.get('settings', 'export_selection_mode') == 'unselected'
+        assert config.get('settings', 'anki_context_mode') == 'both'
+        assert config.getboolean('settings', 'save_to_favorites_on_export') is True
+        assert config.getboolean('settings', 'copy_source_txt_to_favorites_on_export') is False
+
+        assert config.getboolean('sentences_mode', 'enabled') is True
+        assert config.get('sentences_mode', 'alignment_method') == 'proportion'
+        assert config.getint('sentences_mode', 'min_sentences') == 3
+        assert config.get('sentences_mode', 'spawn_order') == 'reverse'
+        assert config.get('sentences_mode', 'parent_mode') == 'stub'
