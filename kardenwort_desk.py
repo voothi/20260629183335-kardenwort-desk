@@ -3214,13 +3214,16 @@ html, body {{
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
                     
                     // Force complete MSHTML layout reflow and graphics repaint
-                    document.body.className = document.body.className;
-                    var _reflow = document.body.offsetHeight;
-                    if (document.body.style) {
-                        var oldO = document.body.style.opacity;
-                        document.body.style.opacity = "0.999";
-                        setTimeout(function() { document.body.style.opacity = oldO || ""; }, 0);
-                    }
+                    if (window._repaintTimer) clearTimeout(window._repaintTimer);
+                    window._repaintTimer = setTimeout(function() {
+                        document.body.className = document.body.className;
+                        var _reflow = document.body.offsetHeight;
+                        if (document.body.style) {
+                            var oldO = document.body.style.opacity;
+                            document.body.style.opacity = "0.999";
+                            setTimeout(function() { document.body.style.opacity = oldO || ""; }, 50);
+                        }
+                    }, 50);
                     
                     if (window.AppState.isFinished) {
                         setTimeout(function() {
