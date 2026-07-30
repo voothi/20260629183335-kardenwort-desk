@@ -18,6 +18,7 @@ def setup_test_env(tmp_path):
 [settings]
 default_target_language=ru
 save_source_text=true
+use_simplemma_correction=true
 [project_structure]
 generated_results_dir=results
 [languages]
@@ -76,6 +77,7 @@ def test_lookup_cache_behavior(monkeypatch, tmp_path):
     
     def mock_run(*args, **kwargs):
         cmd = args[0]
+        assert "--use-simplemma-correction" in cmd, "Expected --use-simplemma-correction to be passed to subprocess"
         out_idx = cmd.index("--output-file") + 1
         out_file = Path(cmd[out_idx])
         out_file.parent.mkdir(parents=True, exist_ok=True)

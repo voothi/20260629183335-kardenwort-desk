@@ -1848,6 +1848,8 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 temp_file.close()
             text_file_to_pass = temp_file_path
             
+        use_simplemma_correction = config.getboolean('settings', 'use_simplemma_correction', fallback=False)
+
         cmd = [
             str(python_exe),
             str(kardenwort_script),
@@ -1863,6 +1865,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             "--text1-file", str(text_file_to_pass),
             "--tts-destination-lang", target_lang
         ]
+        
+        if use_simplemma_correction:
+            cmd.append("--use-simplemma-correction")
         
         if language == "de":
             de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')

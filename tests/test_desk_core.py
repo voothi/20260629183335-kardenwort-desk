@@ -358,6 +358,8 @@ def test_run_render_flow_passes_tts_destination_lang(monkeypatch):
     
     mock_cmd = []
     def mock_run(cmd, *args, **kwargs):
+        if "--output-file" in cmd:  # Only for extraction step
+            assert "--use-simplemma-correction" in cmd, "Expected --use-simplemma-correction to be passed to subprocess"
         mock_cmd.extend(cmd)
         if "--output-file" in cmd:
             out_idx = cmd.index("--output-file")
@@ -383,6 +385,7 @@ def test_run_render_flow_passes_tts_destination_lang(monkeypatch):
 [settings]
 default_target_language=uk
 save_source_text=False
+use_simplemma_correction=true
 [languages]
 en_lemma_index=idx.txt
 en_lemma_override=override.txt
