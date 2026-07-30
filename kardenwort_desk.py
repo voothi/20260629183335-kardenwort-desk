@@ -1868,6 +1868,10 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         
         if use_simplemma_correction:
             cmd.append("--use-simplemma-correction")
+            
+        de_force_noun_capitalization = config.getboolean('settings', 'de_force_noun_capitalization', fallback=False)
+        if de_force_noun_capitalization:
+            cmd.append("--de-force-noun-capitalization")
         
         if language == "de":
             de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
