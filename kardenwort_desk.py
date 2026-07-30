@@ -1997,6 +1997,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
     return selected_positions, len(selected_positions) > 0
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
+    if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     target_lang = config.get('settings', 'default_target_language', fallback='ru')
     children_tsv_paths = []
     
@@ -4655,6 +4656,7 @@ html, body {{
     return html_page
 
 def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid, text_mode='single', wordfill_cfg=None):
+    if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     import hashlib
     import time
     
@@ -7614,6 +7616,10 @@ def main():
 
     try:
         args = parser.parse_args()
+        
+        if hasattr(args, 'text') and args.text:
+            args.text = args.text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
+            
     except SystemExit as e:
         if e.code != 0:
             print_structured_error("INVALID_ARGS", "Failed to parse command line arguments")
