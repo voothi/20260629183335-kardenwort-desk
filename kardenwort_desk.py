@@ -1869,6 +1869,14 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         if use_simplemma_correction:
             cmd.append("--use-simplemma-correction")
             
+        force_proper_noun_capitalization = config.getboolean('settings', 'force_proper_noun_capitalization', fallback=False)
+        if force_proper_noun_capitalization:
+            cmd.append("--force-proper-noun-capitalization")
+            
+        prefer_shortest_form = config.getboolean('settings', 'prefer_shortest_form', fallback=False)
+        if prefer_shortest_form:
+            cmd.append("--prefer-shortest-form")
+            
         de_force_noun_capitalization = config.getboolean('settings', 'de_force_noun_capitalization', fallback=False)
         if de_force_noun_capitalization:
             cmd.append("--de-force-noun-capitalization")
@@ -1877,9 +1885,16 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
             de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
             cmd.extend([
-                "--de-fix-genitive",
                 "--de-dictionary-file", str(de_dict_path),
             ])
+            
+            de_fix_genitive = config.getboolean('settings', 'de_fix_genitive', fallback=True)
+            if de_fix_genitive:
+                cmd.append("--de-fix-genitive")
+                
+            de_gcs = config.getboolean('settings', 'de_gcs', fallback=False)
+            if de_gcs:
+                cmd.append("--de-gcs")
         desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
         if not desk_classification_enabled:
             cmd.append("--disable-classification")
