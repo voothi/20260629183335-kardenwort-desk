@@ -2566,7 +2566,7 @@ html, body {{
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
         
         candidates = set()
-        vals_to_check = [inflected_val] if inflected_val else [lemma_val]
+        vals_to_check = [f.strip() for f in inflected_val.split(',')] if inflected_val else [lemma_val]
         for val in vals_to_check:
             if val:
                 clean_val = "".join(ch for ch in val.lower() if ch.isalnum() or ch == "'")
@@ -2591,21 +2591,28 @@ html, body {{
     anchored_positions = {}
     for row_id, row in enumerate(data_rows):
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
-        inf_words = []
-        if inflected_val:
-            inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch == "'"))
-                         for p in re.findall(r"[\w']+", inflected_val)]
-            inf_words = [w for w in inf_words if w]
+        forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
         
-        if len(inf_words) >= 2 and '-' not in inflected_val:
-            pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
-            if ok:
-                anchored_positions[row_id] = pos_set
-            else:
-                anchored_positions[row_id] = set()
-        else:
+        has_single_word_form = False
+        row_anchored_pos = set()
+        
+        for form in forms:
+            if not form: continue
+            inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch == "'"))
+                         for p in re.findall(r"[\w']+", form)]
+            inf_words = [w for w in inf_words if w]
+            
+            if len(inf_words) >= 2 and '-' not in form:
+                pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
+                if ok:
+                    row_anchored_pos.update(pos_set)
+            elif len(inf_words) == 1 or '-' in form:
+                has_single_word_form = True
+                
+        if has_single_word_form or not forms:
             single_word_rows.add(row_id)
-            anchored_positions[row_id] = set()
+            
+        anchored_positions[row_id] = row_anchored_pos
 
     paired_rows = {row_id for row_id, pos_set in anchored_positions.items() if pos_set}
     
