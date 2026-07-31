@@ -1899,6 +1899,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         combine_source_words = config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)) if config.has_section('settings') else True
         if combine_source_words:
             cmd.append("--combine-source-words")
+            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
+            cmd.extend(["--combine-source-words-order", combine_source_words_order])
+
             
         token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config.has_section('token_mappings') else True
         if token_mappings_enabled:
@@ -1975,7 +1978,20 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
     return working_tsv_path
 
+def sort_inflected_forms(forms, order='contractions_first'):
+    unique_forms = []
+    for f in forms:
+        f_clean = f.strip()
+        if f_clean and f_clean not in unique_forms:
+            unique_forms.append(f_clean)
+    if order == 'contractions_first':
+        unique_forms.sort(key=lambda f: (not ("'" in f or "’" in f or "-" in f or " " in f), -len(f), f.lower()))
+    elif order == 'alphabetical':
+        unique_forms.sort(key=lambda f: f.lower())
+    return unique_forms
+
 SPLIT_GAP_LIMIT = 60
+
 
 def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
     """
@@ -2182,7 +2198,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                 for p in new_parts:
                                     if p and p not in existing_parts:
                                         existing_parts.append(p)
-                                master_data_rows[existing_row_idx][col_inflected] = ", ".join(existing_parts)
+                                order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
+                                master_data_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, order_cfg))
+
 
                         continue
                     if w:
