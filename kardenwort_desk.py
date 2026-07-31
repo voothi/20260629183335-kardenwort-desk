@@ -2014,12 +2014,14 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and hasattr(config, 'getboolean') else True
     is_filtering_window = False
-    window_words = set()
+    window_words_exact = set()
+    window_words_lower = set()
     if window_text and filter_by_window:
         is_filtering_window = True
         import re
-        raw_words = re.findall(r"[\w']+", window_text.lower())
-        window_words = set(w.strip() for w in raw_words if w.strip())
+        raw_words = re.findall(r"[\w']+", window_text)
+        window_words_exact = set(w.strip() for w in raw_words if w.strip())
+        window_words_lower = set(w.lower() for w in window_words_exact)
 
     for row in data_rows:
         if len(row) > col_word_source:
@@ -2040,7 +2042,17 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                             if p and p not in existing_parts:
                                 existing_parts.append(p)
                         if is_filtering_window:
-                            existing_parts = [p for p in existing_parts if p.lower() in window_words]
+                            final_parts = []
+                            seen_lower = set()
+                            for p in existing_parts:
+                                if p in window_words_exact and p.lower() not in seen_lower:
+                                    seen_lower.add(p.lower())
+                                    final_parts.append(p)
+                            for p in existing_parts:
+                                if p.lower() in window_words_lower and p.lower() not in seen_lower:
+                                    seen_lower.add(p.lower())
+                                    final_parts.append(p)
+                            existing_parts = final_parts
                         order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
                         apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
                         apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
@@ -2052,9 +2064,18 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                     cur_inf = row[col_inflected].strip()
                     if cur_inf:
                         parts = [p.strip() for p in cur_inf.split(',') if p.strip()]
-                        filtered_parts = [p for p in parts if p.lower() in window_words]
+                        final_parts = []
+                        seen_lower = set()
+                        for p in parts:
+                            if p in window_words_exact and p.lower() not in seen_lower:
+                                seen_lower.add(p.lower())
+                                final_parts.append(p)
+                        for p in parts:
+                            if p.lower() in window_words_lower and p.lower() not in seen_lower:
+                                seen_lower.add(p.lower())
+                                final_parts.append(p)
                         row = list(row)
-                        row[col_inflected] = ", ".join(filtered_parts)
+                        row[col_inflected] = ", ".join(final_parts)
         deduped_rows.append(list(row))
     return deduped_rows
 
