@@ -2332,7 +2332,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     sub_rows.append(sub_row)
                     
             if col_word_source != -1 and dedup_scope_cfg == 'sentence':
-                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sent_text)
+                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text)
                 
             sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
             save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
