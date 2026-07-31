@@ -1901,6 +1901,8 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             cmd.append("--combine-source-words")
             combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
             cmd.extend(["--combine-source-words-order", combine_source_words_order])
+            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))
+            cmd.extend(["--apostrophe-chars", apostrophe_chars])
 
             
         token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config.has_section('token_mappings') else True
@@ -1978,21 +1980,19 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
     return working_tsv_path
 
-APOSTROPHE_CHARS = ("'", "’", "‘", "`", "´", "ʼ")
-
-def is_complex_inflected_form(form):
-    if any(c in form for c in APOSTROPHE_CHARS) or '-' in form or ' ' in form:
+def is_complex_inflected_form(form, apostrophe_chars):
+    if any(c in form for c in apostrophe_chars) or '-' in form or ' ' in form:
         return True
     return any(not c.isalnum() for c in form)
 
-def sort_inflected_forms(forms, order='contractions_first'):
+def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first'):
     unique_forms = []
     for f in forms:
         f_clean = f.strip()
         if f_clean and f_clean not in unique_forms:
             unique_forms.append(f_clean)
     if order == 'contractions_first':
-        unique_forms.sort(key=lambda f: (not is_complex_inflected_form(f), -len(f), f.lower()))
+        unique_forms.sort(key=lambda f: (not is_complex_inflected_form(f, apostrophe_chars), -len(f), f.lower()))
     elif order == 'alphabetical':
         unique_forms.sort(key=lambda f: f.lower())
     return unique_forms
@@ -2207,7 +2207,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                     if p and p not in existing_parts:
                                         existing_parts.append(p)
                                 order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
-                                master_data_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, order_cfg))
+                                apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))
+                                apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
+                                master_data_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg))
+
 
 
                         continue
