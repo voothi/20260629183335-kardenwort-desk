@@ -1348,7 +1348,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             if terminators is None:
                 terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
             if terminators:
-                terminators = terminators.strip('\'"')
+                terminators = terminators.strip('"')
             if not terminators.strip():
                 terminators = ".!?:"
             
@@ -1356,7 +1356,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             if punctuation_marks is None:
                 punctuation_marks = ".,;:!?()\"[]{}—–"
             else:
-                punctuation_marks = punctuation_marks.strip('\'"')
+                punctuation_marks = punctuation_marks.strip('"')
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
             words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
             words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
@@ -1815,7 +1815,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         if terminators is None:
             terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
         if terminators:
-            terminators = terminators.strip('\'"')
+            terminators = terminators.strip('"')
         if not terminators.strip():
             terminators = ".!?:"
             
@@ -1823,7 +1823,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         if punctuation_marks is None:
             punctuation_marks = ".,;:!?()\"[]{}—–"
         else:
-            punctuation_marks = punctuation_marks.strip('\'"')
+            punctuation_marks = punctuation_marks.strip('"')
             
         sentences_mode_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
         min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
@@ -1911,7 +1911,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             cmd.append("--combine-source-words")
             combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
             cmd.extend(["--combine-source-words-order", combine_source_words_order])
-            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('\'"')
+            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
             cmd.extend(["--apostrophe-chars", apostrophe_chars])
 
             
@@ -2030,7 +2030,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config)
                             if p and p not in existing_parts:
                                 existing_parts.append(p)
                         order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
-                        apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('\'"')
+                        apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
                         apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
                         deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg))
                 continue
@@ -2119,7 +2119,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     if terminators is None:
         terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
     if terminators:
-        terminators = terminators.strip('\'"')
+        terminators = terminators.strip('"')
     if not terminators.strip():
         terminators = ".!?:"
         
@@ -2127,7 +2127,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     if punctuation_marks is None:
         punctuation_marks = ".,;:!?()\"[]{}—–"
     else:
-        punctuation_marks = punctuation_marks.strip('\'"')
+        punctuation_marks = punctuation_marks.strip('"')
         
     wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
     
