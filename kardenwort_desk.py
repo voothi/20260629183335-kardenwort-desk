@@ -2629,7 +2629,7 @@ html, body {{
                     row_to_c_idx[row_id] = -1
                     
     absolute_to_c_idx = {}
-    if eff_mode != 'single':
+    if eff_mode not in ('single', 'multi'):
         c_idx = 0
         for a_idx, ln in enumerate(text.splitlines()):
             if ln.strip():
@@ -2647,7 +2647,7 @@ html, body {{
             lower_clean = token.get("lower_clean", "")
             mapped_rows = token_to_rows.get(lower_clean, [])
             
-            if eff_mode != 'single' and col_index != -1:
+            if eff_mode not in ('single', 'multi') and col_index != -1:
                 curr_c_idx = absolute_to_c_idx.get(current_a_idx, -1)
                 mapped_rows = [r_idx for r_idx in mapped_rows if row_to_c_idx.get(r_idx, -1) == curr_c_idx]
                 
