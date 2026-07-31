@@ -1895,6 +1895,18 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             de_gcs = config.getboolean('settings', 'de_gcs', fallback=False)
             if de_gcs:
                 cmd.append("--de-gcs")
+                
+        combine_source_words = config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)) if config.has_section('settings') else True
+        if combine_source_words:
+            cmd.append("--combine-source-words")
+            
+        token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config.has_section('token_mappings') else True
+        if token_mappings_enabled:
+            cmd.append("--token-mappings-enabled")
+            
+        lemmatize_mapped_tokens = config.getboolean('token_mappings', 'lemmatize_mapped_tokens', fallback=True) if config.has_section('token_mappings') else True
+        if lemmatize_mapped_tokens:
+            cmd.append("--lemmatize-mapped-tokens")
         desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
         if not desk_classification_enabled:
             cmd.append("--disable-classification")
@@ -6877,7 +6889,7 @@ def cmd_merge(args):
             
     deduplicate_by_lemma = True
     if config and config.has_section('settings'):
-        deduplicate_by_lemma = config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)
+        deduplicate_by_lemma = config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True))
     
     try:
         input_paths = [Path(f).resolve() for f in args.files]
