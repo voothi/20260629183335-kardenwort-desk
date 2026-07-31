@@ -2158,22 +2158,34 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     
         col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
+        col_inflected = headers.index(role_fields.get('inflected', 'WordSourceInflectedForm')) if role_fields.get('inflected', 'WordSourceInflectedForm') in headers else -1
         master_data_rows = []
         dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
         if col_word_source != -1 and dedup_scope_cfg != 'none':
-            seen_words = set()
+            seen_words = {}
             for row in data_rows:
                 if len(row) > col_word_source:
                     w = row[col_word_source].strip().lower()
                     pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
                     key = (w, pos)
                     if w and key in seen_words:
+                        existing_row_idx = seen_words[key]
+                        if col_inflected != -1 and len(row) > col_inflected:
+                            new_inflected = row[col_inflected].strip()
+                            if new_inflected:
+                                existing_inflected = master_data_rows[existing_row_idx][col_inflected].strip()
+                                existing_parts = [p.strip() for p in existing_inflected.split(',')]
+                                new_parts = [p.strip() for p in new_inflected.split(',')]
+                                for p in new_parts:
+                                    if p and p not in existing_parts:
+                                        existing_parts.append(p)
+                                master_data_rows[existing_row_idx][col_inflected] = ", ".join(existing_parts)
                         continue
                     if w:
-                        seen_words.add(key)
-                master_data_rows.append(row)
+                        seen_words[key] = len(master_data_rows)
+                master_data_rows.append(list(row))
         else:
-            master_data_rows = list(data_rows)
+            master_data_rows = [list(r) for r in data_rows]
             
         save_tsv_rows_safely(master_tsv_path, comments, headers, master_data_rows)
 
