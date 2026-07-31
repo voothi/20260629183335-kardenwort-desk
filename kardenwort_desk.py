@@ -2013,7 +2013,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     seen_words = {}
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and hasattr(config, 'getboolean') else True
-    strict_inflected = config.getboolean('settings', 'strict_inflected_from_mapping_files', fallback=True) if config and hasattr(config, 'getboolean') else True
     is_filtering_window = False
     window_words_exact = set()
     window_words_lower = set()
@@ -2023,37 +2022,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         raw_words = re.findall(r"[\w']+", window_text)
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
         window_words_lower = set(w.lower() for w in window_words_exact)
-
-    allowed_inflected = set()
-    if is_filtering_window and strict_inflected and language and resolved_paths:
-        try:
-            kardenwort_workspace = resolved_paths.get('kardenwort_workspace')
-            if kardenwort_workspace:
-                import configparser
-                kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
-                kw_config.read(__import__('os').path.join(kardenwort_workspace, "config.ini"), encoding='utf-8')
-                
-                files_str = kw_config.get('token_mappings', language, fallback='')
-                if files_str:
-                    file_paths = [__import__('os').path.join(kardenwort_workspace, f.strip()) for f in files_str.split(',') if f.strip()]
-                    import csv
-                    for fp in file_paths:
-                        try:
-                            with open(fp, "r", encoding="utf-8") as f:
-                                reader = csv.reader(f, delimiter="\t")
-                                for line_row in reader:
-                                    if not line_row or line_row[0].startswith('#'): continue
-                                    if len(line_row) >= 1:
-                                        allowed_inflected.add(line_row[0].strip())
-                                        allowed_inflected.add(line_row[0].strip().lower())
-                        except Exception as e:
-                            import logging
-                            logger = logging.getLogger('kardenwort_desk')
-                            logger.warning(f"Could not read mapping file for strict INFLECTED filtering: {fp}")
-        except Exception as kw_e:
-            import logging
-            logger = logging.getLogger('kardenwort_desk')
-            logger.warning(f"Failed to load kw_config for token mappings: {kw_e}")
 
     for row in data_rows:
         if len(row) > col_word_source:
@@ -2080,11 +2048,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                                 p_clean = p.strip()
                                 p_lower = p_clean.lower()
                                 in_window = (p_clean in window_words_exact) or (p_lower in window_words_lower)
-                                
-                                if in_window and strict_inflected:
-                                    if p_clean not in allowed_inflected and p_lower not in allowed_inflected:
-                                        in_window = False
-                                        
                                 if in_window and p_lower not in seen_lower:
                                     seen_lower.add(p_lower)
                                     final_parts.append(p)
@@ -2106,11 +2069,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                             p_clean = p.strip()
                             p_lower = p_clean.lower()
                             in_window = (p_clean in window_words_exact) or (p_lower in window_words_lower)
-                            
-                            if in_window and strict_inflected:
-                                if p_clean not in allowed_inflected and p_lower not in allowed_inflected:
-                                    in_window = False
-                                    
                             if in_window and p_lower not in seen_lower:
                                 seen_lower.add(p_lower)
                                 final_parts.append(p)
