@@ -1209,19 +1209,3 @@ def test_classification_hyphenated_words():
             
     assert 0 in single_word_rows
     assert len(single_word_rows) == 1
-
-def test_classification_contractions():
-    import kardenwort_desk as desk
-    
-    mapped_rows = [0, 1]
-    classes = ["word"]
-    
-    # New logic: split tokens (len(mapped_rows) > 1) are treated as purple
-    anchored_positions = {0: set(), 1: set()}
-    is_paired = any(0 in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
-    is_split_token = len(set(mapped_rows)) > 1
-    
-    if is_paired or is_split_token:
-        classes.append("highlight-purple")
-        
-    assert "highlight-purple" in classes

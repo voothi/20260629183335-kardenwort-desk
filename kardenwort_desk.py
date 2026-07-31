@@ -2709,8 +2709,7 @@ html, body {{
             classes = ["word"]
             if mapped_rows:
                 is_paired = any(word_counter in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
-                is_split_token = len(set(mapped_rows)) > 1
-                if is_paired or is_split_token:
+                if is_paired:
                     classes.append("highlight-purple")
                 elif any(r_idx in single_word_rows for r_idx in mapped_rows):
                     classes.append("highlight-orange")
@@ -2738,13 +2737,6 @@ html, body {{
                 span_htmls.append(text_escaped)
                 
     source_html = "".join(span_htmls)
-    
-    split_token_rows = set()
-    for token in source_tokens:
-        if token.get("is_word"):
-            mapped = token.get("filtered_mapped_rows", [])
-            if len(set(mapped)) > 1:
-                split_token_rows.update(mapped)
     
     sentence_htmls = []
     has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
@@ -2835,7 +2827,7 @@ html, body {{
         trans_class = "editable" if trans_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         inflected_class = "editable" if inflected_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
-        row_highlight_class = "highlight-purple" if (row_id in paired_rows or row_id in split_token_rows) else "highlight-orange"
+        row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
         
         is_selected = "0"
         if col_highlighted != -1:
