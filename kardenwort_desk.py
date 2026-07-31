@@ -2008,11 +2008,12 @@ def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first'):
     return unique_forms
 
 
-def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None):
+def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None):
     deduped_rows = []
     seen_words = {}
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and hasattr(config, 'getboolean') else True
+    strict_inflected = config.getboolean('settings', 'strict_inflected_from_mapping_files', fallback=True) if config and hasattr(config, 'getboolean') else True
     is_filtering_window = False
     window_words_exact = set()
     window_words_lower = set()
@@ -2022,6 +2023,27 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         raw_words = re.findall(r"[\w']+", window_text)
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
         window_words_lower = set(w.lower() for w in window_words_exact)
+
+    allowed_inflected = set()
+    if is_filtering_window and strict_inflected and language and resolved_paths and config and hasattr(config, 'get'):
+        files_str = config.get('token_mappings', language, fallback='')
+        if files_str:
+            base_dir = resolved_paths.get('base_dir', '.')
+            file_paths = [__import__('os').path.join(base_dir, f.strip()) for f in files_str.split(',') if f.strip()]
+            import csv
+            for fp in file_paths:
+                try:
+                    with open(fp, "r", encoding="utf-8") as f:
+                        reader = csv.reader(f, delimiter="\t")
+                        for line_row in reader:
+                            if not line_row or line_row[0].startswith('#'): continue
+                            if len(line_row) >= 1:
+                                allowed_inflected.add(line_row[0].strip())
+                                allowed_inflected.add(line_row[0].strip().lower())
+                except Exception as e:
+                    import logging
+                    logger = logging.getLogger('kardenwort_desk')
+                    logger.warning(f"Could not read mapping file for strict INFLECTED filtering: {fp}")
 
     for row in data_rows:
         if len(row) > col_word_source:
@@ -2045,12 +2067,16 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                             final_parts = []
                             seen_lower = set()
                             for p in existing_parts:
-                                if p in window_words_exact and p.lower() not in seen_lower:
-                                    seen_lower.add(p.lower())
-                                    final_parts.append(p)
-                            for p in existing_parts:
-                                if p.lower() in window_words_lower and p.lower() not in seen_lower:
-                                    seen_lower.add(p.lower())
+                                p_clean = p.strip()
+                                p_lower = p_clean.lower()
+                                in_window = (p_clean in window_words_exact) or (p_lower in window_words_lower)
+                                
+                                if in_window and strict_inflected and allowed_inflected:
+                                    if p_clean not in allowed_inflected and p_lower not in allowed_inflected:
+                                        in_window = False
+                                        
+                                if in_window and p_lower not in seen_lower:
+                                    seen_lower.add(p_lower)
                                     final_parts.append(p)
                             existing_parts = final_parts
                         order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
@@ -2067,12 +2093,16 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                         final_parts = []
                         seen_lower = set()
                         for p in parts:
-                            if p in window_words_exact and p.lower() not in seen_lower:
-                                seen_lower.add(p.lower())
-                                final_parts.append(p)
-                        for p in parts:
-                            if p.lower() in window_words_lower and p.lower() not in seen_lower:
-                                seen_lower.add(p.lower())
+                            p_clean = p.strip()
+                            p_lower = p_clean.lower()
+                            in_window = (p_clean in window_words_exact) or (p_lower in window_words_lower)
+                            
+                            if in_window and strict_inflected and allowed_inflected:
+                                if p_clean not in allowed_inflected and p_lower not in allowed_inflected:
+                                    in_window = False
+                                    
+                            if in_window and p_lower not in seen_lower:
+                                seen_lower.add(p_lower)
                                 final_parts.append(p)
                         row = list(row)
                         row[col_inflected] = ", ".join(final_parts)
@@ -2271,7 +2301,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
         dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
         if col_word_source != -1 and dedup_scope_cfg != 'none':
-            master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text)
+            master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text, language=language, resolved_paths=resolved_paths)
         else:
             master_data_rows = [list(r) for r in data_rows]
 
@@ -2353,7 +2383,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     sub_rows.append(sub_row)
                     
             if col_word_source != -1 and dedup_scope_cfg == 'sentence':
-                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text)
+                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths)
                 
             sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
             save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
