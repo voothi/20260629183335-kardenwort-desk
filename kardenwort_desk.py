@@ -2182,7 +2182,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                 for p in new_parts:
                                     if p and p not in existing_parts:
                                         existing_parts.append(p)
-                                existing_parts.sort(key=lambda f: (not ("'" in f or "-" in f or " " in f), -len(f), f.lower()))
                                 master_data_rows[existing_row_idx][col_inflected] = ", ".join(existing_parts)
 
                         continue
