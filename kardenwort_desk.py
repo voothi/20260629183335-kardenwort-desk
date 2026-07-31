@@ -5261,7 +5261,7 @@ def is_wordfill_eligible(col_name):
     We avoid hardcoding explicit fields. Instead we fill Word-level attributes,
     while avoiding Sentence-level attributes and the primary WordSource itself.
     """
-    if col_name in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2'):
+    if col_name in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2', 'WordDestinationInflectedForm'):
         return False
     if col_name.startswith('Sentence'):
         return False
