@@ -1978,6 +1978,13 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
     return working_tsv_path
 
+APOSTROPHE_CHARS = ("'", "’", "‘", "`", "´", "ʼ")
+
+def is_complex_inflected_form(form):
+    if any(c in form for c in APOSTROPHE_CHARS) or '-' in form or ' ' in form:
+        return True
+    return any(not c.isalnum() for c in form)
+
 def sort_inflected_forms(forms, order='contractions_first'):
     unique_forms = []
     for f in forms:
@@ -1985,10 +1992,11 @@ def sort_inflected_forms(forms, order='contractions_first'):
         if f_clean and f_clean not in unique_forms:
             unique_forms.append(f_clean)
     if order == 'contractions_first':
-        unique_forms.sort(key=lambda f: (not ("'" in f or "’" in f or "-" in f or " " in f), -len(f), f.lower()))
+        unique_forms.sort(key=lambda f: (not is_complex_inflected_form(f), -len(f), f.lower()))
     elif order == 'alphabetical':
         unique_forms.sort(key=lambda f: f.lower())
     return unique_forms
+
 
 SPLIT_GAP_LIMIT = 60
 
