@@ -2008,9 +2008,16 @@ def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first'):
     return unique_forms
 
 
-def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config):
+def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None):
     deduped_rows = []
     seen_words = {}
+
+    window_words = set()
+    if window_text:
+        import re
+        raw_words = re.findall(r"[\w']+", window_text.lower())
+        window_words = set(w.strip() for w in raw_words if w.strip())
+
     for row in data_rows:
         if len(row) > col_word_source:
             w = row[col_word_source].strip().lower()
@@ -2029,6 +2036,10 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config)
                         for p in new_parts:
                             if p and p not in existing_parts:
                                 existing_parts.append(p)
+                        if window_words:
+                            filtered_parts = [p for p in existing_parts if p.lower() in window_words]
+                            if filtered_parts:
+                                existing_parts = filtered_parts
                         order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
                         apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
                         apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
@@ -2036,6 +2047,14 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config)
                 continue
             if w:
                 seen_words[key] = len(deduped_rows)
+                if window_words and col_inflected != -1 and len(row) > col_inflected:
+                    cur_inf = row[col_inflected].strip()
+                    if cur_inf:
+                        parts = [p.strip() for p in cur_inf.split(',') if p.strip()]
+                        filtered_parts = [p for p in parts if p.lower() in window_words]
+                        if filtered_parts:
+                            row = list(row)
+                            row[col_inflected] = ", ".join(filtered_parts)
         deduped_rows.append(list(row))
     return deduped_rows
 
@@ -2231,7 +2250,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         
         dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
         if col_word_source != -1 and dedup_scope_cfg != 'none':
-            master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config)
+            master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text)
         else:
             master_data_rows = [list(r) for r in data_rows]
 
@@ -2313,7 +2332,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     sub_rows.append(sub_row)
                     
             if col_word_source != -1 and dedup_scope_cfg == 'sentence':
-                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config)
+                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sent_text)
                 
             sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
             save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)

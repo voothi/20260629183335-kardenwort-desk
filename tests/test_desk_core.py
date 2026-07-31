@@ -1236,3 +1236,28 @@ def test_spawn_kardenwort_token_mappings(monkeypatch, tmp_path):
     # Actually, spawning kardenwort requires a lot of setup for the WorkerThread.
     # We can just test the config resolution directly if we want, or mock subprocess.run.
     pass
+
+
+def test_deduplicate_rows_window_filtering():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    data_rows = [
+        ["den, Der, der, die, am, im", "der", "1"],
+        ["im, in", "in", "1"],
+        ["einem, eine, ein", "ein", "1"],
+    ]
+
+    window_text = "Bei einem ukrainischen Drohnenangriff auf die südrussische Hafenstadt Rostow am Don sind mindestens fünf Zivilisten getötet worden, als eine Drohne in ein Hochhaus einschlug."
+
+    # col_word_source = 1 (lemma), col_pos = -1, col_inflected = 0 (inflected)
+    deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
+
+    # For 'der', only 'die' and 'am' exist in the window_text
+    assert deduped[0][0] == "die, am" or deduped[0][0] == "am, die"
+    # For 'in', only 'in' exists in window_text
+    assert deduped[1][0] == "in"
+    # For 'ein', 'einem', 'eine', 'ein' exist in window_text
+    assert deduped[2][0] == "einem, eine, ein"
+
