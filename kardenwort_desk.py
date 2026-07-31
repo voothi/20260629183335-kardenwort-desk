@@ -1896,12 +1896,12 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             if de_gcs:
                 cmd.append("--de-gcs")
                 
-        combine_source_words = config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)) if config.has_section('settings') else True
+        combine_source_words = config.getboolean('lemmatization', 'combine_source_words', fallback=config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)))
         if combine_source_words:
             cmd.append("--combine-source-words")
-            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
+            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
             cmd.extend(["--combine-source-words-order", combine_source_words_order])
-            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))
+            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")))
             cmd.extend(["--apostrophe-chars", apostrophe_chars])
 
             
@@ -2206,8 +2206,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                                 for p in new_parts:
                                     if p and p not in existing_parts:
                                         existing_parts.append(p)
-                                order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
-                                apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))
+                                order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
+                                apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")))
                                 apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
                                 master_data_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg))
 
