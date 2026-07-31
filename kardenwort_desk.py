@@ -1897,7 +1897,8 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 cmd.append("--de-gcs")
                 
         combine_source_words = config.getboolean('lemmatization', 'combine_source_words', fallback=config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)))
-        if text_mode == 'sentences':
+        sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
+        if text_mode == 'multi' and sentences_enabled:
             dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
             if dedup_scope_cfg == 'sentence':
                 combine_source_words = False
@@ -2016,6 +2017,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config)
                 if col_inflected != -1 and len(row) > col_inflected:
                     new_inflected = row[col_inflected].strip()
                     if new_inflected:
+                        while len(deduped_rows[existing_row_idx]) <= col_inflected:
+                            deduped_rows[existing_row_idx].append("")
                         existing_inflected = deduped_rows[existing_row_idx][col_inflected].strip()
                         existing_parts = [p.strip() for p in existing_inflected.split(',') if p.strip()]
                         new_parts = [p.strip() for p in new_inflected.split(',') if p.strip()]
