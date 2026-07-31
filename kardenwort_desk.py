@@ -7639,7 +7639,7 @@ def main():
     p_merge.add_argument("--files", nargs="+", required=True, help="List of TSV files to merge")
     p_merge.add_argument("--target", default="new", help="Merge target path, new, or first")
     p_merge.add_argument("--delete-sources", action="store_true", help="Delete source files after merge")
-    p_merge.add_argument("--deduplicate", action="store_true", help="Deduplicate by (inflected, lemma) pair, prioritizing the row with most fields filled")
+    p_merge.add_argument("--deduplicate", action="store_true", help="Deduplicate by lemma or (inflected, lemma) pair, prioritizing the row with most fields filled")
     p_merge.add_argument("--sort-frequency", action="store_true", help="Sort the merged TSV rows by lemma frequency from Kardenwort Core")
 
     # restore
