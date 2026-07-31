@@ -1897,6 +1897,11 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 cmd.append("--de-gcs")
                 
         combine_source_words = config.getboolean('lemmatization', 'combine_source_words', fallback=config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)))
+        if text_mode == 'sentences':
+            dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
+            if dedup_scope_cfg == 'sentence':
+                combine_source_words = False
+
         if combine_source_words:
             cmd.append("--combine-source-words")
             combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
@@ -1996,6 +2001,36 @@ def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first'):
     elif order == 'alphabetical':
         unique_forms.sort(key=lambda f: f.lower())
     return unique_forms
+
+
+def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config):
+    deduped_rows = []
+    seen_words = {}
+    for row in data_rows:
+        if len(row) > col_word_source:
+            w = row[col_word_source].strip().lower()
+            pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
+            key = (w, pos)
+            if w and key in seen_words:
+                existing_row_idx = seen_words[key]
+                if col_inflected != -1 and len(row) > col_inflected:
+                    new_inflected = row[col_inflected].strip()
+                    if new_inflected:
+                        existing_inflected = deduped_rows[existing_row_idx][col_inflected].strip()
+                        existing_parts = [p.strip() for p in existing_inflected.split(',') if p.strip()]
+                        new_parts = [p.strip() for p in new_inflected.split(',') if p.strip()]
+                        for p in new_parts:
+                            if p and p not in existing_parts:
+                                existing_parts.append(p)
+                        order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
+                        apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")))
+                        apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
+                        deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg))
+                continue
+            if w:
+                seen_words[key] = len(deduped_rows)
+        deduped_rows.append(list(row))
+    return deduped_rows
 
 
 SPLIT_GAP_LIMIT = 60
@@ -2186,37 +2221,10 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
         col_inflected = headers.index(role_fields.get('inflected', 'WordSourceInflectedForm')) if role_fields.get('inflected', 'WordSourceInflectedForm') in headers else -1
-        master_data_rows = []
+        
         dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
         if col_word_source != -1 and dedup_scope_cfg != 'none':
-            seen_words = {}
-            for row in data_rows:
-                if len(row) > col_word_source:
-                    w = row[col_word_source].strip().lower()
-                    pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
-                    key = (w, pos)
-                    if w and key in seen_words:
-                        existing_row_idx = seen_words[key]
-                        if col_inflected != -1 and len(row) > col_inflected:
-                            new_inflected = row[col_inflected].strip()
-                            if new_inflected:
-                                existing_inflected = master_data_rows[existing_row_idx][col_inflected].strip()
-                                existing_parts = [p.strip() for p in existing_inflected.split(',') if p.strip()]
-                                new_parts = [p.strip() for p in new_inflected.split(',') if p.strip()]
-                                for p in new_parts:
-                                    if p and p not in existing_parts:
-                                        existing_parts.append(p)
-                                order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
-                                apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")))
-                                apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
-                                master_data_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg))
-
-
-
-                        continue
-                    if w:
-                        seen_words[key] = len(master_data_rows)
-                master_data_rows.append(list(row))
+            master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config)
         else:
             master_data_rows = [list(r) for r in data_rows]
             
@@ -2299,6 +2307,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         sub_row[col_sentence_dest] = sub_trans
                     sub_rows.append(sub_row)
                     
+            if col_word_source != -1 and dedup_scope_cfg == 'sentence':
+                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config)
+                
             sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
             save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
             sub_tsv_paths.append(sub_tsv_path)
