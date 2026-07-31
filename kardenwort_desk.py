@@ -2187,6 +2187,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         else:
             master_data_rows = [list(r) for r in data_rows]
             
+        data_rows = master_data_rows
+
         save_tsv_rows_safely(master_tsv_path, comments, headers, master_data_rows)
 
         kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -2780,7 +2782,7 @@ html, body {{
         trans_class = "editable" if trans_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         inflected_class = "editable" if inflected_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
-        row_highlight_class = "highlight-purple" if (row_id in paired_rows or row_id in split_token_rows) else "highlight-orange"
+        row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
         
         is_selected = "0"
         if col_highlighted != -1:
