@@ -2653,6 +2653,13 @@ html, body {{
                 
     source_html = "".join(span_htmls)
     
+    split_token_rows = set()
+    for token in source_tokens:
+        if token.get("is_word"):
+            mapped = token.get("filtered_mapped_rows", [])
+            if len(set(mapped)) > 1:
+                split_token_rows.update(mapped)
+    
     sentence_htmls = []
     has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
     if is_progressive and run_text == 'auto' and not has_real_text:
@@ -2742,7 +2749,7 @@ html, body {{
         trans_class = "editable" if trans_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         inflected_class = "editable" if inflected_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
-        row_highlight_class = "highlight-purple" if row_id in paired_rows else "highlight-orange"
+        row_highlight_class = "highlight-purple" if (row_id in paired_rows or row_id in split_token_rows) else "highlight-orange"
         
         is_selected = "0"
         if col_highlighted != -1:
