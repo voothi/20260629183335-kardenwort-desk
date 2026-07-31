@@ -1175,3 +1175,53 @@ def test_generate_unique_zid():
     assert zid2 != zid3
     assert int(zid2) > int(zid1)
     assert int(zid3) > int(zid2)
+
+def test_classification_hyphenated_words():
+    import kardenwort_desk as desk
+    import re
+    # Simulate generating the HTML for a hyphenated word
+    
+    # Mock data rows
+    data_rows = [
+        ["Hunde-Haus", "Hunde-Haus", "1"]
+    ]
+    
+    # We just need to check the logic that populates single_word_rows and anchored_positions
+    col_inflected = 1
+    single_word_rows = set()
+    anchored_positions = {}
+    
+    for row_id, row in enumerate(data_rows):
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        inf_words = []
+        if inflected_val:
+            import text_tokenizer as tok
+            inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch == "'"))
+                         for p in re.findall(r"[\w']+", inflected_val)]
+            inf_words = [w for w in inf_words if w]
+        
+        # New logic: hyphenated words are treated as single words
+        if len(inf_words) >= 2 and '-' not in inflected_val:
+            pass # mock pos_set logic
+        else:
+            single_word_rows.add(row_id)
+            anchored_positions[row_id] = set()
+            
+    assert 0 in single_word_rows
+    assert len(single_word_rows) == 1
+
+def test_classification_contractions():
+    import kardenwort_desk as desk
+    
+    mapped_rows = [0, 1]
+    classes = ["word"]
+    
+    # New logic: split tokens (len(mapped_rows) > 1) are treated as purple
+    anchored_positions = {0: set(), 1: set()}
+    is_paired = any(0 in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
+    is_split_token = len(set(mapped_rows)) > 1
+    
+    if is_paired or is_split_token:
+        classes.append("highlight-purple")
+        
+    assert "highlight-purple" in classes

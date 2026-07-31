@@ -2572,7 +2572,7 @@ html, body {{
                          for p in re.findall(r"[\w']+", inflected_val)]
             inf_words = [w for w in inf_words if w]
         
-        if len(inf_words) >= 2:
+        if len(inf_words) >= 2 and '-' not in inflected_val:
             pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
             if ok:
                 anchored_positions[row_id] = pos_set
@@ -2622,7 +2622,8 @@ html, body {{
             classes = ["word"]
             if mapped_rows:
                 is_paired = any(word_counter in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
-                if is_paired:
+                is_split_token = len(set(mapped_rows)) > 1
+                if is_paired or is_split_token:
                     classes.append("highlight-purple")
                 elif any(r_idx in single_word_rows for r_idx in mapped_rows):
                     classes.append("highlight-orange")
