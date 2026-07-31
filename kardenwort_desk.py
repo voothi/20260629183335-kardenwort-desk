@@ -2230,8 +2230,6 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config)
         else:
             master_data_rows = [list(r) for r in data_rows]
-            
-        data_rows = master_data_rows
 
         save_tsv_rows_safely(master_tsv_path, comments, headers, master_data_rows)
 
