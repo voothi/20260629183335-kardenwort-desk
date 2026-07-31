@@ -2835,7 +2835,7 @@ html, body {{
         trans_class = "editable" if trans_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         inflected_class = "editable" if inflected_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
-        row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
+        row_highlight_class = "highlight-purple" if (row_id in paired_rows or row_id in split_token_rows) else "highlight-orange"
         
         is_selected = "0"
         if col_highlighted != -1:
