@@ -2542,7 +2542,8 @@ html, body {{
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
         
         candidates = set()
-        for val in (lemma_val, inflected_val):
+        vals_to_check = [inflected_val] if inflected_val else [lemma_val]
+        for val in vals_to_check:
             if val:
                 clean_val = "".join(ch for ch in val.lower() if ch.isalnum() or ch == "'")
                 if clean_val:
