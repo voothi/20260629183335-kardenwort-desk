@@ -6874,6 +6874,10 @@ def cmd_merge(args):
     if not sort_frequency:
         if config and config.has_section('settings'):
             sort_frequency = config.getboolean('settings', 'merge_sort_frequency', fallback=False)
+            
+    deduplicate_by_lemma = True
+    if config and config.has_section('settings'):
+        deduplicate_by_lemma = config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)
     
     try:
         input_paths = [Path(f).resolve() for f in args.files]
@@ -7098,7 +7102,7 @@ def cmd_merge(args):
                     for row in all_data_rows:
                         lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
                         inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
-                        pair = (inflected_val, lemma_val)
+                        pair = lemma_val if deduplicate_by_lemma else (inflected_val, lemma_val)
                         if pair not in grouped_rows:
                             grouped_rows[pair] = []
                             seen_pairs.append(pair)
@@ -7109,10 +7113,19 @@ def cmd_merge(args):
                         rows_list = grouped_rows[pair]
                         # Merge rows by overlaying non-empty fields from oldest to newest
                         merged_row = [""] * len(first_headers)
+                        merged_inflected = []
                         for r in rows_list:
                             for i, cell in enumerate(r):
                                 if i < len(merged_row) and cell.strip():
                                     merged_row[i] = cell
+                            if deduplicate_by_lemma and col_inflected != -1 and len(r) > col_inflected:
+                                current_inf = r[col_inflected].strip()
+                                if current_inf:
+                                    for part in [p.strip() for p in current_inf.split(',') if p.strip()]:
+                                        if part not in merged_inflected:
+                                            merged_inflected.append(part)
+                        if deduplicate_by_lemma and col_inflected != -1 and merged_inflected:
+                            merged_row[col_inflected] = ", ".join(merged_inflected)
                         unique_data_rows.append(merged_row)
                     all_data_rows = unique_data_rows
 
