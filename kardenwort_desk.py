@@ -5393,8 +5393,12 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     best_fallback_score = -1
     best_fallback_match = None
 
+    exclude_zid = extract_zid(Path(exclude_path)) if exclude_path else None
+
     for file_rank, tsv_path in enumerate(candidates):
         if exclude_path and tsv_path.resolve() == Path(exclude_path).resolve():
+            continue
+        if exclude_zid and extract_zid(tsv_path) == exclude_zid and '-merged.' not in tsv_path.name:
             continue
             
         try:
