@@ -1903,6 +1903,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config.has_section('token_mappings') else True
         if token_mappings_enabled:
             cmd.append("--token-mappings-enabled")
+        else:
+            cmd.append("--disable-token-mappings")
+
             
         lemmatize_mapped_tokens = config.getboolean('token_mappings', 'lemmatize_mapped_tokens', fallback=True) if config.has_section('token_mappings') else True
         if lemmatize_mapped_tokens:
