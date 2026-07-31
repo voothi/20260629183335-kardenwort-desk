@@ -2012,8 +2012,9 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     deduped_rows = []
     seen_words = {}
 
+    filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and hasattr(config, 'getboolean') else True
     window_words = set()
-    if window_text:
+    if window_text and filter_by_window:
         import re
         raw_words = re.findall(r"[\w']+", window_text.lower())
         window_words = set(w.strip() for w in raw_words if w.strip())

@@ -1251,7 +1251,9 @@ def test_deduplicate_rows_window_filtering():
 
     window_text = "Bei einem ukrainischen Drohnenangriff auf die südrussische Hafenstadt Rostow am Don sind mindestens fünf Zivilisten getötet worden, als eine Drohne in ein Hochhaus einschlug."
 
-    # col_word_source = 1 (lemma), col_pos = -1, col_inflected = 0 (inflected)
+    # Test with filter_inflected_by_window = true (default)
+    config.add_section('settings')
+    config.set('settings', 'filter_inflected_by_window', 'true')
     deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
 
     # For 'der', only 'die' and 'am' exist in the window_text
@@ -1260,4 +1262,9 @@ def test_deduplicate_rows_window_filtering():
     assert deduped[1][0] == "in"
     # For 'ein', 'einem', 'eine', 'ein' exist in window_text
     assert deduped[2][0] == "einem, eine, ein"
+
+    # Test with filter_inflected_by_window = false (legacy mode)
+    config.set('settings', 'filter_inflected_by_window', 'false')
+    deduped_legacy = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
+    assert deduped_legacy[0][0] == "den, Der, der, die, am, im"
 
