@@ -2013,8 +2013,10 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     seen_words = {}
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and hasattr(config, 'getboolean') else True
+    is_filtering_window = False
     window_words = set()
     if window_text and filter_by_window:
+        is_filtering_window = True
         import re
         raw_words = re.findall(r"[\w']+", window_text.lower())
         window_words = set(w.strip() for w in raw_words if w.strip())
@@ -2037,10 +2039,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                         for p in new_parts:
                             if p and p not in existing_parts:
                                 existing_parts.append(p)
-                        if window_words:
-                            filtered_parts = [p for p in existing_parts if p.lower() in window_words]
-                            if filtered_parts:
-                                existing_parts = filtered_parts
+                        if is_filtering_window:
+                            existing_parts = [p for p in existing_parts if p.lower() in window_words]
                         order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
                         apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
                         apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
@@ -2048,14 +2048,13 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                 continue
             if w:
                 seen_words[key] = len(deduped_rows)
-                if window_words and col_inflected != -1 and len(row) > col_inflected:
+                if is_filtering_window and col_inflected != -1 and len(row) > col_inflected:
                     cur_inf = row[col_inflected].strip()
                     if cur_inf:
                         parts = [p.strip() for p in cur_inf.split(',') if p.strip()]
                         filtered_parts = [p for p in parts if p.lower() in window_words]
-                        if filtered_parts:
-                            row = list(row)
-                            row[col_inflected] = ", ".join(filtered_parts)
+                        row = list(row)
+                        row[col_inflected] = ", ".join(filtered_parts)
         deduped_rows.append(list(row))
     return deduped_rows
 
