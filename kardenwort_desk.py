@@ -2223,6 +2223,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             sub_trans_path.write_text(sub_trans, encoding='utf-8')
             
             sub_rows = []
+            sub_tokens = tok.build_word_list_internal(sub_text, keep_spaces=True)
+            sub_words = {t["lower_clean"] for t in sub_tokens if t.get("is_word") and "lower_clean" in t}
+            
             for row in data_rows:
                 row_sent_idx = -1
                 if col_index != -1 and len(row) > col_index:
@@ -2230,7 +2233,24 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                         row_sent_idx = int(row[col_index]) - 1
                     except ValueError:
                         pass
-                if row_sent_idx == i:
+                
+                matches_sentence = (row_sent_idx == i)
+                if not matches_sentence:
+                    row_inf = row[col_inflected].strip() if col_inflected != -1 and len(row) > col_inflected else ""
+                    row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
+                    forms_to_check = [f.strip() for f in row_inf.split(',')] if row_inf else ([row_lem] if row_lem else [])
+                    for f in forms_to_check:
+                        if not f: continue
+                        clean_f = "".join(ch for ch in f.lower() if ch.isalnum() or ch == "'")
+                        if clean_f in sub_words:
+                            matches_sentence = True
+                            break
+                        parts = re.findall(r"[\w']+", f.lower())
+                        if any("".join(ch for ch in p if ch.isalnum() or ch == "'") in sub_words for p in parts if p):
+                            matches_sentence = True
+                            break
+                            
+                if matches_sentence:
                     sub_row = list(row)
                     if col_index != -1:
                         while len(sub_row) <= col_index:
