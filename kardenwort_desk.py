@@ -7017,13 +7017,21 @@ def cmd_edit_save(args):
 def _c(code, text):
     return f"\033[{code}m{text}\033[0m"
 
-def make_progress_bar(current: int, total: int, label: str = "files") -> str:
+def make_progress_bar(current: int, total: int, label: str = "files", status: str = "") -> str:
     bar_width = 30
     percent = (current / total) * 100 if total > 0 else 100
     filled = int(round(bar_width * percent / 100.0))
     bar = _c("32", "━" * filled) + _c("90", "━" * (bar_width - filled))
     text = f"{current}/{total} {label} ({percent:.1f}%)"
-    return f"\r    {bar} {_c('36', text)}"
+    
+    if len(status) > 80:
+        status = status[:77] + "..."
+        
+    out = f"\r\033[K    {bar} {_c('36', text)}\n\033[K"
+    if status:
+        out += f"    {_c('90', status)}"
+    out += "\033[A" # Move cursor back up to the progress bar line
+    return out
 
 def cmd_merge(args):
     import os
@@ -7166,7 +7174,7 @@ def cmd_merge(args):
         
         total_files = len(files)
         processed_files = 0
-        sys.stdout.write(make_progress_bar(processed_files, total_files))
+        sys.stdout.write(make_progress_bar(processed_files, total_files, status="Preparing files..."))
         sys.stdout.flush()
 
         for idx, (lang, lang_files) in enumerate(sorted(files_by_lang.items())):
@@ -7188,10 +7196,10 @@ def cmd_merge(args):
                             union_headers_set.add(h)
                             
                     processed_files += 1
-                    sys.stdout.write(make_progress_bar(processed_files, total_files))
+                    sys.stdout.write(make_progress_bar(processed_files, total_files, status=f"Merged {f.name}"))
                     sys.stdout.flush()
                 except Exception as e:
-                    print_structured_error("MERGE_FAILED", f"\nFailed to read file {f.name}: {e}")
+                    print_structured_error("MERGE_FAILED", f"\n\nFailed to read file {f.name}: {e}")
                     sys.exit(1)
 
             first_headers = union_headers
@@ -7435,7 +7443,10 @@ def cmd_merge(args):
                 print_structured_error("MERGE_FAILED", f"Merge execution failed for '{lang}': {e}")
                 sys.exit(1)
 
-        success_msg = _c("1;32", "\n\nSUCCESS: Merged Files") + "\n"
+        sys.stdout.write(make_progress_bar(processed_files, total_files, status="Finalizing merge..."))
+        sys.stdout.flush()
+        
+        success_msg = _c("1;32", "\n\n\nSUCCESS: Merged Files") + "\n"
         
         if all_written_tsvs:
             success_msg += _c("36", "\nTSVs:\n")

@@ -147,4 +147,4 @@ def test_cmd_merge_cli(tmp_path, monkeypatch):
     
     main()
     out_str = mock_out.getvalue()
-    assert "SUCCESS: Merged TSVs" in out_str
+    assert "SUCCESS: Merged Files" in out_str
