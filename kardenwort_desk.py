@@ -2047,14 +2047,13 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         window_words_lower = set(w.lower() for w in window_words_exact)
 
         def _is_in_window(p_clean):
-            p_lower = p_clean.lower()
-            if p_clean in window_words_exact or p_lower in window_words_lower:
+            if p_clean in window_words_exact:
                 return True
             p_parts = [w for w in re.findall(word_pattern, p_clean) if w.strip()]
             if not p_parts:
                 return False
             for part in p_parts:
-                if part not in window_words_exact and part.lower() not in window_words_lower:
+                if part not in window_words_exact:
                     return False
             return True
 
