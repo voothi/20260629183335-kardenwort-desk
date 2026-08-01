@@ -2037,10 +2037,12 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     is_filtering_window = False
     window_words_exact = set()
     window_words_lower = set()
-    if window_text and filter_by_window and token_mappings_enabled:
+    if window_text and filter_by_window:
         is_filtering_window = True
         import re
-        raw_words = re.findall(r"[\w']+", window_text)
+        apo_pattern = "".join(re.escape(c) for c in apo_cfg)
+        word_pattern = r"[\w" + apo_pattern + r"]+"
+        raw_words = re.findall(word_pattern, window_text)
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
         window_words_lower = set(w.lower() for w in window_words_exact)
 
@@ -2048,7 +2050,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             p_lower = p_clean.lower()
             if p_clean in window_words_exact or p_lower in window_words_lower:
                 return True
-            p_parts = [w for w in re.findall(r"[\w']+", p_clean) if w.strip()]
+            p_parts = [w for w in re.findall(word_pattern, p_clean) if w.strip()]
             if not p_parts:
                 return False
             for part in p_parts:
@@ -2063,7 +2065,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             key = (w, pos)
             if w and key in seen_words:
                 existing_row_idx = seen_words[key]
-                if token_mappings_enabled and col_inflected != -1 and len(row) > col_inflected:
+                if col_inflected != -1 and len(row) > col_inflected:
                     new_inflected = row[col_inflected].strip()
                     if new_inflected:
                         while len(deduped_rows[existing_row_idx]) <= col_inflected:
