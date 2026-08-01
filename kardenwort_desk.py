@@ -1899,6 +1899,8 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             de_gcs = config.getboolean('settings', 'de_gcs', fallback=False)
             if de_gcs:
                 cmd.append("--de-gcs")
+                if config.getboolean('settings', 'de_gcs_preserve_compound_word', fallback=False):
+                    cmd.append("--de-gcs-preserve-compound-word")
                 
         combine_source_words = config.getboolean('lemmatization', 'combine_source_words', fallback=config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)))
         sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
