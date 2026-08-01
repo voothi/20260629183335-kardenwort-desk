@@ -1268,3 +1268,26 @@ def test_deduplicate_rows_window_filtering():
     deduped_legacy = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
     assert deduped_legacy[0][0] == "den, Der, der, die, am, im"
 
+def test_deduplicate_rows_window_filtering_compounds():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'filter_inflected_by_window', 'true')
+
+    data_rows = [
+        ["EU-Kommission", "EU-Kommission", "1"],
+        ["brechen aus", "ausbrechen", "1"],
+        ["KI-Labore", "KI-Labor", "1"]
+    ]
+
+    window_text = "Die EU-Kommission wird am Sonntag aktiv. KI-Labore brechen in den Markt aus."
+
+    deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
+
+    # All these should be retained because their parts are present in the text
+    assert deduped[0][0] == "EU-Kommission"
+    assert deduped[1][0] == "brechen aus"
+    assert deduped[2][0] == "KI-Labore"
+

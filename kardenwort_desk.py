@@ -2023,6 +2023,18 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
         window_words_lower = set(w.lower() for w in window_words_exact)
 
+        def _is_in_window(p_clean):
+            p_lower = p_clean.lower()
+            if p_clean in window_words_exact or p_lower in window_words_lower:
+                return True
+            p_parts = [w for w in re.findall(r"[\w']+", p_clean) if w.strip()]
+            if not p_parts:
+                return False
+            for part in p_parts:
+                if part not in window_words_exact and part.lower() not in window_words_lower:
+                    return False
+            return True
+
     for row in data_rows:
         if len(row) > col_word_source:
             w = row[col_word_source].strip().lower()
@@ -2047,7 +2059,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                             for p in existing_parts:
                                 p_clean = p.strip()
                                 p_lower = p_clean.lower()
-                                in_window = (p_clean in window_words_exact) or (p_lower in window_words_lower)
+                                in_window = _is_in_window(p_clean)
                                 if in_window and p_lower not in seen_lower:
                                     seen_lower.add(p_lower)
                                     final_parts.append(p)
@@ -2068,7 +2080,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                         for p in parts:
                             p_clean = p.strip()
                             p_lower = p_clean.lower()
-                            in_window = (p_clean in window_words_exact) or (p_lower in window_words_lower)
+                            in_window = _is_in_window(p_clean)
                             if in_window and p_lower not in seen_lower:
                                 seen_lower.add(p_lower)
                                 final_parts.append(p)
