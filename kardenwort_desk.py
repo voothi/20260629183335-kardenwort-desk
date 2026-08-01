@@ -5922,6 +5922,10 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
             save_to_favorites_override=True,
             send_to_anki_override=force_send_to_anki
         )
+        
+    print("Selected pipeline execution complete.")
+    if getattr(args, 'pause', False):
+        input("\nPress Enter to exit...")
 
 def cmd_export_selected(args):
     execute_selected_pipeline(args, force_send_to_anki=False)
@@ -7011,6 +7015,7 @@ def cmd_edit_save(args):
         sys.exit(1)
 
 def cmd_merge(args):
+    print("Kardenwort Desk: Merging files...")
     logger.info("Merge subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     deduplicate = getattr(args, 'deduplicate', False)
@@ -7411,8 +7416,12 @@ def cmd_merge(args):
         dest_tsv_str = ", ".join(str(p) for p in sorted(all_written_tsvs))
         dest_txt_str = ", ".join(str(p) for p in sorted(all_written_txts))
         emit_payload(f"SUCCESS: Merged TSVs: {dest_tsv_str}, Merged TXT files: {dest_txt_str}", raw=True)
+        if getattr(args, 'pause', False):
+            input("\nPress Enter to exit...")
     except Exception as e:
         print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
+        if getattr(args, 'pause', False):
+            input("\nPress Enter to exit...")
         sys.exit(1)
 
 def spawn_ahk(args_list, base_dir):
@@ -7761,10 +7770,12 @@ def main():
     p_export_selected = subparsers.add_parser("export-selected")
     p_export_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
     p_export_selected.add_argument("--language", default=None, help="Language code")
+    p_export_selected.add_argument("--pause", action="store_true", help="Pause on exit")
 
     p_import_selected = subparsers.add_parser("import-selected")
     p_import_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
     p_import_selected.add_argument("--language", default=None, help="Language code")
+    p_import_selected.add_argument("--pause", action="store_true", help="Pause on exit")
 
     # reprocess
     p_reprocess = subparsers.add_parser("reprocess")
@@ -7814,6 +7825,7 @@ def main():
     p_merge.add_argument("--delete-sources", action="store_true", help="Delete source files after merge")
     p_merge.add_argument("--deduplicate", action="store_true", help="Deduplicate by lemma or (inflected, lemma) pair, prioritizing the row with most fields filled")
     p_merge.add_argument("--sort-frequency", action="store_true", help="Sort the merged TSV rows by lemma frequency from Kardenwort Core")
+    p_merge.add_argument("--pause", action="store_true", help="Pause on exit to keep console window open")
 
     # restore
     p_restore = subparsers.add_parser("restore")

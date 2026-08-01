@@ -8,10 +8,10 @@ SENDTO_DIRECTORY = r"%APPDATA%\Microsoft\Windows\SendTo"
 # Registry of entrypoints
 # Format: { "Shortcut Name": { "arguments": "...", "desc": "description" } }
 ENTRYPOINTS = {
-    "Kardenwort Merge Files": { "arguments": "merge --deduplicate --sort-frequency --files", "desc": "Merge multiple kardenwort TSVs" },
+    "Kardenwort Merge Files": { "arguments": "merge --deduplicate --sort-frequency --pause --files", "desc": "Merge multiple kardenwort TSVs" },
     "Kardenwort Open Desk": { "arguments": "desk --file", "desc": "Open text file or restore session in desk window" },
-    "Kardenwort Export Selected": { "arguments": "export-selected --files", "desc": "Export selected rows to a new TSV in favorites" },
-    "Kardenwort Import Selected": { "arguments": "import-selected --files", "desc": "Export selected rows and import them to Anki" }
+    "Kardenwort Export Selected": { "arguments": "export-selected --pause --files", "desc": "Export selected rows to a new TSV in favorites" },
+    "Kardenwort Import Selected": { "arguments": "import-selected --pause --files", "desc": "Export selected rows and import them to Anki" }
 }
 
 def create_shortcut(name, arguments, description):
