@@ -2032,11 +2032,10 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
     
-    prefer_lowercase_cfg = config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True))) if config and (config.has_section('settings') or config.has_section('token_mappings') or config.has_section('lemmatization')) else True
+    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)))) if config else True
 
     is_filtering_window = False
     window_words_exact = set()
-    window_words_lower = set()
     if window_text and filter_by_window:
         is_filtering_window = True
         import re
@@ -2044,7 +2043,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         word_pattern = r"[\w" + apo_pattern + r"]+"
         raw_words = re.findall(word_pattern, window_text)
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
-        window_words_lower = set(w.lower() for w in window_words_exact)
 
         def _is_in_window(p_clean):
             if p_clean in window_words_exact:
@@ -7031,20 +7029,27 @@ def _c(code, text):
     return f"\033[{code}m{text}\033[0m"
 
 def make_progress_bar(current: int, total: int, label: str = "files", status: str = "") -> str:
+    import shutil
+    term_width = shutil.get_terminal_size((100, 20)).columns
     bar_width = 30
     percent = (current / total) * 100 if total > 0 else 100
     filled = int(round(bar_width * percent / 100.0))
     bar = _c("32", "━" * filled) + _c("90", "━" * (bar_width - filled))
     text = f"{current}/{total} {label} ({percent:.1f}%)"
     
-    if len(status) > 80:
-        status = status[:77] + "..."
+    max_status_width = max(20, term_width - 6)
+    if len(status) > max_status_width:
+        status = status[:max_status_width - 3] + "..."
         
     out = f"\r\033[K    {bar} {_c('36', text)}\n\033[K"
     if status:
         out += f"    {_c('90', status)}"
     out += "\033[A" # Move cursor back up to the progress bar line
     return out
+
+def clear_progress_bar():
+    sys.stdout.write("\r\033[K\n\r\033[K\033[A")
+    sys.stdout.flush()
 
 def cmd_merge(args):
     import os
@@ -7198,7 +7203,8 @@ def cmd_merge(args):
             union_headers_set = set()
             for f in lang_files:
                 if not f.exists():
-                    print_structured_error("INVALID_ARGS", f"\nFile not found: {f}")
+                    clear_progress_bar()
+                    print_structured_error("INVALID_ARGS", f"File not found: {f}")
                     sys.exit(1)
                 try:
                     comments, headers, rows = load_tsv_rows(f)
@@ -7212,7 +7218,8 @@ def cmd_merge(args):
                     sys.stdout.write(make_progress_bar(processed_files, total_files, status=f"Merged {f.name}"))
                     sys.stdout.flush()
                 except Exception as e:
-                    print_structured_error("MERGE_FAILED", f"\n\nFailed to read file {f.name}: {e}")
+                    clear_progress_bar()
+                    print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
                     sys.exit(1)
 
             first_headers = union_headers
@@ -7455,14 +7462,13 @@ def cmd_merge(args):
                         except Exception as e:
                             logger.warning(f"Failed to delete merged source {f.name}: {e}")
             except Exception as e:
+                clear_progress_bar()
                 print_structured_error("MERGE_FAILED", f"Merge execution failed for '{lang}': {e}")
                 sys.exit(1)
 
-        # Clear the status line by passing an empty string
-        sys.stdout.write(make_progress_bar(processed_files, total_files, status=""))
-        sys.stdout.flush()
+        clear_progress_bar()
         
-        success_msg = _c("1;32", "\n\nSUCCESS: Merged Files") + "\n"
+        success_msg = _c("1;32", "SUCCESS: Merged Files") + "\n"
         
         if all_written_tsvs:
             success_msg += _c("36", "\nTSVs:\n")
@@ -7478,7 +7484,8 @@ def cmd_merge(args):
         if getattr(args, 'pause', False):
             input("\nPress Enter to exit...")
     except Exception as e:
-        print_structured_error("MERGE_FAILED", f"\n\nMerge execution failed: {e}")
+        clear_progress_bar()
+        print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
         if getattr(args, 'pause', False):
             input("\nPress Enter to exit...")
         sys.exit(1)
