@@ -2076,13 +2076,9 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                                 existing_parts.append(p)
                         if is_filtering_window:
                             final_parts = []
-                            seen_lower = set()
                             for p in existing_parts:
                                 p_clean = p.strip()
-                                p_lower = p_clean.lower()
-                                in_window = _is_in_window(p_clean)
-                                if in_window and p_lower not in seen_lower:
-                                    seen_lower.add(p_lower)
+                                if _is_in_window(p_clean):
                                     final_parts.append(p)
                             existing_parts = final_parts
                         deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
@@ -2094,16 +2090,13 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                     if cur_inf:
                         parts = [p.strip() for p in cur_inf.split(',') if p.strip()]
                         final_parts = []
-                        seen_lower = set()
                         for p in parts:
                             p_clean = p.strip()
-                            p_lower = p_clean.lower()
-                            in_window = _is_in_window(p_clean)
-                            if in_window and p_lower not in seen_lower:
-                                seen_lower.add(p_lower)
+                            if _is_in_window(p_clean):
                                 final_parts.append(p)
                         row = list(row)
-                        row[col_inflected] = ", ".join(final_parts)
+                        row[col_inflected] = ", ".join(sort_inflected_forms(final_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
+                        row = tuple(row)
         deduped_rows.append(list(row))
     return deduped_rows
 
