@@ -7014,8 +7014,21 @@ def cmd_edit_save(args):
         print_structured_error("DESK_FAILED", f"Failed to process and save working TSV: {e}")
         sys.exit(1)
 
+def _c(code, text):
+    return f"\033[{code}m{text}\033[0m"
+
+def make_progress_bar(current: int, total: int, label: str = "files") -> str:
+    bar_width = 30
+    percent = (current / total) * 100 if total > 0 else 100
+    filled = int(round(bar_width * percent / 100.0))
+    bar = _c("32", "━" * filled) + _c("90", "━" * (bar_width - filled))
+    text = f"{current}/{total} {label} ({percent:.1f}%)"
+    return f"\r    {bar} {_c('36', text)}"
+
 def cmd_merge(args):
-    print("Kardenwort Desk: Merging files...")
+    import os
+    os.system("") # Enable ANSI on Windows
+    print("Kardenwort Desk: Merging files...\n")
     logger.info("Merge subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     deduplicate = getattr(args, 'deduplicate', False)
@@ -7150,6 +7163,11 @@ def cmd_merge(args):
         import time
         all_written_tsvs = []
         all_written_txts = []
+        
+        total_files = len(files)
+        processed_files = 0
+        sys.stdout.write(make_progress_bar(processed_files, total_files))
+        sys.stdout.flush()
 
         for idx, (lang, lang_files) in enumerate(sorted(files_by_lang.items())):
             timestamp_id = generate_unique_zid()
@@ -7159,7 +7177,7 @@ def cmd_merge(args):
             union_headers_set = set()
             for f in lang_files:
                 if not f.exists():
-                    print_structured_error("INVALID_ARGS", f"File not found: {f}")
+                    print_structured_error("INVALID_ARGS", f"\nFile not found: {f}")
                     sys.exit(1)
                 try:
                     comments, headers, rows = load_tsv_rows(f)
@@ -7168,8 +7186,12 @@ def cmd_merge(args):
                         if h not in union_headers_set:
                             union_headers.append(h)
                             union_headers_set.add(h)
+                            
+                    processed_files += 1
+                    sys.stdout.write(make_progress_bar(processed_files, total_files))
+                    sys.stdout.flush()
                 except Exception as e:
-                    print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
+                    print_structured_error("MERGE_FAILED", f"\nFailed to read file {f.name}: {e}")
                     sys.exit(1)
 
             first_headers = union_headers
@@ -7413,13 +7435,23 @@ def cmd_merge(args):
                 print_structured_error("MERGE_FAILED", f"Merge execution failed for '{lang}': {e}")
                 sys.exit(1)
 
-        dest_tsv_str = ", ".join(str(p) for p in sorted(all_written_tsvs))
-        dest_txt_str = ", ".join(str(p) for p in sorted(all_written_txts))
-        emit_payload(f"SUCCESS: Merged TSVs: {dest_tsv_str}, Merged TXT files: {dest_txt_str}", raw=True)
+        success_msg = _c("1;32", "\n\nSUCCESS: Merged Files") + "\n"
+        
+        if all_written_tsvs:
+            success_msg += _c("36", "\nTSVs:\n")
+            for p in sorted(all_written_tsvs):
+                success_msg += f"  - {_c('90', str(p.parent) + os.sep)}{_c('1', p.name)}\n"
+                
+        if all_written_txts:
+            success_msg += _c("36", "\nTXTs:\n")
+            for p in sorted(all_written_txts):
+                success_msg += f"  - {_c('90', str(p.parent) + os.sep)}{_c('1', p.name)}\n"
+
+        emit_payload(success_msg, raw=True)
         if getattr(args, 'pause', False):
             input("\nPress Enter to exit...")
     except Exception as e:
-        print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
+        print_structured_error("MERGE_FAILED", f"\n\nMerge execution failed: {e}")
         if getattr(args, 'pause', False):
             input("\nPress Enter to exit...")
         sys.exit(1)
