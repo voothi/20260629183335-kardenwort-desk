@@ -7310,7 +7310,7 @@ def cmd_merge(args):
                     apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))) if config else "', ’, ‘, `, ´, ʼ"
                     apo_cfg = tuple(c.strip() for c in apo_cfg_str.strip('"').split(',') if c.strip())
                     
-                    prefer_lowercase_cfg = config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True))) if config else True
+                    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)))) if config else True
 
                     seen_pairs = []
                     grouped_rows = {}
