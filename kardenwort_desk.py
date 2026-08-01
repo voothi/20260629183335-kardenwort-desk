@@ -7443,10 +7443,11 @@ def cmd_merge(args):
                 print_structured_error("MERGE_FAILED", f"Merge execution failed for '{lang}': {e}")
                 sys.exit(1)
 
-        sys.stdout.write(make_progress_bar(processed_files, total_files, status="Finalizing merge..."))
+        # Clear the status line by passing an empty string
+        sys.stdout.write(make_progress_bar(processed_files, total_files, status=""))
         sys.stdout.flush()
         
-        success_msg = _c("1;32", "\n\n\nSUCCESS: Merged Files") + "\n"
+        success_msg = _c("1;32", "\n\nSUCCESS: Merged Files") + "\n"
         
         if all_written_tsvs:
             success_msg += _c("36", "\nTSVs:\n")
