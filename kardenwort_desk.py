@@ -1995,12 +1995,26 @@ def is_complex_inflected_form(form, apostrophe_chars):
         return True
     return any(not c.isalnum() for c in form)
 
-def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first'):
-    unique_forms = []
+def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first', prefer_lowercase=True):
+    unique_forms_dict = {}
     for f in forms:
         f_clean = f.strip()
-        if f_clean and f_clean not in unique_forms:
-            unique_forms.append(f_clean)
+        if not f_clean:
+            continue
+            
+        if prefer_lowercase:
+            f_lower = f_clean.lower()
+            if f_lower not in unique_forms_dict:
+                unique_forms_dict[f_lower] = f_clean
+            elif f_clean == f_lower:
+                # If we have an uppercase version, override it with the lowercase version!
+                unique_forms_dict[f_lower] = f_clean
+        else:
+            if f_clean not in unique_forms_dict:
+                unique_forms_dict[f_clean] = f_clean
+
+    unique_forms = list(unique_forms_dict.values())
+    
     if order == 'contractions_first':
         unique_forms.sort(key=lambda f: (not is_complex_inflected_form(f, apostrophe_chars), -len(f), f.lower()))
     elif order == 'alphabetical':
@@ -2017,6 +2031,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
     apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
+    
+    prefer_lowercase_cfg = config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True))) if config and (config.has_section('settings') or config.has_section('token_mappings') or config.has_section('lemmatization')) else True
 
     is_filtering_window = False
     window_words_exact = set()
@@ -2069,7 +2085,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                                     seen_lower.add(p_lower)
                                     final_parts.append(p)
                             existing_parts = final_parts
-                        deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg))
+                        deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
                 continue
             if w:
                 seen_words[key] = len(deduped_rows)
@@ -7293,6 +7309,8 @@ def cmd_merge(args):
                     order_cfg = order_cfg.strip().lower()
                     apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))) if config else "', ’, ‘, `, ´, ʼ"
                     apo_cfg = tuple(c.strip() for c in apo_cfg_str.strip('"').split(',') if c.strip())
+                    
+                    prefer_lowercase_cfg = config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True))) if config else True
 
                     seen_pairs = []
                     grouped_rows = {}
@@ -7327,7 +7345,7 @@ def cmd_merge(args):
                                         if part not in merged_inflected:
                                             merged_inflected.append(part)
                         if col_inflected != -1 and merged_inflected:
-                            merged_row[col_inflected] = ", ".join(sort_inflected_forms(merged_inflected, apo_cfg, order_cfg))
+                            merged_row[col_inflected] = ", ".join(sort_inflected_forms(merged_inflected, apo_cfg, order_cfg, prefer_lowercase_cfg))
                         unique_data_rows.append(merged_row)
                     all_data_rows = unique_data_rows
 
