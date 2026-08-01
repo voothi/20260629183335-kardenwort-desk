@@ -7247,12 +7247,22 @@ def cmd_merge(args):
                 col_inflected = first_headers.index(inflected_col) if inflected_col in first_headers else -1
                     
                 if col_lemma != -1 and col_inflected != -1:
+                    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))) if config else 'contractions_first'
+                    order_cfg = order_cfg.strip().lower()
+                    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))) if config else "', ’, ‘, `, ´, ʼ"
+                    apo_cfg = tuple(c.strip() for c in apo_cfg_str.strip('"').split(',') if c.strip())
+
                     seen_pairs = []
                     grouped_rows = {}
                     for row in all_data_rows:
                         lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
-                        inflected_val = row[col_inflected].strip().lower() if len(row) > col_inflected else ""
-                        pair = lemma_val if deduplicate_by_lemma else (inflected_val, lemma_val)
+                        if len(row) > col_inflected:
+                            inf_parts = [p.strip() for p in row[col_inflected].strip().lower().split(',') if p.strip()]
+                            inflected_key = tuple(sorted(inf_parts))
+                        else:
+                            inflected_key = ()
+                        
+                        pair = lemma_val if deduplicate_by_lemma else (inflected_key, lemma_val)
                         if pair not in grouped_rows:
                             grouped_rows[pair] = []
                             seen_pairs.append(pair)
@@ -7268,14 +7278,14 @@ def cmd_merge(args):
                             for i, cell in enumerate(r):
                                 if i < len(merged_row) and cell.strip():
                                     merged_row[i] = cell
-                            if deduplicate_by_lemma and col_inflected != -1 and len(r) > col_inflected:
+                            if col_inflected != -1 and len(r) > col_inflected:
                                 current_inf = r[col_inflected].strip()
                                 if current_inf:
                                     for part in [p.strip() for p in current_inf.split(',') if p.strip()]:
                                         if part not in merged_inflected:
                                             merged_inflected.append(part)
-                        if deduplicate_by_lemma and col_inflected != -1 and merged_inflected:
-                            merged_row[col_inflected] = ", ".join(merged_inflected)
+                        if col_inflected != -1 and merged_inflected:
+                            merged_row[col_inflected] = ", ".join(sort_inflected_forms(merged_inflected, apo_cfg, order_cfg))
                         unique_data_rows.append(merged_row)
                     all_data_rows = unique_data_rows
 
