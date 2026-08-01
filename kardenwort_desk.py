@@ -2012,11 +2012,13 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     deduped_rows = []
     seen_words = {}
 
-    filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and hasattr(config, 'getboolean') else True
+    filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and config.has_section('settings') else True
+    token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
+
     is_filtering_window = False
     window_words_exact = set()
     window_words_lower = set()
-    if window_text and filter_by_window:
+    if window_text and filter_by_window and token_mappings_enabled:
         is_filtering_window = True
         import re
         raw_words = re.findall(r"[\w']+", window_text)
@@ -2042,7 +2044,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             key = (w, pos)
             if w and key in seen_words:
                 existing_row_idx = seen_words[key]
-                if col_inflected != -1 and len(row) > col_inflected:
+                token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
+                if token_mappings_enabled and col_inflected != -1 and len(row) > col_inflected:
                     new_inflected = row[col_inflected].strip()
                     if new_inflected:
                         while len(deduped_rows[existing_row_idx]) <= col_inflected:
