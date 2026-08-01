@@ -2014,6 +2014,9 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and config.has_section('settings') else True
     token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
+    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
+    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
+    apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
 
     is_filtering_window = False
     window_words_exact = set()
@@ -2044,7 +2047,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             key = (w, pos)
             if w and key in seen_words:
                 existing_row_idx = seen_words[key]
-                token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
                 if token_mappings_enabled and col_inflected != -1 and len(row) > col_inflected:
                     new_inflected = row[col_inflected].strip()
                     if new_inflected:
@@ -2067,9 +2069,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                                     seen_lower.add(p_lower)
                                     final_parts.append(p)
                             existing_parts = final_parts
-                        order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
-                        apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
-                        apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
                         deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg))
                 continue
             if w:
