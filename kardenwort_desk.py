@@ -2085,15 +2085,18 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                 continue
             if w:
                 seen_words[key] = len(deduped_rows)
-                if is_filtering_window and col_inflected != -1 and len(row) > col_inflected:
+                if col_inflected != -1 and len(row) > col_inflected:
                     cur_inf = row[col_inflected].strip()
                     if cur_inf:
                         parts = [p.strip() for p in cur_inf.split(',') if p.strip()]
                         final_parts = []
-                        for p in parts:
-                            p_clean = p.strip()
-                            if _is_in_window(p_clean):
-                                final_parts.append(p)
+                        if is_filtering_window:
+                            for p in parts:
+                                p_clean = p.strip()
+                                if _is_in_window(p_clean):
+                                    final_parts.append(p)
+                        else:
+                            final_parts = parts
                         row = list(row)
                         row[col_inflected] = ", ".join(sort_inflected_forms(final_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
                         row = tuple(row)

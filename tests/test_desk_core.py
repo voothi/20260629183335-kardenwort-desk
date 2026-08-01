@@ -1266,7 +1266,7 @@ def test_deduplicate_rows_window_filtering():
     # Test with filter_inflected_by_window = false (legacy mode)
     config.set('settings', 'filter_inflected_by_window', 'false')
     deduped_legacy = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
-    assert deduped_legacy[0][0] == "den, Der, der, die, am, im"
+    assert deduped_legacy[0][0] == "den, der, die, am, im"
 
 def test_deduplicate_rows_window_filtering_compounds():
     import kardenwort_desk as desk
