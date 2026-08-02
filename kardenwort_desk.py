@@ -113,6 +113,10 @@ import text_tokenizer as tok
 DEFAULT_COMBINE_ORDER = "contractions_first"
 DEFAULT_APOSTROPHE_CHARS = "', ’, ‘, `, ´, ʼ"
 
+SEC_SETTINGS = "settings"
+SEC_TOKEN_MAPPINGS = "token_mappings"
+SEC_MERGE = "merge"
+
 
 @dataclass(frozen=True)
 class RuntimeTokenConfig:
@@ -135,36 +139,31 @@ class RuntimeTokenConfig:
     def from_config(cls, config: Any) -> "RuntimeTokenConfig":
         if isinstance(config, cls):
             return config
-        filter_by_window = (
-            config.getboolean("settings", "filter_inflected_by_window", fallback=True)
-            if config and hasattr(config, "has_section") and config.has_section("settings")
-            else True
-        )
-        combine_source_words = (
-            config.getboolean("settings", "combine_source_words", fallback=False)
-            if config and hasattr(config, "has_section") and config.has_section("settings")
-            else False
-        )
-        token_mappings_enabled = (
-            config.getboolean("token_mappings", "enabled", fallback=True)
-            if config and hasattr(config, "has_section") and config.has_section("token_mappings")
-            else True
-        )
+
+        if config and hasattr(config, "getboolean"):
+            filter_by_window = config.getboolean(SEC_SETTINGS, "filter_inflected_by_window", fallback=True)
+            combine_source_words = config.getboolean(SEC_SETTINGS, "combine_source_words", fallback=False)
+            token_mappings_enabled = config.getboolean(SEC_TOKEN_MAPPINGS, "enabled", fallback=True)
+        else:
+            filter_by_window = True
+            combine_source_words = False
+            token_mappings_enabled = True
+
         if config and hasattr(config, "get"):
             combine_order = config.get(
-                "token_mappings",
+                SEC_TOKEN_MAPPINGS,
                 "combine_source_words_order",
-                fallback=config.get("settings", "combine_source_words_order", fallback=DEFAULT_COMBINE_ORDER),
+                fallback=config.get(SEC_SETTINGS, "combine_source_words_order", fallback=DEFAULT_COMBINE_ORDER),
             ).strip().lower()
             apostrophe_chars = config.get(
-                "token_mappings",
+                SEC_TOKEN_MAPPINGS,
                 "apostrophe_chars",
-                fallback=config.get("settings", "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS),
+                fallback=config.get(SEC_SETTINGS, "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS),
             ).strip('"')
             prefer_lowercase = config.getboolean(
-                "token_mappings",
+                SEC_TOKEN_MAPPINGS,
                 "combine_source_words_prefer_lowercase",
-                fallback=config.getboolean("settings", "combine_source_words_prefer_lowercase", fallback=True),
+                fallback=config.getboolean(SEC_SETTINGS, "combine_source_words_prefer_lowercase", fallback=True),
             )
         else:
             combine_order = DEFAULT_COMBINE_ORDER
@@ -207,16 +206,16 @@ class BatchMergeConfig:
 
         if config and hasattr(config, "getboolean"):
             dedup_val = config.getboolean(
-                "merge", "deduplicate",
-                fallback=config.getboolean("settings", "merge_deduplicate", fallback=True)
+                SEC_MERGE, "deduplicate",
+                fallback=config.getboolean(SEC_SETTINGS, "merge_deduplicate", fallback=True)
             )
             sort_val = config.getboolean(
-                "merge", "sort_frequency",
-                fallback=config.getboolean("settings", "merge_sort_frequency", fallback=False)
+                SEC_MERGE, "sort_frequency",
+                fallback=config.getboolean(SEC_SETTINGS, "merge_sort_frequency", fallback=False)
             )
             dedup_lemma = config.getboolean(
-                "merge", "deduplicate_by_lemma",
-                fallback=config.getboolean("settings", "merge_deduplicate_by_lemma", fallback=True)
+                SEC_MERGE, "deduplicate_by_lemma",
+                fallback=config.getboolean(SEC_SETTINGS, "merge_deduplicate_by_lemma", fallback=True)
             )
         else:
             dedup_val = True
@@ -228,19 +227,19 @@ class BatchMergeConfig:
 
         if config and hasattr(config, "get"):
             combine_order = config.get(
-                "merge", "combine_source_words_order",
-                fallback=config.get("token_mappings", "combine_source_words_order",
-                                    fallback=config.get("settings", "combine_source_words_order", fallback=DEFAULT_COMBINE_ORDER))
+                SEC_MERGE, "combine_source_words_order",
+                fallback=config.get(SEC_TOKEN_MAPPINGS, "combine_source_words_order",
+                                    fallback=config.get(SEC_SETTINGS, "combine_source_words_order", fallback=DEFAULT_COMBINE_ORDER))
             ).strip().lower()
             apostrophe_chars = config.get(
-                "merge", "apostrophe_chars",
-                fallback=config.get("token_mappings", "apostrophe_chars",
-                                    fallback=config.get("settings", "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS))
+                SEC_MERGE, "apostrophe_chars",
+                fallback=config.get(SEC_TOKEN_MAPPINGS, "apostrophe_chars",
+                                    fallback=config.get(SEC_SETTINGS, "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS))
             ).strip('"')
             prefer_lowercase = config.getboolean(
-                "merge", "combine_source_words_prefer_lowercase",
-                fallback=config.getboolean("token_mappings", "combine_source_words_prefer_lowercase",
-                                           fallback=config.getboolean("settings", "combine_source_words_prefer_lowercase", fallback=True))
+                SEC_MERGE, "combine_source_words_prefer_lowercase",
+                fallback=config.getboolean(SEC_TOKEN_MAPPINGS, "combine_source_words_prefer_lowercase",
+                                           fallback=config.getboolean(SEC_SETTINGS, "combine_source_words_prefer_lowercase", fallback=True))
             )
         else:
             combine_order = DEFAULT_COMBINE_ORDER
@@ -2066,7 +2065,8 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 if config.getboolean('settings', 'de_gcs_mask_unknown_parts', fallback=False):
                     cmd.append("--de-gcs-mask-unknown-parts")
                 
-        combine_source_words = config.getboolean('settings', 'combine_source_words', fallback=False)
+        token_cfg = RuntimeTokenConfig.from_config(config)
+        combine_source_words = token_cfg.combine_source_words
         sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
         if text_mode == 'multi' and sentences_enabled:
             dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
@@ -2075,14 +2075,11 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
         if combine_source_words:
             cmd.append("--combine-source-words")
-            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback=DEFAULT_COMBINE_ORDER)).strip().lower()
-            cmd.extend(["--combine-source-words-order", combine_source_words_order])
-            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback=DEFAULT_APOSTROPHE_CHARS)).strip('"')
-            cmd.extend(["--apostrophe-chars", apostrophe_chars])
+            cmd.extend(["--combine-source-words-order", token_cfg.combine_order])
+            cmd.extend(["--apostrophe-chars", token_cfg.apostrophe_chars])
 
             
-        token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config.has_section('token_mappings') else True
-        if token_mappings_enabled:
+        if token_cfg.token_mappings_enabled:
             cmd.append("--token-mappings-enabled")
         else:
             cmd.append("--disable-token-mappings")
