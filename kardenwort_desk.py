@@ -16,6 +16,8 @@ import threading
 import traceback
 from pathlib import Path
 from datetime import datetime, timezone
+from dataclasses import dataclass
+from typing import Optional, Any, Union
 
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
 vendor_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
@@ -110,6 +112,149 @@ import text_tokenizer as tok
 
 DEFAULT_COMBINE_ORDER = "contractions_first"
 DEFAULT_APOSTROPHE_CHARS = "', ’, ‘, `, ´, ʼ"
+
+
+@dataclass(frozen=True)
+class RuntimeTokenConfig:
+    combine_source_words: bool = False
+    combine_order: str = DEFAULT_COMBINE_ORDER
+    prefer_lowercase: bool = True
+    filter_by_window: bool = True
+    apostrophe_chars: str = DEFAULT_APOSTROPHE_CHARS
+    token_mappings_enabled: bool = True
+
+    @property
+    def combine_source_words_order(self) -> str:
+        return self.combine_order
+
+    @property
+    def combine_source_words_prefer_lowercase(self) -> bool:
+        return self.prefer_lowercase
+
+    @classmethod
+    def from_config(cls, config: Any) -> "RuntimeTokenConfig":
+        if isinstance(config, cls):
+            return config
+        filter_by_window = (
+            config.getboolean("settings", "filter_inflected_by_window", fallback=True)
+            if config and hasattr(config, "has_section") and config.has_section("settings")
+            else True
+        )
+        combine_source_words = (
+            config.getboolean("settings", "combine_source_words", fallback=False)
+            if config and hasattr(config, "has_section") and config.has_section("settings")
+            else False
+        )
+        token_mappings_enabled = (
+            config.getboolean("token_mappings", "enabled", fallback=True)
+            if config and hasattr(config, "has_section") and config.has_section("token_mappings")
+            else True
+        )
+        if config and hasattr(config, "get"):
+            combine_order = config.get(
+                "token_mappings",
+                "combine_source_words_order",
+                fallback=config.get("settings", "combine_source_words_order", fallback=DEFAULT_COMBINE_ORDER),
+            ).strip().lower()
+            apostrophe_chars = config.get(
+                "token_mappings",
+                "apostrophe_chars",
+                fallback=config.get("settings", "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS),
+            ).strip('"')
+            prefer_lowercase = config.getboolean(
+                "token_mappings",
+                "combine_source_words_prefer_lowercase",
+                fallback=config.getboolean("settings", "combine_source_words_prefer_lowercase", fallback=True),
+            )
+        else:
+            combine_order = DEFAULT_COMBINE_ORDER
+            apostrophe_chars = DEFAULT_APOSTROPHE_CHARS
+            prefer_lowercase = True
+
+        return cls(
+            combine_source_words=combine_source_words,
+            combine_order=combine_order,
+            prefer_lowercase=prefer_lowercase,
+            filter_by_window=filter_by_window,
+            apostrophe_chars=apostrophe_chars,
+            token_mappings_enabled=token_mappings_enabled,
+        )
+
+
+@dataclass(frozen=True)
+class BatchMergeConfig:
+    deduplicate: bool = True
+    deduplicate_by_lemma: bool = True
+    sort_frequency: bool = False
+    combine_order: str = DEFAULT_COMBINE_ORDER
+    prefer_lowercase: bool = True
+    apostrophe_chars: str = DEFAULT_APOSTROPHE_CHARS
+
+    @property
+    def combine_source_words_order(self) -> str:
+        return self.combine_order
+
+    @property
+    def combine_source_words_prefer_lowercase(self) -> bool:
+        return self.prefer_lowercase
+
+    @classmethod
+    def from_config(cls, config: Any, args: Any = None) -> "BatchMergeConfig":
+        if isinstance(config, cls):
+            return config
+        dedup_arg = getattr(args, "deduplicate", False) if args else False
+        sort_arg = getattr(args, "sort_frequency", False) if args else False
+
+        if config and hasattr(config, "getboolean"):
+            dedup_val = config.getboolean(
+                "merge", "deduplicate",
+                fallback=config.getboolean("settings", "merge_deduplicate", fallback=True)
+            )
+            sort_val = config.getboolean(
+                "merge", "sort_frequency",
+                fallback=config.getboolean("settings", "merge_sort_frequency", fallback=False)
+            )
+            dedup_lemma = config.getboolean(
+                "merge", "deduplicate_by_lemma",
+                fallback=config.getboolean("settings", "merge_deduplicate_by_lemma", fallback=True)
+            )
+        else:
+            dedup_val = True
+            sort_val = False
+            dedup_lemma = True
+
+        dedup_final = dedup_val if not dedup_arg else True
+        sort_final = sort_val if not sort_arg else True
+
+        if config and hasattr(config, "get"):
+            combine_order = config.get(
+                "merge", "combine_source_words_order",
+                fallback=config.get("token_mappings", "combine_source_words_order",
+                                    fallback=config.get("settings", "combine_source_words_order", fallback=DEFAULT_COMBINE_ORDER))
+            ).strip().lower()
+            apostrophe_chars = config.get(
+                "merge", "apostrophe_chars",
+                fallback=config.get("token_mappings", "apostrophe_chars",
+                                    fallback=config.get("settings", "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS))
+            ).strip('"')
+            prefer_lowercase = config.getboolean(
+                "merge", "combine_source_words_prefer_lowercase",
+                fallback=config.getboolean("token_mappings", "combine_source_words_prefer_lowercase",
+                                           fallback=config.getboolean("settings", "combine_source_words_prefer_lowercase", fallback=True))
+            )
+        else:
+            combine_order = DEFAULT_COMBINE_ORDER
+            apostrophe_chars = DEFAULT_APOSTROPHE_CHARS
+            prefer_lowercase = True
+
+        return cls(
+            deduplicate=dedup_final,
+            deduplicate_by_lemma=dedup_lemma,
+            sort_frequency=sort_final,
+            combine_order=combine_order,
+            prefer_lowercase=prefer_lowercase,
+            apostrophe_chars=apostrophe_chars,
+        )
 
 
 class ConfigError(Exception):
