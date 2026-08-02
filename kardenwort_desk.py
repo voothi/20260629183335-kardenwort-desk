@@ -7077,26 +7077,13 @@ def cmd_merge(args):
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     deduplicate = getattr(args, 'deduplicate', False)
     if not deduplicate:
-        if config and config.has_section('merge'):
-            deduplicate = config.getboolean('merge', 'deduplicate', fallback=True)
-        elif config and config.has_section('settings'):
-            deduplicate = config.getboolean('settings', 'merge_deduplicate', fallback=True)
-        else:
-            deduplicate = True
+        deduplicate = config.getboolean('merge', 'deduplicate', fallback=config.getboolean('settings', 'merge_deduplicate', fallback=True)) if config else True
             
     sort_frequency = getattr(args, 'sort_frequency', False)
     if not sort_frequency:
-        if config and config.has_section('merge'):
-            sort_frequency = config.getboolean('merge', 'sort_frequency', fallback=False)
-        elif config and config.has_section('settings'):
-            sort_frequency = config.getboolean('settings', 'merge_sort_frequency', fallback=False)
+        sort_frequency = config.getboolean('merge', 'sort_frequency', fallback=config.getboolean('settings', 'merge_sort_frequency', fallback=False)) if config else False
             
-    deduplicate_by_lemma = True
-    if config:
-        if config.has_section('merge'):
-            deduplicate_by_lemma = config.getboolean('merge', 'deduplicate_by_lemma', fallback=True)
-        elif config.has_section('settings'):
-            deduplicate_by_lemma = config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)
+    deduplicate_by_lemma = config.getboolean('merge', 'deduplicate_by_lemma', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)) if config else True
     
     try:
         input_paths = [Path(f).resolve() for f in args.files]
@@ -7462,10 +7449,7 @@ def cmd_merge(args):
                             
                 delete_sources = getattr(args, 'delete_sources', False)
                 if not delete_sources and config:
-                    if config.has_section('merge'):
-                        delete_sources = config.getboolean('merge', 'delete_sources', fallback=False)
-                    elif config.has_section('settings'):
-                        delete_sources = config.getboolean('settings', 'merge_delete_sources', fallback=False)
+                    delete_sources = config.getboolean('merge', 'delete_sources', fallback=config.getboolean('settings', 'merge_delete_sources', fallback=False))
                         
                 if delete_sources:
                     for f in lang_files:
