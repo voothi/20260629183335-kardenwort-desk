@@ -384,6 +384,12 @@ def test_separable_verb_anchoring_scenarios(tmp_path, monkeypatch):
     assert 'class="word highlight-purple" data-word-idx="3" data-line-idx="0" data-lower-clean="geht">geht</span>' in html
     assert 'class="word highlight-purple" data-word-idx="5" data-line-idx="0" data-lower-clean="an">an</span>' in html
 
+    # 4.10 dotted abbreviation (e.g.) should be treated as single word (orange) while separable verbs stay purple
+    tsv_content = "WordSource\tWordSourceInflectedForm\tWordDestination\nfor\te.g.\tfor\nexample\te.g.\texample\nausstehen\tstehe aus\tstand due\n"
+    html = run_scenario("We test e.g. while ich stehe hier aus.", tsv_content)
+    assert 'highlight-purple' in html  # confirms separable verb (stehe ... aus) is still purple
+    assert 'highlight-orange' in html  # confirms e.g. is treated as a single word entity (orange/yellow)
+
 def test_run_render_flow_with_classification(tmp_path, monkeypatch):
     import configparser
     import sys

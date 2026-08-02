@@ -2904,11 +2904,11 @@ html, body {{
                          for p in re.findall(r"[\w']+", form)]
             inf_words = [w for w in inf_words if w]
             
-            if len(inf_words) >= 2 and '-' not in form:
+            if len(inf_words) >= 2 and '-' not in form and '.' not in form:
                 pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
                 if ok:
                     row_anchored_pos.update(pos_set)
-            elif len(inf_words) == 1 or '-' in form:
+            elif len(inf_words) == 1 or '-' in form or '.' in form:
                 has_single_word_form = True
                 
         if has_single_word_form or not forms:
