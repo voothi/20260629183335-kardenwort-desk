@@ -3046,6 +3046,18 @@ html, body {{
             th_elements.append(f'<th>{h}</th>')
     table_header_html = "<tr>" + "".join(th_elements) + "</tr>"
 
+    # Extract resolved column names and editable styling once outside the loop for orthogonal behavior and safety when data_rows is empty
+    lemma_col_name = role_fields.get('lemma', 'WordSource')
+    trans_col_name = role_fields.get('word_translation', 'WordDestination')
+    inflected_col_name = role_fields.get('inflected', 'WordSourceInflectedForm')
+    ipa_col_name = role_fields.get('ipa', 'WordSourceIPA')
+    morph_col_name = role_fields.get('morphology', 'WordSourceMorphologyAI')
+
+    editable_cols = mapping.get('desk_editable', 'editable_columns', fallback='')
+    lemma_class = "editable" if lemma_col_name in editable_cols else ""
+    trans_class = "editable" if trans_col_name in editable_cols else ""
+    inflected_class = "editable" if inflected_col_name in editable_cols else ""
+
     table_rows = []
     for row_id, row in enumerate(data_rows):
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
@@ -3062,17 +3074,6 @@ html, body {{
                 ipa_val = '<span class="skeleton-loader" style="width: 50px;"></span>'
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
                 morph_val = '<span class="skeleton-loader" style="width: 80px;"></span>'
-        
-        # Extract resolved column names from role_fields for orthogonal behavior
-        lemma_col_name = role_fields.get('lemma', 'WordSource')
-        trans_col_name = role_fields.get('word_translation', 'WordDestination')
-        inflected_col_name = role_fields.get('inflected', 'WordSourceInflectedForm')
-        ipa_col_name = role_fields.get('ipa', 'WordSourceIPA')
-        morph_col_name = role_fields.get('morphology', 'WordSourceMorphologyAI')
-
-        lemma_class = "editable" if lemma_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
-        trans_class = "editable" if trans_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
-        inflected_class = "editable" if inflected_col_name in mapping.get('desk_editable', 'editable_columns', fallback='') else ""
         
         row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
         
