@@ -108,6 +108,9 @@ if hasattr(threading, 'excepthook'):
 
 import text_tokenizer as tok
 
+DEFAULT_COMBINE_ORDER = "contractions_first"
+DEFAULT_APOSTROPHE_CHARS = "', ’, ‘, `, ´, ʼ"
+
 
 class ConfigError(Exception):
     pass
@@ -1927,9 +1930,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
         if combine_source_words:
             cmd.append("--combine-source-words")
-            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
+            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback=DEFAULT_COMBINE_ORDER)).strip().lower()
             cmd.extend(["--combine-source-words-order", combine_source_words_order])
-            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")).strip('"')
+            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback=DEFAULT_APOSTROPHE_CHARS)).strip('"')
             cmd.extend(["--apostrophe-chars", apostrophe_chars])
 
             
@@ -2046,8 +2049,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and config.has_section('settings') else True
     token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
-    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower() if config else 'contractions_first'
-    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")).strip('"') if config else "', ’, ‘, `, ´, ʼ"
+    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback=DEFAULT_COMBINE_ORDER)).strip().lower() if config else DEFAULT_COMBINE_ORDER
+    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback=DEFAULT_APOSTROPHE_CHARS)).strip('"') if config else DEFAULT_APOSTROPHE_CHARS
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
     
     prefer_lowercase_cfg = config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)) if config else True
@@ -7324,12 +7327,12 @@ def cmd_merge(args):
                 col_inflected = first_headers.index(inflected_col) if inflected_col in first_headers else -1
                     
                 if col_lemma != -1 and col_inflected != -1:
-                    order_cfg = config.get('merge', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')) if config else 'contractions_first'
+                    order_cfg = config.get('merge', 'combine_source_words_order', fallback=config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback=DEFAULT_COMBINE_ORDER))) if config else DEFAULT_COMBINE_ORDER
                     order_cfg = order_cfg.strip().lower()
-                    apo_cfg_str = config.get('merge', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")) if config else "', ’, ‘, `, ´, ʼ"
+                    apo_cfg_str = config.get('merge', 'apostrophe_chars', fallback=config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback=DEFAULT_APOSTROPHE_CHARS))) if config else DEFAULT_APOSTROPHE_CHARS
                     apo_cfg = tuple(c.strip() for c in apo_cfg_str.strip('"').split(',') if c.strip())
                     
-                    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)) if config else True
+                    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True))) if config else True
 
                     seen_pairs = []
                     grouped_rows = {}
