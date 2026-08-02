@@ -2048,6 +2048,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     seen_words = {}
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and config.has_section('settings') else True
+    combine_source_words = config.getboolean('settings', 'combine_source_words', fallback=False) if config and config.has_section('settings') else False
     token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
     order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback=DEFAULT_COMBINE_ORDER)).strip().lower() if config else DEFAULT_COMBINE_ORDER
     apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback=DEFAULT_APOSTROPHE_CHARS)).strip('"') if config else DEFAULT_APOSTROPHE_CHARS
@@ -2079,7 +2080,11 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         if len(row) > col_word_source:
             w = row[col_word_source].strip().lower()
             pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
-            key = (w, pos)
+            if not combine_source_words:
+                inf_form_lower = row[col_inflected].strip().lower() if col_inflected != -1 and len(row) > col_inflected else ""
+                key = (w, pos, inf_form_lower)
+            else:
+                key = (w, pos)
             if w and key in seen_words:
                 existing_row_idx = seen_words[key]
                 if col_inflected != -1 and len(row) > col_inflected:
