@@ -1341,3 +1341,91 @@ def test_deduplicate_rows_combine_source_words_true():
     assert deduped[0][1] == "be"
     assert deduped[0][2] == "verb"
 
+
+def test_runtime_token_config_initialization_and_immutability():
+    import pytest
+    import configparser
+    from dataclasses import FrozenInstanceError
+    from kardenwort_desk import RuntimeTokenConfig, DEFAULT_COMBINE_ORDER, DEFAULT_APOSTROPHE_CHARS
+
+    # Test default initialization and properties
+    cfg = RuntimeTokenConfig()
+    assert cfg.combine_source_words is False
+    assert cfg.combine_order == DEFAULT_COMBINE_ORDER
+    assert cfg.prefer_lowercase is True
+    assert cfg.filter_by_window is True
+    assert cfg.apostrophe_chars == DEFAULT_APOSTROPHE_CHARS
+    assert cfg.token_mappings_enabled is True
+    assert cfg.combine_source_words_order == DEFAULT_COMBINE_ORDER
+    assert cfg.combine_source_words_prefer_lowercase is True
+
+    # Test immutability (frozen=True invariant)
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        cfg.combine_source_words = True
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        cfg.prefer_lowercase = False
+
+    # Test from_config with fallbacks ([token_mappings] -> [settings])
+    cp = configparser.ConfigParser()
+    cp.add_section("settings")
+    cp.set("settings", "combine_source_words", "true")
+    cp.set("settings", "combine_source_words_order", "settings_order")
+    cfg_from_settings = RuntimeTokenConfig.from_config(cp)
+    assert cfg_from_settings.combine_source_words is True
+    assert cfg_from_settings.combine_order == "settings_order"
+
+    cp.add_section("token_mappings")
+    cp.set("token_mappings", "combine_source_words_order", "mappings_order")
+    cfg_from_mappings = RuntimeTokenConfig.from_config(cp)
+    assert cfg_from_mappings.combine_order == "mappings_order"
+
+    # Test that passing a RuntimeTokenConfig instance to from_config returns it directly
+    assert RuntimeTokenConfig.from_config(cfg) is cfg
+
+
+def test_batch_merge_config_initialization_and_immutability():
+    import pytest
+    import configparser
+    from argparse import Namespace
+    from dataclasses import FrozenInstanceError
+    from kardenwort_desk import BatchMergeConfig, DEFAULT_COMBINE_ORDER, DEFAULT_APOSTROPHE_CHARS
+
+    # Test default initialization
+    cfg = BatchMergeConfig()
+    assert cfg.deduplicate is True
+    assert cfg.deduplicate_by_lemma is True
+    assert cfg.sort_frequency is False
+    assert cfg.combine_order == DEFAULT_COMBINE_ORDER
+
+    # Test immutability (frozen=True invariant)
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        cfg.deduplicate = False
+    with pytest.raises((FrozenInstanceError, AttributeError)):
+        cfg.sort_frequency = True
+
+    # Test from_config with fallbacks ([merge] -> [token_mappings] -> [settings])
+    cp = configparser.ConfigParser()
+    cp.add_section("settings")
+    cp.set("settings", "combine_source_words_order", "settings_order")
+    cp.set("settings", "merge_sort_frequency", "true")
+    
+    cfg_settings = BatchMergeConfig.from_config(cp)
+    assert cfg_settings.combine_order == "settings_order"
+    assert cfg_settings.sort_frequency is True
+
+    cp.add_section("token_mappings")
+    cp.set("token_mappings", "combine_source_words_order", "mappings_order")
+    cfg_mappings = BatchMergeConfig.from_config(cp)
+    assert cfg_mappings.combine_order == "mappings_order"
+
+    cp.add_section("merge")
+    cp.set("merge", "combine_source_words_order", "merge_order")
+    cfg_merge = BatchMergeConfig.from_config(cp)
+    assert cfg_merge.combine_order == "merge_order"
+
+    # Test argparse overriding config
+    args = Namespace(deduplicate=True, sort_frequency=True)
+    cfg_with_args = BatchMergeConfig.from_config(cp, args=args)
+    assert cfg_with_args.deduplicate is True
+    assert cfg_with_args.sort_frequency is True
+    assert BatchMergeConfig.from_config(cfg) is cfg
