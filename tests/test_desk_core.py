@@ -1200,8 +1200,8 @@ def test_classification_hyphenated_words():
                          for p in re.findall(r"[\w']+", inflected_val)]
             inf_words = [w for w in inf_words if w]
         
-        # New logic: hyphenated words are treated as single words
-        if len(inf_words) >= 2 and '-' not in inflected_val:
+        # New logic: hyphenated words and dotted abbreviations are treated as single words
+        if len(inf_words) >= 2 and not any(ch in inflected_val for ch in ('-', '.')):
             pass # mock pos_set logic
         else:
             single_word_rows.add(row_id)

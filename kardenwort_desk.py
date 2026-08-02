@@ -116,6 +116,10 @@ DEFAULT_APOSTROPHE_CHARS = "', ’, ‘, `, ´, ʼ"
 SEC_SETTINGS = "settings"
 SEC_TOKEN_MAPPINGS = "token_mappings"
 SEC_MERGE = "merge"
+SEC_SENTENCES_MODE = "sentences_mode"
+SEC_CLASSIFICATION = "classification"
+SEC_TIMEOUTS = "timeouts"
+SINGLE_WORD_DELIMITERS = ('-', '.')
 
 
 @dataclass(frozen=True)
@@ -126,6 +130,7 @@ class RuntimeTokenConfig:
     filter_by_window: bool = True
     apostrophe_chars: str = DEFAULT_APOSTROPHE_CHARS
     token_mappings_enabled: bool = True
+    lemmatize_mapped_tokens: bool = True
 
     @property
     def combine_source_words_order(self) -> str:
@@ -144,10 +149,12 @@ class RuntimeTokenConfig:
             filter_by_window = config.getboolean(SEC_SETTINGS, "filter_inflected_by_window", fallback=True)
             combine_source_words = config.getboolean(SEC_SETTINGS, "combine_source_words", fallback=False)
             token_mappings_enabled = config.getboolean(SEC_TOKEN_MAPPINGS, "enabled", fallback=True)
+            lemmatize_mapped_tokens = config.getboolean(SEC_TOKEN_MAPPINGS, "lemmatize_mapped_tokens", fallback=True)
         else:
             filter_by_window = True
             combine_source_words = False
             token_mappings_enabled = True
+            lemmatize_mapped_tokens = True
 
         if config and hasattr(config, "get"):
             combine_order = config.get(
@@ -177,6 +184,7 @@ class RuntimeTokenConfig:
             filter_by_window=filter_by_window,
             apostrophe_chars=apostrophe_chars,
             token_mappings_enabled=token_mappings_enabled,
+            lemmatize_mapped_tokens=lemmatize_mapped_tokens,
         )
 
 
@@ -2039,37 +2047,37 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 "--de-dictionary-file", str(de_dict_path),
             ])
             
-            de_fix_genitive = config.getboolean('settings', 'de_fix_genitive', fallback=True)
+            de_fix_genitive = config.getboolean(SEC_SETTINGS, 'de_fix_genitive', fallback=True)
             if de_fix_genitive:
                 cmd.append("--de-fix-genitive")
                 
-            de_gcs = config.getboolean('settings', 'de_gcs', fallback=False)
+            de_gcs = config.getboolean(SEC_SETTINGS, 'de_gcs', fallback=False)
             if de_gcs:
                 cmd.append("--de-gcs")
-                de_gcs_pos_tags = config.get('settings', 'de_gcs_pos_tags', fallback=None)
+                de_gcs_pos_tags = config.get(SEC_SETTINGS, 'de_gcs_pos_tags', fallback=None)
                 if de_gcs_pos_tags:
                     cmd.append("--de-gcs-pos-tags")
                     cmd.extend(de_gcs_pos_tags.strip().split())
-                de_gcs_split_mode = config.get('settings', 'de_gcs_split_mode', fallback=None)
+                de_gcs_split_mode = config.get(SEC_SETTINGS, 'de_gcs_split_mode', fallback=None)
                 if de_gcs_split_mode:
                     cmd.extend(["--de-gcs-split-mode", de_gcs_split_mode.strip()])
-                de_gcs_part_singularization = config.get('settings', 'de_gcs_part_singularization', fallback=None)
+                de_gcs_part_singularization = config.get(SEC_SETTINGS, 'de_gcs_part_singularization', fallback=None)
                 if de_gcs_part_singularization:
                     cmd.extend(["--de-gcs-part-singularization", de_gcs_part_singularization.strip()])
-                if config.getboolean('settings', 'de_gcs_preserve_compound_word', fallback=False):
+                if config.getboolean(SEC_SETTINGS, 'de_gcs_preserve_compound_word', fallback=False):
                     cmd.append("--de-gcs-preserve-compound-word")
-                if config.getboolean('settings', 'de_gcs_add_parts_to_wordlist', fallback=False):
+                if config.getboolean(SEC_SETTINGS, 'de_gcs_add_parts_to_wordlist', fallback=False):
                     cmd.append("--de-gcs-add-parts-to-wordlist")
-                if config.getboolean('settings', 'de_gcs_skip_merge_fractions', fallback=False):
+                if config.getboolean(SEC_SETTINGS, 'de_gcs_skip_merge_fractions', fallback=False):
                     cmd.append("--de-gcs-skip-merge-fractions")
-                if config.getboolean('settings', 'de_gcs_mask_unknown_parts', fallback=False):
+                if config.getboolean(SEC_SETTINGS, 'de_gcs_mask_unknown_parts', fallback=False):
                     cmd.append("--de-gcs-mask-unknown-parts")
                 
         token_cfg = RuntimeTokenConfig.from_config(config)
         combine_source_words = token_cfg.combine_source_words
-        sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
+        sentences_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
         if text_mode == 'multi' and sentences_enabled:
-            dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
+            dedup_scope_cfg = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section(SEC_SENTENCES_MODE) else 'sentence'
             if dedup_scope_cfg == 'sentence':
                 combine_source_words = False
 
@@ -2085,14 +2093,13 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             cmd.append("--disable-token-mappings")
 
             
-        lemmatize_mapped_tokens = config.getboolean('token_mappings', 'lemmatize_mapped_tokens', fallback=True) if config.has_section('token_mappings') else True
-        if lemmatize_mapped_tokens:
+        if token_cfg.lemmatize_mapped_tokens:
             cmd.append("--lemmatize-mapped-tokens")
-        desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
+        desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
         if not desk_classification_enabled:
             cmd.append("--disable-classification")
             
-        kardenwort_timeout = config.getint('timeouts', 'kardenwort_timeout', fallback=120)
+        kardenwort_timeout = config.getint(SEC_TIMEOUTS, 'kardenwort_timeout', fallback=120)
         env = os.environ.copy()
         env["PYTHONIOENCODING"] = "utf-8"
         
@@ -2904,11 +2911,11 @@ html, body {{
                          for p in re.findall(r"[\w']+", form)]
             inf_words = [w for w in inf_words if w]
             
-            if len(inf_words) >= 2 and '-' not in form and '.' not in form:
+            if len(inf_words) >= 2 and not any(ch in form for ch in SINGLE_WORD_DELIMITERS):
                 pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
                 if ok:
                     row_anchored_pos.update(pos_set)
-            elif len(inf_words) == 1 or '-' in form or '.' in form:
+            elif len(inf_words) == 1 or any(ch in form for ch in SINGLE_WORD_DELIMITERS):
                 has_single_word_form = True
                 
         if has_single_word_form or not forms:
@@ -3052,6 +3059,7 @@ html, body {{
     inflected_col_name = role_fields.get('inflected', 'WordSourceInflectedForm')
     ipa_col_name = role_fields.get('ipa', 'WordSourceIPA')
     morph_col_name = role_fields.get('morphology', 'WordSourceMorphologyAI')
+    selected_col_name = role_fields.get('selected', 'DeskSelected')
 
     editable_cols = mapping.get('desk_editable', 'editable_columns', fallback='')
     lemma_class = "editable" if lemma_col_name in editable_cols else ""
@@ -4981,8 +4989,6 @@ html, body {{
     html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if eff_mode == "multi" else "normal")
-    
-    selected_col_name = role_fields.get('selected', 'DeskSelected')
     html_page = html_page.replace("{selected_col_name}", selected_col_name)
     html_page = html_page.replace("{has_highlight_col}", "true" if col_highlighted != -1 else "false")
 
