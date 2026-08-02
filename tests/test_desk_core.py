@@ -1291,3 +1291,53 @@ def test_deduplicate_rows_window_filtering_compounds():
     assert deduped[1][0] == "brechen aus"
     assert deduped[2][0] == "KI-Labore"
 
+
+def test_deduplicate_rows_combine_source_words_false():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'combine_source_words', 'false')
+    config.set('settings', 'filter_inflected_by_window', 'false')
+
+    data_rows = [
+        ["is", "be", "verb"],
+        ["isn't", "be", "verb"],
+        ["was", "be", "verb"],
+        ["is", "be", "verb"],
+    ]
+
+    deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config)
+
+    assert len(deduped) == 3
+    assert deduped[0] == ["is", "be", "verb"]
+    assert deduped[1] == ["isn't", "be", "verb"]
+    assert deduped[2] == ["was", "be", "verb"]
+
+
+def test_deduplicate_rows_combine_source_words_true():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'combine_source_words', 'true')
+    config.set('settings', 'filter_inflected_by_window', 'false')
+
+    data_rows = [
+        ["is", "be", "verb"],
+        ["isn't", "be", "verb"],
+        ["was", "be", "verb"],
+        ["is", "be", "verb"],
+    ]
+
+    deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config)
+
+    assert len(deduped) == 1
+    assert "is" in deduped[0][0].split(", ")
+    assert "isn't" in deduped[0][0].split(", ")
+    assert "was" in deduped[0][0].split(", ")
+    assert deduped[0][1] == "be"
+    assert deduped[0][2] == "verb"
+
