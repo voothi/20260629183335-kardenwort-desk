@@ -1899,8 +1899,24 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             de_gcs = config.getboolean('settings', 'de_gcs', fallback=False)
             if de_gcs:
                 cmd.append("--de-gcs")
+                de_gcs_pos_tags = config.get('settings', 'de_gcs_pos_tags', fallback=None)
+                if de_gcs_pos_tags:
+                    cmd.append("--de-gcs-pos-tags")
+                    cmd.extend(de_gcs_pos_tags.strip().split())
+                de_gcs_split_mode = config.get('settings', 'de_gcs_split_mode', fallback=None)
+                if de_gcs_split_mode:
+                    cmd.extend(["--de-gcs-split-mode", de_gcs_split_mode.strip()])
+                de_gcs_part_singularization = config.get('settings', 'de_gcs_part_singularization', fallback=None)
+                if de_gcs_part_singularization:
+                    cmd.extend(["--de-gcs-part-singularization", de_gcs_part_singularization.strip()])
                 if config.getboolean('settings', 'de_gcs_preserve_compound_word', fallback=False):
                     cmd.append("--de-gcs-preserve-compound-word")
+                if config.getboolean('settings', 'de_gcs_add_parts_to_wordlist', fallback=False):
+                    cmd.append("--de-gcs-add-parts-to-wordlist")
+                if config.getboolean('settings', 'de_gcs_skip_merge_fractions', fallback=False):
+                    cmd.append("--de-gcs-skip-merge-fractions")
+                if config.getboolean('settings', 'de_gcs_mask_unknown_parts', fallback=False):
+                    cmd.append("--de-gcs-mask-unknown-parts")
                 
         combine_source_words = config.getboolean('lemmatization', 'combine_source_words', fallback=config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)))
         sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
