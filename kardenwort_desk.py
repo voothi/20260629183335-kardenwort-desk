@@ -1881,7 +1881,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         if de_force_noun_capitalization:
             cmd.append("--de-force-noun-capitalization")
             
-        strip_garbage_characters = config.get('lemmatization', 'strip_garbage_characters', fallback=config.get('settings', 'strip_garbage_characters', fallback=None))
+        strip_garbage_characters = config.get('settings', 'strip_garbage_characters', fallback=None)
         if strip_garbage_characters is not None:
             cmd.extend(["--strip-garbage-characters", strip_garbage_characters])
         
@@ -1918,7 +1918,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 if config.getboolean('settings', 'de_gcs_mask_unknown_parts', fallback=False):
                     cmd.append("--de-gcs-mask-unknown-parts")
                 
-        combine_source_words = config.getboolean('lemmatization', 'combine_source_words', fallback=config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)))
+        combine_source_words = config.getboolean('settings', 'combine_source_words', fallback=False)
         sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
         if text_mode == 'multi' and sentences_enabled:
             dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
@@ -1927,9 +1927,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
 
         if combine_source_words:
             cmd.append("--combine-source-words")
-            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
+            combine_source_words_order = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower()
             cmd.extend(["--combine-source-words-order", combine_source_words_order])
-            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
+            apostrophe_chars = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")).strip('"')
             cmd.extend(["--apostrophe-chars", apostrophe_chars])
 
             
@@ -2046,17 +2046,16 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
 
     filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and config.has_section('settings') else True
     token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
-    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))).strip().lower()
-    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))).strip('"')
+    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')).strip().lower() if config else 'contractions_first'
+    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")).strip('"') if config else "', ’, ‘, `, ´, ʼ"
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
     
-    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)))) if config else True
+    prefer_lowercase_cfg = config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)) if config else True
 
     is_filtering_window = False
     window_words_exact = set()
     if window_text and filter_by_window:
         is_filtering_window = True
-        import re
         apo_pattern = "".join(re.escape(c) for c in apo_cfg)
         word_pattern = r"[\w" + apo_pattern + r"]+"
         raw_words = re.findall(word_pattern, window_text)
@@ -7047,7 +7046,6 @@ def _c(code, text):
     return f"\033[{code}m{text}\033[0m"
 
 def make_progress_bar(current: int, total: int, label: str = "files", status: str = "") -> str:
-    import shutil
     term_width = shutil.get_terminal_size((100, 20)).columns
     bar_width = 30
     percent = (current / total) * 100 if total > 0 else 100
@@ -7070,7 +7068,6 @@ def clear_progress_bar():
     sys.stdout.flush()
 
 def cmd_merge(args):
-    import os
     os.system("") # Enable ANSI on Windows
     print("Kardenwort Desk: Merging files...\n")
     logger.info("Merge subcommand invoked")
@@ -7096,7 +7093,7 @@ def cmd_merge(args):
         if config.has_section('merge'):
             deduplicate_by_lemma = config.getboolean('merge', 'deduplicate_by_lemma', fallback=True)
         elif config.has_section('settings'):
-            deduplicate_by_lemma = config.getboolean('settings', 'combine_source_words', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True))
+            deduplicate_by_lemma = config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)
     
     try:
         input_paths = [Path(f).resolve() for f in args.files]
@@ -7327,12 +7324,12 @@ def cmd_merge(args):
                 col_inflected = first_headers.index(inflected_col) if inflected_col in first_headers else -1
                     
                 if col_lemma != -1 and col_inflected != -1:
-                    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('lemmatization', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first'))) if config else 'contractions_first'
+                    order_cfg = config.get('merge', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback='contractions_first')) if config else 'contractions_first'
                     order_cfg = order_cfg.strip().lower()
-                    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('lemmatization', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ"))) if config else "', ’, ‘, `, ´, ʼ"
+                    apo_cfg_str = config.get('merge', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback="', ’, ‘, `, ´, ʼ")) if config else "', ’, ‘, `, ´, ʼ"
                     apo_cfg = tuple(c.strip() for c in apo_cfg_str.strip('"').split(',') if c.strip())
                     
-                    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('lemmatization', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)))) if config else True
+                    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)) if config else True
 
                     seen_pairs = []
                     grouped_rows = {}
