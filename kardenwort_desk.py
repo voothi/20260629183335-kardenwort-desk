@@ -2192,14 +2192,15 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     deduped_rows = []
     seen_words = {}
 
-    filter_by_window = config.getboolean('settings', 'filter_inflected_by_window', fallback=True) if config and config.has_section('settings') else True
-    combine_source_words = config.getboolean('settings', 'combine_source_words', fallback=False) if config and config.has_section('settings') else False
-    token_mappings_enabled = config.getboolean('token_mappings', 'enabled', fallback=True) if config and config.has_section('token_mappings') else True
-    order_cfg = config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback=DEFAULT_COMBINE_ORDER)).strip().lower() if config else DEFAULT_COMBINE_ORDER
-    apo_cfg_str = config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback=DEFAULT_APOSTROPHE_CHARS)).strip('"') if config else DEFAULT_APOSTROPHE_CHARS
+    token_config = RuntimeTokenConfig.from_config(config)
+    filter_by_window = token_config.filter_by_window
+    combine_source_words = token_config.combine_source_words
+    token_mappings_enabled = token_config.token_mappings_enabled
+    order_cfg = token_config.combine_order
+    apo_cfg_str = token_config.apostrophe_chars
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
     
-    prefer_lowercase_cfg = config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True)) if config else True
+    prefer_lowercase_cfg = token_config.prefer_lowercase
 
     is_filtering_window = False
     window_words_exact = set()
@@ -7225,15 +7226,10 @@ def cmd_merge(args):
     print("Kardenwort Desk: Merging files...\n")
     logger.info("Merge subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
-    deduplicate = getattr(args, 'deduplicate', False)
-    if not deduplicate:
-        deduplicate = config.getboolean('merge', 'deduplicate', fallback=config.getboolean('settings', 'merge_deduplicate', fallback=True)) if config else True
-            
-    sort_frequency = getattr(args, 'sort_frequency', False)
-    if not sort_frequency:
-        sort_frequency = config.getboolean('merge', 'sort_frequency', fallback=config.getboolean('settings', 'merge_sort_frequency', fallback=False)) if config else False
-            
-    deduplicate_by_lemma = config.getboolean('merge', 'deduplicate_by_lemma', fallback=config.getboolean('settings', 'merge_deduplicate_by_lemma', fallback=True)) if config else True
+    merge_config = BatchMergeConfig.from_config(config, args=args)
+    deduplicate = merge_config.deduplicate
+    sort_frequency = merge_config.sort_frequency
+    deduplicate_by_lemma = merge_config.deduplicate_by_lemma
     
     try:
         input_paths = [Path(f).resolve() for f in args.files]
@@ -7464,12 +7460,10 @@ def cmd_merge(args):
                 col_inflected = first_headers.index(inflected_col) if inflected_col in first_headers else -1
                     
                 if col_lemma != -1 and col_inflected != -1:
-                    order_cfg = config.get('merge', 'combine_source_words_order', fallback=config.get('token_mappings', 'combine_source_words_order', fallback=config.get('settings', 'combine_source_words_order', fallback=DEFAULT_COMBINE_ORDER))) if config else DEFAULT_COMBINE_ORDER
-                    order_cfg = order_cfg.strip().lower()
-                    apo_cfg_str = config.get('merge', 'apostrophe_chars', fallback=config.get('token_mappings', 'apostrophe_chars', fallback=config.get('settings', 'apostrophe_chars', fallback=DEFAULT_APOSTROPHE_CHARS))) if config else DEFAULT_APOSTROPHE_CHARS
-                    apo_cfg = tuple(c.strip() for c in apo_cfg_str.strip('"').split(',') if c.strip())
+                    order_cfg = merge_config.combine_order
+                    apo_cfg = tuple(c.strip() for c in merge_config.apostrophe_chars.split(',') if c.strip())
                     
-                    prefer_lowercase_cfg = config.getboolean('merge', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('token_mappings', 'combine_source_words_prefer_lowercase', fallback=config.getboolean('settings', 'combine_source_words_prefer_lowercase', fallback=True))) if config else True
+                    prefer_lowercase_cfg = merge_config.prefer_lowercase
 
                     seen_pairs = []
                     grouped_rows = {}
