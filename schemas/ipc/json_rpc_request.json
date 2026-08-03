@@ -1,0 +1,256 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/ipc/json_rpc_request.json",
+  "title": "JsonRpcRequest",
+  "description": "Authoritative JSON-RPC 2.0 request frame contract for all Kardenwort-Desk operational commands transmitted over persistent streaming socket transport (Named Pipe on Windows, UNIX Domain Socket or loopback TCP on POSIX). All frames are newline-delimited UTF-8 JSON strings.",
+  "type": "object",
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0",
+      "description": "JSON-RPC protocol version. MUST always be exactly '2.0'."
+    },
+    "id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ],
+      "description": "Correlation identifier assigned by the client. MUST be present and non-null for request-response operations. MUST be omitted or null for server-push notification frames."
+    },
+    "method": {
+      "type": "string",
+      "enum": [
+        "render",
+        "edit-save",
+        "retext",
+        "reprocess",
+        "lookup",
+        "export",
+        "merge",
+        "shutdown"
+      ],
+      "description": "Operational command method identifier. Selects the backend command handler to dispatch the request to. 'shutdown' signals the persistent daemon to gracefully terminate its listening loop."
+    },
+    "params": {
+      "type": "object",
+      "description": "Command-specific parameter object. All operational arguments previously serialized as shell command-line strings or base64 command buffers are encoded here as typed JSON properties.",
+      "oneOf": [
+        { "$ref": "#/$defs/RenderParams" },
+        { "$ref": "#/$defs/EditSaveParams" },
+        { "$ref": "#/$defs/RetextParams" },
+        { "$ref": "#/$defs/ReprocessParams" },
+        { "$ref": "#/$defs/LookupParams" },
+        { "$ref": "#/$defs/ExportParams" },
+        { "$ref": "#/$defs/MergeParams" },
+        { "$ref": "#/$defs/ShutdownParams" }
+      ]
+    }
+  },
+  "required": ["jsonrpc", "method"],
+  "additionalProperties": false,
+  "$defs": {
+    "RenderParams": {
+      "title": "RenderParams",
+      "description": "Parameters for the 'render' command: generate HTML rendering output from source vocabulary data.",
+      "type": "object",
+      "properties": {
+        "config_path": {
+          "type": "string",
+          "description": "Absolute path to the configuration INI file governing rendering behavior."
+        },
+        "tsv_path": {
+          "type": "string",
+          "description": "Absolute path to the source TSV vocabulary data file."
+        },
+        "row_indices": {
+          "type": ["array", "null"],
+          "items": { "type": "integer" },
+          "description": "Optional list of zero-based row indices to render. Null renders all rows."
+        },
+        "output_format": {
+          "type": "string",
+          "enum": ["html", "base64"],
+          "default": "base64",
+          "description": "Output encoding format: 'html' for raw HTML string, 'base64' for Base64-encoded HTML."
+        }
+      },
+      "required": ["config_path", "tsv_path"],
+      "additionalProperties": false
+    },
+    "EditSaveParams": {
+      "title": "EditSaveParams",
+      "description": "Parameters for the 'edit-save' command: persist field-level edits back to the TSV source file.",
+      "type": "object",
+      "properties": {
+        "config_path": {
+          "type": "string",
+          "description": "Absolute path to the configuration INI file."
+        },
+        "tsv_path": {
+          "type": "string",
+          "description": "Absolute path to the source TSV vocabulary data file."
+        },
+        "row_index": {
+          "type": "integer",
+          "description": "Zero-based index of the row to update."
+        },
+        "field": {
+          "type": "string",
+          "description": "Column field name of the cell being edited."
+        },
+        "value": {
+          "type": "string",
+          "description": "New cell value to persist."
+        }
+      },
+      "required": ["config_path", "tsv_path", "row_index", "field", "value"],
+      "additionalProperties": false
+    },
+    "RetextParams": {
+      "title": "RetextParams",
+      "description": "Parameters for the 'retext' command: replace the source vocabulary text and trigger full re-processing.",
+      "type": "object",
+      "properties": {
+        "config_path": {
+          "type": "string",
+          "description": "Absolute path to the configuration INI file."
+        },
+        "tsv_path": {
+          "type": "string",
+          "description": "Absolute path to the source TSV vocabulary data file."
+        },
+        "text": {
+          "type": "string",
+          "description": "New source text to replace existing vocabulary entries."
+        },
+        "show_window": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to bring the Kardenwort window to focus after retext completes."
+        }
+      },
+      "required": ["config_path", "tsv_path", "text"],
+      "additionalProperties": false
+    },
+    "ReprocessParams": {
+      "title": "ReprocessParams",
+      "description": "Parameters for the 'reprocess' command: re-execute the processing pipeline for selected rows.",
+      "type": "object",
+      "properties": {
+        "config_path": {
+          "type": "string",
+          "description": "Absolute path to the configuration INI file."
+        },
+        "tsv_path": {
+          "type": "string",
+          "description": "Absolute path to the source TSV vocabulary data file."
+        },
+        "row_indices": {
+          "type": ["array", "null"],
+          "items": { "type": "integer" },
+          "description": "List of zero-based row indices to reprocess. Null or empty list triggers full-file reprocessing."
+        }
+      },
+      "required": ["config_path", "tsv_path"],
+      "additionalProperties": false
+    },
+    "LookupParams": {
+      "title": "LookupParams",
+      "description": "Parameters for the 'lookup' command: query the vocabulary dictionary for a word or phrase.",
+      "type": "object",
+      "properties": {
+        "config_path": {
+          "type": "string",
+          "description": "Absolute path to the configuration INI file."
+        },
+        "query": {
+          "type": "string",
+          "description": "Word or phrase to look up."
+        },
+        "tsv_path": {
+          "type": ["string", "null"],
+          "description": "Optional absolute path to the TSV vocabulary data file for cross-reference lookups."
+        }
+      },
+      "required": ["config_path", "query"],
+      "additionalProperties": false
+    },
+    "ExportParams": {
+      "title": "ExportParams",
+      "description": "Parameters for the 'export' command: export selected vocabulary rows to an external target (e.g. Anki).",
+      "type": "object",
+      "properties": {
+        "config_path": {
+          "type": "string",
+          "description": "Absolute path to the configuration INI file."
+        },
+        "tsv_path": {
+          "type": "string",
+          "description": "Absolute path to the source TSV vocabulary data file."
+        },
+        "row_indices": {
+          "type": ["array", "null"],
+          "items": { "type": "integer" },
+          "description": "List of zero-based row indices to export. Null exports all rows."
+        },
+        "selection_mode": {
+          "type": "string",
+          "enum": ["selected", "all", "favorites"],
+          "default": "selected",
+          "description": "Export selection strategy."
+        },
+        "show_window": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to bring the Kardenwort window to focus after export completes."
+        }
+      },
+      "required": ["config_path", "tsv_path"],
+      "additionalProperties": false
+    },
+    "MergeParams": {
+      "title": "MergeParams",
+      "description": "Parameters for the 'merge' command: merge token data from a source into the active vocabulary file.",
+      "type": "object",
+      "properties": {
+        "config_path": {
+          "type": "string",
+          "description": "Absolute path to the configuration INI file."
+        },
+        "tsv_path": {
+          "type": "string",
+          "description": "Absolute path to the target TSV vocabulary data file."
+        },
+        "source_path": {
+          "type": "string",
+          "description": "Absolute path to the source TSV file whose vocabulary entries are to be merged."
+        },
+        "deduplicate": {
+          "type": "boolean",
+          "default": true,
+          "description": "Whether to suppress duplicate token entries during merge."
+        },
+        "sort_frequency": {
+          "type": "boolean",
+          "default": false,
+          "description": "Whether to sort merged entries by corpus frequency."
+        }
+      },
+      "required": ["config_path", "tsv_path", "source_path"],
+      "additionalProperties": false
+    },
+    "ShutdownParams": {
+      "title": "ShutdownParams",
+      "description": "Parameters for the 'shutdown' command: signal the persistent daemon to gracefully terminate.",
+      "type": "object",
+      "properties": {
+        "reason": {
+          "type": ["string", "null"],
+          "description": "Optional human-readable reason for the shutdown request (e.g. 'client-disconnect', 'idle-timeout')."
+        }
+      },
+      "additionalProperties": false
+    }
+  }
+}

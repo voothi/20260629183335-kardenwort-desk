@@ -1,0 +1,241 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/ipc/json_rpc_response.json",
+  "title": "JsonRpcResponse",
+  "description": "Formal JSON-RPC 2.0 result response envelope transmitted by the Kardenwort-Desk persistent streaming daemon over socket transport (Named Pipe on Windows, UNIX Domain Socket or loopback TCP on POSIX). Issued when an operational command completes successfully. All frames are newline-delimited UTF-8 JSON strings.",
+  "type": "object",
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0",
+      "description": "JSON-RPC protocol version. MUST always be exactly '2.0'."
+    },
+    "id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ],
+      "description": "Correlation identifier copied verbatim from the client's originating request. MUST match the request 'id' exactly. MUST be null if the request 'id' was null or if this is a server-push notification frame."
+    },
+    "result": {
+      "description": "Successful operation output payload. The structure varies by the originating command method. MUST be present when the command succeeded. MUST NOT be present alongside 'error'.",
+      "oneOf": [
+        { "$ref": "#/$defs/RenderResult" },
+        { "$ref": "#/$defs/EditSaveResult" },
+        { "$ref": "#/$defs/RetextResult" },
+        { "$ref": "#/$defs/ReprocessResult" },
+        { "$ref": "#/$defs/LookupResult" },
+        { "$ref": "#/$defs/ExportResult" },
+        { "$ref": "#/$defs/MergeResult" },
+        { "$ref": "#/$defs/ShutdownResult" },
+        { "$ref": "#/$defs/NotificationResult" }
+      ]
+    }
+  },
+  "required": ["jsonrpc", "id", "result"],
+  "additionalProperties": false,
+  "$defs": {
+    "RenderResult": {
+      "title": "RenderResult",
+      "description": "Successful response payload for the 'render' command.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["success"],
+          "description": "Operation completion status."
+        },
+        "output": {
+          "type": "string",
+          "description": "Rendered HTML output. Encoded as Base64 string when output_format='base64', raw HTML when output_format='html'."
+        },
+        "row_count": {
+          "type": "integer",
+          "description": "Number of vocabulary rows rendered."
+        }
+      },
+      "required": ["status", "output"],
+      "additionalProperties": false
+    },
+    "EditSaveResult": {
+      "title": "EditSaveResult",
+      "description": "Successful response payload for the 'edit-save' command.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["success"],
+          "description": "Operation completion status."
+        },
+        "row_index": {
+          "type": "integer",
+          "description": "Zero-based index of the row that was updated."
+        },
+        "field": {
+          "type": "string",
+          "description": "Field name that was persisted."
+        }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
+    "RetextResult": {
+      "title": "RetextResult",
+      "description": "Successful response payload for the 'retext' command.",
+      "type": "object",
+      "properties": {
+        "retext_started": {
+          "type": "boolean",
+          "description": "Indicates that the retext operation was accepted and background processing has begun."
+        },
+        "status": {
+          "type": ["string", "null"],
+          "description": "Operation completion status or null when retext is asynchronous."
+        }
+      },
+      "required": ["retext_started"],
+      "additionalProperties": false
+    },
+    "ReprocessResult": {
+      "title": "ReprocessResult",
+      "description": "Successful response payload for the 'reprocess' command.",
+      "type": "object",
+      "properties": {
+        "reprocess_started": {
+          "type": "boolean",
+          "description": "Indicates that the reprocess operation was accepted and background processing has begun."
+        },
+        "rows": {
+          "type": "integer",
+          "description": "Number of rows queued for reprocessing."
+        },
+        "status": {
+          "type": ["string", "null"],
+          "enum": ["success", "skipped", null],
+          "description": "Synchronous completion status. Null when processing is asynchronous."
+        },
+        "message": {
+          "type": ["string", "null"],
+          "description": "Human-readable status message, present when status='skipped'."
+        }
+      },
+      "required": ["reprocess_started"],
+      "additionalProperties": false
+    },
+    "LookupResult": {
+      "title": "LookupResult",
+      "description": "Successful response payload for the 'lookup' command.",
+      "type": "object",
+      "properties": {
+        "match": {
+          "type": ["object", "null"],
+          "description": "Dictionary lookup match result object. Null if no match was found."
+        }
+      },
+      "required": ["match"],
+      "additionalProperties": false
+    },
+    "ExportResult": {
+      "title": "ExportResult",
+      "description": "Successful response payload for the 'export' command.",
+      "type": "object",
+      "properties": {
+        "import_complete": {
+          "type": "boolean",
+          "description": "Indicates export operation completed."
+        },
+        "status": {
+          "type": ["string", "null"],
+          "enum": ["success", "skipped", null],
+          "description": "Operation completion status."
+        },
+        "output": {
+          "type": ["string", "null"],
+          "description": "Human-readable result summary message."
+        },
+        "show_window": {
+          "type": "boolean",
+          "description": "Whether the Kardenwort window should be brought into focus."
+        },
+        "message": {
+          "type": ["string", "null"],
+          "description": "Human-readable status message, present when status='skipped'."
+        }
+      },
+      "required": ["import_complete"],
+      "additionalProperties": false
+    },
+    "MergeResult": {
+      "title": "MergeResult",
+      "description": "Successful response payload for the 'merge' command.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["success"],
+          "description": "Operation completion status."
+        },
+        "merged_count": {
+          "type": "integer",
+          "description": "Number of new vocabulary entries merged into the target file."
+        },
+        "duplicate_count": {
+          "type": "integer",
+          "description": "Number of duplicate entries suppressed during merge."
+        }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
+    "ShutdownResult": {
+      "title": "ShutdownResult",
+      "description": "Successful response payload for the 'shutdown' command.",
+      "type": "object",
+      "properties": {
+        "status": {
+          "type": "string",
+          "enum": ["shutting_down"],
+          "description": "Indicates the daemon has accepted the shutdown signal and will gracefully terminate."
+        }
+      },
+      "required": ["status"],
+      "additionalProperties": false
+    },
+    "NotificationResult": {
+      "title": "NotificationResult",
+      "description": "Server-push asynchronous notification frame emitted by the backend daemon to broadcast real-time processing progress. Replaces file-message-queue disk polling. The 'id' in the parent response MUST be null for notifications.",
+      "type": "object",
+      "properties": {
+        "notification": {
+          "type": "string",
+          "enum": [
+            "progress",
+            "stage_complete",
+            "error_partial",
+            "status_update"
+          ],
+          "description": "Notification event type identifier."
+        },
+        "stage": {
+          "type": ["string", "null"],
+          "description": "Current processing pipeline stage name (e.g. 'tokenizing', 'translating', 'rendering')."
+        },
+        "status": {
+          "type": ["string", "null"],
+          "description": "Stage-level completion status."
+        },
+        "message": {
+          "type": ["string", "null"],
+          "description": "Human-readable progress description."
+        },
+        "rows": {
+          "type": ["object", "null"],
+          "description": "Optional row-level update payload. Structure mirrors file-message-queue row objects for backward compatibility."
+        }
+      },
+      "required": ["notification"],
+      "additionalProperties": false
+    }
+  }
+}

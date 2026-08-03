@@ -1458,3 +1458,224 @@ def test_batch_merge_config_initialization_and_immutability():
     assert cfg_with_args.deduplicate is True
     assert cfg_with_args.sort_frequency is True
     assert BatchMergeConfig.from_config(cfg) is cfg
+
+
+# =============================================================================
+# IPC JSON-RPC 2.0 Encapsulation Assertions (ipc-hardening spec)
+#
+# These tests confirm that dictionaries emitted by emit_payload and errors from
+# print_structured_error can be cleanly encapsulated into valid JSON-RPC 2.0
+# result and error frames under simulated streaming daemon mode.
+#
+# The helpers wrap_as_jsonrpc_result / wrap_as_jsonrpc_error model the framing
+# that a persistent streaming daemon would apply before writing to the socket.
+# =============================================================================
+
+import sys
+import io
+
+
+def _wrap_as_jsonrpc_result(payload: dict, request_id) -> dict:
+    """
+    Encapsulate emit_payload output dict into a valid JSON-RPC 2.0 result frame.
+    This mirrors what a persistent streaming daemon applies before socket write.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "result": payload,
+    }
+
+
+def _wrap_as_jsonrpc_error(error_payload: dict, request_id,
+                            code: int = -32000) -> dict:
+    """
+    Encapsulate print_structured_error output dict into a valid JSON-RPC 2.0
+    error frame. This mirrors what a persistent streaming daemon applies before
+    socket write.
+    """
+    return {
+        "jsonrpc": "2.0",
+        "id": request_id,
+        "error": {
+            "code": code,
+            "message": "Internal error",
+            "data": error_payload,
+        },
+    }
+
+
+def _capture_emit_payload(monkeypatch, data, raw=False) -> str:
+    """Capture the raw string that emit_payload writes to sys.__stdout__."""
+    mock_stdout = io.StringIO()
+    monkeypatch.setattr(sys, '__stdout__', mock_stdout)
+    desk.emit_payload(data, raw=raw)
+    return mock_stdout.getvalue().rstrip("\n")
+
+
+def _capture_print_structured_error(capfd, error_code, message, details=None) -> dict:
+    """Capture and parse what print_structured_error writes to stderr."""
+    desk.print_structured_error(error_code, message, details=details)
+    captured = capfd.readouterr()
+    return json.loads(captured.err.strip())
+
+
+class TestIpcJsonRpcEncapsulation:
+    """
+    2.2 – Verify that emit_payload and print_structured_error produce dictionaries
+    that encapsulate cleanly into valid JSON-RPC 2.0 frames.
+
+    These tests operate at the output layer only (capturing stdout/stderr) and
+    do NOT modify emit_payload or print_structured_error internals.
+    """
+
+    def test_emit_payload_dict_encapsulates_into_jsonrpc_result(self, monkeypatch):
+        """emit_payload({...}) → JSON string that parses back as a dict
+        and wraps cleanly into a JSON-RPC 2.0 result frame."""
+        raw_output = _capture_emit_payload(monkeypatch, {"status": "success"})
+        payload = json.loads(raw_output)
+
+        # Payload must be a plain dict (not a JSON-RPC frame itself)
+        assert isinstance(payload, dict)
+        assert payload["status"] == "success"
+
+        # Encapsulate into a JSON-RPC result frame
+        rpc_frame = _wrap_as_jsonrpc_result(payload, request_id="req-test-1")
+
+        # Frame must be valid JSON
+        frame_str = json.dumps(rpc_frame)
+        decoded = json.loads(frame_str)
+
+        assert decoded["jsonrpc"] == "2.0"
+        assert decoded["id"] == "req-test-1"
+        assert decoded["result"]["status"] == "success"
+        assert "error" not in decoded
+
+    def test_emit_payload_complex_dict_encapsulates(self, monkeypatch):
+        """emit_payload with a complex nested payload encapsulates without data loss."""
+        complex_payload = {
+            "import_complete": True,
+            "show_window": True,
+            "output": "SUCCESS: Exported to /path/to/file.apkg",
+            "rows": {"0": {"lemma": "Haus", "trans": "house"}},
+        }
+        raw_output = _capture_emit_payload(monkeypatch, complex_payload)
+        payload = json.loads(raw_output)
+
+        rpc_frame = _wrap_as_jsonrpc_result(payload, request_id="req-test-2")
+        decoded = json.loads(json.dumps(rpc_frame))
+
+        assert decoded["result"]["import_complete"] is True
+        assert decoded["result"]["rows"]["0"]["lemma"] == "Haus"
+        assert "error" not in decoded
+
+    def test_emit_payload_skipped_status_encapsulates(self, monkeypatch):
+        """Skipped-status emit_payload encapsulates with status='skipped' preserved."""
+        raw_output = _capture_emit_payload(monkeypatch, {
+            "status": "skipped",
+            "message": "Warning: No rows to export based on selection mode. Export skipped.",
+        })
+        payload = json.loads(raw_output)
+        rpc_frame = _wrap_as_jsonrpc_result(payload, request_id="req-test-3")
+        decoded = json.loads(json.dumps(rpc_frame))
+
+        assert decoded["result"]["status"] == "skipped"
+        assert "Warning" in decoded["result"]["message"]
+
+    def test_emit_payload_reprocess_started_encapsulates(self, monkeypatch):
+        """reprocess_started payload encapsulates cleanly with integer rows field."""
+        raw_output = _capture_emit_payload(monkeypatch, {
+            "reprocess_started": True,
+            "rows": 12,
+        })
+        payload = json.loads(raw_output)
+        rpc_frame = _wrap_as_jsonrpc_result(payload, request_id="req-test-4")
+        decoded = json.loads(json.dumps(rpc_frame))
+
+        assert decoded["result"]["reprocess_started"] is True
+        assert decoded["result"]["rows"] == 12
+
+    def test_print_structured_error_encapsulates_into_jsonrpc_error(self, capfd):
+        """print_structured_error({...}) → JSON on stderr that wraps cleanly
+        into a JSON-RPC 2.0 error frame."""
+        error_payload = _capture_print_structured_error(
+            capfd, "CONFIG_LOAD_FAILED", "Failed to load config.ini"
+        )
+
+        assert error_payload["error_code"] == "CONFIG_LOAD_FAILED"
+        assert error_payload["message"] == "Failed to load config.ini"
+
+        rpc_frame = _wrap_as_jsonrpc_error(error_payload, request_id="req-err-1",
+                                            code=-32001)
+        decoded = json.loads(json.dumps(rpc_frame))
+
+        assert decoded["jsonrpc"] == "2.0"
+        assert decoded["id"] == "req-err-1"
+        assert decoded["error"]["code"] == -32001
+        assert decoded["error"]["data"]["error_code"] == "CONFIG_LOAD_FAILED"
+        assert "result" not in decoded
+
+    def test_print_structured_error_with_details_encapsulates(self, capfd):
+        """print_structured_error with details string encapsulates with details preserved."""
+        traceback_str = "Traceback (most recent call last):\n  File 'x.py', line 1\n"
+        error_payload = _capture_print_structured_error(
+            capfd, "UNHANDLED_EXCEPTION", "Something went wrong", details=traceback_str
+        )
+
+        assert error_payload["error_code"] == "UNHANDLED_EXCEPTION"
+        assert error_payload.get("details") == traceback_str
+
+        rpc_frame = _wrap_as_jsonrpc_error(error_payload, request_id="req-err-2",
+                                            code=-32000)
+        decoded = json.loads(json.dumps(rpc_frame))
+
+        assert decoded["error"]["data"]["details"] == traceback_str
+
+    def test_print_structured_error_interrupted_encapsulates(self, capfd):
+        """INTERRUPTED error encapsulates into JSON-RPC error frame with null id."""
+        error_payload = _capture_print_structured_error(
+            capfd, "INTERRUPTED", "Process was interrupted."
+        )
+
+        # Interrupted errors use null request_id (daemon cannot correlate)
+        rpc_frame = _wrap_as_jsonrpc_error(error_payload, request_id=None,
+                                            code=-32000)
+        decoded = json.loads(json.dumps(rpc_frame))
+
+        assert decoded["id"] is None
+        assert decoded["error"]["data"]["error_code"] == "INTERRUPTED"
+
+    def test_jsonrpc_result_frame_is_newline_delimited_serializable(self, monkeypatch):
+        """Full pipeline: emit_payload output → JSON-RPC result → encode as
+        newline-delimited frame (as socket write would do)."""
+        raw_output = _capture_emit_payload(monkeypatch, {"status": "success", "output": "abc"})
+        payload = json.loads(raw_output)
+        rpc_frame = _wrap_as_jsonrpc_result(payload, request_id="req-nl-1")
+
+        # Simulate what a daemon would write to the socket
+        socket_frame = json.dumps(rpc_frame, ensure_ascii=False) + "\n"
+
+        # Must be a single line (no embedded newlines in the JSON body)
+        lines = socket_frame.split("\n")
+        non_empty = [l for l in lines if l.strip()]
+        assert len(non_empty) == 1, "Frame must be exactly one newline-terminated line"
+
+        # Must be parseable back
+        decoded = json.loads(non_empty[0])
+        assert decoded["result"]["status"] == "success"
+
+    def test_jsonrpc_error_frame_is_newline_delimited_serializable(self, capfd):
+        """Full pipeline: print_structured_error output → JSON-RPC error → newline-delimited."""
+        error_payload = _capture_print_structured_error(
+            capfd, "PROCESSING_ERROR", "Tokenization failed"
+        )
+        rpc_frame = _wrap_as_jsonrpc_error(error_payload, request_id="req-nl-2",
+                                            code=-32000)
+
+        socket_frame = json.dumps(rpc_frame, ensure_ascii=False) + "\n"
+        lines = socket_frame.split("\n")
+        non_empty = [l for l in lines if l.strip()]
+        assert len(non_empty) == 1
+
+        decoded = json.loads(non_empty[0])
+        assert decoded["error"]["data"]["error_code"] == "PROCESSING_ERROR"

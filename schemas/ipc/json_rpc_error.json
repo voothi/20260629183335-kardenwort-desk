@@ -1,0 +1,117 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/ipc/json_rpc_error.json",
+  "title": "JsonRpcError",
+  "description": "Structured diagnostic error framing contract for JSON-RPC 2.0 error response envelopes transmitted by the Kardenwort-Desk persistent streaming daemon. Emitted when an operational command fails or when an unhandled exception occurs during command fulfillment. The persistent server process MUST NOT terminate upon emitting an error frame. All frames are newline-delimited UTF-8 JSON strings.",
+  "type": "object",
+  "properties": {
+    "jsonrpc": {
+      "type": "string",
+      "const": "2.0",
+      "description": "JSON-RPC protocol version. MUST always be exactly '2.0'."
+    },
+    "id": {
+      "oneOf": [
+        { "type": "string" },
+        { "type": "integer" },
+        { "type": "null" }
+      ],
+      "description": "Correlation identifier copied verbatim from the originating request. MUST be null when the request could not be parsed (parse error). MUST match the request 'id' for all other error conditions."
+    },
+    "error": {
+      "$ref": "#/$defs/ErrorObject",
+      "description": "Structured error object describing the failure. MUST be present. MUST NOT be present alongside 'result'."
+    }
+  },
+  "required": ["jsonrpc", "id", "error"],
+  "additionalProperties": false,
+  "$defs": {
+    "ErrorObject": {
+      "title": "ErrorObject",
+      "description": "JSON-RPC 2.0 error object encapsulating error classification, human-readable message, and optional diagnostic details.",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "integer",
+          "description": "Numeric error classification code. Standard JSON-RPC 2.0 codes (-32700 through -32603) cover protocol-level failures. Application-domain error codes begin at -32000 and extend downward.",
+          "oneOf": [
+            {
+              "description": "Standard JSON-RPC 2.0 reserved error codes",
+              "enum": [
+                -32700,
+                -32600,
+                -32601,
+                -32602,
+                -32603
+              ]
+            },
+            {
+              "description": "Kardenwort-Desk application error codes (-32000 and below)",
+              "maximum": -32000,
+              "minimum": -32099
+            }
+          ]
+        },
+        "message": {
+          "type": "string",
+          "description": "Short, human-readable error description. For standard codes this MUST be: -32700='Parse error', -32600='Invalid Request', -32601='Method not found', -32602='Invalid params', -32603='Internal error'. Application error messages are free-form."
+        },
+        "data": {
+          "$ref": "#/$defs/ErrorData",
+          "description": "Optional structured diagnostic data providing additional context about the failure. Contains the Kardenwort structured error envelope mapped to JSON-RPC framing."
+        }
+      },
+      "required": ["code", "message"],
+      "additionalProperties": false
+    },
+    "ErrorData": {
+      "title": "ErrorData",
+      "description": "Kardenwort-Desk structured diagnostic payload encapsulated within the JSON-RPC error 'data' field. Mirrors the existing print_structured_error output format for backward compatibility with CLI consumers.",
+      "type": "object",
+      "properties": {
+        "error_code": {
+          "type": "string",
+          "description": "Kardenwort-Desk internal error code string (e.g. 'UNHANDLED_EXCEPTION', 'INTERRUPTED', 'CONFIG_LOAD_FAILED', 'COMMAND_NOT_FOUND', 'INVALID_PARAMS', 'PROCESSING_ERROR')."
+        },
+        "message": {
+          "type": "string",
+          "description": "Human-readable description of the error condition."
+        },
+        "details": {
+          "type": ["string", "null"],
+          "description": "Optional extended diagnostic detail. For UNHANDLED_EXCEPTION errors, contains the full Python traceback string."
+        }
+      },
+      "required": ["error_code", "message"],
+      "additionalProperties": false
+    }
+  },
+  "examples": [
+    {
+      "jsonrpc": "2.0",
+      "id": null,
+      "error": {
+        "code": -32700,
+        "message": "Parse error",
+        "data": {
+          "error_code": "PARSE_ERROR",
+          "message": "Received frame could not be decoded as valid UTF-8 JSON.",
+          "details": null
+        }
+      }
+    },
+    {
+      "jsonrpc": "2.0",
+      "id": "req-42",
+      "error": {
+        "code": -32000,
+        "message": "Internal error",
+        "data": {
+          "error_code": "UNHANDLED_EXCEPTION",
+          "message": "NullPointerException during render pipeline",
+          "details": "Traceback (most recent call last):\n  File \"kardenwort_desk.py\", line 6086, in handle_render\n    ..."
+        }
+      }
+    }
+  ]
+}
