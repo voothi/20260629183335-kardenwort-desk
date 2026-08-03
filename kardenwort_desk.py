@@ -685,20 +685,20 @@ def _warn_deprecated(key, msg):
 
 def _migrate_config(config):
     # Ensure sections exist
-    if not config.has_section('pipeline'):
-        config.add_section('pipeline')
-    if not config.has_section('triggers'):
-        config.add_section('triggers')
-    if not config.has_section('rendering'):
-        config.add_section('rendering')
+    if not config.has_section(SEC_PIPELINE):
+        config.add_section(SEC_PIPELINE)
+    if not config.has_section(SEC_TRIGGERS):
+        config.add_section(SEC_TRIGGERS)
+    if not config.has_section(SEC_RENDERING):
+        config.add_section(SEC_RENDERING)
 
     # Read legacy providers
-    legacy_main = config.get('translation_providers', 'main_text_translation', fallback=None) if config.has_section('translation_providers') else None
-    legacy_lemmas = config.get('translation_providers', 'lemmas_translation', fallback=None) if config.has_section('translation_providers') else None
+    legacy_main = config.get(SEC_TRANSLATION_PROVIDERS, 'main_text_translation', fallback=None) if config.has_section(SEC_TRANSLATION_PROVIDERS) else None
+    legacy_lemmas = config.get(SEC_TRANSLATION_PROVIDERS, 'lemmas_translation', fallback=None) if config.has_section(SEC_TRANSLATION_PROVIDERS) else None
 
     # Resolve text_base_provider (migrated from main_text_provider or legacy_main)
-    text_base = config.get('pipeline', 'text_base_provider', fallback=None)
-    old_main_text = config.get('pipeline', 'main_text_provider', fallback=None)
+    text_base = config.get(SEC_PIPELINE, 'text_base_provider', fallback=None)
+    old_main_text = config.get(SEC_PIPELINE, 'main_text_provider', fallback=None)
     if text_base is None:
         if old_main_text is not None:
             text_base = old_main_text
@@ -706,17 +706,17 @@ def _migrate_config(config):
             text_base = legacy_main
         else:
             text_base = 'google'
-    config.set('pipeline', 'text_base_provider', text_base)
+    config.set(SEC_PIPELINE, 'text_base_provider', text_base)
 
     # Resolve text_reprocess_provider
-    text_reprocess = config.get('pipeline', 'text_reprocess_provider', fallback=None)
+    text_reprocess = config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback=None)
     if text_reprocess is None:
         text_reprocess = 'deepl'
-    config.set('pipeline', 'text_reprocess_provider', text_reprocess)
+    config.set(SEC_PIPELINE, 'text_reprocess_provider', text_reprocess)
 
     # Resolve lemma_base_provider (migrated from base_provider)
-    lemma_base = config.get('pipeline', 'lemma_base_provider', fallback=None)
-    old_base = config.get('pipeline', 'base_provider', fallback=None)
+    lemma_base = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback=None)
+    old_base = config.get(SEC_PIPELINE, 'base_provider', fallback=None)
     if lemma_base is None:
         if old_base is not None:
             lemma_base = old_base
@@ -727,11 +727,11 @@ def _migrate_config(config):
                 lemma_base = 'deepl'
             else:
                 lemma_base = 'google'
-    config.set('pipeline', 'lemma_base_provider', lemma_base)
+    config.set(SEC_PIPELINE, 'lemma_base_provider', lemma_base)
 
     # Resolve lemma_reprocess_provider (migrated from enrichment_provider)
-    lemma_reprocess = config.get('pipeline', 'lemma_reprocess_provider', fallback=None)
-    old_enrichment = config.get('pipeline', 'enrichment_provider', fallback=None)
+    lemma_reprocess = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback=None)
+    old_enrichment = config.get(SEC_PIPELINE, 'enrichment_provider', fallback=None)
     if lemma_reprocess is None:
         if old_enrichment is not None:
             lemma_reprocess = old_enrichment
@@ -744,17 +744,17 @@ def _migrate_config(config):
                 lemma_reprocess = 'intellifiller'
             else:
                 lemma_reprocess = 'intellifiller'
-    config.set('pipeline', 'lemma_reprocess_provider', lemma_reprocess)
+    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', lemma_reprocess)
 
     # Read legacy triggers
-    legacy_lazy = config.get('settings', 'lazy_processing', fallback=None) if config.has_section('settings') else None
+    legacy_lazy = config.get(SEC_SETTINGS, 'lazy_processing', fallback=None) if config.has_section(SEC_SETTINGS) else None
 
     # Resolve triggers
-    run_lemma_base = config.get('triggers', 'run_lemma_base_translation', fallback=None)
-    old_run_base = config.get('triggers', 'run_base_translation', fallback=None)
-    run_lemma_enrich = config.get('triggers', 'run_lemma_enrichment', fallback=None)
-    old_run_enrich = config.get('triggers', 'run_enrichment', fallback=None)
-    run_text = config.get('triggers', 'run_text_translation', fallback=None)
+    run_lemma_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback=None)
+    old_run_base = config.get(SEC_TRIGGERS, 'run_base_translation', fallback=None)
+    run_lemma_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback=None)
+    old_run_enrich = config.get(SEC_TRIGGERS, 'run_enrichment', fallback=None)
+    run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback=None)
 
     if run_lemma_base is None or run_lemma_enrich is None or run_text is None:
         mapped_base = 'auto'
@@ -779,15 +779,15 @@ def _migrate_config(config):
         if run_text is None:
             run_text = run_lemma_base
     
-    config.set('triggers', 'run_lemma_base_translation', run_lemma_base)
-    config.set('triggers', 'run_lemma_enrichment', run_lemma_enrich)
-    config.set('triggers', 'run_text_translation', run_text)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', run_lemma_base)
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', run_lemma_enrich)
+    config.set(SEC_TRIGGERS, 'run_text_translation', run_text)
 
     # Read legacy rendering
-    legacy_prog = config.get('settings', 'progressive_loading', fallback=None) if config.has_section('settings') else None
+    legacy_prog = config.get(SEC_SETTINGS, 'progressive_loading', fallback=None) if config.has_section(SEC_SETTINGS) else None
 
     # Resolve rendering
-    display_mode = config.get('rendering', 'display_mode', fallback=None)
+    display_mode = config.get(SEC_RENDERING, 'display_mode', fallback=None)
     if display_mode is None:
         if legacy_prog is not None:
             _warn_deprecated('progressive_loading', "progressive_loading is deprecated; map it to rendering.display_mode.")
@@ -797,18 +797,18 @@ def _migrate_config(config):
                 display_mode = 'monolithic'
         else:
             display_mode = 'progressive'
-    config.set('rendering', 'display_mode', display_mode)
+    config.set(SEC_RENDERING, 'display_mode', display_mode)
 
-    if not config.has_section('settings'):
-        config.add_section('settings')
-    raw_gap = config.get('settings', 'split_gap_limit', fallback=None)
+    if not config.has_section(SEC_SETTINGS):
+        config.add_section(SEC_SETTINGS)
+    raw_gap = config.get(SEC_SETTINGS, 'split_gap_limit', fallback=None)
     val_gap = 60
     if raw_gap is not None:
         try:
             val_gap = int(raw_gap)
         except ValueError:
             val_gap = 60
-    config.set('settings', 'split_gap_limit', str(val_gap))
+    config.set(SEC_SETTINGS, 'split_gap_limit', str(val_gap))
 
 def load_config(config_path=None):
     """
@@ -831,8 +831,8 @@ def load_config(config_path=None):
     resolved_paths = {'base_dir': base_dir}
     
     # 1. Resolve environment paths
-    if 'environment' in config:
-        for key, value in config['environment'].items():
+    if SEC_ENVIRONMENT in config:
+        for key, value in config[SEC_ENVIRONMENT].items():
             if value.startswith('../') or value.startswith('./'):
                 resolved_path = (base_dir / value).resolve()
             else:
@@ -847,16 +847,16 @@ def load_config(config_path=None):
             raise ConfigError(f"Path configured for '{key}' does not exist: {path}")
             
     # 2. Settings paths
-    if 'settings' in config:
+    if SEC_SETTINGS in config:
         # favorites_output_dir is relative to config.ini location
-        fav_dir = config['settings'].get('favorites_output_dir', './favorites')
+        fav_dir = config[SEC_SETTINGS].get('favorites_output_dir', './favorites')
         if fav_dir.startswith('../') or fav_dir.startswith('./'):
             resolved_paths['favorites_output_dir'] = (base_dir / fav_dir).resolve()
         else:
             resolved_paths['favorites_output_dir'] = Path(fav_dir).resolve()
             
         # anki_mapping_file is relative to config.ini location
-        mapping_file = config['settings'].get('anki_mapping_file', './anki-mapping.ini')
+        mapping_file = config[SEC_SETTINGS].get('anki_mapping_file', './anki-mapping.ini')
         if mapping_file.startswith('../') or mapping_file.startswith('./'):
             resolved_paths['anki_mapping_file'] = (base_dir / mapping_file).resolve()
         else:
@@ -866,8 +866,8 @@ def load_config(config_path=None):
             raise ConfigError(f"anki_mapping_file path configured for 'anki_mapping_file' does not exist: {resolved_paths['anki_mapping_file']}")
 
     # 3. Project structure paths
-    if 'project_structure' in config:
-        res_dir = config['project_structure'].get('generated_results_dir')
+    if SEC_PROJECT_STRUCTURE in config:
+        res_dir = config[SEC_PROJECT_STRUCTURE].get('generated_results_dir')
         if res_dir:
             if res_dir.startswith('../') or res_dir.startswith('./'):
                 resolved_paths['generated_results_dir'] = (base_dir / res_dir).resolve()
@@ -875,12 +875,12 @@ def load_config(config_path=None):
                 resolved_paths['generated_results_dir'] = Path(res_dir).resolve()
             
     goldendict = {}
-    if 'goldendict' in config:
-        gd = config['goldendict']
+    if SEC_GOLDENDICT in config:
+        gd = config[SEC_GOLDENDICT]
         goldendict['format'] = gd.get('format', 'html')
-        goldendict['target_language'] = gd.get('target_language', config.get('settings', 'default_target_language', fallback='ru'))
+        goldendict['target_language'] = gd.get('target_language', config.get(SEC_SETTINGS, 'default_target_language', fallback='ru'))
         if not goldendict['target_language']:
-            goldendict['target_language'] = config.get('settings', 'default_target_language', fallback='ru')
+            goldendict['target_language'] = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
         goldendict['run_intellifiller'] = gd.getboolean('run_intellifiller', fallback=False)
         goldendict['lookup_ttl_seconds'] = gd.getint('lookup_ttl_seconds', fallback=300)
         goldendict['theme'] = gd.get('theme', 'dark')
@@ -898,7 +898,7 @@ def load_config(config_path=None):
         goldendict['lemma_columns'] = parse_columns_list(raw_columns, ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
     else:
         goldendict['format'] = 'html'
-        goldendict['target_language'] = config.get('settings', 'default_target_language', fallback='ru')
+        goldendict['target_language'] = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
         goldendict['run_intellifiller'] = False
         goldendict['lookup_ttl_seconds'] = 300
         goldendict['theme'] = 'dark'
@@ -911,8 +911,8 @@ def load_config(config_path=None):
         goldendict['lemma_columns'] = ['inflected', 'lemma', 'translation']
 
     wordfill = {}
-    if 'wordfill' in config:
-        wf = config['wordfill']
+    if SEC_WORDFILL in config:
+        wf = config[SEC_WORDFILL]
         wordfill['enabled'] = wf.getboolean('enabled', fallback=False)
         raw_roots = wf.get('scan_roots', '')
         parsed_roots = []
@@ -957,7 +957,7 @@ def resolve_results_dir(resolved_paths, kw_config):
     if 'generated_results_dir' in resolved_paths:
         return resolved_paths['generated_results_dir']
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
-    results_dir_name = kw_config.get('project_structure', 'generated_results_dir', fallback='results')
+    results_dir_name = kw_config.get(SEC_PROJECT_STRUCTURE, 'generated_results_dir', fallback='results')
     return (kardenwort_workspace / results_dir_name).resolve()
 
 def load_anki_mapping(mapping_path):
@@ -1030,7 +1030,7 @@ def setup_logging(verbose=False, debug=False):
         logger.setLevel(logging.WARNING)
 
 def get_deepl_key(config, base_dir):
-    deepl_settings_file_val = config.get('environment', 'deepl_settings_file', fallback=None)
+    deepl_settings_file_val = config.get(SEC_ENVIRONMENT, 'deepl_settings_file', fallback=None)
     if not deepl_settings_file_val:
         return None
         
@@ -1344,9 +1344,9 @@ def is_network_online_multi(hosts, port=53, timeout=1.0):
         return False
 
 def translate_text(text, source, target, config, resolved_paths, provider):
-    auto_fallback = config.getboolean('pipeline', 'auto_offline_fallback', fallback=True)
+    auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=True)
     
-    check_ips_str = config.get('pipeline', 'fast_connectivity_check_ips', fallback=config.get('pipeline', 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1'))
+    check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1'))
     check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
     
     if auto_fallback and check_ips and provider != 'argos':
@@ -1663,15 +1663,15 @@ def _validate_translated_line(orig_line, trans_line, idx, config):
     if not trans_line.strip():
         raise ValueError(f"Empty line returned for non-empty source at line index {idx}")
         
-    word_count_check = config.getboolean('translation', 'translation_word_count_check', fallback=False)
+    word_count_check = config.getboolean(SEC_TRANSLATION, 'translation_word_count_check', fallback=False)
     if word_count_check:
         orig_words = len(orig_line.split())
         trans_words = len(trans_line.split())
         if orig_words > 0:
-            abs_tolerance = config.getint('translation', 'translation_word_count_abs_tolerance', fallback=5)
+            abs_tolerance = config.getint(SEC_TRANSLATION, 'translation_word_count_abs_tolerance', fallback=5)
             if abs(orig_words - trans_words) > abs_tolerance:
-                min_ratio = config.getfloat('translation', 'translation_word_count_min_ratio', fallback=0.25)
-                max_ratio = config.getfloat('translation', 'translation_word_count_max_ratio', fallback=3.5)
+                min_ratio = config.getfloat(SEC_TRANSLATION, 'translation_word_count_min_ratio', fallback=0.25)
+                max_ratio = config.getfloat(SEC_TRANSLATION, 'translation_word_count_max_ratio', fallback=3.5)
                 ratio = trans_words / orig_words
                 if ratio < min_ratio or ratio > max_ratio:
                     raise ValueError(
@@ -1681,8 +1681,8 @@ def _validate_translated_line(orig_line, trans_line, idx, config):
 
 def _build_chunks(lines, chunk_size, config):
     chunks = []
-    adaptive_max_lines = config.getint('translation', 'translation_adaptive_max_lines', fallback=30)
-    adaptive_max_chars = config.getint('translation', 'translation_adaptive_max_chars', fallback=1000)
+    adaptive_max_lines = config.getint(SEC_TRANSLATION, 'translation_adaptive_max_lines', fallback=30)
+    adaptive_max_chars = config.getint(SEC_TRANSLATION, 'translation_adaptive_max_chars', fallback=1000)
     
     if chunk_size > 0:
         chunk = []
@@ -1891,15 +1891,15 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     # This preserves the literal piecemeal formatting that the user prefers (avoiding DeepL reformatting a giant text block)
                     full_text_trans = ""
                     try:
-                        api_delay = config.getfloat('translation', 'translation_api_delay', fallback=0.0)
+                        api_delay = config.getfloat(SEC_TRANSLATION, 'translation_api_delay', fallback=0.0)
                         if api_delay > 0:
                             import time
                             time.sleep(api_delay)
                             
                         # Disable fallback for unpadded run so we don't accidentally downgrade the UI 
                         # to Argo if the network drops between the two passes.
-                        original_fallback = config.get('pipeline', 'auto_offline_fallback', fallback='true')
-                        config.set('pipeline', 'auto_offline_fallback', 'false')
+                        original_fallback = config.get(SEC_PIPELINE, 'auto_offline_fallback', fallback='true')
+                        config.set(SEC_PIPELINE, 'auto_offline_fallback', 'false')
                         try:
                             unpadded_translations = translate_source_text(
                                 "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
@@ -1911,7 +1911,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                                 if isinstance(i, int) and unpadded_translations.get(i, "")
                             )
                         finally:
-                            config.set('pipeline', 'auto_offline_fallback', original_fallback)
+                            config.set(SEC_PIPELINE, 'auto_offline_fallback', original_fallback)
                     except Exception as e:
                         logger.error(f"Failed to translate unpadded lines block: {e}")
                     
@@ -2292,7 +2292,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         stem = stem[:-4]
     source_text_path = results_dir / f"{stem}.txt"
     
-    wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
+    wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
     save_source_text = config.getboolean(SEC_SETTINGS, 'save_source_text', fallback=True)
     if save_source_text:
@@ -2305,8 +2305,8 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     fields = list(mapping['fields'].keys())
     field_mapping = build_field_mapping(mapping, 'word')
     
-    lemma_index_rel = config.get('languages', f'{language}_lemma_index')
-    lemma_override_rel = config.get('languages', f'{language}_lemma_override')
+    lemma_index_rel = config.get(SEC_LANGUAGES, f'{language}_lemma_index')
+    lemma_override_rel = config.get(SEC_LANGUAGES, f'{language}_lemma_override')
     
     lemma_index_file = kardenwort_workspace / lemma_index_rel
     lemma_override_file = kardenwort_workspace / lemma_override_rel
@@ -2378,7 +2378,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             cmd.extend(["--strip-garbage-characters", strip_garbage_characters])
         
         if language == "de":
-            de_dictionary_file = kw_config.get('language_resources', 'dictionary_file_de', fallback='german.dic')
+            de_dictionary_file = kw_config.get(SEC_LANGUAGE_RESOURCES, 'dictionary_file_de', fallback='german.dic')
             de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
             cmd.extend([
                 "--de-dictionary-file", str(de_dict_path),
@@ -2686,7 +2686,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             source_sentences = text.splitlines()
     
     if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
-        main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
+        main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
         
         # Translate paragraph holistically
         translated_sentences = []
@@ -2920,10 +2920,10 @@ html, body {{
     lmb_play_val = "false"
     lmb_source_val = "lemma"
     rmb_play_val = "false"
-    if config.has_section('audio'):
-        lmb_play_val = "true" if config.getboolean('audio', 'lmb_play', fallback=False) else "false"
-        lmb_source_val = config.get('audio', 'lmb_source', fallback='lemma').strip().lower()
-        rmb_play_val = "true" if config.getboolean('audio', 'rmb_play', fallback=False) else "false"
+    if config.has_section(SEC_AUDIO):
+        lmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'lmb_play', fallback=False) else "false"
+        lmb_source_val = config.get(SEC_AUDIO, 'lmb_source', fallback='lemma').strip().lower()
+        rmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'rmb_play', fallback=False) else "false"
 
     anki_tts_cli_path = ""
     if 'anki_tts_cli' in resolved_paths:
@@ -2961,8 +2961,8 @@ html, body {{
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
-    lemmas_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
+    main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
+    lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
     
     role_fields = get_role_fields(mapping, headers)
         
@@ -2999,7 +2999,7 @@ html, body {{
 
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
-    is_progressive = config.get('rendering', 'display_mode', fallback='progressive') == 'progressive'
+    is_progressive = config.get(SEC_RENDERING, 'display_mode', fallback='progressive') == 'progressive'
     updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
     if is_progressive and updates_dir.exists():
         try:
@@ -3010,12 +3010,12 @@ html, body {{
                         break
         except Exception:
             pass
-    auto_inject_updates = config.getboolean('rendering', 'auto_inject_updates', fallback=True)
-    run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
-    run_text = config.get('triggers', 'run_text_translation', fallback='auto')
-    run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
-    base_provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
-    enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
+    auto_inject_updates = config.getboolean(SEC_RENDERING, 'auto_inject_updates', fallback=True)
+    run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
+    run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
+    run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
+    base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+    enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
     
     source_text_path = working_tsv_path.with_suffix('.txt')
     if eff_mode == 'single':
@@ -3052,7 +3052,7 @@ html, body {{
                 )
                 eff_mode = _effective_text_mode(text, text_mode)
                 translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
-                save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+                save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
                 _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                 
  
@@ -3066,7 +3066,7 @@ html, body {{
             )
             eff_mode = _effective_text_mode(text, text_mode)
             translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
-            save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+            save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
             _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
@@ -3134,14 +3134,14 @@ html, body {{
                 else:
                     sentence_translations[a_idx] = ""
             
-    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
     translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
     eff_mode = _effective_text_mode(text, text_mode)
     _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
             
     worker_launched = False
     if not llm_filled:
-        prompt_name = config.get('languages', f'{language}_prompt')
+        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt')
         
         if is_progressive:
             if (run_text == 'auto' and not sentence_translated) or (run_base == 'auto' and has_untranslated_lemmas) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
@@ -5331,7 +5331,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     ttl_seconds = goldendict['lookup_ttl_seconds']
     run_intellifiller = goldendict['run_intellifiller']
     
-    main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
+    main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
     try:
         sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
     except TranslationAlignmentError as tae:
@@ -5397,7 +5397,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         persist=True, return_single=True
     )
     
-    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
     translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
     eff_mode = _effective_text_mode(text, text_mode)
     _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=True)
@@ -5406,7 +5406,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     
     if col_lemma != -1 and col_word_dest != -1:
-        lemmas_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
+        lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
         lemmas_to_translate = []
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
@@ -5430,7 +5430,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                 save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
 
     if run_intellifiller:
-        prompt_name = config.get('languages', f'{language}_prompt', fallback='')
+        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
         run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
         
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
@@ -6046,9 +6046,9 @@ def cmd_lookup(args):
         if args.disable_css:
             goldendict['disable_css'] = True
             
-        target_lang = args.target_lang if args.target_lang else config.get('settings', 'default_target_language', fallback='ru')
+        target_lang = args.target_lang if args.target_lang else config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
         
-        if f"{args.language}_prompt" not in config['languages']:
+        if f"{args.language}_prompt" not in config[SEC_LANGUAGES]:
             raise KeyError(f"Missing {args.language}_prompt in [languages]")
             
 
@@ -6057,8 +6057,8 @@ def cmd_lookup(args):
             text_mode = 'multi'
             
         if text_mode == 'multi':
-            remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
-            clean_spaces = config.getboolean('settings', 'multi_mode_clean_spaces', fallback=True)
+            remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
+            clean_spaces = config.getboolean(SEC_SETTINGS, 'multi_mode_clean_spaces', fallback=True)
             if remove_empty or clean_spaces:
                 import re
                 new_lines = []
@@ -6125,8 +6125,8 @@ def cmd_render(args):
         text_mode = 'multi'
         
     if text_mode == 'multi':
-        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
-        clean_spaces = config.getboolean('settings', 'multi_mode_clean_spaces', fallback=True)
+        remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
+        clean_spaces = config.getboolean(SEC_SETTINGS, 'multi_mode_clean_spaces', fallback=True)
         if remove_empty or clean_spaces:
             import re
             new_lines = []
@@ -6139,8 +6139,8 @@ def cmd_render(args):
             text = "\n".join(new_lines)
         
     try:
-        zoom_val = args.zoom if args.zoom else config.get('settings', 'default_zoom', fallback='100')
-        split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint('settings', 'split_gap_limit', fallback=60)
+        zoom_val = args.zoom if args.zoom else config.get(SEC_SETTINGS, 'default_zoom', fallback='100')
+        split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60)
         html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill, seq_num=getattr(args, 'seq_num', None))
         from b64util import encode
         emit_payload(encode(html), raw=True)
@@ -6174,7 +6174,7 @@ def cmd_export(args):
         print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
         sys.exit(1)
         
-    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     
     tsv_path_str = manifest.get("tsv_path")
     if tsv_path_str:
@@ -6192,7 +6192,7 @@ def cmd_export(args):
         print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
         sys.exit(1)
         
-    export_selection_mode = config.get('settings', 'export_selection_mode', fallback='selected').lower()
+    export_selection_mode = config.get(SEC_SETTINGS, 'export_selection_mode', fallback='selected').lower()
     if export_selection_mode == 'all':
         actual_export_rows = list(range(len(data_rows)))
     elif export_selection_mode == 'unselected':
@@ -6263,11 +6263,11 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
     fav_dir = resolved_paths['favorites_output_dir']
     fav_dir.mkdir(parents=True, exist_ok=True)
 
-    fav_prefix = config.get('settings', 'favorites_prefix', fallback='')
+    fav_prefix = config.get(SEC_SETTINGS, 'favorites_prefix', fallback='')
     dest_filename = f"{fav_prefix}{tsv_path.name}"
     dest_path = fav_dir / dest_filename
 
-    save_to_favorites = config.getboolean('settings', 'save_to_favorites_on_export', fallback=True) if save_to_favorites_override is None else save_to_favorites_override
+    save_to_favorites = config.getboolean(SEC_SETTINGS, 'save_to_favorites_on_export', fallback=True) if save_to_favorites_override is None else save_to_favorites_override
     import_path = dest_path if save_to_favorites else (results_dir / f"temp_import_{dest_filename}")
 
     try:
@@ -6276,7 +6276,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
         if save_to_favorites:
             logger.info(f"Exported favorites to {import_path}")
             
-            copy_txt = config.getboolean('settings', 'copy_source_txt_to_favorites_on_export', fallback=False)
+            copy_txt = config.getboolean(SEC_SETTINGS, 'copy_source_txt_to_favorites_on_export', fallback=False)
             if copy_txt:
                 txt_files = list(tsv_path.parent.glob(f"{zid}-*.txt"))
                 for txt_file in txt_files:
@@ -6289,10 +6289,10 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
         else:
             logger.info(f"Exported temporary file for Anki import to {import_path}")
         
-        send_to_anki = config.getboolean('settings', 'send_to_anki_after_export', fallback=False) if send_to_anki_override is None else send_to_anki_override
+        send_to_anki = config.getboolean(SEC_SETTINGS, 'send_to_anki_after_export', fallback=False) if send_to_anki_override is None else send_to_anki_override
         if send_to_anki:
-            detach = config.getboolean('settings', 'detach_import_on_send', fallback=True)
-            show_window = config.getboolean('settings', 'show_import_window', fallback=False)
+            detach = config.getboolean(SEC_SETTINGS, 'detach_import_on_send', fallback=True)
+            show_window = config.getboolean(SEC_SETTINGS, 'show_import_window', fallback=False)
             if detach:
                 show_window = False
                 pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
@@ -6319,7 +6319,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                         logger.error(f"Anki import failed synchronously: {output}")
         else:
             if save_to_favorites:
-                show_window = config.getboolean('settings', 'show_import_window', fallback=False)
+                show_window = config.getboolean(SEC_SETTINGS, 'show_import_window', fallback=False)
                 if is_from_ui:
                     emit_payload({"import_complete": True, "show_window": show_window, "output": f"SUCCESS: Exported to {import_path}"})
             else:
@@ -6339,7 +6339,7 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
     kw_config = load_kardenwort_config(kardenwort_workspace)
     results_dir = resolve_results_dir(resolved_paths, kw_config)
     
-    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     
     mapping = None
     try:
@@ -6444,7 +6444,7 @@ def cmd_reprocess(args):
         emit_payload({"status": "skipped", "message": "Warning: No rows selected. Reprocess skipped."})
         sys.exit(0)
         
-    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     
     tsv_path_str = manifest.get("tsv_path")
     if tsv_path_str:
@@ -6519,14 +6519,14 @@ def cmd_reprocess(args):
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
         role_fields = get_role_fields(mapping, headers)
-        run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
+        run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
         if run_enrich == 'auto':
             write_update_js(tsv_path, data_rows, headers, role_fields)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
         sys.exit(1)
         
-    prompt_name = config.get('languages', f'{lang}_prompt')
+    prompt_name = config.get(SEC_LANGUAGES, f'{lang}_prompt')
     logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows in batches.")
     
     # Spawn the batch worker
@@ -6607,13 +6607,13 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                                 row[col_word_dest] = lemma_translations[lemma_val]
                 save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 
-            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
+            run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 write_update_js(tsv_path, data_rows, headers, role_fields)
     return data_rows
 
 def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows):
-    batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
+    batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
     for i in range(0, len(selected_rows), batch_size):
         batch = selected_rows[i:i + batch_size]
         logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
@@ -6622,7 +6622,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         try:
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
-            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
+            run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 write_update_js(tsv_path, data_rows, headers, role_fields)
         except Exception as e:
@@ -6638,9 +6638,9 @@ def cmd_reprocess_worker(args):
         return
         
     selected_rows = [int(r.strip()) for r in rows_str.split(',') if r.strip()]
-    lemmas_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
-    language = config.get('settings', 'default_language', fallback='en')
-    target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
+    language = config.get(SEC_SETTINGS, 'default_language', fallback='en')
+    target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     
     data_rows, headers, role_fields = [], [], {}
     class_cols = []
@@ -6652,7 +6652,7 @@ def cmd_reprocess_worker(args):
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
         
-        run_lemmatizer = config.getboolean('pipeline', 'run_lemmatizer', fallback=True)
+        run_lemmatizer = config.getboolean(SEC_PIPELINE, 'run_lemmatizer', fallback=True)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
         original_lemmas = {}
         if not run_lemmatizer and col_lemma != -1:
@@ -6906,8 +6906,8 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     
-    run_text = config.get('triggers', 'run_text_translation', fallback='auto')
-    run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
+    run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
+    run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
     
     try:
         # check if sentence needs translation
@@ -6921,7 +6921,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
             source_txt_path = tsv_path.with_suffix('.txt')
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
-                main_text_provider = config.get('pipeline', 'text_base_provider', fallback=config.get('pipeline', 'lemma_base_provider', fallback='google'))
+                main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
                 col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 try:
                     def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest):
@@ -6944,7 +6944,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                         sentence_translations_raw, tsv_path, comments, headers,
                         persist=True, return_single=False
                     )
-                    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+                    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
                     slug = generate_slug(text)
                     m = re.match(r"^(\d{14})", tsv_path.name)
                     zid = m.group(1) if m else "session"
@@ -6963,7 +6963,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                         tae.partial_dict, tsv_path, comments, headers,
                         persist=True, return_single=False
                     )
-                    save_translation_text = config.getboolean('settings', 'save_translation_text', fallback=False)
+                    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
                     slug = generate_slug(text)
                     m = re.match(r"^(\d{14})", tsv_path.name)
                     zid = m.group(1) if m else "session"
@@ -6994,11 +6994,11 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                         seen.add(val)
                         lemmas_to_translate.append(val)
             
-            translation_order = config.get('translation', 'translation_order', fallback='top_to_bottom').strip().lower()
+            translation_order = config.get(SEC_TRANSLATION, 'translation_order', fallback='top_to_bottom').strip().lower()
             if translation_order == 'bottom_to_top':
                 lemmas_to_translate = list(reversed(lemmas_to_translate))
             if lemmas_to_translate:
-                provider = config.get('pipeline', 'lemma_base_provider', fallback='google')
+                provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
                 if provider == 'intellifiller':
                     selected_rows_to_translate = []
                     for i, row in enumerate(data_rows):
@@ -7013,7 +7013,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
                     else:
                         write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
                 else:
-                    chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
+                    chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
                         chunk_size = 15  # Fallback to 15 to prevent huge chunks from freezing the progressive loading
                     if chunk_size > 0:
@@ -7055,7 +7055,7 @@ def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     try:
-        batch_size = config.getint('settings', 'intellifiller_batch_size', fallback=5)
+        batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
             
@@ -7131,7 +7131,7 @@ def cmd_retext(args):
         print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
         sys.exit(1)
         
-    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     
     tsv_path_str = manifest.get("tsv_path")
     if tsv_path_str:
@@ -7195,7 +7195,7 @@ def cmd_retext_worker(args):
     tsv_path = Path(args.tsv)
     language = args.language
     text_mode = args.text_mode
-    target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     
     try:
         with file_lock(tsv_path):
@@ -7210,7 +7210,7 @@ def cmd_retext_worker(args):
             return
             
         text = source_text_path.read_text(encoding='utf-8')
-        text_reprocess_provider = config.get('pipeline', 'text_reprocess_provider', fallback='deepl')
+        text_reprocess_provider = config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
         
         try:
@@ -7364,10 +7364,10 @@ def cmd_progressive_worker(args):
             wait_for_older_siblings_in_batch(tsv_path, mapping)
             
         try:
-            run_base = config.get('triggers', 'run_lemma_base_translation', fallback='auto')
-            run_text = config.get('triggers', 'run_text_translation', fallback='auto')
-            run_enrich = config.get('triggers', 'run_lemma_enrichment', fallback='auto')
-            enrich_provider = config.get('pipeline', 'lemma_reprocess_provider', fallback='intellifiller')
+            run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
+            run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
+            run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
+            enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
 
             
             # 1. Base Translation Stage
@@ -7430,7 +7430,7 @@ def cmd_edit_save(args):
         
     results_dir = resolve_results_dir(resolved_paths, kw_config)
     
-    lang = args.language or config.get('settings', 'default_language', fallback='en')
+    lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     
     if hasattr(args, 'tsv') and args.tsv:
         tsv_path = Path(args.tsv)
@@ -7589,7 +7589,7 @@ def cmd_merge(args):
             
         files.sort(key=extract_zid)
 
-        default_lang = config.get('settings', 'default_language', fallback='en')
+        default_lang = config.get(SEC_SETTINGS, 'default_language', fallback='en')
         def extract_lang_from_tsv(path):
             match = re.search(r'\.([a-z]{2})\.tsv$', path.name.lower())
             return match.group(1) if match else default_lang
@@ -7812,7 +7812,7 @@ def cmd_merge(args):
                             kardenwort_workspace = resolved_paths['kardenwort_workspace']
                             kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
                             
-                            lemma_index_rel = config.get('languages', f'{lang}_lemma_index', fallback="")
+                            lemma_index_rel = config.get(SEC_LANGUAGES, f'{lang}_lemma_index', fallback="")
                             if lemma_index_rel:
                                 lemma_index_file = kardenwort_workspace / lemma_index_rel
                                 cmd = [
@@ -8207,8 +8207,8 @@ def cmd_desk(args):
         text_mode = 'multi'
         
     if text_mode == 'multi':
-        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True)
-        clean_spaces = config.getboolean('settings', 'multi_mode_clean_spaces', fallback=True)
+        remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
+        clean_spaces = config.getboolean(SEC_SETTINGS, 'multi_mode_clean_spaces', fallback=True)
         if remove_empty or clean_spaces:
             new_lines = []
             for line in text.splitlines():
@@ -8225,13 +8225,13 @@ def cmd_desk(args):
         if lang_match:
             lang = lang_match.group(1)
         else:
-            lang = config.get('settings', 'default_language', fallback='en')
+            lang = config.get(SEC_SETTINGS, 'default_language', fallback='en')
             
     timestamp_id = generate_unique_zid()
     
     try:
         theme_val = args.theme if hasattr(args, 'theme') else "dark"
-        split_gap = config.getint('settings', 'split_gap_limit', fallback=60)
+        split_gap = config.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60)
         html = run_render_flow(text, lang, timestamp_id, args.text_mode, config, resolved_paths, theme=theme_val, split_gap_limit=split_gap)
         from b64util import encode
         emit_payload(encode(html), raw=True)
