@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Optional, Any, Union
+from typing import Optional, Any, Union, List
 
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
 vendor_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
@@ -262,6 +262,108 @@ class BatchMergeConfig:
             prefer_lowercase=prefer_lowercase,
             apostrophe_chars=apostrophe_chars,
         )
+
+
+@dataclass(frozen=True)
+class DeGCSConfig:
+    enabled: bool = False
+    pos_tags: Optional[str] = None
+    split_mode: Optional[str] = None
+    part_singularization: Optional[str] = None
+    preserve_compound_word: bool = False
+    add_parts_to_wordlist: bool = False
+    skip_merge_fractions: bool = False
+    mask_unknown_parts: bool = False
+
+    @classmethod
+    def from_config(cls, config: Any) -> "DeGCSConfig":
+        if isinstance(config, cls):
+            return config
+
+        enabled = False
+        preserve_compound_word = False
+        add_parts_to_wordlist = False
+        skip_merge_fractions = False
+        mask_unknown_parts = False
+        pos_tags = None
+        split_mode = None
+        part_singularization = None
+
+        if config and hasattr(config, "getboolean"):
+            try:
+                enabled = config.getboolean(SEC_SETTINGS, "de_gcs", fallback=False)
+            except Exception:
+                enabled = False
+            try:
+                preserve_compound_word = config.getboolean(SEC_SETTINGS, "de_gcs_preserve_compound_word", fallback=False)
+            except Exception:
+                preserve_compound_word = False
+            try:
+                add_parts_to_wordlist = config.getboolean(SEC_SETTINGS, "de_gcs_add_parts_to_wordlist", fallback=False)
+            except Exception:
+                add_parts_to_wordlist = False
+            try:
+                skip_merge_fractions = config.getboolean(SEC_SETTINGS, "de_gcs_skip_merge_fractions", fallback=False)
+            except Exception:
+                skip_merge_fractions = False
+            try:
+                mask_unknown_parts = config.getboolean(SEC_SETTINGS, "de_gcs_mask_unknown_parts", fallback=False)
+            except Exception:
+                mask_unknown_parts = False
+
+        if config and hasattr(config, "get"):
+            try:
+                pos_tags = config.get(SEC_SETTINGS, "de_gcs_pos_tags", fallback=None)
+                if pos_tags is not None and not isinstance(pos_tags, str):
+                    pos_tags = str(pos_tags)
+            except Exception:
+                pos_tags = None
+
+            try:
+                split_mode = config.get(SEC_SETTINGS, "de_gcs_split_mode", fallback=None)
+                if split_mode is not None and not isinstance(split_mode, str):
+                    split_mode = str(split_mode)
+            except Exception:
+                split_mode = None
+
+            try:
+                part_singularization = config.get(SEC_SETTINGS, "de_gcs_part_singularization", fallback=None)
+                if part_singularization is not None and not isinstance(part_singularization, str):
+                    part_singularization = str(part_singularization)
+            except Exception:
+                part_singularization = None
+
+        return cls(
+            enabled=enabled,
+            pos_tags=pos_tags,
+            split_mode=split_mode,
+            part_singularization=part_singularization,
+            preserve_compound_word=preserve_compound_word,
+            add_parts_to_wordlist=add_parts_to_wordlist,
+            skip_merge_fractions=skip_merge_fractions,
+            mask_unknown_parts=mask_unknown_parts,
+        )
+
+    def to_cli_args(self) -> List[str]:
+        if not self.enabled:
+            return []
+        cmd = ["--de-gcs"]
+        if self.pos_tags:
+            cmd.append("--de-gcs-pos-tags")
+            cmd.extend(self.pos_tags.strip().split())
+        if self.split_mode:
+            cmd.extend(["--de-gcs-split-mode", self.split_mode.strip()])
+        if self.part_singularization:
+            cmd.extend(["--de-gcs-part-singularization", self.part_singularization.strip()])
+        if self.preserve_compound_word:
+            cmd.append("--de-gcs-preserve-compound-word")
+        if self.add_parts_to_wordlist:
+            cmd.append("--de-gcs-add-parts-to-wordlist")
+        if self.skip_merge_fractions:
+            cmd.append("--de-gcs-skip-merge-fractions")
+        if self.mask_unknown_parts:
+            cmd.append("--de-gcs-mask-unknown-parts")
+        return cmd
 
 
 class ConfigError(Exception):
