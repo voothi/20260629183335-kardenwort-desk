@@ -10,6 +10,7 @@ from kardenwort_desk import (
     OperationalMode,
     ExecutionContext,
     SentenceBoundaryConfig,
+    SentencesModeConfig,
     ModeDispatcher,
     MonolithicLiveStrategy,
     SentenceLocalDedupStrategy,
@@ -438,8 +439,49 @@ def test_deterministic_strategy_dispatch_routing(params):
     else:
         pytest.fail(f"Unexpected OperationalMode resolution: {ctx.mode}")
 
-    # Assert immutability of OperationalWorkflowResult
     with pytest.raises(AttributeError):
         result.dedup_scope = "overridden"
     with pytest.raises(AttributeError):
         result.combine_source_words = True
+
+
+def test_sentences_mode_config_invariants():
+    """
+    Verify parsing, default fallback behaviors, and immutability invariants for SentencesModeConfig.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section("sentences_mode")
+    cp.set("sentences_mode", "enabled", "true")
+    cp.set("sentences_mode", "min_sentences", "5")
+    cp.set("sentences_mode", "alignment_method", "proportional")
+    cp.set("sentences_mode", "spawn_order", "reversed")
+    cp.set("sentences_mode", "parent_mode", "summary")
+    cp.set("sentences_mode", "multi_mode_sentence_decomposition", "true")
+    cp.set("sentences_mode", "deduplication_scope", " GLOBAL ")
+
+    smc = SentencesModeConfig.from_config(cp)
+    assert smc.enabled is True
+    assert smc.min_sentences == 5
+    assert smc.alignment_method == "proportional"
+    assert smc.spawn_order == "reversed"
+    assert smc.parent_mode == "summary"
+    assert smc.multi_mode_decompose is True
+    assert smc.deduplication_scope == "global"
+
+    # Verify idempotency
+    smc2 = SentencesModeConfig.from_config(smc)
+    assert smc2 is smc
+
+    # Verify fallback defaults with empty config
+    empty_smc = SentencesModeConfig.from_config(None)
+    assert empty_smc.enabled is False
+    assert empty_smc.min_sentences == 2
+    assert empty_smc.alignment_method == "auto"
+    assert empty_smc.deduplication_scope == "sentence"
+
+    # Verify immutability
+    with pytest.raises(AttributeError):
+        smc.enabled = False
+    with pytest.raises(AttributeError):
+        smc.deduplication_scope = "none"
+

@@ -120,6 +120,16 @@ SEC_MERGE = "merge"
 SEC_SENTENCES_MODE = "sentences_mode"
 SEC_CLASSIFICATION = "classification"
 SEC_TIMEOUTS = "timeouts"
+SEC_PIPELINE = "pipeline"
+SEC_TRIGGERS = "triggers"
+SEC_TRANSLATION = "translation"
+SEC_TRANSLATION_PROVIDERS = "translation_providers"
+SEC_RENDERING = "rendering"
+SEC_ENVIRONMENT = "environment"
+SEC_LANGUAGES = "languages"
+SEC_LANGUAGE_RESOURCES = "language_resources"
+SEC_PROJECT_STRUCTURE = "project_structure"
+SEC_AUDIO = "audio"
 SINGLE_WORD_DELIMITERS = ('-', '.')
 
 
@@ -459,6 +469,55 @@ class SentenceBoundaryConfig:
         )
 
 
+@dataclass(frozen=True)
+class SentencesModeConfig:
+    enabled: bool = False
+    min_sentences: int = 2
+    alignment_method: str = "auto"
+    spawn_order: str = "normal"
+    parent_mode: str = "full"
+    multi_mode_decompose: bool = False
+    deduplication_scope: str = "sentence"
+
+    @classmethod
+    def from_config(cls, config: Any) -> "SentencesModeConfig":
+        if isinstance(config, cls):
+            return config
+
+        enabled = False
+        min_sentences = 2
+        alignment_method = "auto"
+        spawn_order = "normal"
+        parent_mode = "full"
+        multi_mode_decompose = False
+        deduplication_scope = "sentence"
+
+        if config and hasattr(config, "has_section") and hasattr(config, "get"):
+            try:
+                if config.has_section(SEC_SENTENCES_MODE):
+                    if hasattr(config, "getboolean"):
+                        enabled = config.getboolean(SEC_SENTENCES_MODE, "enabled", fallback=False)
+                        multi_mode_decompose = config.getboolean(SEC_SENTENCES_MODE, "multi_mode_sentence_decomposition", fallback=False)
+                    if hasattr(config, "getint"):
+                        min_sentences = config.getint(SEC_SENTENCES_MODE, "min_sentences", fallback=2)
+                    alignment_method = config.get(SEC_SENTENCES_MODE, "alignment_method", fallback="auto")
+                    spawn_order = config.get(SEC_SENTENCES_MODE, "spawn_order", fallback="normal")
+                    parent_mode = config.get(SEC_SENTENCES_MODE, "parent_mode", fallback="full")
+                    deduplication_scope = config.get(SEC_SENTENCES_MODE, "deduplication_scope", fallback="sentence").strip().lower()
+            except Exception:
+                pass
+
+        return cls(
+            enabled=enabled,
+            min_sentences=min_sentences,
+            alignment_method=alignment_method,
+            spawn_order=spawn_order,
+            parent_mode=parent_mode,
+            multi_mode_decompose=multi_mode_decompose,
+            deduplication_scope=deduplication_scope,
+        )
+
+
 class OperationalMode(Enum):
     MONOLITHIC_LIVE = auto()
     MULTI_SENTENCE_LOCAL_DEDUP = auto()
@@ -481,17 +540,9 @@ class ExecutionContext:
             token_cfg = RuntimeTokenConfig.from_config(config)
 
         combine_source_words = token_cfg.combine_source_words
-        sentences_enabled = False
-        dedup_scope = 'sentence'
-
-        if config and hasattr(config, "has_section") and hasattr(config, "getboolean"):
-            try:
-                if config.has_section(SEC_SENTENCES_MODE):
-                    sentences_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False)
-                    if hasattr(config, "get"):
-                        dedup_scope = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence').strip().lower()
-            except Exception:
-                pass
+        smc = SentencesModeConfig.from_config(config)
+        sentences_enabled = smc.enabled
+        dedup_scope = smc.deduplication_scope
 
         if text_mode == 'multi' and sentences_enabled:
             if dedup_scope == 'sentence':
@@ -1195,10 +1246,10 @@ def run_google_translation(text, source, target, config, resolved_paths):
         "--source", source,
         "--target", target,
     ]
-    if config.getboolean('pipeline', 'use_local_fork', fallback=True):
+    if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
-    timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
+    timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60)
     logger.info(f"Running Google translation command: {' '.join(cmd)}")
     
     res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
@@ -1223,10 +1274,10 @@ def run_deepl_translation(text, source, target, config, resolved_paths):
         "--target", target,
         "--deepl-api-key", deepl_key,
     ]
-    if config.getboolean('pipeline', 'use_local_fork', fallback=True):
+    if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
-    timeout = config.getint('timeouts', 'translation_timeout', fallback=60)
+    timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60)
     
     logged_cmd = cmd[:]
     if "--deepl-api-key" in logged_cmd:
@@ -1256,7 +1307,7 @@ def run_argos_translation(text, source, target, config, resolved_paths):
     ]
         
     # Double the timeout for local offline translation to handle model loading overhead and concurrent requests
-    timeout = config.getint('timeouts', 'translation_timeout', fallback=60) * 2
+    timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) * 2
     logger.info(f"Running Argos translation command: {' '.join(cmd)}")
     
     try:
@@ -1723,16 +1774,16 @@ def split_merged_text_by_markers(text, markers):
     return parts
 
 def _validate_translation_config(config):
-    if not config.has_section('translation'):
+    if not config.has_section(SEC_TRANSLATION):
         return
-    split_mode = config.get('translation', 'translation_split_mode', fallback='newline_join')
-    word_count_check = config.getboolean('translation', 'translation_word_count_check', fallback=False)
+    split_mode = config.get(SEC_TRANSLATION, 'translation_split_mode', fallback='newline_join')
+    word_count_check = config.getboolean(SEC_TRANSLATION, 'translation_word_count_check', fallback=False)
     if split_mode == 'proportional' and word_count_check:
         logger.warning(
             "Config validation warning: translation_word_count_check = true is incompatible with "
             "translation_split_mode = proportional. Forcing translation_word_count_check to false."
         )
-        config.set('translation', 'translation_word_count_check', 'false')
+        config.set(SEC_TRANSLATION, 'translation_word_count_check', 'false')
 
 def _write_translation_txt(text, effective_text_mode, sentence_translations_raw, out_path, *, save_flag, overwrite=False):
     if not save_flag:
@@ -1801,12 +1852,12 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     
     eff_mode = _effective_text_mode(text, text_mode)
     
-    split_mode = config.get('translation', 'translation_split_mode', fallback='newline_join')
-    chunk_size = config.getint('translation', 'translation_chunk_size', fallback=0)
-    max_retries = config.getint('translation', 'translation_max_retries', fallback=3)
-    retry_backoff = config.getfloat('translation', 'translation_retry_backoff', fallback=1.0)
-    fix_sentence_splits = config.getboolean('translation', 'translation_fix_sentence_splits', fallback=False)
-    wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
+    split_mode = config.get(SEC_TRANSLATION, 'translation_split_mode', fallback='newline_join')
+    chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
+    max_retries = config.getint(SEC_TRANSLATION, 'translation_max_retries', fallback=3)
+    retry_backoff = config.getfloat(SEC_TRANSLATION, 'translation_retry_backoff', fallback=1.0)
+    fix_sentence_splits = config.getboolean(SEC_TRANSLATION, 'translation_fix_sentence_splits', fallback=False)
+    wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
     if eff_mode == 'single':
         if len(text) <= wrap_max_chars and '\n' not in text.strip():
@@ -2032,7 +2083,7 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
     except Exception:
         pass
     
-    timeout = config.getint('timeouts', 'intellifiller_timeout', fallback=120)
+    timeout = config.getint(SEC_TIMEOUTS, 'intellifiller_timeout', fallback=120)
     logger.info(f"Running headless IntelliFiller command: {' '.join(cmd)}")
     
     res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
@@ -2597,16 +2648,17 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     children_tsv_paths = []
     
-    sentences_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
-    min_sentences = config.getint(SEC_SENTENCES_MODE, 'min_sentences', fallback=2) if config.has_section(SEC_SENTENCES_MODE) else 2
-    alignment_method = config.get(SEC_SENTENCES_MODE, 'alignment_method', fallback='auto') if config.has_section(SEC_SENTENCES_MODE) else 'auto'
-    spawn_order = config.get(SEC_SENTENCES_MODE, 'spawn_order', fallback='normal') if config.has_section(SEC_SENTENCES_MODE) else 'normal'
-    parent_mode = config.get(SEC_SENTENCES_MODE, 'parent_mode', fallback='full') if config.has_section(SEC_SENTENCES_MODE) else 'full'
-    multi_mode_decompose = config.getboolean(SEC_SENTENCES_MODE, 'multi_mode_sentence_decomposition', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
+    smc = SentencesModeConfig.from_config(config)
+    sentences_enabled = smc.enabled
+    min_sentences = smc.min_sentences
+    alignment_method = smc.alignment_method
+    spawn_order = smc.spawn_order
+    parent_mode = smc.parent_mode
+    multi_mode_decompose = smc.multi_mode_decompose
     
     sbc = SentenceBoundaryConfig.from_config(config)
         
-    wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
+    wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
     eff_mode = _effective_text_mode(text, text_mode)
     if eff_mode == 'single':
@@ -2706,7 +2758,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
         col_inflected = headers.index(role_fields.get('inflected', 'WordSourceInflectedForm')) if role_fields.get('inflected', 'WordSourceInflectedForm') in headers else -1
         
-        dedup_scope_cfg = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section(SEC_SENTENCES_MODE) else 'sentence'
+        dedup_scope_cfg = smc.deduplication_scope
         if col_word_source != -1 and dedup_scope_cfg != 'none':
             master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text, language=language, resolved_paths=resolved_paths)
         else:
@@ -3256,13 +3308,13 @@ html, body {{
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
     
     dynamic_roles = []
-    desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
+    desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
     
-    if desk_classification_enabled and kw_config.has_section('classification') and kw_config.getboolean('classification', 'enabled', fallback=False):
-        if kw_config.has_option('classification', f'dictionaries_{language}'):
-            dicts = kw_config.get('classification', f'dictionaries_{language}', fallback='')
+    if desk_classification_enabled and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
+        if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{language}'):
+            dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{language}', fallback='')
         else:
-            dicts = kw_config.get('classification', 'dictionaries', fallback='')
+            dicts = kw_config.get(SEC_CLASSIFICATION, 'dictionaries', fallback='')
         if dicts:
             for d in dicts.split(','):
                 d = d.strip()
@@ -6630,20 +6682,20 @@ def cmd_reprocess_worker(args):
                 
         # Update classification fields if enabled
         try:
-            desk_classification_enabled = config.getboolean('classification', 'enabled', fallback=True) if config.has_section('classification') else True
+            desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
             kardenwort_workspace = resolved_paths['kardenwort_workspace']
             kw_config = load_kardenwort_config(kardenwort_workspace)
-            if desk_classification_enabled and kw_config.has_section('classification') and kw_config.getboolean('classification', 'enabled', fallback=False):
+            if desk_classification_enabled and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
                 # Import core kardenwort loaders
                 import sys
                 if str(kardenwort_workspace / "src") not in sys.path:
                     sys.path.append(str(kardenwort_workspace / "src"))
                 from kardenwort.core.kardenwort import load_classification_dictionaries
                 
-                if kw_config.has_option('classification', f'dictionaries_{language}'):
-                    dicts = kw_config.get('classification', f'dictionaries_{language}', fallback='')
+                if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{language}'):
+                    dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{language}', fallback='')
                 else:
-                    dicts = kw_config.get('classification', 'dictionaries', fallback='')
+                    dicts = kw_config.get(SEC_CLASSIFICATION, 'dictionaries', fallback='')
                 classify_args = []
                 if dicts:
                     for d in dicts.split(','):
@@ -7836,7 +7888,7 @@ def cmd_merge(args):
                             
                 delete_sources = getattr(args, 'delete_sources', False)
                 if not delete_sources and config:
-                    delete_sources = config.getboolean('merge', 'delete_sources', fallback=config.getboolean('settings', 'merge_delete_sources', fallback=False))
+                    delete_sources = config.getboolean(SEC_MERGE, 'delete_sources', fallback=config.getboolean(SEC_SETTINGS, 'merge_delete_sources', fallback=False))
                         
                 if delete_sources:
                     for f in lang_files:
