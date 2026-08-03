@@ -1,0 +1,48 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/config/batch_merge_config.json",
+  "title": "BatchMergeConfig",
+  "description": "Schema contract for the BatchMergeConfig frozen dataclass governing batch vocabulary merge parameters.",
+  "type": "object",
+  "properties": {
+    "deduplicate": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether duplicate rows are deduplicated during batch merge operations."
+    },
+    "deduplicate_by_lemma": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether deduplication uses lemma-normalized keys rather than raw inflected forms."
+    },
+    "sort_frequency": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether merged output rows are sorted by word frequency descending."
+    },
+    "combine_order": {
+      "type": "string",
+      "default": "alphabetical",
+      "description": "Order applied when combining source words in merged output (e.g. 'alphabetical', 'frequency')."
+    },
+    "prefer_lowercase": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether combined or merged tokens prefer lowercase normalization."
+    },
+    "apostrophe_chars": {
+      "type": "string",
+      "default": "'",
+      "description": "Characters treated as apostrophes during batch token boundary resolution. Must be a Unicode string."
+    }
+  },
+  "required": [
+    "deduplicate",
+    "deduplicate_by_lemma",
+    "sort_frequency",
+    "combine_order",
+    "prefer_lowercase",
+    "apostrophe_chars"
+  ],
+  "additionalProperties": false
+}

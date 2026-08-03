@@ -3,6 +3,7 @@ import itertools
 import pytest
 from typing import List, Tuple, Dict, Any
 import kardenwort_desk as desk
+from tests.schema_validator import validate_dataclass
 from kardenwort_desk import (
     RuntimeTokenConfig,
     BatchMergeConfig,
@@ -157,6 +158,7 @@ def test_runtime_token_config_matrix_resolution(params):
     assert cfg.prefer_lowercase == params["prefer_lowercase"]
     assert cfg.token_mappings_enabled == params["token_mappings_enabled"]
     assert cfg.combine_source_words_prefer_lowercase == params["prefer_lowercase"]
+    validate_dataclass(cfg)
 
 
 @pytest.mark.parametrize("params", generate_batch_merge_config_matrix())
@@ -180,6 +182,7 @@ def test_batch_merge_config_matrix_resolution(params):
     assert cfg.sort_frequency == params["sort_frequency"]
     assert cfg.prefer_lowercase == params["prefer_lowercase"]
     assert cfg.combine_source_words_prefer_lowercase == params["prefer_lowercase"]
+    validate_dataclass(cfg)
 
 
 @pytest.mark.parametrize("combine_flag", [True, False])
@@ -321,6 +324,7 @@ def test_de_gcs_config_matrix_resolution(params):
             assert "--de-gcs-skip-merge-fractions" in args
         if cfg.mask_unknown_parts:
             assert "--de-gcs-mask-unknown-parts" in args
+    validate_dataclass(cfg)
 
 
 @pytest.mark.parametrize("params", generate_execution_context_matrix())
@@ -400,6 +404,7 @@ def test_sentence_boundary_config_matrix_resolution(params):
         sbc.terminators = ".!?"
     with pytest.raises(AttributeError):
         sbc.words_before = 10
+    validate_dataclass(sbc)
 
 
 @pytest.mark.parametrize("params", generate_execution_context_matrix())
@@ -484,4 +489,5 @@ def test_sentences_mode_config_invariants():
         smc.enabled = False
     with pytest.raises(AttributeError):
         smc.deduplication_scope = "none"
-
+    validate_dataclass(smc)
+    validate_dataclass(empty_smc)

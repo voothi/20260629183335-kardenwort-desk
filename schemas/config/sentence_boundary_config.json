@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/config/sentence_boundary_config.json",
+  "title": "SentenceBoundaryConfig",
+  "description": "Schema contract for the SentenceBoundaryConfig frozen dataclass defining sentence boundary detection parameters.",
+  "type": "object",
+  "properties": {
+    "terminators": {
+      "type": "string",
+      "default": ".!?:",
+      "minLength": 1,
+      "description": "Characters recognized as sentence terminators (e.g. '.!?:'). Must be a non-empty Unicode string."
+    },
+    "punctuation_marks": {
+      "type": "string",
+      "default": ".,;:!?()\"[]{}—–",
+      "minLength": 1,
+      "description": "Characters treated as punctuation marks in sentence boundary analysis. Must be a non-empty Unicode string."
+    },
+    "abbrev_str": {
+      "type": "string",
+      "default": "",
+      "description": "Whitespace-separated abbreviation list (e.g. 'Dr. Mr. Prof.') used to suppress sentence splits on abbreviation boundaries."
+    },
+    "words_before": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of context words included before the target sentence boundary. Non-negative integer."
+    },
+    "words_after": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Number of context words included after the target sentence boundary. Non-negative integer."
+    },
+    "max_words": {
+      "type": "integer",
+      "minimum": 0,
+      "default": 0,
+      "description": "Maximum total context words allowed per boundary window (0 means unlimited). Non-negative integer."
+    },
+    "context_mode": {
+      "type": "string",
+      "enum": ["single", "both"],
+      "default": "single",
+      "description": "Sentence context expansion direction: 'single' (one-directional) or 'both' (bidirectional)."
+    }
+  },
+  "required": [
+    "terminators",
+    "punctuation_marks",
+    "abbrev_str",
+    "words_before",
+    "words_after",
+    "max_words",
+    "context_mode"
+  ],
+  "additionalProperties": false
+}

@@ -1,0 +1,54 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/config/runtime_token_config.json",
+  "title": "RuntimeTokenConfig",
+  "description": "Schema contract for the RuntimeTokenConfig frozen dataclass governing token processing runtime parameters.",
+  "type": "object",
+  "properties": {
+    "combine_source_words": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether to combine source words during token processing."
+    },
+    "combine_order": {
+      "type": "string",
+      "default": "alphabetical",
+      "description": "Order used when combining source words (e.g. 'alphabetical', 'frequency')."
+    },
+    "prefer_lowercase": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether combined or resolved tokens prefer lowercase normalization."
+    },
+    "filter_by_window": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether inflected forms are filtered against a sliding context window."
+    },
+    "apostrophe_chars": {
+      "type": "string",
+      "default": "'",
+      "description": "Characters treated as apostrophes during token boundary analysis. Must be a Unicode string, not OS-path-encoded."
+    },
+    "token_mappings_enabled": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether custom token mapping rules are applied during processing."
+    },
+    "lemmatize_mapped_tokens": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether tokens resolved via mapping rules undergo further lemmatization."
+    }
+  },
+  "required": [
+    "combine_source_words",
+    "combine_order",
+    "prefer_lowercase",
+    "filter_by_window",
+    "apostrophe_chars",
+    "token_mappings_enabled",
+    "lemmatize_mapped_tokens"
+  ],
+  "additionalProperties": false
+}

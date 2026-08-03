@@ -1,0 +1,59 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/config/sentences_mode_config.json",
+  "title": "SentencesModeConfig",
+  "description": "Schema contract for the SentencesModeConfig frozen dataclass governing multi-sentence processing mode parameters.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether multi-sentence processing mode is active."
+    },
+    "min_sentences": {
+      "type": "integer",
+      "minimum": 1,
+      "default": 2,
+      "description": "Minimum number of sentences required to activate multi-sentence alignment mode."
+    },
+    "alignment_method": {
+      "type": "string",
+      "enum": ["auto", "proportional", "sequential"],
+      "default": "auto",
+      "description": "Algorithm used to align source and target sentence sequences. Supported: 'auto', 'proportional', 'sequential'."
+    },
+    "spawn_order": {
+      "type": "string",
+      "enum": ["normal", "reversed"],
+      "default": "normal",
+      "description": "Order in which spawned sentence-level processing tasks are dispatched."
+    },
+    "parent_mode": {
+      "type": "string",
+      "enum": ["full", "summary"],
+      "default": "full",
+      "description": "How the parent sentence context is represented in multi-sentence output."
+    },
+    "multi_mode_decompose": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether multi-mode processing decomposes each sentence independently before combining results."
+    },
+    "deduplication_scope": {
+      "type": "string",
+      "enum": ["sentence", "global"],
+      "default": "sentence",
+      "description": "Scope at which deduplication is applied: 'sentence' (per-sentence local) or 'global' (cross-sentence combined)."
+    }
+  },
+  "required": [
+    "enabled",
+    "min_sentences",
+    "alignment_method",
+    "spawn_order",
+    "parent_mode",
+    "multi_mode_decompose",
+    "deduplication_scope"
+  ],
+  "additionalProperties": false
+}

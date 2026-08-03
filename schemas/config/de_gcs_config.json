@@ -1,0 +1,60 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/config/de_gcs_config.json",
+  "title": "DeGCSConfig",
+  "description": "Schema contract for the DeGCSConfig frozen dataclass governing German compound splitting (GCS) runtime parameters.",
+  "type": "object",
+  "properties": {
+    "enabled": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether German compound splitting is active during token processing."
+    },
+    "pos_tags": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Whitespace-separated POS tag identifiers restricting compound splitting eligibility. Null disables tag-based filtering."
+    },
+    "split_mode": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Split mode identifier controlling compound decomposition strategy (e.g. 'greedy', 'balanced'). Null uses library default."
+    },
+    "part_singularization": {
+      "type": ["string", "null"],
+      "default": null,
+      "description": "Singularization strategy applied to compound parts (e.g. 'all', 'none'). Null uses library default."
+    },
+    "preserve_compound_word": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether the original unsplit compound word is preserved alongside its decomposed parts."
+    },
+    "add_parts_to_wordlist": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether individual compound parts are added to the output vocabulary wordlist."
+    },
+    "skip_merge_fractions": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether fractional compound merge candidates are excluded from splitting."
+    },
+    "mask_unknown_parts": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether compound parts not resolvable in the dictionary are masked or suppressed."
+    }
+  },
+  "required": [
+    "enabled",
+    "pos_tags",
+    "split_mode",
+    "part_singularization",
+    "preserve_compound_word",
+    "add_parts_to_wordlist",
+    "skip_merge_fractions",
+    "mask_unknown_parts"
+  ],
+  "additionalProperties": false
+}
