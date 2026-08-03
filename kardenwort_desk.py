@@ -2178,19 +2178,19 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         if use_simplemma_correction:
             cmd.append("--use-simplemma-correction")
             
-        force_proper_noun_capitalization = config.getboolean('settings', 'force_proper_noun_capitalization', fallback=False)
+        force_proper_noun_capitalization = config.getboolean(SEC_SETTINGS, 'force_proper_noun_capitalization', fallback=False)
         if force_proper_noun_capitalization:
             cmd.append("--force-proper-noun-capitalization")
             
-        prefer_shortest_form = config.getboolean('settings', 'prefer_shortest_form', fallback=False)
+        prefer_shortest_form = config.getboolean(SEC_SETTINGS, 'prefer_shortest_form', fallback=False)
         if prefer_shortest_form:
             cmd.append("--prefer-shortest-form")
             
-        de_force_noun_capitalization = config.getboolean('settings', 'de_force_noun_capitalization', fallback=False)
+        de_force_noun_capitalization = config.getboolean(SEC_SETTINGS, 'de_force_noun_capitalization', fallback=False)
         if de_force_noun_capitalization:
             cmd.append("--de-force-noun-capitalization")
             
-        strip_garbage_characters = config.get('settings', 'strip_garbage_characters', fallback=None)
+        strip_garbage_characters = config.get(SEC_SETTINGS, 'strip_garbage_characters', fallback=None)
         if strip_garbage_characters is not None:
             cmd.extend(["--strip-garbage-characters", strip_garbage_characters])
         
@@ -2205,35 +2205,11 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             if de_fix_genitive:
                 cmd.append("--de-fix-genitive")
                 
-            de_gcs = config.getboolean(SEC_SETTINGS, 'de_gcs', fallback=False)
-            if de_gcs:
-                cmd.append("--de-gcs")
-                de_gcs_pos_tags = config.get(SEC_SETTINGS, 'de_gcs_pos_tags', fallback=None)
-                if de_gcs_pos_tags:
-                    cmd.append("--de-gcs-pos-tags")
-                    cmd.extend(de_gcs_pos_tags.strip().split())
-                de_gcs_split_mode = config.get(SEC_SETTINGS, 'de_gcs_split_mode', fallback=None)
-                if de_gcs_split_mode:
-                    cmd.extend(["--de-gcs-split-mode", de_gcs_split_mode.strip()])
-                de_gcs_part_singularization = config.get(SEC_SETTINGS, 'de_gcs_part_singularization', fallback=None)
-                if de_gcs_part_singularization:
-                    cmd.extend(["--de-gcs-part-singularization", de_gcs_part_singularization.strip()])
-                if config.getboolean(SEC_SETTINGS, 'de_gcs_preserve_compound_word', fallback=False):
-                    cmd.append("--de-gcs-preserve-compound-word")
-                if config.getboolean(SEC_SETTINGS, 'de_gcs_add_parts_to_wordlist', fallback=False):
-                    cmd.append("--de-gcs-add-parts-to-wordlist")
-                if config.getboolean(SEC_SETTINGS, 'de_gcs_skip_merge_fractions', fallback=False):
-                    cmd.append("--de-gcs-skip-merge-fractions")
-                if config.getboolean(SEC_SETTINGS, 'de_gcs_mask_unknown_parts', fallback=False):
-                    cmd.append("--de-gcs-mask-unknown-parts")
+            cmd.extend(DeGCSConfig.from_config(config).to_cli_args())
                 
         token_cfg = RuntimeTokenConfig.from_config(config)
-        combine_source_words = token_cfg.combine_source_words
-        sentences_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
-        if text_mode == 'multi' and sentences_enabled:
-            dedup_scope_cfg = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section(SEC_SENTENCES_MODE) else 'sentence'
-            if dedup_scope_cfg == 'sentence':
-                combine_source_words = False
+        exec_ctx = ExecutionContext.from_config(text_mode, config, token_cfg)
+        combine_source_words = exec_ctx.combine_source_words
 
         if combine_source_words:
             cmd.append("--combine-source-words")
