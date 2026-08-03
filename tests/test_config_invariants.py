@@ -6,6 +6,9 @@ import kardenwort_desk as desk
 from kardenwort_desk import (
     RuntimeTokenConfig,
     BatchMergeConfig,
+    DeGCSConfig,
+    OperationalMode,
+    ExecutionContext,
     DEFAULT_COMBINE_ORDER,
     DEFAULT_APOSTROPHE_CHARS,
 )
@@ -57,8 +60,38 @@ def generate_batch_merge_config_matrix() -> List[Dict[str, Any]]:
     return [dict(zip(flags, values)) for values in matrix]
 
 
+def generate_de_gcs_config_matrix() -> List[Dict[str, Any]]:
+    """
+    Generates deterministic test combinations specifically for DeGCSConfig boolean flags.
+    """
+    flags = [
+        "enabled",
+        "preserve_compound_word",
+        "add_parts_to_wordlist",
+        "skip_merge_fractions",
+        "mask_unknown_parts",
+    ]
+    matrix = list(itertools.product([True, False], repeat=len(flags)))
+    return [dict(zip(flags, values)) for values in matrix]
+
+
+def generate_execution_context_matrix() -> List[Dict[str, Any]]:
+    """
+    Generates deterministic test combinations specifically for ExecutionContext parameter resolution and invariants.
+    """
+    keys = ["text_mode", "sentences_enabled", "dedup_scope", "combine_source_words"]
+    values = [
+        ["single", "multi"],
+        [True, False],
+        ["sentence", "global", "none"],
+        [True, False],
+    ]
+    matrix = list(itertools.product(*values))
+    return [dict(zip(keys, item)) for item in matrix]
+
+
 def test_matrix_generator_dimensions():
-    """Verify that deterministic matrix generators produce exact expected 2^N permutations."""
+    """Verify that deterministic matrix generators produce exact expected permutations."""
     bool_matrix = generate_boolean_matrix()
     assert len(bool_matrix) == 2 ** len(BOOLEAN_FLAGS) == 32
     assert (True, True, True, True, True) in bool_matrix
@@ -69,6 +102,12 @@ def test_matrix_generator_dimensions():
 
     merge_matrix = generate_batch_merge_config_matrix()
     assert len(merge_matrix) == 16
+
+    gcs_matrix = generate_de_gcs_config_matrix()
+    assert len(gcs_matrix) == 32
+
+    exec_matrix = generate_execution_context_matrix()
+    assert len(exec_matrix) == 24
 
 
 @pytest.mark.parametrize("params", generate_runtime_token_config_matrix())
@@ -220,3 +259,73 @@ def test_batch_merge_deduplication_bounded_output_invariant(merge_params):
 
     assert len(grouped) <= total_input
     assert len(grouped) > 0
+
+
+@pytest.mark.parametrize("params", generate_de_gcs_config_matrix())
+def test_de_gcs_config_matrix_resolution(params):
+    """
+    Verify complete runtime resolution across combinations of boolean flags in DeGCSConfig
+    without unhandled exceptions, and confirm deterministic CLI argument generation.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section("settings")
+    cp.set("settings", "de_gcs", str(params["enabled"]))
+    cp.set("settings", "de_gcs_preserve_compound_word", str(params["preserve_compound_word"]))
+    cp.set("settings", "de_gcs_add_parts_to_wordlist", str(params["add_parts_to_wordlist"]))
+    cp.set("settings", "de_gcs_skip_merge_fractions", str(params["skip_merge_fractions"]))
+    cp.set("settings", "de_gcs_mask_unknown_parts", str(params["mask_unknown_parts"]))
+
+    cfg = DeGCSConfig.from_config(cp)
+    assert cfg.enabled == params["enabled"]
+    assert cfg.preserve_compound_word == params["preserve_compound_word"]
+    assert cfg.add_parts_to_wordlist == params["add_parts_to_wordlist"]
+    assert cfg.skip_merge_fractions == params["skip_merge_fractions"]
+    assert cfg.mask_unknown_parts == params["mask_unknown_parts"]
+
+    args = cfg.to_cli_args()
+    if not cfg.enabled:
+        assert args == []
+    else:
+        assert args[0] == "--de-gcs"
+        if cfg.preserve_compound_word:
+            assert "--de-gcs-preserve-compound-word" in args
+        if cfg.add_parts_to_wordlist:
+            assert "--de-gcs-add-parts-to-wordlist" in args
+        if cfg.skip_merge_fractions:
+            assert "--de-gcs-skip-merge-fractions" in args
+        if cfg.mask_unknown_parts:
+            assert "--de-gcs-mask-unknown-parts" in args
+
+
+@pytest.mark.parametrize("params", generate_execution_context_matrix())
+def test_execution_context_matrix_resolution(params):
+    """
+    Verify state transitions and invariant locks across all combinations of text_mode,
+    sentences_mode.enabled, and deduplication_scope in ExecutionContext without parsing errors.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section("settings")
+    cp.add_section("sentences_mode")
+
+    cp.set("settings", "combine_source_words", str(params["combine_source_words"]))
+    cp.set("sentences_mode", "enabled", str(params["sentences_enabled"]))
+    cp.set("sentences_mode", "deduplication_scope", params["dedup_scope"])
+
+    ctx = ExecutionContext.from_config(params["text_mode"], cp)
+
+    if params["text_mode"] == "multi" and params["sentences_enabled"]:
+        if params["dedup_scope"] == "sentence":
+            assert ctx.mode == OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
+            assert ctx.combine_source_words is False
+        else:
+            assert ctx.mode == OperationalMode.MULTI_GLOBAL_COMBINED
+            assert ctx.combine_source_words == params["combine_source_words"]
+    else:
+        assert ctx.mode == OperationalMode.MONOLITHIC_LIVE
+        assert ctx.combine_source_words == params["combine_source_words"]
+
+    # Assert immutability of resolved operational mode and invariant parameters
+    with pytest.raises(AttributeError):
+        ctx.mode = OperationalMode.MONOLITHIC_LIVE
+    with pytest.raises(AttributeError):
+        ctx.combine_source_words = not ctx.combine_source_words
