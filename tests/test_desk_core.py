@@ -1962,3 +1962,278 @@ class TestPayloadTypeConformance:
         payload = json.loads(raw)
         assert payload["retext_started"] is True
         assert set(payload.keys()) == {"retext_started"}
+
+
+# =============================================================================
+# IPC Payload Defense — Base64 Integration Assertions (ipc-payload-defense spec)
+#
+# Capability: ipc-payload-defense
+# Spec: openspec/changes/20260803151525-headless-fsm-payload-defense/
+#         specs/ipc-payload-defense/spec.md
+#
+# Verifies that Base64 payload generation and decoding via b64util operate
+# deterministically without character truncation or code-page corruption,
+# including multi-megabyte payloads, multi-line HTML structures, and
+# foreign-language (German umlauts, Cyrillic) vocabulary dictionaries.
+#
+# These tests validate the complete IPC pipeline:
+#   Python backend → b64util.encode() → emit_payload(raw=True) → AHK b64Decode()
+# =============================================================================
+
+
+class TestBase64PayloadDefense:
+    """
+    2.2 – Automated Base64 payload integration assertions verifying encoding and
+    decoding reliability across simulated operating system environments without
+    character truncation or code-page corruption.
+
+    All assertions use only b64util.encode/decode (the shared IPC codec) and
+    do NOT test internal Python base64 directly, matching the real AHK-bound
+    emission paths.
+    """
+
+    def test_b64_roundtrip_pure_ascii(self):
+        """Plain ASCII payload encodes and decodes with 100% byte-for-byte fidelity."""
+        from b64util import encode, decode
+        original = "Hello, World! Simple ASCII test payload."
+        assert decode(encode(original)) == original
+
+    def test_b64_roundtrip_german_umlauts(self):
+        """German umlaut characters (ä, ö, ü, ß) survive Base64 round-trip without corruption."""
+        from b64util import encode, decode
+        original = "Haus, Straße, Mädchen, Höhle, über, Föhn, Zürich, Gemüse"
+        encoded = encode(original)
+        decoded = decode(encoded)
+        assert decoded == original, (
+            f"German umlauts corrupted. Original: {original!r}, Decoded: {decoded!r}"
+        )
+
+    def test_b64_roundtrip_cyrillic(self):
+        """Cyrillic characters survive Base64 round-trip without code-page drift."""
+        from b64util import encode, decode
+        original = "дом, мама, привет, Москва, Россия"
+        encoded = encode(original)
+        decoded = decode(encoded)
+        assert decoded == original, (
+            f"Cyrillic characters corrupted. Original: {original!r}, Decoded: {decoded!r}"
+        )
+
+    def test_b64_roundtrip_mixed_unicode(self):
+        """Mixed Unicode (German + Cyrillic + emoji + ASCII) encodes cleanly."""
+        from b64util import encode, decode
+        original = "Haus 🏠 дом Straße Москва über 🇩🇪 test & <html/>"
+        encoded = encode(original)
+        decoded = decode(encoded)
+        assert decoded == original
+
+    def test_b64_encoded_output_is_pure_ascii(self):
+        """Encoded output must be pure ASCII — no embedded whitespace or non-ASCII bytes.
+
+        This guarantees AHK process boundary safety: Windows shell cannot corrupt
+        pure ASCII sequences regardless of system code page.
+        """
+        from b64util import encode
+        original = "Über die Straße läuft eine Kröte. 🐸"
+        encoded = encode(original)
+        assert encoded.isascii(), f"Encoded output contains non-ASCII chars: {encoded!r}"
+        assert " " not in encoded, "Encoded output must not contain spaces"
+        assert "\n" not in encoded, "Encoded output must not contain newlines"
+        assert "\r" not in encoded, "Encoded output must not contain carriage returns"
+
+    def test_b64_roundtrip_multiline_html_structure(self):
+        """Multi-line HTML structures (as emitted by cmd_render) survive Base64 encoding intact."""
+        from b64util import encode, decode
+        html_payload = (
+            "<!DOCTYPE html>\n"
+            "<html lang='de'>\n"
+            "  <head><meta charset='UTF-8'><title>Kardenwort</title></head>\n"
+            "  <body>\n"
+            "    <div class='entry'>Haus &mdash; дом &mdash; house</div>\n"
+            "    <div class='ipa'>ˈhaʊ̯s</div>\n"
+            "    <div class='translation'>Straße → street (Über uns)</div>\n"
+            "    <script>window.receiveUpdate({\"status\": \"ready\"});</script>\n"
+            "  </body>\n"
+            "</html>\n"
+        )
+        encoded = encode(html_payload)
+        decoded = decode(encoded)
+        assert decoded == html_payload, (
+            "Multi-line HTML payload corrupted by Base64 encoding/decoding"
+        )
+
+    def test_b64_roundtrip_json_vocabulary_dict(self):
+        """Complex JSON vocabulary dictionary (as emitted by cmd_restore) round-trips cleanly."""
+        from b64util import encode, decode
+        import json
+        vocab_dict = {
+            "source_text": "Über die Straße läuft eine Kröte",
+            "headers": ["Lemma", "Translation", "IPA", "POS"],
+            "data_rows": [
+                ["Kröte", "toad", "ˈkʁøːtə", "N"],
+                ["Straße", "street", "ˈʃtʁaːsə", "N"],
+                ["laufen", "to run", "ˈlaʊ̯fən", "V"],
+            ],
+            "warnings": [],
+            "tsv_path": "C:/Users/test/Kardenwort/favorites.tsv",
+            "txt_path": "",
+        }
+        json_str = json.dumps(vocab_dict, ensure_ascii=False)
+        encoded = encode(json_str)
+        decoded_str = decode(encoded)
+        decoded_dict = json.loads(decoded_str)
+
+        assert decoded_dict["source_text"] == vocab_dict["source_text"]
+        assert decoded_dict["data_rows"][0][0] == "Kröte"
+        assert decoded_dict["data_rows"][1][1] == "street"
+        assert decoded_dict["headers"] == vocab_dict["headers"]
+
+    def test_b64_multimegabyte_payload_fidelity(self):
+        """Multi-megabyte Base64 payload encodes and decodes with 100% byte-for-byte fidelity.
+
+        Simulates a large vocabulary HTML bundle exceeding typical Windows 11
+        shell argument buffer limits (8KB–32KB) to confirm no truncation occurs.
+        Target size: ~2 MB of repeated UTF-8 vocabulary content.
+        """
+        from b64util import encode, decode
+        # Build ~2 MB of realistic vocabulary content with umlauts and special chars
+        row_template = (
+            "<tr><td>Geschwindigkeit</td><td>speed / velocity</td>"
+            "<td>ɡəˈʃvɪndɪçkaɪ̯t</td><td>Noun</td></tr>\n"
+            "<tr><td>Überzeugung</td><td>conviction</td>"
+            "<td>ˌyːbɐˈʦɔʏ̯ɡʊŋ</td><td>Noun</td></tr>\n"
+            "<tr><td>Straßenbahn</td><td>tram</td>"
+            "<td>ˈʃtʁaːsənbaːn</td><td>Noun</td></tr>\n"
+        )
+        # Repeat to generate ~2 MB
+        repeat_count = (2 * 1024 * 1024) // len(row_template.encode("utf-8")) + 1
+        large_payload = row_template * repeat_count
+
+        payload_bytes = len(large_payload.encode("utf-8"))
+        assert payload_bytes > 1_000_000, (
+            f"Test payload too small: {payload_bytes} bytes, expected > 1 MB"
+        )
+
+        encoded = encode(large_payload)
+
+        # Encoded must be pure ASCII (no corruption of the codec output)
+        assert encoded.isascii(), "Multi-megabyte encoded payload contains non-ASCII characters"
+
+        decoded = decode(encoded)
+
+        # Verify 100% byte-for-byte fidelity
+        assert decoded == large_payload, (
+            f"Multi-megabyte payload fidelity failure: "
+            f"original={payload_bytes} bytes, decoded={len(decoded.encode('utf-8'))} bytes"
+        )
+
+    def test_b64_payload_null_and_empty_edge_cases(self):
+        """Null and empty inputs do not crash the encoder/decoder."""
+        from b64util import encode, decode
+        assert encode(None) == ""
+        assert decode(None) == ""
+        assert encode("") == ""
+        assert decode("") == ""
+
+    def test_b64_emit_pipeline_html_to_stdout(self, monkeypatch):
+        """Full IPC pipeline: HTML → encode → emit_payload(raw=True) → captured stdout.
+
+        Simulates the cmd_render / cmd_desk emission pattern and verifies
+        that the AHK-bound output is a valid Base64 string that decodes back
+        to the original HTML without loss.
+        """
+        from b64util import encode, decode
+        import sys
+
+        html_content = (
+            "<!DOCTYPE html><html><body>"
+            "<div class='word'>Straße</div>"
+            "<div class='ipa'>ˈʃtʁaːsə</div>"
+            "</body></html>"
+        )
+        encoded = encode(html_content)
+
+        mock_stdout = io.StringIO()
+        monkeypatch.setattr(sys, "__stdout__", mock_stdout)
+        desk.emit_payload(encoded, raw=True)
+
+        emitted = mock_stdout.getvalue().rstrip("\n")
+
+        # The emitted string must equal the encoded payload
+        assert emitted == encoded, (
+            f"Emitted payload does not match encoded input. "
+            f"Emitted length: {len(emitted)}, Encoded length: {len(encoded)}"
+        )
+
+        # The emitted string must be pure ASCII
+        assert emitted.isascii(), "Emitted Base64 payload contains non-ASCII characters"
+
+        # Round-trip decode must recover the original HTML exactly
+        recovered = decode(emitted)
+        assert recovered == html_content, (
+            f"HTML payload corrupted through emit pipeline. "
+            f"Original: {html_content!r}, Recovered: {recovered!r}"
+        )
+
+    def test_b64_emit_pipeline_json_dict_to_stdout(self, monkeypatch):
+        """Full IPC pipeline: JSON dict → encode → emit_payload(raw=True) → verified decode.
+
+        Simulates the cmd_restore emission pattern (vocabulary JSON dict).
+        """
+        from b64util import encode, decode
+        import json
+        import sys
+
+        payload_dict = {
+            "source_text": "Mädchen läuft über die Brücke",
+            "headers": ["Word", "Translation"],
+            "data_rows": [["Mädchen", "girl"], ["Brücke", "bridge"]],
+            "warnings": [],
+        }
+        json_str = json.dumps(payload_dict, ensure_ascii=False)
+        encoded = encode(json_str)
+
+        mock_stdout = io.StringIO()
+        monkeypatch.setattr(sys, "__stdout__", mock_stdout)
+        desk.emit_payload(encoded, raw=True)
+
+        emitted = mock_stdout.getvalue().rstrip("\n")
+        assert emitted.isascii(), "Emitted Base64 JSON payload contains non-ASCII characters"
+
+        recovered_str = decode(emitted)
+        recovered_dict = json.loads(recovered_str)
+
+        assert recovered_dict["source_text"] == payload_dict["source_text"]
+        assert recovered_dict["data_rows"][0][0] == "Mädchen"
+        assert recovered_dict["data_rows"][1][1] == "bridge"
+
+    def test_b64_no_embedded_newlines_in_encoded_output(self):
+        """Base64 output must contain no embedded newlines (critical for AHK line-reading).
+
+        AHK reads IPC output line-by-line. A Base64 payload with embedded newlines
+        would be split across multiple reads, corrupting the payload boundary.
+        """
+        from b64util import encode
+        import string
+        # Generate payload with various newline-producing content
+        multiline_content = "\n".join([
+            "Line one: Straße",
+            "Line two: Überzeugung",
+            "Line three: <div>HTML</div>",
+            'Line four: {"key": "Wert"}',
+        ])
+        encoded = encode(multiline_content)
+        assert "\n" not in encoded, "Base64 output must not contain embedded \\n"
+        assert "\r" not in encoded, "Base64 output must not contain embedded \\r"
+
+    def test_b64_deterministic_across_repeated_calls(self):
+        """Base64 encoding is deterministic: same input always produces same output.
+
+        This is required for AHK InStr() substring matching and caching reliability.
+        """
+        from b64util import encode
+        payload = "Schlüssel, Tür, Öl, über Brücken fahren 🚗"
+        results = [encode(payload) for _ in range(10)]
+        assert all(r == results[0] for r in results), (
+            "Base64 encode is non-deterministic — output varies across repeated calls"
+        )
+

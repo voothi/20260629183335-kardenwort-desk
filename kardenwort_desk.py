@@ -151,6 +151,28 @@ class RetextStartedPayload(TypedDict):
 
 
 def emit_payload(data, raw=False):
+    """Emit a structured payload to sys.__stdout__ for AHK or GoldenDict consumers.
+
+    IPC Payload Defense contract (ipc-payload-defense / ipc-hardening):
+      When raw=True and the consumer is the AutoHotkey front-end over a shell
+      process boundary, callers MUST Base64-encode complex payloads (multi-line
+      HTML, structured JSON dicts) via b64util.encode() before calling this
+      function. This eliminates Windows command-line buffer overflow risks and
+      code-page corruption for foreign-language content.
+
+      Compliant AHK-bound callers (must use encode() before raw=True):
+        - cmd_render  → emit_payload(encode(html), raw=True)
+        - cmd_desk    → emit_payload(encode(html), raw=True)
+        - cmd_restore → emit_payload(encode(response_str), raw=True)
+
+      Exempt paths (intentionally NOT Base64-encoded, per design non-goals):
+        - cmd_lookup  → plain text/HTML for GoldenDict (human-facing, not AHK)
+        - cmd_merge   → ANSI console text for human terminal output
+
+    Args:
+        data: dict (JSON-serialised, raw=False) or str (raw=True).
+        raw:  If True, emit data as-is; caller is responsible for encoding.
+    """
     out = sys.__stdout__
     if out is None:
         out = sys.stderr
