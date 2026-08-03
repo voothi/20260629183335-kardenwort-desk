@@ -1,0 +1,115 @@
+{
+  "$schema": "https://kardenwort.dev/schemas/fsm/v1",
+  "version": "1.0.0",
+  "domain": "backend_dispatch",
+  "description": "Declarative Table-Driven FSM specification for Kardenwort backend operational mode routing. Defines the complete dispatch table mapping (text_mode, sentences_enabled, dedup_scope) configuration domain states to named pipeline execution strategies. Authoritative source-of-truth for ModeDispatcher conformance and automated cross-platform code generation.",
+  "strategies": [
+    {
+      "id": "MONOLITHIC_LIVE",
+      "class": "MonolithicLiveStrategy",
+      "description": "Single-pass monolithic processing pipeline. Processes all words as one contiguous block with global deduplication. Used when sentences mode is disabled or text_mode is single.",
+      "dedup_scope": "global",
+      "combine_source_words": "PRESERVE_CONFIG"
+    },
+    {
+      "id": "MULTI_SENTENCE_LOCAL_DEDUP",
+      "class": "SentenceLocalDedupStrategy",
+      "description": "Multi-sentence pipeline with per-sentence local deduplication. Each sentence boundary creates an isolated deduplication scope. combine_source_words is always forced to false in this mode.",
+      "dedup_scope": "sentence",
+      "combine_source_words": "FORCE_FALSE"
+    },
+    {
+      "id": "MULTI_GLOBAL_COMBINED",
+      "class": "MultiGlobalCombinedStrategy",
+      "description": "Multi-sentence pipeline with global combined deduplication across all sentence boundaries. Deduplication operates on the merged word set. combine_source_words is preserved from config.",
+      "dedup_scope": "global",
+      "combine_source_words": "PRESERVE_CONFIG"
+    }
+  ],
+  "routing_table": [
+    {
+      "id": "R01",
+      "text_mode": "single",
+      "sentences_enabled": true,
+      "dedup_scope": "sentence",
+      "target_strategy": "MONOLITHIC_LIVE",
+      "description": "Single-mode always routes to MONOLITHIC_LIVE regardless of sentences configuration."
+    },
+    {
+      "id": "R02",
+      "text_mode": "single",
+      "sentences_enabled": true,
+      "dedup_scope": "global",
+      "target_strategy": "MONOLITHIC_LIVE",
+      "description": "Single-mode always routes to MONOLITHIC_LIVE regardless of sentences configuration."
+    },
+    {
+      "id": "R03",
+      "text_mode": "single",
+      "sentences_enabled": false,
+      "dedup_scope": "sentence",
+      "target_strategy": "MONOLITHIC_LIVE",
+      "description": "Single-mode always routes to MONOLITHIC_LIVE."
+    },
+    {
+      "id": "R04",
+      "text_mode": "single",
+      "sentences_enabled": false,
+      "dedup_scope": "global",
+      "target_strategy": "MONOLITHIC_LIVE",
+      "description": "Single-mode always routes to MONOLITHIC_LIVE."
+    },
+    {
+      "id": "R05",
+      "text_mode": "multi",
+      "sentences_enabled": false,
+      "dedup_scope": "sentence",
+      "target_strategy": "MONOLITHIC_LIVE",
+      "description": "Multi-mode with sentences disabled routes to MONOLITHIC_LIVE (fallback to single-pass)."
+    },
+    {
+      "id": "R06",
+      "text_mode": "multi",
+      "sentences_enabled": false,
+      "dedup_scope": "global",
+      "target_strategy": "MONOLITHIC_LIVE",
+      "description": "Multi-mode with sentences disabled routes to MONOLITHIC_LIVE (fallback to single-pass)."
+    },
+    {
+      "id": "R07",
+      "text_mode": "multi",
+      "sentences_enabled": true,
+      "dedup_scope": "sentence",
+      "target_strategy": "MULTI_SENTENCE_LOCAL_DEDUP",
+      "description": "Multi-mode with sentences enabled and sentence-local dedup scope routes to MULTI_SENTENCE_LOCAL_DEDUP."
+    },
+    {
+      "id": "R08",
+      "text_mode": "multi",
+      "sentences_enabled": true,
+      "dedup_scope": "global",
+      "target_strategy": "MULTI_GLOBAL_COMBINED",
+      "description": "Multi-mode with sentences enabled and global dedup scope routes to MULTI_GLOBAL_COMBINED."
+    }
+  ],
+  "routing_logic": {
+    "description": "Deterministic dispatch decision tree derived from routing_table above.",
+    "decision_tree": [
+      {
+        "step": 1,
+        "condition": "text_mode != 'multi' OR sentences_enabled == false",
+        "result": "MONOLITHIC_LIVE"
+      },
+      {
+        "step": 2,
+        "condition": "text_mode == 'multi' AND sentences_enabled == true AND dedup_scope == 'sentence'",
+        "result": "MULTI_SENTENCE_LOCAL_DEDUP"
+      },
+      {
+        "step": 3,
+        "condition": "text_mode == 'multi' AND sentences_enabled == true AND dedup_scope != 'sentence'",
+        "result": "MULTI_GLOBAL_COMBINED"
+      }
+    ]
+  }
+}

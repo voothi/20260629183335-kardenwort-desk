@@ -7,6 +7,8 @@ from kardenwort_desk import (
 )
 import configparser
 import itertools
+import json
+import pathlib
 import pytest
 from typing import List, Tuple, Dict, Any
 import kardenwort_desk as desk
@@ -498,3 +500,117 @@ def test_sentences_mode_config_invariants():
         smc.deduplication_scope = "none"
     validate_dataclass(smc)
     validate_dataclass(empty_smc)
+
+
+# ---------------------------------------------------------------------------
+# FSM Conformance: ModeDispatcher vs. backend_dispatch_table.json
+# ---------------------------------------------------------------------------
+
+_BACKEND_DISPATCH_TABLE_PATH = (
+    pathlib.Path(__file__).parent.parent / "schemas" / "fsm" / "backend_dispatch_table.json"
+)
+
+_STRATEGY_TO_MODE = {
+    "MONOLITHIC_LIVE": OperationalMode.MONOLITHIC_LIVE,
+    "MULTI_SENTENCE_LOCAL_DEDUP": OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP,
+    "MULTI_GLOBAL_COMBINED": OperationalMode.MULTI_GLOBAL_COMBINED,
+}
+
+_STRATEGY_CLASS_MAP = {
+    "MONOLITHIC_LIVE": MonolithicLiveStrategy,
+    "MULTI_SENTENCE_LOCAL_DEDUP": SentenceLocalDedupStrategy,
+    "MULTI_GLOBAL_COMBINED": MultiGlobalCombinedStrategy,
+}
+
+
+def _load_backend_dispatch_table() -> dict:
+    """Load and return the backend dispatch FSM table from schemas/fsm/."""
+    assert _BACKEND_DISPATCH_TABLE_PATH.exists(), (
+        f"backend_dispatch_table.json not found at {_BACKEND_DISPATCH_TABLE_PATH}"
+    )
+    with _BACKEND_DISPATCH_TABLE_PATH.open(encoding="utf-8") as fh:
+        return json.load(fh)
+
+
+def _build_dispatch_params_from_table() -> list:
+    """
+    Build pytest parametrize values from each row in backend_dispatch_table.json's routing_table.
+    Returns list of (row_id, text_mode, sentences_enabled, dedup_scope, expected_strategy_id).
+    """
+    table = _load_backend_dispatch_table()
+    params = []
+    for row in table["routing_table"]:
+        params.append(pytest.param(
+            row["id"],
+            row["text_mode"],
+            row["sentences_enabled"],
+            row["dedup_scope"],
+            row["target_strategy"],
+            id=row["id"],
+        ))
+    return params
+
+
+@pytest.mark.parametrize(
+    "row_id,text_mode,sentences_enabled,dedup_scope,expected_strategy_id",
+    _build_dispatch_params_from_table(),
+)
+def test_mode_dispatcher_conforms_to_fsm_table(
+    row_id, text_mode, sentences_enabled, dedup_scope, expected_strategy_id
+):
+    """
+    FSM conformance assertion: for each routing row in backend_dispatch_table.json,
+    verify that ModeDispatcher at runtime resolves to exactly the declared target strategy
+    across all (text_mode, sentences_enabled, dedup_scope) combinations.
+
+    This test is the automated conformance gate ensuring zero routing drift between
+    the declarative FSM specification and the runtime ModeDispatcher implementation.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_SENTENCES_MODE)
+    cp.set(SEC_SETTINGS, "combine_source_words", "True")
+    cp.set(SEC_SENTENCES_MODE, "enabled", str(sentences_enabled))
+    cp.set(SEC_SENTENCES_MODE, "deduplication_scope", dedup_scope)
+
+    ctx = ExecutionContext.from_config(text_mode, cp)
+    runtime_strategy = ModeDispatcher.get_strategy(ctx)
+
+    expected_mode = _STRATEGY_TO_MODE[expected_strategy_id]
+    expected_cls = _STRATEGY_CLASS_MAP[expected_strategy_id]
+
+    assert ctx.mode == expected_mode, (
+        f"[Row {row_id}] FSM table declares {expected_strategy_id} for "
+        f"(text_mode={text_mode!r}, sentences_enabled={sentences_enabled}, dedup_scope={dedup_scope!r}), "
+        f"but ExecutionContext resolved mode={ctx.mode!r}"
+    )
+    assert isinstance(runtime_strategy, expected_cls), (
+        f"[Row {row_id}] ModeDispatcher returned {type(runtime_strategy).__name__!r} "
+        f"but FSM table specifies {expected_cls.__name__!r} for "
+        f"(text_mode={text_mode!r}, sentences_enabled={sentences_enabled}, dedup_scope={dedup_scope!r})"
+    )
+
+
+def test_mode_dispatcher_fsm_table_covers_all_registered_modes():
+    """
+    Verify that every OperationalMode registered in ModeDispatcher._strategies has at
+    least one corresponding entry in backend_dispatch_table.json's routing_table,
+    ensuring the FSM specification does not omit any live operational strategy.
+    """
+    table = _load_backend_dispatch_table()
+    declared_strategy_ids = {s["id"] for s in table["strategies"]}
+    routing_targets = {r["target_strategy"] for r in table["routing_table"]}
+
+    # All strategies declared in the table must appear in routing rows
+    unused_strategies = declared_strategy_ids - routing_targets
+    assert not unused_strategies, (
+        f"Strategies declared in FSM table but not referenced in any routing row: {unused_strategies}"
+    )
+
+    # All modes registered in ModeDispatcher must map to a declared FSM strategy
+    registered_modes = set(ModeDispatcher._strategies.keys())
+    fsm_modes = {_STRATEGY_TO_MODE[sid] for sid in declared_strategy_ids}
+    unspecified_modes = registered_modes - fsm_modes
+    assert not unspecified_modes, (
+        f"OperationalModes registered in ModeDispatcher but absent from FSM table: {unspecified_modes}"
+    )

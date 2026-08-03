@@ -1,0 +1,177 @@
+{
+  "$schema": "https://kardenwort.dev/schemas/fsm/v1",
+  "version": "1.0.0",
+  "domain": "gui_lifecycle",
+  "description": "Declarative Table-Driven FSM specification for Kardenwort GUI window lifecycle transitions. Defines all macroscopic frontend states, triggering events, guard conditions, resulting state transitions, and IO side-effect mappings required for deterministic cross-platform porting to Go and Rust.",
+  "initial_state": "IDLE",
+  "states": [
+    {
+      "id": "IDLE",
+      "description": "Window is resting with no pending user modifications. All controls are fully enabled. Background workers are inactive."
+    },
+    {
+      "id": "DIRTY",
+      "description": "User has made unsaved modifications. UI lock indicators are active. Save / Export controls become the primary action path."
+    },
+    {
+      "id": "SAVING",
+      "description": "A save operation is actively in progress. Most user controls are disabled to prevent concurrent edits during write."
+    },
+    {
+      "id": "EXPORTING",
+      "description": "Export-to-Anki or batch-export operation is actively in progress. Controls are locked pending export pipeline completion."
+    },
+    {
+      "id": "REPROCESSING",
+      "description": "Background reprocessing worker (e.g., sentence-mode re-analysis) is running. The window remains visible but edit controls are locked."
+    }
+  ],
+  "events": [
+    { "id": "EV_DIRTY",          "description": "User edits text content, triggering the dirty flag." },
+    { "id": "EV_SAVE_CLICK",     "description": "User clicks the Save button." },
+    { "id": "EV_EXPORT_CLICK",   "description": "User clicks the Export / Send-to-Anki button." },
+    { "id": "EV_REPROCESS",      "description": "Background reprocess worker is spawned (e.g., after config change)." },
+    { "id": "EV_SAVE_COMPLETE",  "description": "Background save operation signals successful completion." },
+    { "id": "EV_SAVE_ERROR",     "description": "Background save operation signals failure." },
+    { "id": "EV_EXPORT_COMPLETE","description": "Export pipeline signals successful completion." },
+    { "id": "EV_EXPORT_ERROR",   "description": "Export pipeline signals failure." },
+    { "id": "EV_WORKER_DONE",    "description": "Background reprocessing worker exits cleanly." },
+    { "id": "EV_WORKER_ERROR",   "description": "Background reprocessing worker exits with error." }
+  ],
+  "guards": [
+    { "id": "GUARD_NONE",        "description": "No guard; transition is unconditional." },
+    { "id": "GUARD_HAS_CONTENT", "description": "Window content field is non-empty." }
+  ],
+  "transitions": [
+    {
+      "id": "T01",
+      "from_state": "IDLE",
+      "event": "EV_DIRTY",
+      "guard": "GUARD_NONE",
+      "to_state": "DIRTY",
+      "action": "SET_DIRTY_FLAG",
+      "io_side_effect": "ENABLE_SAVE_BUTTON",
+      "description": "User modifies content; window transitions from clean to dirty state."
+    },
+    {
+      "id": "T02",
+      "from_state": "DIRTY",
+      "event": "EV_DIRTY",
+      "guard": "GUARD_NONE",
+      "to_state": "DIRTY",
+      "action": "NOOP",
+      "io_side_effect": "NONE",
+      "description": "Subsequent edits while already dirty remain in DIRTY state (idempotent)."
+    },
+    {
+      "id": "T03",
+      "from_state": "DIRTY",
+      "event": "EV_SAVE_CLICK",
+      "guard": "GUARD_HAS_CONTENT",
+      "to_state": "SAVING",
+      "action": "CLEAR_DIRTY_FLAG",
+      "io_side_effect": "DISABLE_CONTROLS",
+      "description": "User initiates save from dirty state; controls are locked during write."
+    },
+    {
+      "id": "T04",
+      "from_state": "SAVING",
+      "event": "EV_SAVE_COMPLETE",
+      "guard": "GUARD_NONE",
+      "to_state": "IDLE",
+      "action": "NOOP",
+      "io_side_effect": "ENABLE_CONTROLS",
+      "description": "Save completes successfully; window returns to clean idle state."
+    },
+    {
+      "id": "T05",
+      "from_state": "SAVING",
+      "event": "EV_SAVE_ERROR",
+      "guard": "GUARD_NONE",
+      "to_state": "DIRTY",
+      "action": "SET_DIRTY_FLAG",
+      "io_side_effect": "ENABLE_CONTROLS_SHOW_ERROR",
+      "description": "Save fails; window reverts to dirty state so the user can retry."
+    },
+    {
+      "id": "T06",
+      "from_state": "IDLE",
+      "event": "EV_EXPORT_CLICK",
+      "guard": "GUARD_HAS_CONTENT",
+      "to_state": "EXPORTING",
+      "action": "NOOP",
+      "io_side_effect": "DISABLE_CONTROLS",
+      "description": "User initiates export from idle state; pipeline begins and controls lock."
+    },
+    {
+      "id": "T07",
+      "from_state": "DIRTY",
+      "event": "EV_EXPORT_CLICK",
+      "guard": "GUARD_HAS_CONTENT",
+      "to_state": "EXPORTING",
+      "action": "NOOP",
+      "io_side_effect": "DISABLE_CONTROLS",
+      "description": "User initiates export from dirty state; export proceeds without saving first."
+    },
+    {
+      "id": "T08",
+      "from_state": "EXPORTING",
+      "event": "EV_EXPORT_COMPLETE",
+      "guard": "GUARD_NONE",
+      "to_state": "IDLE",
+      "action": "NOOP",
+      "io_side_effect": "ENABLE_CONTROLS",
+      "description": "Export pipeline completes; window returns to idle."
+    },
+    {
+      "id": "T09",
+      "from_state": "EXPORTING",
+      "event": "EV_EXPORT_ERROR",
+      "guard": "GUARD_NONE",
+      "to_state": "IDLE",
+      "action": "NOOP",
+      "io_side_effect": "ENABLE_CONTROLS_SHOW_ERROR",
+      "description": "Export fails; window returns to idle and surfaces an error indicator."
+    },
+    {
+      "id": "T10",
+      "from_state": "IDLE",
+      "event": "EV_REPROCESS",
+      "guard": "GUARD_NONE",
+      "to_state": "REPROCESSING",
+      "action": "NOOP",
+      "io_side_effect": "DISABLE_EDIT_CONTROLS",
+      "description": "Background reprocessing worker is spawned while the window is idle."
+    },
+    {
+      "id": "T11",
+      "from_state": "DIRTY",
+      "event": "EV_REPROCESS",
+      "guard": "GUARD_NONE",
+      "to_state": "REPROCESSING",
+      "action": "NOOP",
+      "io_side_effect": "DISABLE_EDIT_CONTROLS",
+      "description": "Background reprocessing worker is spawned while dirty; dirty flag preserved."
+    },
+    {
+      "id": "T12",
+      "from_state": "REPROCESSING",
+      "event": "EV_WORKER_DONE",
+      "guard": "GUARD_NONE",
+      "to_state": "IDLE",
+      "action": "NOOP",
+      "io_side_effect": "ENABLE_CONTROLS",
+      "description": "Reprocessing worker finishes cleanly; window returns to idle."
+    },
+    {
+      "id": "T13",
+      "from_state": "REPROCESSING",
+      "event": "EV_WORKER_ERROR",
+      "guard": "GUARD_NONE",
+      "to_state": "IDLE",
+      "action": "NOOP",
+      "io_side_effect": "ENABLE_CONTROLS_SHOW_ERROR",
+      "description": "Reprocessing worker exits with error; window returns to idle and shows error."
+    }
+  ]
+}
