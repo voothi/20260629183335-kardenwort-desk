@@ -510,6 +510,79 @@ class ExecutionContext:
         )
 
 
+@dataclass(frozen=True)
+class OperationalWorkflowResult:
+    mode: OperationalMode
+    dedup_scope: str
+    combine_source_words: bool
+
+
+class PipelineStrategy:
+    mode: OperationalMode
+
+    def execute(self, exec_ctx: ExecutionContext, *args: Any, **kwargs: Any) -> OperationalWorkflowResult:
+        raise NotImplementedError
+
+
+class MonolithicLiveStrategy(PipelineStrategy):
+    mode = OperationalMode.MONOLITHIC_LIVE
+
+    def execute(self, exec_ctx: ExecutionContext, *args: Any, **kwargs: Any) -> OperationalWorkflowResult:
+        return OperationalWorkflowResult(
+            mode=self.mode,
+            dedup_scope="global",
+            combine_source_words=exec_ctx.combine_source_words,
+        )
+
+
+class SentenceLocalDedupStrategy(PipelineStrategy):
+    mode = OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
+
+    def execute(self, exec_ctx: ExecutionContext, *args: Any, **kwargs: Any) -> OperationalWorkflowResult:
+        return OperationalWorkflowResult(
+            mode=self.mode,
+            dedup_scope="sentence",
+            combine_source_words=False,
+        )
+
+
+class MultiGlobalCombinedStrategy(PipelineStrategy):
+    mode = OperationalMode.MULTI_GLOBAL_COMBINED
+
+    def execute(self, exec_ctx: ExecutionContext, *args: Any, **kwargs: Any) -> OperationalWorkflowResult:
+        return OperationalWorkflowResult(
+            mode=self.mode,
+            dedup_scope="global",
+            combine_source_words=exec_ctx.combine_source_words,
+        )
+
+
+class ModeDispatcher:
+    _strategies = {
+        OperationalMode.MONOLITHIC_LIVE: MonolithicLiveStrategy(),
+        OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP: SentenceLocalDedupStrategy(),
+        OperationalMode.MULTI_GLOBAL_COMBINED: MultiGlobalCombinedStrategy(),
+    }
+
+    @classmethod
+    def get_strategy(cls, mode_or_ctx: Union[OperationalMode, ExecutionContext]) -> PipelineStrategy:
+        if isinstance(mode_or_ctx, ExecutionContext):
+            mode = mode_or_ctx.mode
+        elif isinstance(mode_or_ctx, OperationalMode):
+            mode = mode_or_ctx
+        else:
+            raise TypeError("ModeDispatcher requires OperationalMode or ExecutionContext")
+        strategy = cls._strategies.get(mode)
+        if strategy is None:
+            raise ValueError(f"No pipeline strategy registered for operational mode: {mode}")
+        return strategy
+
+    @classmethod
+    def dispatch(cls, exec_ctx: ExecutionContext, *args: Any, **kwargs: Any) -> OperationalWorkflowResult:
+        strategy = cls.get_strategy(exec_ctx)
+        return strategy.execute(exec_ctx, *args, **kwargs)
+
+
 class ConfigError(Exception):
     pass
 
@@ -2193,13 +2266,11 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     
     try:
         sbc = SentenceBoundaryConfig.from_config(config)
-        sentences_mode_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
-        min_sentences = config.getint(SEC_SENTENCES_MODE, 'min_sentences', fallback=2) if config.has_section(SEC_SENTENCES_MODE) else 2
-        dedup_scope_cfg = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence') if config.has_section(SEC_SENTENCES_MODE) else 'sentence'
-
-        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
-        is_sentences_mode_run = sentences_mode_enabled and len(sentences) >= min_sentences
-        dedup_scope = dedup_scope_cfg if is_sentences_mode_run else "global"
+        token_cfg = RuntimeTokenConfig.from_config(config)
+        exec_ctx = ExecutionContext.from_config(eff_mode, config, token_cfg)
+        workflow_res = ModeDispatcher.dispatch(exec_ctx)
+        dedup_scope = workflow_res.dedup_scope
+        combine_source_words = workflow_res.combine_source_words
 
         use_temp = (eff_mode == 'single') or (not save_source_text)
         if use_temp:
@@ -2266,9 +2337,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 
             cmd.extend(DeGCSConfig.from_config(config).to_cli_args())
                 
-        token_cfg = RuntimeTokenConfig.from_config(config)
-        exec_ctx = ExecutionContext.from_config(text_mode, config, token_cfg)
-        combine_source_words = exec_ctx.combine_source_words
+        # token_cfg, exec_ctx, and combine_source_words are resolved via ModeDispatcher above
 
         if combine_source_words:
             cmd.append("--combine-source-words")
