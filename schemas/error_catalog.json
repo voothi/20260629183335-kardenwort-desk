@@ -1,0 +1,107 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "schemas/error_catalog.json",
+  "title": "KardenwortErrorCatalog",
+  "description": "Authoritative, language-agnostic catalog of all permitted structured diagnostic error code identifiers emitted by the Kardenwort-Desk Python backend via print_structured_error. This catalog serves as the canonical enumeration reference for runtime validation, automated testing, and cross-language compilation into Go constants and Rust pattern-matching error enums.",
+  "type": "object",
+  "properties": {
+    "version": {
+      "type": "string",
+      "description": "Semantic version of the error catalog schema."
+    },
+    "error_codes": {
+      "type": "array",
+      "description": "Closed set of all permitted diagnostic error code identifiers.",
+      "items": {
+        "$ref": "#/$defs/ErrorCodeEntry"
+      },
+      "minItems": 1
+    }
+  },
+  "required": ["version", "error_codes"],
+  "additionalProperties": false,
+  "$defs": {
+    "ErrorCodeEntry": {
+      "title": "ErrorCodeEntry",
+      "type": "object",
+      "properties": {
+        "code": {
+          "type": "string",
+          "description": "Canonical error code identifier string. Must match the Python ErrorCode enum member name exactly."
+        },
+        "category": {
+          "type": "string",
+          "enum": ["system", "process", "configuration", "runtime", "input"],
+          "description": "Broad classification of the error class."
+        },
+        "description": {
+          "type": "string",
+          "description": "Human-readable description of when this error code is emitted."
+        },
+        "resolution": {
+          "type": "string",
+          "description": "Recommended resolution or diagnostic guidance for clients."
+        }
+      },
+      "required": ["code", "category", "description", "resolution"],
+      "additionalProperties": false
+    }
+  },
+  "version": "1.0.0",
+  "error_codes": [
+    {
+      "code": "UNHANDLED_EXCEPTION",
+      "category": "system",
+      "description": "An unexpected, unhandled Python exception escaped the top-level exception handler. Emitted by the global excepthook.",
+      "resolution": "Inspect the 'details' field for the full Python traceback. Report to the development team if reproducible."
+    },
+    {
+      "code": "INTERRUPTED",
+      "category": "system",
+      "description": "The process received a KeyboardInterrupt signal (SIGINT). The process is terminating cleanly.",
+      "resolution": "No action required if intentional. If unexpected, verify that no external process sent SIGINT unexpectedly."
+    },
+    {
+      "code": "TIMEOUT",
+      "category": "process",
+      "description": "An external subprocess (e.g. kardenwort.py) exceeded its configured time limit and was forcibly terminated.",
+      "resolution": "Increase the timeout configuration value in config.ini or investigate the subprocess for performance regressions."
+    },
+    {
+      "code": "DESK_FAILED",
+      "category": "runtime",
+      "description": "A Kardenwort-Desk internal operation failed. Covers TSV loading failures, render errors, column-not-found conditions, and other internal runtime faults.",
+      "resolution": "Inspect the 'message' field for specific failure context. Verify input files and configuration are intact."
+    },
+    {
+      "code": "KARDENWORT_FAILED",
+      "category": "process",
+      "description": "The external kardenwort.py subprocess exited with a non-zero return code indicating processing failure.",
+      "resolution": "Inspect the 'details.stderr' field for kardenwort.py error output. Verify the input text and language configuration."
+    },
+    {
+      "code": "UNRAISABLE_EXCEPTION",
+      "category": "system",
+      "description": "A Python unraisable exception occurred (e.g. in a __del__ destructor or background finalizer). Emitted via sys.unraisablehook.",
+      "resolution": "Inspect the 'details' traceback. These are typically non-fatal but may indicate resource cleanup issues."
+    },
+    {
+      "code": "DEPENDENCY_MISSING",
+      "category": "configuration",
+      "description": "A required external dependency (library, binary, or resource file) could not be located or loaded.",
+      "resolution": "Verify that all required dependencies are installed and accessible in the configured paths."
+    },
+    {
+      "code": "INVALID_STATE",
+      "category": "runtime",
+      "description": "The application reached an internally inconsistent state that prevents continuing the requested operation.",
+      "resolution": "Check configuration consistency and restart the process. If persistent, report with reproduction steps."
+    },
+    {
+      "code": "CONFIGURATION_ERROR",
+      "category": "configuration",
+      "description": "A configuration file is missing, malformed, or contains invalid values that prevent the operation from proceeding.",
+      "resolution": "Validate config.ini and related configuration files against documented schemas. Correct identified issues and retry."
+    }
+  ]
+}

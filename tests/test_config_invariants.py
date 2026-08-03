@@ -3,7 +3,8 @@ from kardenwort_desk import (
     SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
     SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
     SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
-    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL,
+    ErrorCode, _VALID_ERROR_CODES,
 )
 import configparser
 import itertools
@@ -614,3 +615,121 @@ def test_mode_dispatcher_fsm_table_covers_all_registered_modes():
     assert not unspecified_modes, (
         f"OperationalModes registered in ModeDispatcher but absent from FSM table: {unspecified_modes}"
     )
+
+
+# ---------------------------------------------------------------------------
+# 4. Shared Error Catalog Synchronization Invariants
+# ---------------------------------------------------------------------------
+
+def _load_error_catalog() -> dict:
+    """Load schemas/error_catalog.json relative to the project root."""
+    project_root = pathlib.Path(__file__).parent.parent
+    catalog_path = project_root / "schemas" / "error_catalog.json"
+    assert catalog_path.exists(), (
+        f"schemas/error_catalog.json not found at {catalog_path}. "
+        "The file must be present as the authoritative error code reference."
+    )
+    with open(catalog_path, "r", encoding="utf-8") as f:
+        return json.load(f)
+
+
+class TestErrorCatalogSynchronization:
+    """
+    4.1 – Automated synchronization gate: programmatically confirms 1-to-1 parity
+    between the runtime Python ErrorCode enumeration in kardenwort_desk.py and
+    the authoritative schemas/error_catalog.json catalog.
+
+    These tests are the build-time enforcement mechanism preventing catalog drift
+    between the Python enum definition and the language-agnostic JSON schema.
+    """
+
+    def test_error_catalog_file_is_loadable(self):
+        """schemas/error_catalog.json must be valid JSON and contain the expected top-level structure."""
+        catalog = _load_error_catalog()
+        assert "version" in catalog, "Error catalog must have a 'version' field."
+        assert "error_codes" in catalog, "Error catalog must have an 'error_codes' array."
+        assert isinstance(catalog["error_codes"], list), "'error_codes' must be a JSON array."
+        assert len(catalog["error_codes"]) > 0, "Error catalog must define at least one error code."
+
+    def test_error_catalog_entries_have_required_fields(self):
+        """Every entry in schemas/error_catalog.json must contain 'code', 'category', 'description', and 'resolution'."""
+        catalog = _load_error_catalog()
+        for entry in catalog["error_codes"]:
+            code = entry.get("code", "<missing>")
+            for required_field in ("code", "category", "description", "resolution"):
+                assert required_field in entry, (
+                    f"Error catalog entry {code!r} is missing required field {required_field!r}."
+                )
+
+    def test_python_enum_members_match_catalog_codes_exactly(self):
+        """
+        Every ErrorCode enum member in kardenwort_desk.py must have a corresponding
+        entry in schemas/error_catalog.json, with matching code identifiers.
+
+        Fails if: Python enum defines a code not documented in the catalog.
+        """
+        catalog = _load_error_catalog()
+        catalog_codes = {entry["code"] for entry in catalog["error_codes"]}
+        python_codes = {member.value for member in ErrorCode}
+
+        undocumented = python_codes - catalog_codes
+        assert not undocumented, (
+            f"ErrorCode enum members are defined in kardenwort_desk.py but absent from "
+            f"schemas/error_catalog.json: {sorted(undocumented)}. "
+            "Add the missing codes to the catalog to restore synchronization."
+        )
+
+    def test_catalog_codes_match_python_enum_members_exactly(self):
+        """
+        Every error code in schemas/error_catalog.json must have a corresponding
+        member in the Python ErrorCode enum in kardenwort_desk.py.
+
+        Fails if: Catalog documents a code that has no Python enum member.
+        """
+        catalog = _load_error_catalog()
+        catalog_codes = {entry["code"] for entry in catalog["error_codes"]}
+        python_codes = {member.value for member in ErrorCode}
+
+        orphaned = catalog_codes - python_codes
+        assert not orphaned, (
+            f"schemas/error_catalog.json documents error codes with no corresponding "
+            f"Python ErrorCode enum member: {sorted(orphaned)}. "
+            "Add the missing members to the ErrorCode enum or remove them from the catalog."
+        )
+
+    def test_valid_error_codes_frozenset_matches_enum(self):
+        """
+        The runtime _VALID_ERROR_CODES frozenset must contain exactly the same
+        identifiers as the ErrorCode enum members. This validates the O(1) membership
+        check helper used by print_structured_error is not stale.
+        """
+        python_codes = {member.value for member in ErrorCode}
+        assert _VALID_ERROR_CODES == frozenset(python_codes), (
+            f"_VALID_ERROR_CODES frozenset diverged from ErrorCode enum members. "
+            f"Frozenset: {sorted(_VALID_ERROR_CODES)}, Enum: {sorted(python_codes)}"
+        )
+
+    def test_error_catalog_has_no_duplicate_codes(self):
+        """schemas/error_catalog.json must not define duplicate code identifiers."""
+        catalog = _load_error_catalog()
+        codes = [entry["code"] for entry in catalog["error_codes"]]
+        seen: set = set()
+        duplicates = set()
+        for code in codes:
+            if code in seen:
+                duplicates.add(code)
+            seen.add(code)
+        assert not duplicates, (
+            f"schemas/error_catalog.json contains duplicate error code entries: {sorted(duplicates)}"
+        )
+
+    def test_error_code_enum_serializes_as_plain_string(self):
+        """
+        ErrorCode members (str, Enum) must serialize via json.dumps() as plain string values,
+        not as enumeration objects, ensuring backward compatibility with all IPC consumers.
+        """
+        for member in ErrorCode:
+            serialized = json.dumps(member.value)
+            assert serialized == f'"{member.value}"', (
+                f"ErrorCode.{member.name} did not serialize as a plain JSON string: {serialized!r}"
+            )

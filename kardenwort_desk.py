@@ -17,7 +17,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass
-from typing import Optional, Any, Union, List, FrozenSet
+from typing import Optional, Any, Union, List, FrozenSet, TypedDict
 from enum import Enum, auto
 
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
@@ -32,6 +32,108 @@ if sys.__stdout__ is not None and hasattr(sys.__stdout__, 'reconfigure'):
 
 if sys.stderr is not None and hasattr(sys.stderr, 'reconfigure'):
     sys.stderr.reconfigure(encoding='utf-8')
+
+
+class ErrorCode(str, Enum):
+    """
+    Authoritative enumeration of all permitted structured diagnostic error code
+    identifiers for Kardenwort-Desk. Corresponds 1-to-1 with schemas/error_catalog.json.
+
+    Inherits from str so that json.dumps() serializes members as plain strings
+    without requiring a custom JSON encoder, preserving backward compatibility
+    with historical IPC consumers and AutoHotkey substring matchers.
+    """
+    UNHANDLED_EXCEPTION = "UNHANDLED_EXCEPTION"
+    INTERRUPTED = "INTERRUPTED"
+    TIMEOUT = "TIMEOUT"
+    DESK_FAILED = "DESK_FAILED"
+    KARDENWORT_FAILED = "KARDENWORT_FAILED"
+    UNRAISABLE_EXCEPTION = "UNRAISABLE_EXCEPTION"
+    DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
+    INVALID_STATE = "INVALID_STATE"
+    CONFIGURATION_ERROR = "CONFIGURATION_ERROR"
+
+
+# Frozen set of all valid catalog codes for O(1) membership checks.
+_VALID_ERROR_CODES: FrozenSet[str] = frozenset(member.value for member in ErrorCode)
+
+
+# ---------------------------------------------------------------------------
+# Static Typed Payload Models (TypedDict)
+# ---------------------------------------------------------------------------
+# These models specify the exact field identifiers, primitive types, and
+# optional attributes for all structured dictionaries emitted by emit_payload
+# across operational command handlers.
+#
+# Non-Goals:
+#   - Runtime validation (TypedDict is a static-analysis contract only).
+#   - Altering existing JSON serialization format or field ordering.
+#
+# Cross-Language Note:
+#   These models serve as authoritative struct blueprints for AI agent
+#   compilation into Go struct serialization tags and Rust serde structures
+#   during upcoming platform migrations.
+# ---------------------------------------------------------------------------
+
+
+class ExportSkippedPayload(TypedDict):
+    """
+    Emitted by execute_export when no rows qualify for export based on the
+    configured selection mode, or when none of the selected indices are valid.
+
+    cmd_export / execute_export → emit_payload({"status": "skipped", ...})
+    """
+    status: str          # Always "skipped"
+    message: str         # Human-readable warning message for the UI
+
+
+class ExportImportStartedPayload(TypedDict):
+    """
+    Emitted by execute_export when a detached Anki import process is
+    successfully launched in the background (detach_import_on_send=True).
+
+    cmd_export / execute_export → emit_payload({"import_started": True, ...})
+    """
+    import_started: bool  # Always True
+    show_window: bool     # Whether the Anki import window should be shown
+    pid: int              # PID of the detached import subprocess
+    log: str              # Absolute path to the detached import log file
+    tsv: str              # Absolute path to the exported TSV/favorites file
+    note: str             # Advisory message for the UI (e.g. "safe to close")
+
+
+class ExportImportCompletePayload(TypedDict):
+    """
+    Emitted by execute_export when a synchronous Anki import completes
+    successfully, or when a favorites file is saved without sending to Anki.
+
+    cmd_export / execute_export → emit_payload({"import_complete": True, ...})
+    """
+    import_complete: bool  # Always True
+    show_window: bool      # Whether the Anki import window should be shown
+    output: str            # Import result message or success path description
+
+
+class ExportSuccessPayload(TypedDict):
+    """
+    Emitted by execute_export when send_to_anki=False and save_to_favorites=False
+    — indicating the export was prepared for Anki but no favorites file was created.
+
+    cmd_export / execute_export → emit_payload({"status": "success", ...})
+    """
+    status: str   # Always "success"
+    message: str  # Human-readable success description
+
+
+class EditSaveSuccessPayload(TypedDict):
+    """
+    Emitted by cmd_edit_save upon successfully applying all deltas and
+    persisting the updated working TSV file.
+
+    cmd_edit_save → emit_payload({"status": "success"})
+    """
+    status: str  # Always "success"
+
 
 def emit_payload(data, raw=False):
     out = sys.__stdout__
@@ -55,6 +157,17 @@ def emit_payload(data, raw=False):
                 pass
 
 def print_structured_error(error_code, message, details=None):
+    # Validate that the error_code belongs to the shared error catalog.
+    # Unknown codes are emitted with a warning prefix to prevent silent leakage
+    # of arbitrary or misspelled error tokens across the IPC boundary while
+    # preserving process stability (no hard crash in error-reporting paths).
+    if error_code not in _VALID_ERROR_CODES:
+        import warnings
+        warnings.warn(
+            f"print_structured_error: unrecognized error code {error_code!r} is not "
+            f"in the shared error catalog. Permitted codes: {sorted(_VALID_ERROR_CODES)}",
+            stacklevel=2,
+        )
     error_payload = {
         "error_code": error_code,
         "message": message,
@@ -6206,7 +6319,11 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
     if not actual_export_rows:
         logger.warning("No rows to export based on selection mode.")
         if is_from_ui:
-            emit_payload({"status": "skipped", "message": "Warning: No rows to export based on selection mode. Export skipped."})
+            skipped_payload: ExportSkippedPayload = {
+                "status": "skipped",
+                "message": "Warning: No rows to export based on selection mode. Export skipped.",
+            }
+            emit_payload(skipped_payload)
         return
         
     exported_rows = []
@@ -6218,7 +6335,11 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
 
     if not exported_rows:
         if is_from_ui:
-            emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
+            skipped_payload: ExportSkippedPayload = {
+                "status": "skipped",
+                "message": "Warning: None of the selected row indices were valid.",
+            }
+            emit_payload(skipped_payload)
         return
 
     # Resolve the selected column name from mapping config.
@@ -6297,20 +6418,25 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                 show_window = False
                 pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
                 if is_from_ui:
-                    response = {
+                    response: ExportImportStartedPayload = {
                         "import_started": True,
                         "show_window": show_window,
                         "pid": pid,
                         "log": log_path,
                         "tsv": str(import_path),
-                        "note": "safe to close the window"
+                        "note": "safe to close the window",
                     }
                     emit_payload(response)
             else:
                 success, output = run_synchronous_import(import_path, config, resolved_paths)
                 if is_from_ui:
                     if success:
-                        emit_payload({"import_complete": True, "show_window": show_window, "output": output})
+                        import_complete_payload: ExportImportCompletePayload = {
+                            "import_complete": True,
+                            "show_window": show_window,
+                            "output": output,
+                        }
+                        emit_payload(import_complete_payload)
                     else:
                         print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
                         sys.exit(1)
@@ -6321,10 +6447,19 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
             if save_to_favorites:
                 show_window = config.getboolean(SEC_SETTINGS, 'show_import_window', fallback=False)
                 if is_from_ui:
-                    emit_payload({"import_complete": True, "show_window": show_window, "output": f"SUCCESS: Exported to {import_path}"})
+                    import_complete_payload: ExportImportCompletePayload = {
+                        "import_complete": True,
+                        "show_window": show_window,
+                        "output": f"SUCCESS: Exported to {import_path}",
+                    }
+                    emit_payload(import_complete_payload)
             else:
                 if is_from_ui:
-                    emit_payload({"status": "success", "message": "SUCCESS: Ready for Anki (no favorites file created)"})
+                    success_payload: ExportSuccessPayload = {
+                        "status": "success",
+                        "message": "SUCCESS: Ready for Anki (no favorites file created)",
+                    }
+                    emit_payload(success_payload)
     except Exception as e:
         if is_from_ui:
             print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
@@ -7487,7 +7622,8 @@ def cmd_edit_save(args):
             data_rows = [r for r in data_rows if r is not None]
             
             save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-        emit_payload({"status": "success"})
+        edit_save_payload: EditSaveSuccessPayload = {"status": "success"}
+        emit_payload(edit_save_payload)
     except SystemExit:
         raise
     except Exception as e:

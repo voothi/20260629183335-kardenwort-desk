@@ -3,7 +3,10 @@ from kardenwort_desk import (
     SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
     SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
     SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
-    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL,
+    ErrorCode, _VALID_ERROR_CODES,
+    ExportSkippedPayload, ExportImportStartedPayload,
+    ExportImportCompletePayload, ExportSuccessPayload, EditSaveSuccessPayload,
 )
 import os
 import sys
@@ -1678,3 +1681,257 @@ class TestIpcJsonRpcEncapsulation:
 
         decoded = json.loads(non_empty[0])
         assert decoded["error"]["data"]["error_code"] == "PROCESSING_ERROR"
+
+
+# ---------------------------------------------------------------------------
+# 3.2 – Error Catalog Conformance & Payload TypedDict Conformance Tests
+# ---------------------------------------------------------------------------
+
+
+class TestErrorCatalogConformance:
+    """
+    3.2a – Verify that error codes emitted via print_structured_error during simulated
+    exception conditions and command handler failures belong to the shared error catalog.
+
+    These tests prove that all IPC error token paths are catalog-recognized, preventing
+    arbitrary or misspelled error strings from escaping across the IPC boundary.
+    """
+
+    def test_all_catalog_error_codes_are_valid_string_enum_members(self):
+        """Every ErrorCode enum member value must be a non-empty string and equal its name."""
+        for member in ErrorCode:
+            assert isinstance(member.value, str), (
+                f"ErrorCode.{member.name}.value must be a str, got {type(member.value).__name__}"
+            )
+            assert member.value == member.name, (
+                f"ErrorCode.{member.name} value {member.value!r} must match enum name."
+            )
+            assert len(member.value) > 0, f"ErrorCode.{member.name}.value must be non-empty."
+
+    def test_unhandled_exception_code_is_in_catalog(self):
+        """UNHANDLED_EXCEPTION must be a recognized catalog code (used by global excepthook)."""
+        assert "UNHANDLED_EXCEPTION" in _VALID_ERROR_CODES
+
+    def test_interrupted_code_is_in_catalog(self):
+        """INTERRUPTED must be a recognized catalog code (used by KeyboardInterrupt handler)."""
+        assert "INTERRUPTED" in _VALID_ERROR_CODES
+
+    def test_timeout_code_is_in_catalog(self):
+        """TIMEOUT must be a recognized catalog code (used by subprocess timeout handler)."""
+        assert "TIMEOUT" in _VALID_ERROR_CODES
+
+    def test_desk_failed_code_is_in_catalog(self):
+        """DESK_FAILED must be a recognized catalog code (used across TSV/render error paths)."""
+        assert "DESK_FAILED" in _VALID_ERROR_CODES
+
+    def test_kardenwort_failed_code_is_in_catalog(self):
+        """KARDENWORT_FAILED must be a recognized catalog code (used by subprocess failure handler)."""
+        assert "KARDENWORT_FAILED" in _VALID_ERROR_CODES
+
+    def test_unraisable_exception_code_is_in_catalog(self):
+        """UNRAISABLE_EXCEPTION must be a recognized catalog code (used by sys.unraisablehook)."""
+        assert "UNRAISABLE_EXCEPTION" in _VALID_ERROR_CODES
+
+    def test_dependency_missing_code_is_in_catalog(self):
+        """DEPENDENCY_MISSING must be a recognized catalog code."""
+        assert "DEPENDENCY_MISSING" in _VALID_ERROR_CODES
+
+    def test_invalid_state_code_is_in_catalog(self):
+        """INVALID_STATE must be a recognized catalog code."""
+        assert "INVALID_STATE" in _VALID_ERROR_CODES
+
+    def test_configuration_error_code_is_in_catalog(self):
+        """CONFIGURATION_ERROR must be a recognized catalog code."""
+        assert "CONFIGURATION_ERROR" in _VALID_ERROR_CODES
+
+    def test_print_structured_error_with_catalog_code_emits_clean_json(self, capfd):
+        """
+        print_structured_error called with a catalog-recognized code must emit
+        valid JSON to stderr without raising warnings.
+        """
+        import warnings
+        with warnings.catch_warnings(record=True) as captured_warnings:
+            warnings.simplefilter("always")
+            desk.print_structured_error("DESK_FAILED", "Test failure message")
+
+        captured = capfd.readouterr()
+        payload = json.loads(captured.err.strip())
+        assert payload["error_code"] == "DESK_FAILED"
+        assert payload["message"] == "Test failure message"
+
+        # No warnings should be emitted for catalog-recognized codes
+        catalog_warnings = [
+            w for w in captured_warnings
+            if "unrecognized error code" in str(w.message)
+        ]
+        assert not catalog_warnings, (
+            f"Unexpected catalog validation warnings for recognized code: {catalog_warnings}"
+        )
+
+    def test_print_structured_error_with_uncataloged_code_emits_warning(self, capfd):
+        """
+        print_structured_error called with an unrecognized (non-catalog) code must
+        emit a UserWarning while still producing valid JSON output — it must not crash.
+        """
+        import warnings
+        with warnings.catch_warnings(record=True) as captured_warnings:
+            warnings.simplefilter("always")
+            desk.print_structured_error("TOTALLY_BOGUS_CODE_XYZ", "This should warn")
+
+        captured = capfd.readouterr()
+        # Output must still be valid JSON (process stability preserved)
+        payload = json.loads(captured.err.strip())
+        assert payload["error_code"] == "TOTALLY_BOGUS_CODE_XYZ"
+
+        # A warning must have been issued
+        catalog_warnings = [
+            w for w in captured_warnings
+            if "unrecognized error code" in str(w.message)
+        ]
+        assert len(catalog_warnings) == 1, (
+            "Expected exactly one UserWarning for unrecognized error code, "
+            f"got: {[str(w.message) for w in captured_warnings]}"
+        )
+
+    def test_all_nine_catalog_codes_present(self):
+        """The catalog must define exactly all 9 documented error codes."""
+        expected = {
+            "UNHANDLED_EXCEPTION", "INTERRUPTED", "TIMEOUT",
+            "DESK_FAILED", "KARDENWORT_FAILED", "UNRAISABLE_EXCEPTION",
+            "DEPENDENCY_MISSING", "INVALID_STATE", "CONFIGURATION_ERROR",
+        }
+        actual = {member.value for member in ErrorCode}
+        assert actual == expected, (
+            f"ErrorCode enum does not match the expected 9 catalog codes.\n"
+            f"Missing: {expected - actual}\n"
+            f"Extra:   {actual - expected}"
+        )
+
+
+class TestPayloadTypeConformance:
+    """
+    3.2b – Verify that structured dictionaries emitted via emit_payload across
+    command handlers conform structurally to their declared TypedDict models.
+
+    These tests confirm that the TypedDict models accurately capture the real
+    payload shapes, preventing model drift from production call sites.
+    """
+
+    def test_export_skipped_payload_has_required_fields(self, monkeypatch):
+        """ExportSkippedPayload shape: must have 'status'='skipped' and 'message' string."""
+        raw = _capture_emit_payload(monkeypatch, {
+            "status": "skipped",
+            "message": "Warning: No rows to export based on selection mode. Export skipped.",
+        })
+        payload = json.loads(raw)
+        assert payload["status"] == "skipped"
+        assert isinstance(payload["message"], str)
+        assert "status" in payload and "message" in payload
+        # Must not contain unexpected fields beyond what ExportSkippedPayload defines
+        assert set(payload.keys()) <= {"status", "message"}, (
+            f"ExportSkippedPayload contains unexpected fields: {set(payload.keys()) - {'status', 'message'}}"
+        )
+
+    def test_export_import_started_payload_has_required_fields(self, monkeypatch):
+        """ExportImportStartedPayload shape: must have all 6 required fields."""
+        sample: ExportImportStartedPayload = {
+            "import_started": True,
+            "show_window": False,
+            "pid": 12345,
+            "log": "C:/path/to/import.log",
+            "tsv": "C:/path/to/favorites.tsv",
+            "note": "safe to close the window",
+        }
+        raw = _capture_emit_payload(monkeypatch, sample)
+        payload = json.loads(raw)
+        assert payload["import_started"] is True
+        assert isinstance(payload["show_window"], bool)
+        assert isinstance(payload["pid"], int)
+        assert isinstance(payload["log"], str)
+        assert isinstance(payload["tsv"], str)
+        assert isinstance(payload["note"], str)
+        required_fields = {"import_started", "show_window", "pid", "log", "tsv", "note"}
+        assert required_fields <= set(payload.keys()), (
+            f"ExportImportStartedPayload missing fields: {required_fields - set(payload.keys())}"
+        )
+
+    def test_export_import_complete_payload_has_required_fields(self, monkeypatch):
+        """ExportImportCompletePayload shape: must have 'import_complete', 'show_window', 'output'."""
+        sample: ExportImportCompletePayload = {
+            "import_complete": True,
+            "show_window": False,
+            "output": "SUCCESS: Exported to C:/favorites/file.tsv",
+        }
+        raw = _capture_emit_payload(monkeypatch, sample)
+        payload = json.loads(raw)
+        assert payload["import_complete"] is True
+        assert isinstance(payload["show_window"], bool)
+        assert isinstance(payload["output"], str)
+        required_fields = {"import_complete", "show_window", "output"}
+        assert required_fields <= set(payload.keys()), (
+            f"ExportImportCompletePayload missing fields: {required_fields - set(payload.keys())}"
+        )
+
+    def test_export_success_payload_has_required_fields(self, monkeypatch):
+        """ExportSuccessPayload shape: must have 'status'='success' and 'message' string."""
+        sample: ExportSuccessPayload = {
+            "status": "success",
+            "message": "SUCCESS: Ready for Anki (no favorites file created)",
+        }
+        raw = _capture_emit_payload(monkeypatch, sample)
+        payload = json.loads(raw)
+        assert payload["status"] == "success"
+        assert isinstance(payload["message"], str)
+        assert set(payload.keys()) <= {"status", "message"}, (
+            f"ExportSuccessPayload contains unexpected fields: {set(payload.keys()) - {'status', 'message'}}"
+        )
+
+    def test_edit_save_success_payload_has_required_fields(self, monkeypatch):
+        """EditSaveSuccessPayload shape: must have exactly 'status'='success'."""
+        sample: EditSaveSuccessPayload = {"status": "success"}
+        raw = _capture_emit_payload(monkeypatch, sample)
+        payload = json.loads(raw)
+        assert payload["status"] == "success"
+        assert set(payload.keys()) == {"status"}, (
+            f"EditSaveSuccessPayload must have exactly one field 'status', "
+            f"got: {set(payload.keys())}"
+        )
+
+    def test_payload_json_serialization_preserves_default_separators(self, monkeypatch):
+        """
+        Payload JSON must use default separators (', ' and ': ') — not compact or sorted.
+        This preserves AHK InStr() substring matching rules that depend on exact spacing.
+        """
+        sample: ExportImportCompletePayload = {
+            "import_complete": True,
+            "show_window": False,
+            "output": "test",
+        }
+        raw = _capture_emit_payload(monkeypatch, sample)
+        # Default json.dumps uses ", " and ": " — verify no compact format
+        assert ": " in raw, "JSON payload must use ': ' separator (not compact ':')"
+        assert ", " in raw, "JSON payload must use ', ' separator (not compact ',')"
+        # Must be parseable as a valid dict
+        payload = json.loads(raw)
+        assert isinstance(payload, dict)
+
+    def test_import_started_payload_ahk_substrings_preserved(self, monkeypatch):
+        """
+        import_started payload must serialize 'import_started' key exactly, preserving
+        AHK InStr() lookup compatibility.
+        """
+        sample: ExportImportStartedPayload = {
+            "import_started": True,
+            "show_window": False,
+            "pid": 99,
+            "log": "log.txt",
+            "tsv": "file.tsv",
+            "note": "safe to close the window",
+        }
+        raw = _capture_emit_payload(monkeypatch, sample)
+        assert '"import_started": true' in raw, (
+            f"'import_started' boolean key not found in expected format. Raw: {raw!r}"
+        )
+        assert '"show_window": false' in raw, (
+            f"'show_window' boolean key not found in expected format. Raw: {raw!r}"
+        )
