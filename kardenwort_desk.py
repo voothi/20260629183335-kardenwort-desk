@@ -135,6 +135,21 @@ class EditSaveSuccessPayload(TypedDict):
     status: str  # Always "success"
 
 
+class ReprocessStartedPayload(TypedDict):
+    """
+    Emitted by cmd_reprocess when background worker successfully launches.
+    """
+    reprocess_started: bool  # Always True
+    rows: int                # Number of rows cleared/reprocessed
+
+
+class RetextStartedPayload(TypedDict):
+    """
+    Emitted by cmd_retext when background worker successfully launches.
+    """
+    retext_started: bool     # Always True
+
+
 def emit_payload(data, raw=False):
     out = sys.__stdout__
     if out is None:
@@ -215,7 +230,7 @@ if hasattr(threading, 'excepthook'):
     def _custom_thread_excepthook(args):
         try:
             tb_str = "".join(traceback.format_exception(args.exc_type, args.exc_value, args.exc_traceback)) if args.exc_traceback else None
-            print_structured_error("UNHANDLED_THREAD_EXCEPTION", str(args.exc_value), details=tb_str)
+            print_structured_error("UNHANDLED_EXCEPTION", str(args.exc_value), details=tb_str)
         except Exception:
             if sys.stderr is not None:
                 sys.stderr.write('{"error_code": "UNHANDLED_THREAD_EXCEPTION", "message": "Thread exception."}\n')
@@ -6200,11 +6215,11 @@ def cmd_lookup(args):
         sys.exit(0)
     except (configparser.Error, KeyError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
         if isinstance(e, subprocess.CalledProcessError):
-            print_structured_error("LOOKUP_FAILED", f"Lookup failed with exit code {e.returncode}", {"stderr": getattr(e, 'stderr', str(e))})
+            print_structured_error("DESK_FAILED", f"Lookup failed with exit code {e.returncode}", {"stderr": getattr(e, 'stderr', str(e))})
         elif isinstance(e, subprocess.TimeoutExpired):
-            print_structured_error("LOOKUP_TIMEOUT", f"Lookup timed out after {e.timeout} seconds")
+            print_structured_error("TIMEOUT", f"Lookup timed out after {e.timeout} seconds")
         else:
-            print_structured_error("LOOKUP_CONFIG_ERROR", f"Configuration error: {str(e)}")
+            print_structured_error("CONFIGURATION_ERROR", f"Configuration error: {str(e)}")
             
         fmt = getattr(args, 'format', 'html')
         try:
@@ -6228,7 +6243,7 @@ def cmd_render(args):
         if not sys.stdin.isatty():
             text = sys.stdin.read()
         else:
-            print_structured_error("INVALID_ARGS", "No text provided to render")
+            print_structured_error("INVALID_STATE", "No text provided to render")
             sys.exit(1)
     else:
         text = args.text
@@ -6271,20 +6286,20 @@ def cmd_export(args):
     
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
-        print_structured_error("INVALID_ARGS", f"Selection manifest not found: {manifest_path}")
+        print_structured_error("INVALID_STATE", f"Selection manifest not found: {manifest_path}")
         sys.exit(1)
         
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as f:
             manifest = json.load(f)
     except Exception as e:
-        print_structured_error("INVALID_ARGS", f"Failed to parse selection manifest: {e}")
+        print_structured_error("INVALID_STATE", f"Failed to parse selection manifest: {e}")
         sys.exit(1)
         
     selected_rows = manifest.get("selected_row_ids", [])
     zid = manifest.get("zid")
     if not zid:
-        print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
+        print_structured_error("INVALID_STATE", "Selection manifest must contain 'zid'")
         sys.exit(1)
         
     lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -6438,7 +6453,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                         }
                         emit_payload(import_complete_payload)
                     else:
-                        print_structured_error("IMPORT_FAILED", "Anki import failed synchronously", {"details": output})
+                        print_structured_error("DESK_FAILED", "Anki import failed synchronously", {"details": output})
                         sys.exit(1)
                 else:
                     if not success:
@@ -6462,7 +6477,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                     emit_payload(success_payload)
     except Exception as e:
         if is_from_ui:
-            print_structured_error("EXPORT_FAILED", f"Failed to save exported favorites: {e}")
+            print_structured_error("DESK_FAILED", f"Failed to save exported favorites: {e}")
             sys.exit(1)
         else:
             logger.error(f"Failed to save exported favorites: {e}")
@@ -6558,20 +6573,20 @@ def cmd_reprocess(args):
     
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
-        print_structured_error("INVALID_ARGS", f"Selection manifest not found: {manifest_path}")
+        print_structured_error("INVALID_STATE", f"Selection manifest not found: {manifest_path}")
         sys.exit(1)
         
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as f:
             manifest = json.load(f)
     except Exception as e:
-        print_structured_error("INVALID_ARGS", f"Failed to parse selection manifest: {e}")
+        print_structured_error("INVALID_STATE", f"Failed to parse selection manifest: {e}")
         sys.exit(1)
         
     selected_rows = manifest.get("selected_row_ids", [])
     zid = manifest.get("zid")
     if not zid:
-        print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
+        print_structured_error("INVALID_STATE", "Selection manifest must contain 'zid'")
         sys.exit(1)
         
     if not selected_rows:
@@ -6704,10 +6719,18 @@ def cmd_reprocess(args):
                 stderr=log_file,
                 close_fds=True
             )
-        emit_payload({"reprocess_started": True, "rows": cleared_count})
+        reprocess_payload: ReprocessStartedPayload = {
+            "reprocess_started": True,
+            "rows": cleared_count,
+        }
+        emit_payload(reprocess_payload)
     except Exception as e:
         logger.error(f"Failed to launch reprocess worker: {e}")
-        emit_payload({"status": "skipped", "message": f"Failed to launch worker: {e}"})
+        skipped_payload: ExportSkippedPayload = {
+            "status": "skipped",
+            "message": f"Failed to launch worker: {e}",
+        }
+        emit_payload(skipped_payload)
 
 def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang):
     col_lemma_name = role_fields.get('lemma', 'WordSource')
@@ -7251,19 +7274,19 @@ def cmd_retext(args):
     
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
-        print_structured_error("INVALID_ARGS", f"Selection manifest not found: {manifest_path}")
+        print_structured_error("INVALID_STATE", f"Selection manifest not found: {manifest_path}")
         sys.exit(1)
         
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as f:
             manifest = json.load(f)
     except Exception as e:
-        print_structured_error("INVALID_ARGS", f"Failed to parse selection manifest: {e}")
+        print_structured_error("INVALID_STATE", f"Failed to parse selection manifest: {e}")
         sys.exit(1)
         
     zid = manifest.get("zid")
     if not zid:
-        print_structured_error("INVALID_ARGS", "Selection manifest must contain 'zid'")
+        print_structured_error("INVALID_STATE", "Selection manifest must contain 'zid'")
         sys.exit(1)
         
     lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -7319,7 +7342,8 @@ def cmd_retext(args):
                 stderr=log_file,
                 close_fds=True
             )
-        emit_payload({"retext_started": True})
+        retext_payload: RetextStartedPayload = {"retext_started": True}
+        emit_payload(retext_payload)
     except Exception as e:
         logger.error(f"Failed to launch retext worker: {e}")
         print_structured_error("DESK_FAILED", f"Failed to launch worker: {e}")
@@ -7553,14 +7577,14 @@ def cmd_edit_save(args):
     
     deltas_path = Path(args.deltas).resolve()
     if not deltas_path.exists():
-        print_structured_error("INVALID_ARGS", f"Deltas file not found: {deltas_path}")
+        print_structured_error("INVALID_STATE", f"Deltas file not found: {deltas_path}")
         sys.exit(1)
         
     try:
         with open(deltas_path, 'r', encoding='utf-8-sig') as f:
             deltas = json.load(f)
     except Exception as e:
-        print_structured_error("INVALID_ARGS", f"Failed to parse deltas: {e}")
+        print_structured_error("INVALID_STATE", f"Failed to parse deltas: {e}")
         sys.exit(1)
         
     results_dir = resolve_results_dir(resolved_paths, kw_config)
@@ -7595,7 +7619,7 @@ def cmd_edit_save(args):
                 val = delta.get("value")
                 
                 if row_id is None or col_name is None or val is None:
-                    print_structured_error("INVALID_ARGS", "Each delta must have 'row_id', 'column', and 'value'")
+                    print_structured_error("INVALID_STATE", "Each delta must have 'row_id', 'column', and 'value'")
                     sys.exit(1)
                     
                 if col_name == "_delete":
@@ -7668,7 +7692,7 @@ def cmd_merge(args):
     try:
         input_paths = [Path(f).resolve() for f in args.files]
         if not input_paths:
-            print_structured_error("INVALID_ARGS", "No inputs provided.")
+            print_structured_error("INVALID_STATE", "No inputs provided.")
             sys.exit(1)
             
         base_dest_dir = input_paths[0].parent
@@ -7720,7 +7744,7 @@ def cmd_merge(args):
                 files.append(tsv_path)
 
         if not files:
-            print_structured_error("INVALID_ARGS", "No TSV files found in the selection to merge.")
+            print_structured_error("INVALID_STATE", "No TSV files found in the selection to merge.")
             sys.exit(1)
             
         files.sort(key=extract_zid)
@@ -7789,7 +7813,7 @@ def cmd_merge(args):
             for f in lang_files:
                 if not f.exists():
                     clear_progress_bar()
-                    print_structured_error("INVALID_ARGS", f"File not found: {f}")
+                    print_structured_error("INVALID_STATE", f"File not found: {f}")
                     sys.exit(1)
                 try:
                     comments, headers, rows = load_tsv_rows(f)
@@ -7804,7 +7828,7 @@ def cmd_merge(args):
                     sys.stdout.flush()
                 except Exception as e:
                     clear_progress_bar()
-                    print_structured_error("MERGE_FAILED", f"Failed to read file {f.name}: {e}")
+                    print_structured_error("DESK_FAILED", f"Failed to read file {f.name}: {e}")
                     sys.exit(1)
 
             first_headers = union_headers
@@ -8043,7 +8067,7 @@ def cmd_merge(args):
                             logger.warning(f"Failed to delete merged source {f.name}: {e}")
             except Exception as e:
                 clear_progress_bar()
-                print_structured_error("MERGE_FAILED", f"Merge execution failed for '{lang}': {e}")
+                print_structured_error("DESK_FAILED", f"Merge execution failed for '{lang}': {e}")
                 sys.exit(1)
 
         clear_progress_bar()
@@ -8065,7 +8089,7 @@ def cmd_merge(args):
             input("\nPress Enter to exit...")
     except Exception as e:
         clear_progress_bar()
-        print_structured_error("MERGE_FAILED", f"Merge execution failed: {e}")
+        print_structured_error("DESK_FAILED", f"Merge execution failed: {e}")
         if getattr(args, 'pause', False):
             input("\nPress Enter to exit...")
         sys.exit(1)
@@ -8151,7 +8175,7 @@ def cmd_restore(args):
                 else:
                     non_zid_files.append(input_path)
             else:
-                print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
+                print_structured_error("INVALID_STATE", f"File to restore not found: {input_path}")
                 
         def priority(p):
             ext = p.suffix.lower()
@@ -8172,7 +8196,7 @@ def cmd_restore(args):
 
     input_path = Path(file_list[0]).resolve()
     if not input_path.exists():
-        print_structured_error("INVALID_ARGS", f"File to restore not found: {input_path}")
+        print_structured_error("INVALID_STATE", f"File to restore not found: {input_path}")
         sys.exit(1)
         
     zid = extract_zid(input_path)
@@ -8283,7 +8307,7 @@ def cmd_desk(args):
         for file_val in file_list:
             file_path = Path(file_val).resolve()
             if not file_path.exists():
-                print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
+                print_structured_error("INVALID_STATE", f"File to analyze not found: {file_path}")
                 continue
                 
             match = re.match(r"^(\d{14})", file_path.name)
@@ -8320,7 +8344,7 @@ def cmd_desk(args):
         
     file_path = Path(file_list[0]).resolve()
     if not file_path.exists():
-        print_structured_error("INVALID_ARGS", f"File to analyze not found: {file_path}")
+        print_structured_error("INVALID_STATE", f"File to analyze not found: {file_path}")
         sys.exit(1)
         
     # Auto-detection: if it's a .tsv or starts with a 14-digit ZID, it's a restore session
@@ -8499,7 +8523,7 @@ def main():
             
     except SystemExit as e:
         if e.code != 0:
-            print_structured_error("INVALID_ARGS", "Failed to parse command line arguments")
+            print_structured_error("INVALID_STATE", "Failed to parse command line arguments")
             sys.exit(1)
         sys.exit(0)
 

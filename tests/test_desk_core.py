@@ -7,6 +7,7 @@ from kardenwort_desk import (
     ErrorCode, _VALID_ERROR_CODES,
     ExportSkippedPayload, ExportImportStartedPayload,
     ExportImportCompletePayload, ExportSuccessPayload, EditSaveSuccessPayload,
+    ReprocessStartedPayload, RetextStartedPayload,
 )
 import os
 import sys
@@ -1941,3 +1942,23 @@ class TestPayloadTypeConformance:
         assert '"show_window": false' in raw, (
             f"'show_window' boolean key not found in expected format. Raw: {raw!r}"
         )
+
+    def test_reprocess_started_payload_has_required_fields(self, monkeypatch):
+        """ReprocessStartedPayload shape: must have 'reprocess_started'=True and 'rows' int."""
+        sample: ReprocessStartedPayload = {
+            "reprocess_started": True,
+            "rows": 12,
+        }
+        raw = _capture_emit_payload(monkeypatch, sample)
+        payload = json.loads(raw)
+        assert payload["reprocess_started"] is True
+        assert isinstance(payload["rows"], int)
+        assert set(payload.keys()) <= {"reprocess_started", "rows"}
+
+    def test_retext_started_payload_has_required_fields(self, monkeypatch):
+        """RetextStartedPayload shape: must have exactly 'retext_started'=True."""
+        sample: RetextStartedPayload = {"retext_started": True}
+        raw = _capture_emit_payload(monkeypatch, sample)
+        payload = json.loads(raw)
+        assert payload["retext_started"] is True
+        assert set(payload.keys()) == {"retext_started"}
