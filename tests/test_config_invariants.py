@@ -9,6 +9,12 @@ from kardenwort_desk import (
     DeGCSConfig,
     OperationalMode,
     ExecutionContext,
+    SentenceBoundaryConfig,
+    ModeDispatcher,
+    MonolithicLiveStrategy,
+    SentenceLocalDedupStrategy,
+    MultiGlobalCombinedStrategy,
+    OperationalWorkflowResult,
     DEFAULT_COMBINE_ORDER,
     DEFAULT_APOSTROPHE_CHARS,
 )
@@ -90,6 +96,22 @@ def generate_execution_context_matrix() -> List[Dict[str, Any]]:
     return [dict(zip(keys, item)) for item in matrix]
 
 
+def generate_sentence_boundary_config_matrix() -> List[Dict[str, Any]]:
+    """
+    Generates deterministic test combinations specifically for SentenceBoundaryConfig resolution.
+    """
+    keys = ["terminators", "punctuation_marks", "abbrev_list", "context_mode", "words_params"]
+    values = [
+        [".!?:", ".\n"],
+        [".,;:!?()\"[]{}—–", ".,"],
+        ["Dr. Mr. Prof.", ""],
+        ["single", "both"],
+        [(0, 0, 0), (2, 2, 10)],
+    ]
+    matrix = list(itertools.product(*values))
+    return [dict(zip(keys, item)) for item in matrix]
+
+
 def test_matrix_generator_dimensions():
     """Verify that deterministic matrix generators produce exact expected permutations."""
     bool_matrix = generate_boolean_matrix()
@@ -108,6 +130,9 @@ def test_matrix_generator_dimensions():
 
     exec_matrix = generate_execution_context_matrix()
     assert len(exec_matrix) == 24
+
+    sbc_matrix = generate_sentence_boundary_config_matrix()
+    assert len(sbc_matrix) == 32
 
 
 @pytest.mark.parametrize("params", generate_runtime_token_config_matrix())
@@ -329,3 +354,92 @@ def test_execution_context_matrix_resolution(params):
         ctx.mode = OperationalMode.MONOLITHIC_LIVE
     with pytest.raises(AttributeError):
         ctx.combine_source_words = not ctx.combine_source_words
+
+
+@pytest.mark.parametrize("params", generate_sentence_boundary_config_matrix())
+def test_sentence_boundary_config_matrix_resolution(params):
+    """
+    Verify deterministic parameter resolution across combinatorial configuration matrices
+    in SentenceBoundaryConfig without unhandled exceptions or parsing errors, and assert immutability.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section("settings")
+    cp.add_section("sentences_mode")
+
+    cp.set("sentences_mode", "terminators", params["terminators"])
+    cp.set("sentences_mode", "punctuation_marks", params["punctuation_marks"])
+    cp.set("settings", "anki_abbrev_list", params["abbrev_list"])
+    cp.set("settings", "anki_context_mode", params["context_mode"])
+
+    w_before, w_after, w_max = params["words_params"]
+    cp.set("settings", "anki_context_words_before", str(w_before))
+    cp.set("settings", "anki_context_words_after", str(w_after))
+    cp.set("settings", "anki_context_max_words", str(w_max))
+
+    sbc = SentenceBoundaryConfig.from_config(cp)
+    assert sbc.terminators == (params["terminators"] if params["terminators"].strip() else ".!?:")
+    assert sbc.punctuation_marks == params["punctuation_marks"]
+    assert sbc.context_mode == params["context_mode"].lower()
+    assert sbc.words_before == w_before
+    assert sbc.words_after == w_after
+    assert sbc.max_words == w_max
+
+    if params["abbrev_list"].strip():
+        expected_abbrev_set = frozenset(a.lower().rstrip('.') for a in params["abbrev_list"].split())
+        assert sbc.abbrev_set == expected_abbrev_set
+    else:
+        assert sbc.abbrev_set is None
+
+    # Verify idempotency of from_config
+    sbc2 = SentenceBoundaryConfig.from_config(sbc)
+    assert sbc is sbc2
+
+    # Verify immutability (frozen dataclass)
+    with pytest.raises(AttributeError):
+        sbc.terminators = ".!?"
+    with pytest.raises(AttributeError):
+        sbc.words_before = 10
+
+
+@pytest.mark.parametrize("params", generate_execution_context_matrix())
+def test_deterministic_strategy_dispatch_routing(params):
+    """
+    Verify deterministic mode dispatching via ModeDispatcher and strategy execution isolation
+    across all combinations of operational modes and configuration states.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section("settings")
+    cp.add_section("sentences_mode")
+
+    cp.set("settings", "combine_source_words", str(params["combine_source_words"]))
+    cp.set("sentences_mode", "enabled", str(params["sentences_enabled"]))
+    cp.set("sentences_mode", "deduplication_scope", params["dedup_scope"])
+
+    ctx = ExecutionContext.from_config(params["text_mode"], cp)
+    strategy = ModeDispatcher.get_strategy(ctx)
+    result = ModeDispatcher.dispatch(ctx)
+
+    assert isinstance(result, OperationalWorkflowResult)
+    assert result.mode == ctx.mode
+
+    if ctx.mode == OperationalMode.MONOLITHIC_LIVE:
+        assert isinstance(strategy, MonolithicLiveStrategy)
+        assert result.dedup_scope == "global"
+        assert result.combine_source_words == params["combine_source_words"]
+    elif ctx.mode == OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP:
+        assert isinstance(strategy, SentenceLocalDedupStrategy)
+        assert result.dedup_scope == "sentence"
+        # Enforce uncombined source words in local sentence deduplication mode
+        assert result.combine_source_words is False
+    elif ctx.mode == OperationalMode.MULTI_GLOBAL_COMBINED:
+        assert isinstance(strategy, MultiGlobalCombinedStrategy)
+        assert result.dedup_scope == "global"
+        assert result.combine_source_words == params["combine_source_words"]
+    else:
+        pytest.fail(f"Unexpected OperationalMode resolution: {ctx.mode}")
+
+    # Assert immutability of OperationalWorkflowResult
+    with pytest.raises(AttributeError):
+        result.dedup_scope = "overridden"
+    with pytest.raises(AttributeError):
+        result.combine_source_words = True
