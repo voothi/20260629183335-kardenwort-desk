@@ -1600,11 +1600,14 @@ class TestIpcJsonRpcEncapsulation:
     def test_print_structured_error_encapsulates_into_jsonrpc_error(self, capfd):
         """print_structured_error({...}) → JSON on stderr that wraps cleanly
         into a JSON-RPC 2.0 error frame."""
-        error_payload = _capture_print_structured_error(
-            capfd, "CONFIG_LOAD_FAILED", "Failed to load config.ini"
-        )
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            error_payload = _capture_print_structured_error(
+                capfd, "CONFIGURATION_ERROR", "Failed to load config.ini"
+            )
 
-        assert error_payload["error_code"] == "CONFIG_LOAD_FAILED"
+        assert error_payload["error_code"] == "CONFIGURATION_ERROR"
         assert error_payload["message"] == "Failed to load config.ini"
 
         rpc_frame = _wrap_as_jsonrpc_error(error_payload, request_id="req-err-1",
@@ -1614,7 +1617,7 @@ class TestIpcJsonRpcEncapsulation:
         assert decoded["jsonrpc"] == "2.0"
         assert decoded["id"] == "req-err-1"
         assert decoded["error"]["code"] == -32001
-        assert decoded["error"]["data"]["error_code"] == "CONFIG_LOAD_FAILED"
+        assert decoded["error"]["data"]["error_code"] == "CONFIGURATION_ERROR"
         assert "result" not in decoded
 
     def test_print_structured_error_with_details_encapsulates(self, capfd):
@@ -1668,9 +1671,12 @@ class TestIpcJsonRpcEncapsulation:
 
     def test_jsonrpc_error_frame_is_newline_delimited_serializable(self, capfd):
         """Full pipeline: print_structured_error output → JSON-RPC error → newline-delimited."""
-        error_payload = _capture_print_structured_error(
-            capfd, "PROCESSING_ERROR", "Tokenization failed"
-        )
+        import warnings
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            error_payload = _capture_print_structured_error(
+                capfd, "INVALID_STATE", "Tokenization failed"
+            )
         rpc_frame = _wrap_as_jsonrpc_error(error_payload, request_id="req-nl-2",
                                             code=-32000)
 
@@ -1680,7 +1686,7 @@ class TestIpcJsonRpcEncapsulation:
         assert len(non_empty) == 1
 
         decoded = json.loads(non_empty[0])
-        assert decoded["error"]["data"]["error_code"] == "PROCESSING_ERROR"
+        assert decoded["error"]["data"]["error_code"] == "INVALID_STATE"
 
 
 # ---------------------------------------------------------------------------
