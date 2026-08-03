@@ -1651,26 +1651,26 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 logger.error(f"Failed to translate main text: {e}")
                 return {0: f"[Translation Error: {e}]"}
         else:
-            abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
+            abbrev_str = config.get(SEC_SETTINGS, 'anki_abbrev_list', fallback="")
             abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
-            terminators = config.get('sentences_mode', 'terminators', fallback=None) if config.has_section('sentences_mode') else None
+            terminators = config.get(SEC_SENTENCES_MODE, 'terminators', fallback=None) if config.has_section(SEC_SENTENCES_MODE) else None
             if terminators is None:
-                terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+                terminators = config.get(SEC_SETTINGS, 'anki_sentence_terminators', fallback=".!?:")
             if terminators:
                 terminators = terminators.strip('"')
             if not terminators.strip():
                 terminators = ".!?:"
             
-            punctuation_marks = config.get('sentences_mode', 'punctuation_marks', fallback=None) if config.has_section('sentences_mode') else None
+            punctuation_marks = config.get(SEC_SENTENCES_MODE, 'punctuation_marks', fallback=None) if config.has_section(SEC_SENTENCES_MODE) else None
             if punctuation_marks is None:
                 punctuation_marks = ".,;:!?()\"[]{}—–"
             else:
                 punctuation_marks = punctuation_marks.strip('"')
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
-            words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
-            words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
-            max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
-            context_mode = config.get('settings', 'anki_context_mode', fallback='single').lower()
+            words_before = config.getint(SEC_SETTINGS, 'anki_context_words_before', fallback=0)
+            words_after = config.getint(SEC_SETTINGS, 'anki_context_words_after', fallback=0)
+            max_words = config.getint(SEC_SETTINGS, 'anki_context_max_words', fallback=0)
+            context_mode = config.get(SEC_SETTINGS, 'anki_context_mode', fallback='single').lower()
             
             apply_padding = False
             if words_before > 0 or words_after > 0:
@@ -2094,7 +2094,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     
     wrap_max_chars = config.getint('translation', 'translation_wrap_max_chars', fallback=90)
     
-    save_source_text = config.getboolean('settings', 'save_source_text', fallback=True)
+    save_source_text = config.getboolean(SEC_SETTINGS, 'save_source_text', fallback=True)
     if save_source_text:
         if eff_mode == 'single':
             source_text_path.write_text(text, encoding='utf-8')
@@ -2118,25 +2118,25 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
     temp_file_path = None
     
     try:
-        abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
+        abbrev_str = config.get(SEC_SETTINGS, 'anki_abbrev_list', fallback="")
         abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
-        terminators = config.get('sentences_mode', 'terminators', fallback=None) if config.has_section('sentences_mode') else None
+        terminators = config.get(SEC_SENTENCES_MODE, 'terminators', fallback=None) if config.has_section(SEC_SENTENCES_MODE) else None
         if terminators is None:
-            terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+            terminators = config.get(SEC_SETTINGS, 'anki_sentence_terminators', fallback=".!?:")
         if terminators:
             terminators = terminators.strip('"')
         if not terminators.strip():
             terminators = ".!?:"
             
-        punctuation_marks = config.get('sentences_mode', 'punctuation_marks', fallback=None) if config.has_section('sentences_mode') else None
+        punctuation_marks = config.get(SEC_SENTENCES_MODE, 'punctuation_marks', fallback=None) if config.has_section(SEC_SENTENCES_MODE) else None
         if punctuation_marks is None:
             punctuation_marks = ".,;:!?()\"[]{}—–"
         else:
             punctuation_marks = punctuation_marks.strip('"')
             
-        sentences_mode_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
-        min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
-        dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence') if config.has_section('sentences_mode') else 'sentence'
+        sentences_mode_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
+        min_sentences = config.getint(SEC_SENTENCES_MODE, 'min_sentences', fallback=2) if config.has_section(SEC_SENTENCES_MODE) else 2
+        dedup_scope_cfg = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence') if config.has_section(SEC_SENTENCES_MODE) else 'sentence'
 
         sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=abbrev_set, terminators=terminators, punctuation_marks=punctuation_marks)
         is_sentences_mode_run = sentences_mode_enabled and len(sentences) >= min_sentences
@@ -2157,7 +2157,7 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
                 temp_file.close()
             text_file_to_pass = temp_file_path
             
-        use_simplemma_correction = config.getboolean('settings', 'use_simplemma_correction', fallback=False)
+        use_simplemma_correction = config.getboolean(SEC_SETTINGS, 'use_simplemma_correction', fallback=False)
 
         cmd = [
             str(python_exe),
@@ -2243,10 +2243,10 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
             sys.exit(1)
 
-        context_mode = config.get('settings', 'anki_context_mode', fallback='single').lower()
-        words_before = config.getint('settings', 'anki_context_words_before', fallback=0)
-        words_after = config.getint('settings', 'anki_context_words_after', fallback=0)
-        max_words = config.getint('settings', 'anki_context_max_words', fallback=0)
+        context_mode = config.get(SEC_SETTINGS, 'anki_context_mode', fallback='single').lower()
+        words_before = config.getint(SEC_SETTINGS, 'anki_context_words_before', fallback=0)
+        words_after = config.getint(SEC_SETTINGS, 'anki_context_words_after', fallback=0)
+        max_words = config.getint(SEC_SETTINGS, 'anki_context_max_words', fallback=0)
         
         apply_padding = False
         if words_before > 0 or words_after > 0:
@@ -2471,27 +2471,27 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
-    target_lang = config.get('settings', 'default_target_language', fallback='ru')
+    target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     children_tsv_paths = []
     
-    sentences_enabled = config.getboolean('sentences_mode', 'enabled', fallback=False) if config.has_section('sentences_mode') else False
-    min_sentences = config.getint('sentences_mode', 'min_sentences', fallback=2) if config.has_section('sentences_mode') else 2
-    alignment_method = config.get('sentences_mode', 'alignment_method', fallback='auto') if config.has_section('sentences_mode') else 'auto'
-    spawn_order = config.get('sentences_mode', 'spawn_order', fallback='normal') if config.has_section('sentences_mode') else 'normal'
-    parent_mode = config.get('sentences_mode', 'parent_mode', fallback='full') if config.has_section('sentences_mode') else 'full'
-    multi_mode_decompose = config.getboolean('sentences_mode', 'multi_mode_sentence_decomposition', fallback=False) if config.has_section('sentences_mode') else False
+    sentences_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
+    min_sentences = config.getint(SEC_SENTENCES_MODE, 'min_sentences', fallback=2) if config.has_section(SEC_SENTENCES_MODE) else 2
+    alignment_method = config.get(SEC_SENTENCES_MODE, 'alignment_method', fallback='auto') if config.has_section(SEC_SENTENCES_MODE) else 'auto'
+    spawn_order = config.get(SEC_SENTENCES_MODE, 'spawn_order', fallback='normal') if config.has_section(SEC_SENTENCES_MODE) else 'normal'
+    parent_mode = config.get(SEC_SENTENCES_MODE, 'parent_mode', fallback='full') if config.has_section(SEC_SENTENCES_MODE) else 'full'
+    multi_mode_decompose = config.getboolean(SEC_SENTENCES_MODE, 'multi_mode_sentence_decomposition', fallback=False) if config.has_section(SEC_SENTENCES_MODE) else False
     
-    abbrev_str = config.get('settings', 'anki_abbrev_list', fallback="")
+    abbrev_str = config.get(SEC_SETTINGS, 'anki_abbrev_list', fallback="")
     abbrev_set = {a.lower().rstrip('.') for a in abbrev_str.split()} if abbrev_str.strip() else None
-    terminators = config.get('sentences_mode', 'terminators', fallback=None) if config.has_section('sentences_mode') else None
+    terminators = config.get(SEC_SENTENCES_MODE, 'terminators', fallback=None) if config.has_section(SEC_SENTENCES_MODE) else None
     if terminators is None:
-        terminators = config.get('settings', 'anki_sentence_terminators', fallback=".!?:")
+        terminators = config.get(SEC_SETTINGS, 'anki_sentence_terminators', fallback=".!?:")
     if terminators:
         terminators = terminators.strip('"')
     if not terminators.strip():
         terminators = ".!?:"
         
-    punctuation_marks = config.get('sentences_mode', 'punctuation_marks', fallback=None) if config.has_section('sentences_mode') else None
+    punctuation_marks = config.get(SEC_SENTENCES_MODE, 'punctuation_marks', fallback=None) if config.has_section(SEC_SENTENCES_MODE) else None
     if punctuation_marks is None:
         punctuation_marks = ".,;:!?()\"[]{}—–"
     else:
@@ -2597,7 +2597,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
         col_inflected = headers.index(role_fields.get('inflected', 'WordSourceInflectedForm')) if role_fields.get('inflected', 'WordSourceInflectedForm') in headers else -1
         
-        dedup_scope_cfg = config.get('sentences_mode', 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section('sentences_mode') else 'sentence'
+        dedup_scope_cfg = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence').strip().lower() if config.has_section(SEC_SENTENCES_MODE) else 'sentence'
         if col_word_source != -1 and dedup_scope_cfg != 'none':
             master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text, language=language, resolved_paths=resolved_paths)
         else:
