@@ -6,6 +6,8 @@ from kardenwort_desk import (
     SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
 )
 import os
+import sys
+import io
 import json
 import base64
 import tempfile
