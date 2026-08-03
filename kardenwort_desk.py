@@ -130,6 +130,8 @@ SEC_LANGUAGES = "languages"
 SEC_LANGUAGE_RESOURCES = "language_resources"
 SEC_PROJECT_STRUCTURE = "project_structure"
 SEC_AUDIO = "audio"
+SEC_GOLDENDICT = "goldendict"
+SEC_WORDFILL = "wordfill"
 SINGLE_WORD_DELIMITERS = ('-', '.')
 
 
@@ -2518,15 +2520,16 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         word_pattern = r"[\w" + apo_pattern + r"]+"
         raw_words = re.findall(word_pattern, window_text)
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
+        window_words_lower = set(w.lower() for w in window_words_exact)
 
         def _is_in_window(p_clean):
-            if p_clean in window_words_exact:
+            if p_clean in window_words_exact or p_clean.lower() in window_words_lower:
                 return True
             p_parts = [w for w in re.findall(word_pattern, p_clean) if w.strip()]
             if not p_parts:
                 return False
             for part in p_parts:
-                if part not in window_words_exact:
+                if part not in window_words_exact and part.lower() not in window_words_lower:
                     return False
             return True
 

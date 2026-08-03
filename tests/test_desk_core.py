@@ -1292,6 +1292,28 @@ def test_deduplicate_rows_window_filtering_compounds():
     assert deduped[2][0] == "KI-Labore"
 
 
+def test_deduplicate_rows_window_filtering_case_insensitive_start():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section('settings')
+    config.set('settings', 'filter_inflected_by_window', 'true')
+
+    data_rows = [
+        ["the", "the", "1"],
+        ["solution", "solution", "1"],
+    ]
+
+    window_text = "The solution stands architecturally sound."
+    deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
+
+    # 'the' should be retained even though it is capitalized as 'The' at sentence start in window_text
+    assert deduped[0][0] == "the"
+    assert deduped[1][0] == "solution"
+
+
+
 def test_deduplicate_rows_combine_source_words_false():
     import kardenwort_desk as desk
     import configparser
