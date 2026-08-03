@@ -1471,9 +1471,6 @@ def test_batch_merge_config_initialization_and_immutability():
 # that a persistent streaming daemon would apply before writing to the socket.
 # =============================================================================
 
-import sys
-import io
-
 
 def _wrap_as_jsonrpc_result(payload: dict, request_id) -> dict:
     """
