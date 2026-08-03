@@ -18,6 +18,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from dataclasses import dataclass
 from typing import Optional, Any, Union, List
+from enum import Enum, auto
 
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
 vendor_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
@@ -364,6 +365,57 @@ class DeGCSConfig:
         if self.mask_unknown_parts:
             cmd.append("--de-gcs-mask-unknown-parts")
         return cmd
+
+
+class OperationalMode(Enum):
+    MONOLITHIC_LIVE = auto()
+    MULTI_SENTENCE_LOCAL_DEDUP = auto()
+    MULTI_GLOBAL_COMBINED = auto()
+
+
+@dataclass(frozen=True)
+class ExecutionContext:
+    mode: OperationalMode
+    combine_source_words: bool
+    config: Any = None
+    token_cfg: Optional[RuntimeTokenConfig] = None
+
+    @classmethod
+    def from_config(cls, text_mode: str, config: Any, token_cfg: Optional[RuntimeTokenConfig] = None) -> "ExecutionContext":
+        if isinstance(config, cls):
+            return config
+
+        if token_cfg is None:
+            token_cfg = RuntimeTokenConfig.from_config(config)
+
+        combine_source_words = token_cfg.combine_source_words
+        sentences_enabled = False
+        dedup_scope = 'sentence'
+
+        if config and hasattr(config, "has_section") and hasattr(config, "getboolean"):
+            try:
+                if config.has_section(SEC_SENTENCES_MODE):
+                    sentences_enabled = config.getboolean(SEC_SENTENCES_MODE, 'enabled', fallback=False)
+                    if hasattr(config, "get"):
+                        dedup_scope = config.get(SEC_SENTENCES_MODE, 'deduplication_scope', fallback='sentence').strip().lower()
+            except Exception:
+                pass
+
+        if text_mode == 'multi' and sentences_enabled:
+            if dedup_scope == 'sentence':
+                mode = OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
+                combine_source_words = False
+            else:
+                mode = OperationalMode.MULTI_GLOBAL_COMBINED
+        else:
+            mode = OperationalMode.MONOLITHIC_LIVE
+
+        return cls(
+            mode=mode,
+            combine_source_words=combine_source_words,
+            config=config,
+            token_cfg=token_cfg,
+        )
 
 
 class ConfigError(Exception):
