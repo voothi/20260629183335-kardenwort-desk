@@ -1,3 +1,10 @@
+from kardenwort_desk import (
+    SEC_SETTINGS, SEC_TOKEN_MAPPINGS, SEC_MERGE, SEC_SENTENCES_MODE,
+    SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
+    SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
+    SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+)
 import os
 import json
 import base64
@@ -78,8 +85,8 @@ Key = {obfuscated_key_b64}
 """)
         
         config = configparser.ConfigParser()
-        config.add_section('environment')
-        config.set('environment', 'deepl_settings_file', str(settings_file.relative_to(tmp_path)))
+        config.add_section(SEC_ENVIRONMENT)
+        config.set(SEC_ENVIRONMENT, 'deepl_settings_file', str(settings_file.relative_to(tmp_path)))
         
         # Test deobfuscation
         key = desk.get_deepl_key(config, tmp_path)
@@ -103,8 +110,8 @@ Key = {plain_key}
 """)
         
         config = configparser.ConfigParser()
-        config.add_section('environment')
-        config.set('environment', 'deepl_settings_file', 'settings.ini')
+        config.add_section(SEC_ENVIRONMENT)
+        config.set(SEC_ENVIRONMENT, 'deepl_settings_file', 'settings.ini')
         
         # Should return plain_key because it fails b64decode/XOR parsing or doesn't have %%SEC%% prefix
         key = desk.get_deepl_key(config, tmp_path)
@@ -185,8 +192,8 @@ def test_merge_subcommand():
             
         # Simulating config and paths
         config = configparser.ConfigParser()
-        config.add_section('settings')
-        config.set('settings', 'merge_delete_sources', 'false')
+        config.add_section(SEC_SETTINGS)
+        config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
         
         # Run merge core logic directly
         # Sort files by ZID
@@ -488,8 +495,8 @@ send_to_anki_after_export=false
     assert len(saved_rows[0]) == 3
     
     # 2. Test mode 'unselected' and save_to_favorites_on_export=true
-    config.set('settings', 'export_selection_mode', 'unselected')
-    config.set('settings', 'save_to_favorites_on_export', 'true')
+    config.set(SEC_SETTINGS, 'export_selection_mode', 'unselected')
+    config.set(SEC_SETTINGS, 'save_to_favorites_on_export', 'true')
     saved_paths.clear()
     saved_rows.clear()
     try:
@@ -505,7 +512,7 @@ send_to_anki_after_export=false
     assert saved_rows[0][1] == ["v5", "v6"]
 
     # 3. Test mode 'selected'
-    config.set('settings', 'export_selection_mode', 'selected')
+    config.set(SEC_SETTINGS, 'export_selection_mode', 'selected')
     saved_paths.clear()
     saved_rows.clear()
     try:
@@ -546,8 +553,8 @@ def test_cmd_merge_filters_tsv(monkeypatch, tmp_path):
 
     # mock load_config
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     monkeypatch.setattr(desk, 'load_config', lambda c: (config, {}, {}, {}))
     
     # Run cmd_merge
@@ -584,8 +591,8 @@ def test_cmd_merge_deduplicates_rows(monkeypatch, tmp_path):
 
     # mock load_config
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     # We must resolve_paths to point to real mapping file
     resolved_paths = {
@@ -621,8 +628,8 @@ def test_cmd_merge_offsets_sentence_index(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -661,8 +668,8 @@ def test_cmd_merge_single_paragraph_mapping(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -703,9 +710,9 @@ def test_cmd_merge_delete_sources_cli(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
+    config.add_section(SEC_SETTINGS)
     # Config has delete sources set to false, but CLI option is True and should override it
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -743,8 +750,8 @@ def test_cmd_merge_folder_scanning(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -781,8 +788,8 @@ def test_cmd_merge_range_selection(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -824,8 +831,8 @@ def test_cmd_merge_multilingual(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -876,8 +883,8 @@ def test_cmd_merge_non_tsv_mapping(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -911,8 +918,8 @@ def test_cmd_merge_empty_sentence_index(monkeypatch, tmp_path):
         config = None
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -952,9 +959,9 @@ def test_cmd_merge_deduplicate_prioritization(monkeypatch, tmp_path):
         deduplicate = False
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
-    config.set('settings', 'merge_deduplicate', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
+    config.set(SEC_SETTINGS, 'merge_deduplicate', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve())
@@ -1001,13 +1008,13 @@ def test_cmd_merge_sort_frequency(monkeypatch, tmp_path):
         sort_frequency = True
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
-    config.add_section('languages')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
+    config.add_section(SEC_LANGUAGES)
     
     mock_index = tmp_path / "mock-en-index.csv"
     mock_index.write_text("the\nand\nuncommon\n", encoding='utf-8')
-    config.set('languages', 'en_lemma_index', str(mock_index))
+    config.set(SEC_LANGUAGES, 'en_lemma_index', str(mock_index))
     
     import sys
     resolved_paths = {
@@ -1053,8 +1060,8 @@ def test_cmd_merge_resilient_schema_union(monkeypatch, tmp_path):
         deduplicate = False
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'merge_delete_sources', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'merge_delete_sources', 'false')
     
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve()),
@@ -1217,11 +1224,11 @@ def test_spawn_kardenwort_token_mappings(monkeypatch, tmp_path):
     
     # 1. Enable token mappings and combine_source_words
     config = configparser.ConfigParser()
-    config.add_section('token_mappings')
-    config.set('token_mappings', 'enabled', 'true')
-    config.set('token_mappings', 'lemmatize_mapped_tokens', 'true')
-    config.add_section('settings')
-    config.set('settings', 'combine_source_words', 'true')
+    config.add_section(SEC_TOKEN_MAPPINGS)
+    config.set(SEC_TOKEN_MAPPINGS, 'enabled', 'true')
+    config.set(SEC_TOKEN_MAPPINGS, 'lemmatize_mapped_tokens', 'true')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'combine_source_words', 'true')
     
     resolved_paths = {
         'kardenwort_python': 'python',
@@ -1252,8 +1259,8 @@ def test_deduplicate_rows_window_filtering():
     window_text = "Bei einem ukrainischen Drohnenangriff auf die südrussische Hafenstadt Rostow am Don sind mindestens fünf Zivilisten getötet worden, als eine Drohne in ein Hochhaus einschlug."
 
     # Test with filter_inflected_by_window = true (default)
-    config.add_section('settings')
-    config.set('settings', 'filter_inflected_by_window', 'true')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'true')
     deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
 
     # For 'der', only 'die' and 'am' exist in the window_text
@@ -1264,7 +1271,7 @@ def test_deduplicate_rows_window_filtering():
     assert deduped[2][0] == "einem, eine, ein"
 
     # Test with filter_inflected_by_window = false (legacy mode)
-    config.set('settings', 'filter_inflected_by_window', 'false')
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'false')
     deduped_legacy = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=-1, col_inflected=0, config=config, window_text=window_text)
     assert deduped_legacy[0][0] == "den, der, die, am, im"
 
@@ -1273,8 +1280,8 @@ def test_deduplicate_rows_window_filtering_compounds():
     import configparser
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'filter_inflected_by_window', 'true')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'true')
 
     data_rows = [
         ["EU-Kommission", "EU-Kommission", "1"],
@@ -1297,8 +1304,8 @@ def test_deduplicate_rows_window_filtering_case_insensitive_start():
     import configparser
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'filter_inflected_by_window', 'true')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'true')
 
     data_rows = [
         ["the", "the", "1"],
@@ -1319,9 +1326,9 @@ def test_deduplicate_rows_combine_source_words_false():
     import configparser
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'combine_source_words', 'false')
-    config.set('settings', 'filter_inflected_by_window', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'combine_source_words', 'false')
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'false')
 
     data_rows = [
         ["is", "be", "verb"],
@@ -1343,9 +1350,9 @@ def test_deduplicate_rows_combine_source_words_true():
     import configparser
 
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'combine_source_words', 'true')
-    config.set('settings', 'filter_inflected_by_window', 'false')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'combine_source_words', 'true')
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'false')
 
     data_rows = [
         ["is", "be", "verb"],
@@ -1389,15 +1396,15 @@ def test_runtime_token_config_initialization_and_immutability():
 
     # Test from_config with fallbacks ([token_mappings] -> [settings])
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.set("settings", "combine_source_words", "true")
-    cp.set("settings", "combine_source_words_order", "settings_order")
+    cp.add_section(SEC_SETTINGS)
+    cp.set(SEC_SETTINGS, "combine_source_words", "true")
+    cp.set(SEC_SETTINGS, "combine_source_words_order", "settings_order")
     cfg_from_settings = RuntimeTokenConfig.from_config(cp)
     assert cfg_from_settings.combine_source_words is True
     assert cfg_from_settings.combine_order == "settings_order"
 
-    cp.add_section("token_mappings")
-    cp.set("token_mappings", "combine_source_words_order", "mappings_order")
+    cp.add_section(SEC_TOKEN_MAPPINGS)
+    cp.set(SEC_TOKEN_MAPPINGS, "combine_source_words_order", "mappings_order")
     cfg_from_mappings = RuntimeTokenConfig.from_config(cp)
     assert cfg_from_mappings.combine_order == "mappings_order"
 
@@ -1427,21 +1434,21 @@ def test_batch_merge_config_initialization_and_immutability():
 
     # Test from_config with fallbacks ([merge] -> [token_mappings] -> [settings])
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.set("settings", "combine_source_words_order", "settings_order")
-    cp.set("settings", "merge_sort_frequency", "true")
+    cp.add_section(SEC_SETTINGS)
+    cp.set(SEC_SETTINGS, "combine_source_words_order", "settings_order")
+    cp.set(SEC_SETTINGS, "merge_sort_frequency", "true")
     
     cfg_settings = BatchMergeConfig.from_config(cp)
     assert cfg_settings.combine_order == "settings_order"
     assert cfg_settings.sort_frequency is True
 
-    cp.add_section("token_mappings")
-    cp.set("token_mappings", "combine_source_words_order", "mappings_order")
+    cp.add_section(SEC_TOKEN_MAPPINGS)
+    cp.set(SEC_TOKEN_MAPPINGS, "combine_source_words_order", "mappings_order")
     cfg_mappings = BatchMergeConfig.from_config(cp)
     assert cfg_mappings.combine_order == "mappings_order"
 
-    cp.add_section("merge")
-    cp.set("merge", "combine_source_words_order", "merge_order")
+    cp.add_section(SEC_MERGE)
+    cp.set(SEC_MERGE, "combine_source_words_order", "merge_order")
     cfg_merge = BatchMergeConfig.from_config(cp)
     assert cfg_merge.combine_order == "merge_order"
 

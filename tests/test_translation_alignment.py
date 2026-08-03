@@ -1,3 +1,10 @@
+from kardenwort_desk import (
+    SEC_SETTINGS, SEC_TOKEN_MAPPINGS, SEC_MERGE, SEC_SENTENCES_MODE,
+    SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
+    SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
+    SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+)
 import pytest
 import configparser
 import kardenwort_desk as desk
@@ -20,11 +27,11 @@ def test_split_long_line():
 
 def test_validate_translated_line():
     config = configparser.ConfigParser()
-    config.add_section('translation')
-    config.set('translation', 'translation_word_count_check', 'true')
-    config.set('translation', 'translation_word_count_abs_tolerance', '2')
-    config.set('translation', 'translation_word_count_min_ratio', '0.5')
-    config.set('translation', 'translation_word_count_max_ratio', '2.0')
+    config.add_section(SEC_TRANSLATION)
+    config.set(SEC_TRANSLATION, 'translation_word_count_check', 'true')
+    config.set(SEC_TRANSLATION, 'translation_word_count_abs_tolerance', '2')
+    config.set(SEC_TRANSLATION, 'translation_word_count_min_ratio', '0.5')
+    config.set(SEC_TRANSLATION, 'translation_word_count_max_ratio', '2.0')
     
     # Normal
     desk._validate_translated_line("one two three", "раз два три", 0, config)
@@ -38,7 +45,7 @@ def test_validate_translated_line():
 
 def test_build_chunks():
     config = configparser.ConfigParser()
-    config.add_section('translation')
+    config.add_section(SEC_TRANSLATION)
     
     # Fixed size chunking
     lines = ["a", "b", "c", "", "d", "e"]
@@ -50,8 +57,8 @@ def test_build_chunks():
     ]
     
     # Adaptive chunking (size = 0)
-    config.set('translation', 'translation_adaptive_max_lines', '2')
-    config.set('translation', 'translation_adaptive_max_chars', '50')
+    config.set(SEC_TRANSLATION, 'translation_adaptive_max_lines', '2')
+    config.set(SEC_TRANSLATION, 'translation_adaptive_max_chars', '50')
     chunks_adaptive = desk._build_chunks(lines, 0, config)
     assert chunks_adaptive == [
         (["a", "b"], [0, 1]),
@@ -71,19 +78,19 @@ def test_split_merged_text_by_markers():
 
 def test_validate_translation_config_guard():
     config = configparser.ConfigParser()
-    config.add_section('translation')
-    config.set('translation', 'translation_split_mode', 'proportional')
-    config.set('translation', 'translation_word_count_check', 'true')
+    config.add_section(SEC_TRANSLATION)
+    config.set(SEC_TRANSLATION, 'translation_split_mode', 'proportional')
+    config.set(SEC_TRANSLATION, 'translation_word_count_check', 'true')
     
     desk._validate_translation_config(config)
-    assert config.get('translation', 'translation_word_count_check') == 'false'
+    assert config.get(SEC_TRANSLATION, 'translation_word_count_check') == 'false'
 
 def test_translate_source_text_split_modes(monkeypatch):
     config = configparser.ConfigParser()
-    config.add_section('translation')
+    config.add_section(SEC_TRANSLATION)
     
     # 1. newline_join
-    config.set('translation', 'translation_split_mode', 'newline_join')
+    config.set(SEC_TRANSLATION, 'translation_split_mode', 'newline_join')
     def mock_translate_text_newline(text, source_lang, target_lang, cfg, paths, provider):
         return "\n".join(f"Trans_{l}" for l in text.splitlines())
     monkeypatch.setattr(desk, "translate_text", mock_translate_text_newline)
@@ -92,12 +99,12 @@ def test_translate_source_text_split_modes(monkeypatch):
     assert res == {0: "Trans_line1", 1: "Trans_line2"}
     
     # 2. line_by_line
-    config.set('translation', 'translation_split_mode', 'line_by_line')
+    config.set(SEC_TRANSLATION, 'translation_split_mode', 'line_by_line')
     res_lbl = desk.translate_source_text("line1\nline2", "en", "ru", "multi", config, {}, "google")
     assert res_lbl == {0: "Trans_line1", 1: "Trans_line2"}
     
     # 3. marker
-    config.set('translation', 'translation_split_mode', 'marker')
+    config.set(SEC_TRANSLATION, 'translation_split_mode', 'marker')
     def mock_translate_marker(text, source_lang, target_lang, cfg, paths, provider):
         return text.replace("line1", "Trans_line1").replace("line2", "Trans_line2")
     monkeypatch.setattr(desk, "translate_text", mock_translate_marker)
@@ -111,8 +118,8 @@ def test_translate_source_text_split_modes(monkeypatch):
 
 def test_single_mode_routing(monkeypatch):
     config = configparser.ConfigParser()
-    config.add_section('translation')
-    config.set('translation', 'translation_wrap_max_chars', '10')
+    config.add_section(SEC_TRANSLATION)
+    config.set(SEC_TRANSLATION, 'translation_wrap_max_chars', '10')
     
     called_multi = False
     def mock_translate(text, source_lang, target_lang, cfg, paths, provider):
@@ -134,10 +141,10 @@ def test_single_mode_routing(monkeypatch):
 
 def test_translation_alignment_error_rescue(monkeypatch):
     config = configparser.ConfigParser()
-    config.add_section('translation')
-    config.set('translation', 'translation_split_mode', 'newline_join')
-    config.set('translation', 'translation_max_retries', '1')
-    config.set('translation', 'translation_chunk_size', '2')
+    config.add_section(SEC_TRANSLATION)
+    config.set(SEC_TRANSLATION, 'translation_split_mode', 'newline_join')
+    config.set(SEC_TRANSLATION, 'translation_max_retries', '1')
+    config.set(SEC_TRANSLATION, 'translation_chunk_size', '2')
     
     # Chunk 1: [line1, line2] -> translates fine
     # Chunk 2: [line3, line4] -> chunk fails (wrong line count), triggers rescue.
@@ -252,8 +259,8 @@ def test_punctuation_marks_prevent_wrapping():
 def test_single_mode_punctuation_no_recursion(monkeypatch):
     import configparser
     config = configparser.ConfigParser()
-    config.add_section('translation')
-    config.set('translation', 'translation_wrap_max_chars', '50')
+    config.add_section(SEC_TRANSLATION)
+    config.set(SEC_TRANSLATION, 'translation_wrap_max_chars', '50')
     
     # 60 character sentence containing a comma (punctuation).
     # Since it contains punctuation, it should not wrap/split.

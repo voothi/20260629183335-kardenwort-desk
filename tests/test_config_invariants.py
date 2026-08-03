@@ -1,3 +1,10 @@
+from kardenwort_desk import (
+    SEC_SETTINGS, SEC_TOKEN_MAPPINGS, SEC_MERGE, SEC_SENTENCES_MODE,
+    SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
+    SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
+    SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+)
 import configparser
 import itertools
 import pytest
@@ -144,13 +151,13 @@ def test_runtime_token_config_matrix_resolution(params):
     in RuntimeTokenConfig without unhandled exceptions or parsing errors.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.add_section("token_mappings")
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_TOKEN_MAPPINGS)
 
-    cp.set("settings", "combine_source_words", str(params["combine_source_words"]))
-    cp.set("settings", "filter_inflected_by_window", str(params["filter_by_window"]))
-    cp.set("settings", "combine_source_words_prefer_lowercase", str(params["prefer_lowercase"]))
-    cp.set("token_mappings", "enabled", str(params["token_mappings_enabled"]))
+    cp.set(SEC_SETTINGS, "combine_source_words", str(params["combine_source_words"]))
+    cp.set(SEC_SETTINGS, "filter_inflected_by_window", str(params["filter_by_window"]))
+    cp.set(SEC_SETTINGS, "combine_source_words_prefer_lowercase", str(params["prefer_lowercase"]))
+    cp.set(SEC_TOKEN_MAPPINGS, "enabled", str(params["token_mappings_enabled"]))
 
     cfg = RuntimeTokenConfig.from_config(cp)
     assert cfg.combine_source_words == params["combine_source_words"]
@@ -168,13 +175,13 @@ def test_batch_merge_config_matrix_resolution(params):
     in BatchMergeConfig without unhandled exceptions or parsing errors.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("merge")
-    cp.add_section("settings")
+    cp.add_section(SEC_MERGE)
+    cp.add_section(SEC_SETTINGS)
 
-    cp.set("merge", "deduplicate", str(params["deduplicate"]))
-    cp.set("merge", "deduplicate_by_lemma", str(params["deduplicate_by_lemma"]))
-    cp.set("merge", "sort_frequency", str(params["sort_frequency"]))
-    cp.set("merge", "combine_source_words_prefer_lowercase", str(params["prefer_lowercase"]))
+    cp.set(SEC_MERGE, "deduplicate", str(params["deduplicate"]))
+    cp.set(SEC_MERGE, "deduplicate_by_lemma", str(params["deduplicate_by_lemma"]))
+    cp.set(SEC_MERGE, "sort_frequency", str(params["sort_frequency"]))
+    cp.set(SEC_MERGE, "combine_source_words_prefer_lowercase", str(params["prefer_lowercase"]))
 
     cfg = BatchMergeConfig.from_config(cp)
     assert cfg.deduplicate == params["deduplicate"]
@@ -193,18 +200,18 @@ def test_sentence_deduplication_scope_override_invariant(combine_flag, dedup_sco
     the invariant is enforced that source word combining behavior is disabled or cleanly overridden.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.add_section("sentences_mode")
-    cp.set("settings", "combine_source_words", str(combine_flag))
-    cp.set("sentences_mode", "enabled", "true")
-    cp.set("sentences_mode", "deduplication_scope", dedup_scope)
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_SENTENCES_MODE)
+    cp.set(SEC_SETTINGS, "combine_source_words", str(combine_flag))
+    cp.set(SEC_SENTENCES_MODE, "enabled", "true")
+    cp.set(SEC_SENTENCES_MODE, "deduplication_scope", dedup_scope)
 
     text_mode = "multi"
 
-    combine_source_words = cp.getboolean("settings", "combine_source_words", fallback=False)
-    sentences_enabled = cp.getboolean("sentences_mode", "enabled", fallback=False)
+    combine_source_words = cp.getboolean(SEC_SETTINGS, "combine_source_words", fallback=False)
+    sentences_enabled = cp.getboolean(SEC_SENTENCES_MODE, "enabled", fallback=False)
     if text_mode == "multi" and sentences_enabled:
-        scope = cp.get("sentences_mode", "deduplication_scope", fallback="sentence").strip().lower()
+        scope = cp.get(SEC_SENTENCES_MODE, "deduplication_scope", fallback="sentence").strip().lower()
         if scope == "sentence":
             combine_source_words = False
 
@@ -221,16 +228,16 @@ def test_lemma_deduplication_bounded_output_invariant(flags):
     remain strictly bounded by (and never exceed) the total count of raw input rows.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.add_section("token_mappings")
-    cp.add_section("merge")
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_TOKEN_MAPPINGS)
+    cp.add_section(SEC_MERGE)
 
     combine_sw, filter_win, pref_lc, map_en, dedup_lem = flags
-    cp.set("settings", "combine_source_words", str(combine_sw))
-    cp.set("settings", "filter_inflected_by_window", str(filter_win))
-    cp.set("settings", "combine_source_words_prefer_lowercase", str(pref_lc))
-    cp.set("token_mappings", "enabled", str(map_en))
-    cp.set("merge", "deduplicate_by_lemma", str(dedup_lem))
+    cp.set(SEC_SETTINGS, "combine_source_words", str(combine_sw))
+    cp.set(SEC_SETTINGS, "filter_inflected_by_window", str(filter_win))
+    cp.set(SEC_SETTINGS, "combine_source_words_prefer_lowercase", str(pref_lc))
+    cp.set(SEC_TOKEN_MAPPINGS, "enabled", str(map_en))
+    cp.set(SEC_MERGE, "deduplicate_by_lemma", str(dedup_lem))
 
     raw_data_rows = [
         ["run", "verb", "runs"],
@@ -263,11 +270,11 @@ def test_batch_merge_deduplication_bounded_output_invariant(merge_params):
     workflows obey core systemic identity invariants (output rows never exceed input rows).
     """
     cp = configparser.ConfigParser()
-    cp.add_section("merge")
-    cp.set("merge", "deduplicate", str(merge_params["deduplicate"]))
-    cp.set("merge", "deduplicate_by_lemma", str(merge_params["deduplicate_by_lemma"]))
-    cp.set("merge", "sort_frequency", str(merge_params["sort_frequency"]))
-    cp.set("merge", "combine_source_words_prefer_lowercase", str(merge_params["prefer_lowercase"]))
+    cp.add_section(SEC_MERGE)
+    cp.set(SEC_MERGE, "deduplicate", str(merge_params["deduplicate"]))
+    cp.set(SEC_MERGE, "deduplicate_by_lemma", str(merge_params["deduplicate_by_lemma"]))
+    cp.set(SEC_MERGE, "sort_frequency", str(merge_params["sort_frequency"]))
+    cp.set(SEC_MERGE, "combine_source_words_prefer_lowercase", str(merge_params["prefer_lowercase"]))
 
     cfg = BatchMergeConfig.from_config(cp)
 
@@ -297,12 +304,12 @@ def test_de_gcs_config_matrix_resolution(params):
     without unhandled exceptions, and confirm deterministic CLI argument generation.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.set("settings", "de_gcs", str(params["enabled"]))
-    cp.set("settings", "de_gcs_preserve_compound_word", str(params["preserve_compound_word"]))
-    cp.set("settings", "de_gcs_add_parts_to_wordlist", str(params["add_parts_to_wordlist"]))
-    cp.set("settings", "de_gcs_skip_merge_fractions", str(params["skip_merge_fractions"]))
-    cp.set("settings", "de_gcs_mask_unknown_parts", str(params["mask_unknown_parts"]))
+    cp.add_section(SEC_SETTINGS)
+    cp.set(SEC_SETTINGS, "de_gcs", str(params["enabled"]))
+    cp.set(SEC_SETTINGS, "de_gcs_preserve_compound_word", str(params["preserve_compound_word"]))
+    cp.set(SEC_SETTINGS, "de_gcs_add_parts_to_wordlist", str(params["add_parts_to_wordlist"]))
+    cp.set(SEC_SETTINGS, "de_gcs_skip_merge_fractions", str(params["skip_merge_fractions"]))
+    cp.set(SEC_SETTINGS, "de_gcs_mask_unknown_parts", str(params["mask_unknown_parts"]))
 
     cfg = DeGCSConfig.from_config(cp)
     assert cfg.enabled == params["enabled"]
@@ -334,12 +341,12 @@ def test_execution_context_matrix_resolution(params):
     sentences_mode.enabled, and deduplication_scope in ExecutionContext without parsing errors.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.add_section("sentences_mode")
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_SENTENCES_MODE)
 
-    cp.set("settings", "combine_source_words", str(params["combine_source_words"]))
-    cp.set("sentences_mode", "enabled", str(params["sentences_enabled"]))
-    cp.set("sentences_mode", "deduplication_scope", params["dedup_scope"])
+    cp.set(SEC_SETTINGS, "combine_source_words", str(params["combine_source_words"]))
+    cp.set(SEC_SENTENCES_MODE, "enabled", str(params["sentences_enabled"]))
+    cp.set(SEC_SENTENCES_MODE, "deduplication_scope", params["dedup_scope"])
 
     ctx = ExecutionContext.from_config(params["text_mode"], cp)
 
@@ -368,18 +375,18 @@ def test_sentence_boundary_config_matrix_resolution(params):
     in SentenceBoundaryConfig without unhandled exceptions or parsing errors, and assert immutability.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.add_section("sentences_mode")
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_SENTENCES_MODE)
 
-    cp.set("sentences_mode", "terminators", params["terminators"])
-    cp.set("sentences_mode", "punctuation_marks", params["punctuation_marks"])
-    cp.set("settings", "anki_abbrev_list", params["abbrev_list"])
-    cp.set("settings", "anki_context_mode", params["context_mode"])
+    cp.set(SEC_SENTENCES_MODE, "terminators", params["terminators"])
+    cp.set(SEC_SENTENCES_MODE, "punctuation_marks", params["punctuation_marks"])
+    cp.set(SEC_SETTINGS, "anki_abbrev_list", params["abbrev_list"])
+    cp.set(SEC_SETTINGS, "anki_context_mode", params["context_mode"])
 
     w_before, w_after, w_max = params["words_params"]
-    cp.set("settings", "anki_context_words_before", str(w_before))
-    cp.set("settings", "anki_context_words_after", str(w_after))
-    cp.set("settings", "anki_context_max_words", str(w_max))
+    cp.set(SEC_SETTINGS, "anki_context_words_before", str(w_before))
+    cp.set(SEC_SETTINGS, "anki_context_words_after", str(w_after))
+    cp.set(SEC_SETTINGS, "anki_context_max_words", str(w_max))
 
     sbc = SentenceBoundaryConfig.from_config(cp)
     assert sbc.terminators == (params["terminators"] if params["terminators"].strip() else ".!?:")
@@ -414,12 +421,12 @@ def test_deterministic_strategy_dispatch_routing(params):
     across all combinations of operational modes and configuration states.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("settings")
-    cp.add_section("sentences_mode")
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_SENTENCES_MODE)
 
-    cp.set("settings", "combine_source_words", str(params["combine_source_words"]))
-    cp.set("sentences_mode", "enabled", str(params["sentences_enabled"]))
-    cp.set("sentences_mode", "deduplication_scope", params["dedup_scope"])
+    cp.set(SEC_SETTINGS, "combine_source_words", str(params["combine_source_words"]))
+    cp.set(SEC_SENTENCES_MODE, "enabled", str(params["sentences_enabled"]))
+    cp.set(SEC_SENTENCES_MODE, "deduplication_scope", params["dedup_scope"])
 
     ctx = ExecutionContext.from_config(params["text_mode"], cp)
     strategy = ModeDispatcher.get_strategy(ctx)
@@ -455,14 +462,14 @@ def test_sentences_mode_config_invariants():
     Verify parsing, default fallback behaviors, and immutability invariants for SentencesModeConfig.
     """
     cp = configparser.ConfigParser()
-    cp.add_section("sentences_mode")
-    cp.set("sentences_mode", "enabled", "true")
-    cp.set("sentences_mode", "min_sentences", "5")
-    cp.set("sentences_mode", "alignment_method", "proportional")
-    cp.set("sentences_mode", "spawn_order", "reversed")
-    cp.set("sentences_mode", "parent_mode", "summary")
-    cp.set("sentences_mode", "multi_mode_sentence_decomposition", "true")
-    cp.set("sentences_mode", "deduplication_scope", " GLOBAL ")
+    cp.add_section(SEC_SENTENCES_MODE)
+    cp.set(SEC_SENTENCES_MODE, "enabled", "true")
+    cp.set(SEC_SENTENCES_MODE, "min_sentences", "5")
+    cp.set(SEC_SENTENCES_MODE, "alignment_method", "proportional")
+    cp.set(SEC_SENTENCES_MODE, "spawn_order", "reversed")
+    cp.set(SEC_SENTENCES_MODE, "parent_mode", "summary")
+    cp.set(SEC_SENTENCES_MODE, "multi_mode_sentence_decomposition", "true")
+    cp.set(SEC_SENTENCES_MODE, "deduplication_scope", " GLOBAL ")
 
     smc = SentencesModeConfig.from_config(cp)
     assert smc.enabled is True

@@ -1,3 +1,10 @@
+from kardenwort_desk import (
+    SEC_SETTINGS, SEC_TOKEN_MAPPINGS, SEC_MERGE, SEC_SENTENCES_MODE,
+    SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
+    SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
+    SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+)
 import time
 import pytest
 import configparser
@@ -8,20 +15,20 @@ import kardenwort_desk
 def test_benchmark_surfacing_latency(tmp_path):
     # Setup bench environment
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'default_target_language', 'ru')
-    config.set('settings', 'anki_mapping_file', './anki-mapping.ini')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'progressive')
-    config.add_section('triggers')
-    config.set('triggers', 'run_base_translation', 'auto')
-    config.set('triggers', 'run_enrichment', 'auto')
-    config.add_section('environment')
-    config.set('environment', 'kardenwort_workspace', str(tmp_path))
-    config.add_section('languages')
-    config.set('languages', 'en_prompt', 'English prompt')
-    config.set('languages', 'en_lemma_index', 'en_idx')
-    config.set('languages', 'en_lemma_override', 'en_over')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.set(SEC_SETTINGS, 'anki_mapping_file', './anki-mapping.ini')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'progressive')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_enrichment', 'auto')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_prompt', 'English prompt')
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
     
     resolved_paths = {
         'kardenwort_workspace': tmp_path,

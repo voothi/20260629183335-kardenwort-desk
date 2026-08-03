@@ -1,3 +1,10 @@
+from kardenwort_desk import (
+    SEC_SETTINGS, SEC_TOKEN_MAPPINGS, SEC_MERGE, SEC_SENTENCES_MODE,
+    SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
+    SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
+    SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+)
 import pytest
 import subprocess
 import configparser
@@ -219,17 +226,17 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
     # Enable new triggers
-    config.set('pipeline', 'lemma_base_provider', 'google')
-    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
+    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
+    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
     
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'auto')
-    config.set('triggers', 'run_lemma_enrichment', 'auto')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'auto')
     
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'progressive')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'progressive')
     
-    config.set('settings', 'intellifiller_batch_size', '2')
+    config.set(SEC_SETTINGS, 'intellifiller_batch_size', '2')
     
     # Create working TSV
     tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
@@ -297,13 +304,13 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
-    config.set('pipeline', 'lemma_base_provider', 'google')
-    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'auto')
-    config.set('triggers', 'run_lemma_enrichment', 'auto')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'progressive')
+    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
+    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'auto')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'progressive')
     
     tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test2.tsv"
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -349,12 +356,12 @@ def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
     config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
-    config.set('pipeline', 'lemma_base_provider', 'google')
-    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'manual')
-    config.set('triggers', 'run_text_translation', 'manual')
-    config.set('triggers', 'run_lemma_enrichment', 'auto')
+    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
+    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'manual')
+    config.set(SEC_TRIGGERS, 'run_text_translation', 'manual')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'auto')
     
     tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -389,10 +396,10 @@ def test_progressive_worker_d4_text_mode(monkeypatch, tmp_path):
     config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
     monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
     
-    config.set('pipeline', 'lemma_base_provider', 'google')
-    config.set('pipeline', 'lemma_reprocess_provider', 'intellifiller')
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'auto')
+    config.set(SEC_PIPELINE, 'lemma_base_provider', 'google')
+    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
     
     tsv_path = resolved_paths['kardenwort_workspace'] / "results" / "test.tsv"
     tsv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -453,8 +460,8 @@ ClassificationOxford=oxford
         mapping.write(f)
         
     # Enable classification section in local config and mock load_kardenwort_config
-    config.add_section('classification')
-    config.set('classification', 'enabled', 'true')
+    config.add_section(SEC_CLASSIFICATION)
+    config.set(SEC_CLASSIFICATION, 'enabled', 'true')
     
     kw_config = MagicMock()
     kw_config.has_section.return_value = True

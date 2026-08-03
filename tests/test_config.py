@@ -1,3 +1,10 @@
+from kardenwort_desk import (
+    SEC_SETTINGS, SEC_TOKEN_MAPPINGS, SEC_MERGE, SEC_SENTENCES_MODE,
+    SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
+    SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
+    SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+)
 import os
 import tempfile
 import pytest
@@ -215,11 +222,11 @@ display_mode = monolithic
         
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
-        assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
-        assert config.get('pipeline', 'lemma_reprocess_provider') == 'none'
-        assert config.get('triggers', 'run_lemma_base_translation') == 'manual'
-        assert config.get('triggers', 'run_lemma_enrichment') == 'auto'
-        assert config.get('rendering', 'display_mode') == 'monolithic'
+        assert config.get(SEC_PIPELINE, 'lemma_base_provider') == 'deepl'
+        assert config.get(SEC_PIPELINE, 'lemma_reprocess_provider') == 'none'
+        assert config.get(SEC_TRIGGERS, 'run_lemma_base_translation') == 'manual'
+        assert config.get(SEC_TRIGGERS, 'run_lemma_enrichment') == 'auto'
+        assert config.get(SEC_RENDERING, 'display_mode') == 'monolithic'
 
 def test_orthogonal_config_migration():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -243,14 +250,14 @@ lemmas_translation = combined
         
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
-        assert config.get('triggers', 'run_lemma_base_translation') == 'auto'
-        assert config.get('triggers', 'run_lemma_enrichment') == 'manual'
+        assert config.get(SEC_TRIGGERS, 'run_lemma_base_translation') == 'auto'
+        assert config.get(SEC_TRIGGERS, 'run_lemma_enrichment') == 'manual'
         
-        assert config.get('rendering', 'display_mode') == 'progressive'
+        assert config.get(SEC_RENDERING, 'display_mode') == 'progressive'
         
-        assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
-        assert config.get('pipeline', 'text_base_provider') == 'deepl'
-        assert config.get('pipeline', 'lemma_reprocess_provider') == 'intellifiller'
+        assert config.get(SEC_PIPELINE, 'lemma_base_provider') == 'deepl'
+        assert config.get(SEC_PIPELINE, 'text_base_provider') == 'deepl'
+        assert config.get(SEC_PIPELINE, 'lemma_reprocess_provider') == 'intellifiller'
 
 def test_orthogonal_config_migration_d7():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -273,8 +280,8 @@ enrichment_provider = intellifiller
         
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
-        assert config.get('pipeline', 'lemma_base_provider') == 'deepl'
-        assert config.get('pipeline', 'lemma_reprocess_provider') == 'intellifiller'
+        assert config.get(SEC_PIPELINE, 'lemma_base_provider') == 'deepl'
+        assert config.get(SEC_PIPELINE, 'lemma_reprocess_provider') == 'intellifiller'
 
 def test_default_rendering_and_triggers():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -300,11 +307,11 @@ enrichment_provider = combined
 
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
 
-        assert config.get('rendering', 'display_mode') == 'monolithic'
-        assert config.get('triggers', 'run_lemma_base_translation') == 'auto'
-        assert config.get('triggers', 'run_lemma_enrichment') == 'auto'
-        assert config.get('pipeline', 'lemma_base_provider') == 'google'
-        assert config.get('pipeline', 'lemma_reprocess_provider') == 'combined'
+        assert config.get(SEC_RENDERING, 'display_mode') == 'monolithic'
+        assert config.get(SEC_TRIGGERS, 'run_lemma_base_translation') == 'auto'
+        assert config.get(SEC_TRIGGERS, 'run_lemma_enrichment') == 'auto'
+        assert config.get(SEC_PIPELINE, 'lemma_base_provider') == 'google'
+        assert config.get(SEC_PIPELINE, 'lemma_reprocess_provider') == 'combined'
 
 def test_split_gap_limit_migration():
     with tempfile.TemporaryDirectory() as tmpdir:
@@ -321,7 +328,7 @@ anki_mapping_file = ./anki-mapping.ini
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
-        assert config.getint('settings', 'split_gap_limit') == 60
+        assert config.getint(SEC_SETTINGS, 'split_gap_limit') == 60
 
         # Scenario 2: split_gap_limit is integer (e.g. 15), should be parsed and returned
         config_content = """[settings]
@@ -330,7 +337,7 @@ split_gap_limit = 15
 """
         config_file.write_text(config_content)
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
-        assert config.getint('settings', 'split_gap_limit') == 15
+        assert config.getint(SEC_SETTINGS, 'split_gap_limit') == 15
 
         # Scenario 3: split_gap_limit is non-integer, should fall back to 60 without raising error
         config_content = """[settings]
@@ -339,7 +346,7 @@ split_gap_limit = abc
 """
         config_file.write_text(config_content)
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
-        assert config.getint('settings', 'split_gap_limit') == 60
+        assert config.getint(SEC_SETTINGS, 'split_gap_limit') == 60
 
 
 def test_audio_config():
@@ -373,9 +380,9 @@ rmb_play = false
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
         
         assert resolved_paths["anki_tts_cli"] == cli_script.resolve()
-        assert config.getboolean('audio', 'lmb_play') is True
-        assert config.get('audio', 'lmb_source') == 'inflection'
-        assert config.getboolean('audio', 'rmb_play') is False
+        assert config.getboolean(SEC_AUDIO, 'lmb_play') is True
+        assert config.get(SEC_AUDIO, 'lmb_source') == 'inflection'
+        assert config.getboolean(SEC_AUDIO, 'rmb_play') is False
 
 
 
@@ -407,13 +414,13 @@ parent_mode = stub
 
         config, resolved_paths, gd, _wf = kardenwort_desk.load_config(config_file)
 
-        assert config.get('settings', 'export_selection_mode') == 'unselected'
-        assert config.get('settings', 'anki_context_mode') == 'both'
-        assert config.getboolean('settings', 'save_to_favorites_on_export') is True
-        assert config.getboolean('settings', 'copy_source_txt_to_favorites_on_export') is False
+        assert config.get(SEC_SETTINGS, 'export_selection_mode') == 'unselected'
+        assert config.get(SEC_SETTINGS, 'anki_context_mode') == 'both'
+        assert config.getboolean(SEC_SETTINGS, 'save_to_favorites_on_export') is True
+        assert config.getboolean(SEC_SETTINGS, 'copy_source_txt_to_favorites_on_export') is False
 
-        assert config.getboolean('sentences_mode', 'enabled') is True
-        assert config.get('sentences_mode', 'alignment_method') == 'proportion'
-        assert config.getint('sentences_mode', 'min_sentences') == 3
-        assert config.get('sentences_mode', 'spawn_order') == 'reverse'
-        assert config.get('sentences_mode', 'parent_mode') == 'stub'
+        assert config.getboolean(SEC_SENTENCES_MODE, 'enabled') is True
+        assert config.get(SEC_SENTENCES_MODE, 'alignment_method') == 'proportion'
+        assert config.getint(SEC_SENTENCES_MODE, 'min_sentences') == 3
+        assert config.get(SEC_SENTENCES_MODE, 'spawn_order') == 'reverse'
+        assert config.get(SEC_SENTENCES_MODE, 'parent_mode') == 'stub'

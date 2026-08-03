@@ -1,3 +1,10 @@
+from kardenwort_desk import (
+    SEC_SETTINGS, SEC_TOKEN_MAPPINGS, SEC_MERGE, SEC_SENTENCES_MODE,
+    SEC_CLASSIFICATION, SEC_TIMEOUTS, SEC_PIPELINE, SEC_TRIGGERS,
+    SEC_TRANSLATION, SEC_TRANSLATION_PROVIDERS, SEC_RENDERING,
+    SEC_ENVIRONMENT, SEC_LANGUAGES, SEC_LANGUAGE_RESOURCES,
+    SEC_PROJECT_STRUCTURE, SEC_AUDIO, SEC_GOLDENDICT, SEC_WORDFILL
+)
 import pytest
 import kardenwort_desk
 from kardenwort_desk import render_section, render_lookup_html, render_lookup_text
@@ -101,22 +108,22 @@ def test_run_render_flow_regions(tmp_path):
     from kardenwort_desk import run_render_flow
     
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'default_target_language', 'ru')
-    config.set('settings', 'anki_mapping_file', './anki-mapping.ini')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'progressive')
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'auto')
-    config.set('triggers', 'run_lemma_enrichment', 'auto')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.set(SEC_SETTINGS, 'anki_mapping_file', './anki-mapping.ini')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'progressive')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'auto')
     
-    config.add_section('environment')
-    config.set('environment', 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
     
-    config.add_section('languages')
-    config.set('languages', 'en_prompt', 'English prompt')
-    config.set('languages', 'en_lemma_index', 'en_idx')
-    config.set('languages', 'en_lemma_override', 'en_over')
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_prompt', 'English prompt')
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
     
     resolved_paths = {
         'kardenwort_workspace': tmp_path,
@@ -164,21 +171,21 @@ def test_d1_progressive_display_mode(tmp_path):
     from kardenwort_desk import run_render_flow
     
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'default_target_language', 'ru')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'monolithic')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
     
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'manual')
-    config.set('triggers', 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'manual')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
     
-    config.add_section('environment')
-    config.set('environment', 'kardenwort_workspace', str(tmp_path))
-    config.add_section('languages')
-    config.set('languages', 'en_lemma_index', 'en_idx')
-    config.set('languages', 'en_lemma_override', 'en_over')
-    config.set('languages', 'en_prompt', 'en_prompt')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
     
     resolved_paths = {'kardenwort_workspace': tmp_path, 'anki_mapping_file': str(tmp_path / "mapping.ini")}
     tsv_path = tmp_path / "test.tsv"
@@ -196,7 +203,7 @@ def test_d1_progressive_display_mode(tmp_path):
     (tmp_path / "debug1.html").write_text(html_out, encoding="utf-8")
     assert '<script id="display-mode" type="text/plain">monolithic</script>' in html_out
     
-    config.set('rendering', 'display_mode', 'progressive')
+    config.set(SEC_RENDERING, 'display_mode', 'progressive')
     html_out = run_render_flow("word1", "en", "123", "single", config, resolved_paths, tsv_path=tsv_path)
     assert '<script id="display-mode" type="text/plain">progressive</script>' in html_out
 
@@ -205,19 +212,19 @@ def test_d2_render_source_translated_pending(tmp_path):
     from kardenwort_desk import run_render_flow
     
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'default_target_language', 'ru')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'progressive')
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'auto')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'progressive')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
     
-    config.add_section('environment')
-    config.set('environment', 'kardenwort_workspace', str(tmp_path))
-    config.add_section('languages')
-    config.set('languages', 'en_lemma_index', 'en_idx')
-    config.set('languages', 'en_lemma_override', 'en_over')
-    config.set('languages', 'en_prompt', 'en_prompt')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
     
     import sys
     resolved_paths = {'kardenwort_workspace': tmp_path, 'anki_mapping_file': str(tmp_path / "mapping.ini"), 'kardenwort_python': sys.executable}
@@ -248,19 +255,19 @@ def test_separable_verb_anchoring_scenarios(tmp_path, monkeypatch):
 
     # Setup base config
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'default_target_language', 'ru')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'progressive')
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'auto')
-    config.set('triggers', 'run_lemma_enrichment', 'manual')
-    config.add_section('environment')
-    config.set('environment', 'kardenwort_workspace', str(tmp_path))
-    config.add_section('languages')
-    config.set('languages', 'en_lemma_index', 'en_idx')
-    config.set('languages', 'en_lemma_override', 'en_over')
-    config.set('languages', 'en_prompt', 'en_prompt')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'progressive')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
     
     # Setup mapping
     mapping = configparser.ConfigParser()
@@ -349,9 +356,9 @@ def test_separable_verb_anchoring_scenarios(tmp_path, monkeypatch):
         cfg15.add_section(sec)
         for k, v in config.items(sec):
             cfg15.set(sec, k, v)
-    cfg15.set('settings', 'split_gap_limit', '15')
+    cfg15.set(SEC_SETTINGS, 'split_gap_limit', '15')
     
-    html = run_scenario(text, tsv_content, split_gap_limit=cfg15.getint('settings', 'split_gap_limit', fallback=60), custom_config=cfg15)
+    html = run_scenario(text, tsv_content, split_gap_limit=cfg15.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60), custom_config=cfg15)
     assert 'class="word not-connected" data-word-idx="1" data-line-idx="0" data-lower-clean="kommt">kommt</span>' in html
 
     # Overridden by flag split_gap_limit = 30 -> allows gap 20
@@ -399,26 +406,26 @@ def test_run_render_flow_with_classification(tmp_path, monkeypatch):
     monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
     
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'default_target_language', 'ru')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'monolithic')
-    config.add_section('triggers')
-    config.set('triggers', 'run_lemma_base_translation', 'auto')
-    config.set('triggers', 'run_lemma_enrichment', 'manual')
-    config.add_section('environment')
-    config.set('environment', 'kardenwort_workspace', str(tmp_path))
-    config.add_section('languages')
-    config.set('languages', 'en_lemma_index', 'en_idx')
-    config.set('languages', 'en_lemma_override', 'en_over')
-    config.set('languages', 'en_prompt', 'en_prompt')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
     
     # kw_config goes to the core kardenwort folder. For tests, kardenwort_desk searches in `kardenwort_workspace` parent or similar. 
     # Let's write the core config.ini in tmp_path (which represents the kardenwort_workspace)
     kw_config = configparser.ConfigParser()
-    kw_config.add_section('classification')
-    kw_config.set('classification', 'enabled', 'true')
-    kw_config.set('classification', 'dictionaries', 'oxford=path/to/oxford.tsv, cambridge=path/to/cambridge.tsv')
+    kw_config.add_section(SEC_CLASSIFICATION)
+    kw_config.set(SEC_CLASSIFICATION, 'enabled', 'true')
+    kw_config.set(SEC_CLASSIFICATION, 'dictionaries', 'oxford=path/to/oxford.tsv, cambridge=path/to/cambridge.tsv')
     with open(tmp_path / "config.ini", 'w') as f:
         kw_config.write(f)
     
@@ -472,15 +479,15 @@ def test_orthogonal_tsv_column_mapping(tmp_path, monkeypatch):
     monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
     
     config = configparser.ConfigParser()
-    config.add_section('settings')
-    config.set('settings', 'default_target_language', 'ru')
-    config.add_section('rendering')
-    config.set('rendering', 'display_mode', 'monolithic')
-    config.add_section('triggers')
-    config.add_section('environment')
-    config.set('environment', 'kardenwort_workspace', str(tmp_path))
-    config.add_section('languages')
-    config.set('languages', 'en_lemma_index', 'en_idx')
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
     
     resolved_paths = {
         'kardenwort_workspace': tmp_path,
