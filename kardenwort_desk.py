@@ -2969,12 +2969,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
                     forms_to_check = [f.strip() for f in row_inf.split(',')] if row_inf else ([row_lem] if row_lem else [])
                     for f in forms_to_check:
                         if not f: continue
-                        clean_f = "".join(ch for ch in f.lower() if ch.isalnum() or ch == "'")
+                        clean_f = "".join(ch for ch in f.lower() if ch.isalnum() or ch in apo_cfg)
                         if clean_f in sub_words:
                             matches_sentence = True
                             break
-                        parts = re.findall(r"[\w']+", f.lower())
-                        if any("".join(ch for ch in p if ch.isalnum() or ch == "'") in sub_words for p in parts if p):
+                        parts = re.findall(word_pattern, f.lower())
+                        if any("".join(ch for ch in p if ch.isalnum() or ch in apo_cfg) in sub_words for p in parts if p):
                             matches_sentence = True
                             break
                             
@@ -3311,7 +3311,10 @@ html, body {{
     if is_progressive and not worker_launched:
         write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True)
 
-                    
+    apo_cfg = tuple(c.strip() for c in config.get(SEC_SETTINGS, "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS).split(',') if c.strip())
+    apo_pattern = "".join(re.escape(c) for c in apo_cfg)
+    word_pattern = r"[\w" + apo_pattern + r"]+"
+
     token_to_rows = {}
     row_candidates = {}
     for row_id, row in enumerate(data_rows):
@@ -3322,13 +3325,13 @@ html, body {{
         vals_to_check = [f.strip() for f in inflected_val.split(',')] if inflected_val else [lemma_val]
         for val in vals_to_check:
             if val:
-                clean_val = "".join(ch for ch in val.lower() if ch.isalnum() or ch == "'")
+                clean_val = "".join(ch for ch in val.lower() if ch.isalnum() or ch in apo_cfg)
                 if clean_val:
                     candidates.add(clean_val)
-                parts = re.findall(r"[\w']+", val.lower())
+                parts = re.findall(word_pattern, val.lower())
                 if len(parts) > 1:
                     for part in parts:
-                        clean_part = "".join(ch for ch in part if ch.isalnum() or ch == "'")
+                        clean_part = "".join(ch for ch in part if ch.isalnum() or ch in apo_cfg)
                         if clean_part:
                             candidates.add(clean_part)
         row_candidates[row_id] = candidates
@@ -3351,8 +3354,8 @@ html, body {{
         
         for form in forms:
             if not form: continue
-            inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch == "'"))
-                         for p in re.findall(r"[\w']+", form)]
+            inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch in apo_cfg))
+                         for p in re.findall(word_pattern, form)]
             inf_words = [w for w in inf_words if w]
             
             if len(inf_words) >= 2 and not any(ch in form for ch in SINGLE_WORD_DELIMITERS):
