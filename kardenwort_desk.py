@@ -2809,7 +2809,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     parent_mode = smc.parent_mode
     multi_mode_decompose = smc.multi_mode_decompose
 
-    apo_cfg = tuple(c.strip() for c in config.get(SEC_SETTINGS, "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS).split(',') if c.strip())
+    apo_cfg = tuple(c.strip() for c in config.get(SEC_SETTINGS, "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS).strip('"').split(',') if c.strip())
     apo_pattern = "".join(re.escape(c) for c in apo_cfg)
     word_pattern = r"[\w" + apo_pattern + r"]+"
 
