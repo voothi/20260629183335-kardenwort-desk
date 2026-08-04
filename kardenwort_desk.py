@@ -2808,7 +2808,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
     spawn_order = smc.spawn_order
     parent_mode = smc.parent_mode
     multi_mode_decompose = smc.multi_mode_decompose
-    
+
+    apo_cfg = tuple(c.strip() for c in config.get(SEC_SETTINGS, "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS).split(',') if c.strip())
+    apo_pattern = "".join(re.escape(c) for c in apo_cfg)
+    word_pattern = r"[\w" + apo_pattern + r"]+"
+
     sbc = SentenceBoundaryConfig.from_config(config)
         
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
@@ -3310,10 +3314,6 @@ html, body {{
                 
     if is_progressive and not worker_launched:
         write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True)
-
-    apo_cfg = tuple(c.strip() for c in config.get(SEC_SETTINGS, "apostrophe_chars", fallback=DEFAULT_APOSTROPHE_CHARS).split(',') if c.strip())
-    apo_pattern = "".join(re.escape(c) for c in apo_cfg)
-    word_pattern = r"[\w" + apo_pattern + r"]+"
 
     token_to_rows = {}
     row_candidates = {}
