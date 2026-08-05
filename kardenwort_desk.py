@@ -2491,6 +2491,9 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
             text_file_to_pass = temp_file_path
             
         use_simplemma_correction = config.getboolean(SEC_SETTINGS, 'use_simplemma_correction', fallback=False)
+        simplemma_after_spacy = config.getboolean(SEC_SETTINGS, 'simplemma_after_spacy', fallback=False)
+        simplemma_pos_aware = config.getboolean(SEC_SETTINGS, 'simplemma_pos_aware', fallback=False)
+        simplemma_smart_fallback = config.getboolean(SEC_SETTINGS, 'simplemma_smart_fallback', fallback=False)
 
         cmd = [
             str(python_exe),
@@ -2510,6 +2513,12 @@ def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid,
         
         if use_simplemma_correction:
             cmd.append("--use-simplemma-correction")
+        if simplemma_after_spacy:
+            cmd.append("--simplemma-after-spacy")
+        if simplemma_pos_aware:
+            cmd.append("--simplemma-pos-aware")
+        if simplemma_smart_fallback:
+            cmd.append("--simplemma-smart-fallback")
             
         force_proper_noun_capitalization = config.getboolean(SEC_SETTINGS, 'force_proper_noun_capitalization', fallback=False)
         if force_proper_noun_capitalization:
