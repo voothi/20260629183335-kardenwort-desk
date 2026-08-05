@@ -340,6 +340,9 @@ class RuntimeTokenConfig:
             apostrophe_chars = DEFAULT_APOSTROPHE_CHARS
             prefer_lowercase = True
 
+        # Keep tokenizer synchronized with configured apostrophe characters
+        tok.APOSTROPHE_CHARS.update(c.strip() for c in apostrophe_chars.split(',') if c.strip())
+
         return cls(
             combine_source_words=combine_source_words,
             combine_order=combine_order,
