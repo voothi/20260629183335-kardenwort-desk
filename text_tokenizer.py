@@ -6,6 +6,7 @@ CYRILLIC_LOWER = "абвгдеёжзийклмнопрстуфхцчшщъыьэ
 
 CYRILLIC_MAP = {CYRILLIC_UPPER[i]: CYRILLIC_LOWER[i] for i in range(len(CYRILLIC_UPPER))}
 WORD_CHARS = set(CYRILLIC_UPPER + CYRILLIC_LOWER)
+APOSTROPHE_CHARS = {"'", "’", "‘", "`", "´", "ʼ"}
 
 def utf8_to_lower(s: str) -> str:
     """Lowercase string mapping custom Cyrillic and German umlauts."""
@@ -16,7 +17,7 @@ def is_word_char(c: str) -> bool:
     if not c:
         return False
     if len(c) == 1:
-        if ('a' <= c <= 'z') or ('A' <= c <= 'Z') or ('0' <= c <= '9') or c == "'":
+        if ('a' <= c <= 'z') or ('A' <= c <= 'Z') or ('0' <= c <= '9') or c in APOSTROPHE_CHARS:
             return True
     return c in WORD_CHARS
 
@@ -72,7 +73,7 @@ def build_word_list_internal(text: str, keep_spaces: bool) -> list:
             token["is_word"] = True
             
             # Clean non-alphanumeric chars (excluding apostrophe) and lowercase
-            cleaned_text = "".join(ch for ch in token["text"] if ch.isalnum() or ch == "'")
+            cleaned_text = "".join(ch for ch in token["text"] if ch.isalnum() or ch in APOSTROPHE_CHARS)
             token["lower_clean"] = utf8_to_lower(cleaned_text)
             token["logical_idx"] = curr_logical_idx
             curr_logical_idx += 1

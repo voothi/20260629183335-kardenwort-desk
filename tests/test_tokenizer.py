@@ -6,6 +6,11 @@ def test_is_word_char():
     assert tok.is_word_char("Z") is True
     assert tok.is_word_char("9") is True
     assert tok.is_word_char("'") is True
+    assert tok.is_word_char("’") is True
+    assert tok.is_word_char("‘") is True
+    assert tok.is_word_char("`") is True
+    assert tok.is_word_char("´") is True
+    assert tok.is_word_char("ʼ") is True
     assert tok.is_word_char("ä") is True
     assert tok.is_word_char("Ö") is True
     assert tok.is_word_char("ß") is True
@@ -53,3 +58,18 @@ def test_build_word_list_internal_ass_tags():
     assert "Word" in texts
     assert "{\\an8}" in texts
     assert "tag" in texts
+
+def test_build_word_list_typographic_apostrophes():
+    text = "Let’s hope they don’t split when using ` or ´ or ʼ apostrophes in words like can‘t."
+    words = tok.build_word_list(text)
+    assert "Let’s" in words
+    assert "don’t" in words
+    assert "can‘t" in words
+
+def test_build_word_list_internal_typographic_contractions():
+    text = "Let’s see."
+    tokens = tok.build_word_list_internal(text, keep_spaces=False)
+    word_tokens = [t for t in tokens if t["is_word"]]
+    assert len(word_tokens) == 2
+    assert word_tokens[0]["text"] == "Let’s"
+    assert word_tokens[0]["lower_clean"] == "let’s"
