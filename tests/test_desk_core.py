@@ -2298,3 +2298,33 @@ WordSource=lemma
     assert "--simplemma-smart-fallback" in mock_cmd
 
 
+def test_typographic_apostrophe_matching_and_categorization():
+    """Verify that typographic contractions like let’s are recognized as single words in matching and candidate generation."""
+    import kardenwort_desk as desk
+    import configparser
+    import re
+
+    config = configparser.ConfigParser()
+    config.read_string("""
+[token_mappings]
+apostrophe_chars = "', ’, ‘, `, ´, ʼ"
+""")
+    token_cfg = desk.RuntimeTokenConfig.from_config(config)
+    apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
+    apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
+
+    test_forms = ["let’s", "don’t", "we‘ve", "they´ll"]
+    for form in test_forms:
+        parts = re.findall(apo_regex, form.lower())
+        assert len(parts) == 1
+        clean_part = "".join(ch for ch in parts[0] if ch.isalnum() or ch in apo_set)
+        assert clean_part == form.lower()
+
+    for form in test_forms:
+        inf_words = [desk.tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch in apo_set))
+                     for p in re.findall(apo_regex, form)]
+        inf_words = [w for w in inf_words if w]
+        assert len(inf_words) == 1
+        assert inf_words[0] == form.lower()
+
+
