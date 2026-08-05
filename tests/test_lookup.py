@@ -527,4 +527,38 @@ ClassificationOxford=oxford
     assert write_calls[0] == [("oxford", col_idx)]
 
 
+def test_lookup_simplemma_new_flags_forwarding(monkeypatch, tmp_path):
+    import subprocess
+    from pathlib import Path
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    config.set('settings', 'simplemma_after_spacy', 'true')
+    config.set('settings', 'simplemma_pos_aware', 'true')
+    config.set('settings', 'simplemma_smart_fallback', 'true')
+    
+    mock_cmds = []
+    def mock_run(*args, **kwargs):
+        cmd = args[0]
+        mock_cmds.append(cmd)
+        out_idx = cmd.index("--output-file") + 1
+        out_file = Path(cmd[out_idx])
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        out_file.write_text("WordSource\tWordDestination\ntest\t\n", encoding='utf-8')
+        class MockProc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return MockProc()
+        
+    monkeypatch.setattr(subprocess, 'run', mock_run)
+    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', lambda *a, **kw: {0: "working"})
+    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {'test': "test_transl"})
+    
+    kardenwort_desk.run_lookup_flow("test text simplemma", "en", "ru", "html", config, resolved_paths, goldendict, "zid_simplemma")
+    assert len(mock_cmds) >= 1
+    assert "--simplemma-after-spacy" in mock_cmds[0]
+    assert "--simplemma-pos-aware" in mock_cmds[0]
+    assert "--simplemma-smart-fallback" in mock_cmds[0]
+
+
+
 

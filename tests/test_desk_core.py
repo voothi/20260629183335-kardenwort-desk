@@ -2237,3 +2237,64 @@ class TestBase64PayloadDefense:
             "Base64 encode is non-deterministic — output varies across repeated calls"
         )
 
+
+def test_simplemma_new_flags_forwarded_to_subprocess(monkeypatch, tmp_path):
+    import kardenwort_desk as desk
+    import subprocess
+    import configparser
+
+    mock_cmd = []
+    def mock_run(cmd, *args, **kwargs):
+        mock_cmd.extend(cmd)
+        if "--output-file" in cmd:
+            out_idx = cmd.index("--output-file")
+            out_path = Path(cmd[out_idx+1])
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text("WordSource\nword\n", encoding='utf-8')
+        class MockProc:
+            returncode = 0
+            stdout = ""
+            stderr = ""
+        return MockProc()
+
+    monkeypatch.setattr(subprocess, 'run', mock_run)
+
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "config.ini").write_text("[project_structure]\ngenerated_results_dir=results\n")
+
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+simplemma_after_spacy=true
+simplemma_pos_aware=true
+simplemma_smart_fallback=true
+[languages]
+en_lemma_index=idx.txt
+en_lemma_override=override.txt
+""")
+
+    mapping_file = tmp_path / "mapping.ini"
+    mapping_file.write_text("""
+[fields]
+WordSource=
+[fields_mapping.word]
+WordSource=lemma
+""")
+
+    resolved_paths = {
+        'kardenwort_workspace': workspace,
+        'anki_mapping_file': mapping_file,
+        'kardenwort_python': Path("python"),
+    }
+
+    try:
+        desk.run_render_flow("test text", "en", "1234", "single", config, resolved_paths)
+    except Exception:
+        pass
+
+    assert "--simplemma-after-spacy" in mock_cmd
+    assert "--simplemma-pos-aware" in mock_cmd
+    assert "--simplemma-smart-fallback" in mock_cmd
+
+
