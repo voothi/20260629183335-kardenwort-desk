@@ -8273,8 +8273,11 @@ def spawn_ahk(args_list, base_dir):
     ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None)
     if not ahk_repo:
         logger.error("Could not find autohotkey repository in parent directory.")
-        return
+        return False
     ahk_script = ahk_repo / "kardenwort-window" / "kardenwort-window.ahk"
+    if not ahk_script.exists():
+        logger.error(f"AHK script not found at {ahk_script}")
+        return False
     
     import shutil
     ahk_exes = ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]
@@ -8319,8 +8322,10 @@ def spawn_ahk(args_list, base_dir):
         logger.info(f"Spawning AHK via executable: {' '.join(cmd)}")
         try:
             subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
+            return True
         except Exception as e:
             logger.error(f"Failed to spawn AHK window process: {e}")
+            return False
     else:
         logger.warning(f"No AutoHotkey executable found, falling back to shell execution for {ahk_script.name}")
         try:
@@ -8329,8 +8334,10 @@ def spawn_ahk(args_list, base_dir):
                 os.startfile(str(ahk_script), operation='open', arguments=args_str)
             else:
                 subprocess.Popen(["cmd.exe", "/c", "start", '""', str(ahk_script)] + args_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
+            return True
         except Exception as e2:
             logger.error(f"Failed to spawn AHK via fallback: {e2}")
+            return False
 
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")

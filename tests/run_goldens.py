@@ -49,9 +49,12 @@ def main():
         # Instead of calling Python directly, we trigger the resident AHK script exactly
         # as if the user triggered it via hotkey or tray menu.
         try:
-            kardenwort_desk.spawn_ahk(["--zid", run['zid'], "--desk", str(run['file'])], repo_root)
-            print(f"SUCCESS: {run['name']} initiated via AHK.")
-            print(f"The actual speed trace will be asynchronously appended to results/speed_trace.jsonl")
+            success = kardenwort_desk.spawn_ahk(["--zid", run['zid'], "--desk", str(run['file'])], repo_root)
+            if success:
+                print(f"SUCCESS: {run['name']} initiated via AHK.")
+                print(f"The actual speed trace will be asynchronously appended to results/speed_trace.jsonl")
+            else:
+                print(f"FAILED: {run['name']} could not be initiated.")
                     
         except Exception as e:
             print(f"ERROR: {e}")
