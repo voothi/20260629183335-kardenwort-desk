@@ -36,16 +36,19 @@ def main():
             
         # Instead of calling Python directly, we trigger the resident AHK script exactly
         # as if the user triggered it via hotkey or tray menu.
-        # This guarantees 100% End-to-End architectural authenticity.
-        cmd = [
-            "AutoHotkey.exe",
-            str(ahk_script),
-            "--desk",
-            str(run['file'])
-        ]
+        AHK_PATH = r"C:\AHK\AutoHotkey_2.0.18\AutoHotkey64.exe"
+        
+        if os.path.exists(AHK_PATH):
+            cmd = [AHK_PATH, str(ahk_script), "--desk", str(run['file'])]
+            cmd_kwargs = {"capture_output": True, "text": True}
+        else:
+            # Fall back to using cmd.exe start to natively delegate to the OS's .ahk 
+            # file association, which avoids WinError 2 if AutoHotkey.exe is not in PATH.
+            cmd = f'start "" "{ahk_script}" --desk "{run["file"]}"'
+            cmd_kwargs = {"shell": True, "capture_output": True, "text": True}
         
         try:
-            result = subprocess.run(cmd, capture_output=True, text=True)
+            result = subprocess.run(cmd, **cmd_kwargs)
             if result.returncode != 0:
                 print(f"ERROR: AHK launcher failed for {run['lang']}:")
                 print(result.stderr)
