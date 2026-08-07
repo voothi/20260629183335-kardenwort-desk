@@ -84,7 +84,11 @@ class TestPerformanceTracing(unittest.TestCase):
             'anki_tts_cli': Path('/mock/anki_tts_cli.py'),
             'kardenwort_python': Path('/mock/python.exe'),
             'deep_translator_python': Path('/mock/deep_translator_python.exe'),
-            'translate_google_script': Path('/mock/translate_google.py')
+            'translate_google_script': Path('/mock/translate_google.py'),
+            'translate_deepl_script': Path('/mock/translate_deepl.py'),
+            'intellifiller_headless': Path('/mock/intellifiller.py'),
+            'favorites_output_dir': Path('/mock/favorites'),
+            'generated_results_dir': Path('/mock/results')
         }
 
         # We'll use an event to hold the first thread inside run_render_flow
