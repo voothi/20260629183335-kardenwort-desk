@@ -6441,7 +6441,7 @@ def cmd_render(args):
     try:
         zoom_val = args.zoom if args.zoom else config.get(SEC_SETTINGS, 'default_zoom', fallback='100')
         split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60)
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill, seq_num=getattr(args, 'seq_num', None), spawn_master=getattr(args, 'spawn_master', False))
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill, seq_num=getattr(args, 'seq_num', None))
         from b64util import encode
         emit_payload(encode(html), raw=True)
     except Exception as e:
