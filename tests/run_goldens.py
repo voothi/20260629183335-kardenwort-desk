@@ -45,7 +45,8 @@ def main():
             "render",
             "--language", run['lang'],
             "--zid", run['zid'],
-            "--text", text_content
+            "--text", text_content,
+            "--spawn-master"
         ]
         
         try:
@@ -58,23 +59,6 @@ def main():
             else:
                 print(f"SUCCESS: {run['name']} completed.")
                 print(f"Rendered HTML length: {len(result.stdout)} characters.")
-                
-                results_dir = repo_root / "results"
-                master_tsvs = list(results_dir.glob(f"{run['zid']}-*.tsv"))
-                if master_tsvs:
-                    ahk_script = repo_root.parent / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
-                    
-                    import shutil
-                    ahk_exe = shutil.which("AutoHotkey.exe") or shutil.which("AutoHotkey64.exe")
-                    if not ahk_exe:
-                        ahk_exe = r"C:\Program Files\AutoHotkey\v2\AutoHotkey.exe"
-                        if not Path(ahk_exe).exists():
-                            ahk_exe = r"C:\Program Files\AutoHotkey\AutoHotkey.exe"
-                            
-                    subprocess.Popen(
-                        [str(ahk_exe), str(ahk_script), "--seq-num", "1", "--restore", str(master_tsvs[0])],
-                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
-                    )
                     
         except Exception as e:
             print(f"ERROR: {e}")

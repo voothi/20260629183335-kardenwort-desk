@@ -3118,6 +3118,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             
         master_seq = seq_num if seq_num is not None else 1
         ahk_args = []
+        
+        # If running headlessly (like run_goldens.py), we need to spawn the master window too
+        if getattr(args, 'spawn_master', False) and resolved_paths.get('master_tsv'):
+            ahk_args.extend(["--seq-num", str(master_seq), "--restore", str(resolved_paths['master_tsv'])])
+            
         paths_to_spawn = [(master_seq + i + 1, path) for i, path in enumerate(sub_tsv_paths)]
         if spawn_order == 'reverse':
             paths_to_spawn.reverse()
@@ -8578,6 +8583,7 @@ def main():
     p_render.add_argument("--zoom", default=None, help="Zoom level for CSS scaling (falls back to config default_zoom)")
     p_render.add_argument("--tsv", default=None, help="Path to TSV file to render")
     p_render.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
+    p_render.add_argument("--spawn-master", action="store_true", help="Spawn the master window in AHK alongside children (for headless testing)")
     p_render.add_argument("--split-gap-limit", type=int, default=None, help="Maximum source-word index distance allowed between parts of a split/separable verb construct")
     p_render.add_argument("--seq-num", type=int, default=None, help="Parent window sequence number")
 
