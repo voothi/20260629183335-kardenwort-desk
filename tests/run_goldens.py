@@ -1,10 +1,7 @@
 import os
 import sys
 import subprocess
-import importlib.util
 from pathlib import Path
-
-import time
 
 def main():
     repo_root = Path(__file__).parent.parent.resolve()
@@ -29,13 +26,9 @@ def main():
     for i, run in enumerate(runs):
         print(f"==================================================")
         if i == 0:
-            print(f"WARNING: Please ensure ALL desk windows are closed before testing so the AHK counter starts at 1.")
-            time.sleep(2)
-            print(f"Starting test for {run['lang']}...")
+            input(f"WARNING: Please ensure ALL desk windows are closed before testing.\nReady to test {run['lang']}? Press Enter to start...")
         else:
-            print(f"\nWARNING: Please close the previous desk window now to reset the counter.")
-            time.sleep(4)
-            print(f"Starting test for {run['lang']}...")
+            input(f"\nWARNING: Please CLOSE the current desk windows (1, 4, 3, 2).\nOnce they are closed, press Enter to test {run['lang']}...")
             
         print(f"Running {run['name']} (ZID: {run['zid']})...")
         
