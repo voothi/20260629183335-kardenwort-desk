@@ -7912,10 +7912,14 @@ def cmd_merge(args):
             return None
 
         files = []
+        original_files_by_tsv = {}
         for f in expanded_files:
             tsv_path = map_to_tsv(f)
-            if tsv_path and tsv_path not in files:
-                files.append(tsv_path)
+            if tsv_path:
+                if tsv_path not in files:
+                    files.append(tsv_path)
+                    original_files_by_tsv[tsv_path] = set()
+                original_files_by_tsv[tsv_path].add(f)
 
         if not files:
             print_structured_error("INVALID_STATE", "No TSV files found in the selection to merge.")
@@ -8232,11 +8236,28 @@ def cmd_merge(args):
                         if f == dest_tsv_path:
                             continue
                         try:
-                            os.remove(f)
+                            # 1. Delete original explicitly selected files mapped to this TSV
+                            if f in original_files_by_tsv:
+                                for orig_f in original_files_by_tsv[f]:
+                                    if orig_f != dest_tsv_path and orig_f not in written_txt_paths:
+                                        try:
+                                            os.remove(orig_f)
+                                        except OSError:
+                                            pass
+                            # 2. Delete the TSV itself
+                            try:
+                                os.remove(f)
+                            except OSError:
+                                pass
+                            # 3. Delete any remaining .txt files for this ZID
                             zid = extract_zid(f)
-                            for t_file in f.parent.glob(f"{zid}-*.txt"):
-                                if t_file not in written_txt_paths:
-                                    os.remove(t_file)
+                            if zid:
+                                for t_file in f.parent.glob(f"{zid}*.txt"):
+                                    if t_file not in written_txt_paths:
+                                        try:
+                                            os.remove(t_file)
+                                        except OSError:
+                                            pass
                         except Exception as e:
                             logger.warning(f"Failed to delete merged source {f.name}: {e}")
             except Exception as e:
