@@ -793,6 +793,7 @@ class ModeDispatcher:
 class ConfigError(Exception):
     pass
 
+_ACTIVE_ZIDS_LOCK = threading.Lock()
 _ACTIVE_ZIDS = set()
 _HAS_BOOTED = False
 
@@ -833,30 +834,31 @@ class TraceTimer(contextlib.ContextDecorator):
             _HAS_BOOTED = True
             
         try:
-            results_dir = resolve_results_dir(self.resolved_paths, self.config) if 'resolve_results_dir' in globals() else self.resolved_paths.get('results_dir', '')
+            results_dir = resolve_results_dir(self.resolved_paths, self.config)
             if not results_dir:
                 return False
                 
-            log_file = os.path.join(results_dir, 'speed_trace.jsonl')
+            log_file = Path(results_dir) / 'speed_trace.jsonl'
             
-            if os.path.exists(log_file) and os.path.getsize(log_file) > self.max_mb * 1024 * 1024:
-                try:
-                    with open(log_file, 'r', encoding='utf-8') as f:
-                        lines = f.readlines()
-                    with open(log_file, 'w', encoding='utf-8') as f:
-                        f.writelines(lines[len(lines)//2:])
-                except Exception:
-                    pass
-                    
-            entry = {
-                "timestamp": datetime.now(timezone.utc).isoformat(),
-                "zid": self.zid,
-                "phase": self.phase,
-                "duration": duration,
-                "cold_start": cold_start
-            }
-            with open(log_file, 'a', encoding='utf-8') as f:
-                f.write(json.dumps(entry) + '\n')
+            with file_lock(log_file):
+                if log_file.exists() and log_file.stat().st_size > self.max_mb * 1024 * 1024:
+                    try:
+                        with open(log_file, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                        with open(log_file, 'w', encoding='utf-8') as f:
+                            f.writelines(lines[len(lines)//2:])
+                    except Exception:
+                        pass
+                        
+                entry = {
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "zid": self.zid,
+                    "phase": self.phase,
+                    "duration": duration,
+                    "cold_start": cold_start
+                }
+                with open(log_file, 'a', encoding='utf-8') as f:
+                    f.write(json.dumps(entry) + '\n')
         except Exception:
             pass
         return False
@@ -2886,13 +2888,15 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
     return selected_positions, len(selected_positions) > 0
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
-    if zid in _ACTIVE_ZIDS:
-        return
-    _ACTIVE_ZIDS.add(zid)
+    with _ACTIVE_ZIDS_LOCK:
+        if zid in _ACTIVE_ZIDS:
+            return
+        _ACTIVE_ZIDS.add(zid)
     try:
         return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num)
     finally:
-        _ACTIVE_ZIDS.discard(zid)
+        with _ACTIVE_ZIDS_LOCK:
+            _ACTIVE_ZIDS.discard(zid)
 
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
