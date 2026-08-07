@@ -2077,7 +2077,7 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         return sentence_translations_raw.get(0, "")
     return None
 
-def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None):
+def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None, zid=None):
     import time
     
     eff_mode = _effective_text_mode(text, text_mode)
@@ -2092,7 +2092,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     if eff_mode == 'single':
         if len(text) <= wrap_max_chars and '\n' not in text.strip():
             try:
-                return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider).strip()}
+                return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider, zid=zid).strip()}
             except Exception as e:
                 logger.error(f"Failed to translate main text: {e}")
                 return {0: f"[Translation Error: {e}]"}
@@ -2112,7 +2112,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     # 1. Translate the padded sentences for the TSV (SentenceDestination)
                     pseudo_translations = translate_source_text(
                         "\n".join(padded_lines), source_lang, target_lang, 'multi',
-                        config, resolved_paths, provider, chunk_callback=chunk_callback
+                        config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid
                     )
                     
                     # 2. Translate the unpadded pseudo-lines for the Translate View (.ru.txt) and TextDestination
@@ -2131,7 +2131,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         try:
                             unpadded_translations = translate_source_text(
                                 "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                                config, resolved_paths, provider
+                                config, resolved_paths, provider, zid=zid
                             )
                             full_text_trans = " ".join(
                                 unpadded_translations.get(i, "").strip() 
@@ -2150,7 +2150,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 else:
                     return translate_source_text(
                         "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                        config, resolved_paths, provider, chunk_callback=chunk_callback
+                        config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid
                     )
             except TranslationAlignmentError as tae:
                 raise TranslationAlignmentError(
@@ -2175,7 +2175,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             last_err = None
             for attempt in range(1, max_retries + 1):
                 try:
-                    trans_line = translate_text(line, source_lang, target_lang, config, resolved_paths, provider)
+                    trans_line = translate_text(line, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
                     _validate_translated_line(line, trans_line, idx, config)
                     translations[idx] = trans_line.strip()
                     success = True
@@ -2209,7 +2209,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             try:
                 if split_mode == 'newline_join':
                     joined_text = "\n".join(chunk_text_list)
-                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
                     normalized = translated_joined.replace('\r\n', '\n').replace('\r', '\n')
                     translated_chunk_lines = normalized.split('\n')
                     
@@ -2230,13 +2230,13 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         parts.append(line)
                     joined_text = " ".join(parts)
                     
-                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
                     parts_split = split_merged_text_by_markers(translated_joined, markers)
                     translated_chunk_lines = [part.replace("__KWSPLITESC__", "[[KWSPLIT") for part in parts_split]
                     
                 elif split_mode == 'proportional':
                     joined_text = " ".join(chunk_text_list)
-                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
                     lengths = [len(line) for line in chunk_text_list]
                     translated_chunk_lines = split_by_proportion(translated_joined, lengths)
                 else:
@@ -2262,7 +2262,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             for list_idx, target_idx in enumerate(indices):
                 original_line = chunk_text_list[list_idx]
                 try:
-                    rescued_line = translate_text(original_line, source_lang, target_lang, config, resolved_paths, provider)
+                    rescued_line = translate_text(original_line, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
                     _validate_translated_line(original_line, rescued_line, target_idx, config)
                     translations[target_idx] = rescued_line.strip()
                 except Exception as rescue_err:
@@ -2944,7 +2944,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         translated_sentences = []
         translated_paragraph = ""
         try:
-            translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider)
+            translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
             translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
         except Exception as e:
             logger.warning(f"Holistic translation failed: {e}")
@@ -2965,7 +2965,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         if len(translated_sentences) != len(source_sentences):
             if not translated_paragraph:
                 try:
-                    translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider)
+                    translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
                 except Exception:
                     translated_paragraph = "[Translation Error]"
             lengths = [len(s) for s in source_sentences]
@@ -3304,7 +3304,7 @@ html, body {{
     if not is_progressive and run_base == 'auto':
         try:
             if not sentence_translated:
-                sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, base_provider)
+                sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, base_provider, zid=zid)
                 resolve_translations(
                     text, text_mode, data_rows, col_index, col_sentence_dest,
                     sentence_translations_raw, working_tsv_path, comments, headers,
@@ -5596,7 +5596,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     
     main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
     try:
-        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider)
+        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
     except TranslationAlignmentError as tae:
         logger.error(f"Lookup translation alignment error: {tae}")
         sentence_translations = tae.partial_dict
@@ -7239,7 +7239,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         write_update_js(tsv_path, curr_rows, h, role_fields, stage=None)
 
                     sentence_translations_raw = translate_source_text(
-                        text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider, chunk_callback=on_chunk_done)
+                        text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider, zid=zid, chunk_callback=on_chunk_done)
                     comments, headers, current_rows = load_tsv_rows(tsv_path)
                     resolve_translations(
                         text, args.text_mode, current_rows, col_index, col_sentence_dest,
@@ -7517,7 +7517,7 @@ def cmd_retext_worker(args):
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
         
         try:
-            sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider)
+            sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider, zid=zid)
         except TranslationAlignmentError as tae:
             logger.error(f"Retext worker translation alignment error: {tae}")
             sentence_translations = tae.partial_dict
