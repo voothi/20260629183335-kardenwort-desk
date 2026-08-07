@@ -39,12 +39,12 @@ def main():
         AHK_PATH = r"C:\AHK\AutoHotkey_2.0.18\AutoHotkey64.exe"
         
         if os.path.exists(AHK_PATH):
-            cmd = [AHK_PATH, str(ahk_script), "--desk", str(run['file']), "--zid", run['zid']]
+            cmd = [AHK_PATH, str(ahk_script), "--zid", run['zid'], "--desk", str(run['file'])]
             cmd_kwargs = {"capture_output": True, "text": True}
         else:
             # Fall back to using cmd.exe start to natively delegate to the OS's .ahk 
             # file association, which avoids WinError 2 if AutoHotkey.exe is not in PATH.
-            cmd = f'start "" "{ahk_script}" --desk "{run["file"]}" --zid "{run["zid"]}"'
+            cmd = f'start "" "{ahk_script}" --zid "{run["zid"]}" --desk "{run["file"]}"'
             cmd_kwargs = {"shell": True, "capture_output": True, "text": True}
         
         try:
