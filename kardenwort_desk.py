@@ -2914,6 +2914,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         try:
             p_tsv = Path(tsv_path)
             if p_tsv.exists():
+                # STRICT CONTRACT WARNING: DO NOT change this logic to read `# Children` tags or any other arbitrary metadata from the TSV file!
+                # The TSV file format is a strict cross-repository contract (desk, core, window, Anki, etc.).
+                # Child relationships MUST be resolved purely by parsing the ZID sequences in filenames on disk.
                 my_zid_match = re.match(r'^(\d{14})', p_tsv.name)
                 if my_zid_match:
                     my_zid = my_zid_match.group(1)
@@ -3046,6 +3049,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         else:
             master_data_rows = [list(r) for r in data_rows]
 
+        # STRICT CONTRACT WARNING: DO NOT append `# Children` tags or any other arbitrary metadata to `comments` here!
+        # The TSV format must remain clean. Child relationships are strictly resolved via filenames.
         save_tsv_rows_safely(master_tsv_path, comments, headers, master_data_rows)
 
         kardenwort_workspace = resolved_paths['kardenwort_workspace']
