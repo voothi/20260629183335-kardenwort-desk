@@ -13,6 +13,7 @@ import html
 import socket
 import concurrent.futures
 import threading
+import time
 import traceback
 from pathlib import Path
 from datetime import datetime, timezone
@@ -792,6 +793,74 @@ class ModeDispatcher:
 class ConfigError(Exception):
     pass
 
+_ACTIVE_ZIDS = set()
+_HAS_BOOTED = False
+
+class TraceTimer(contextlib.ContextDecorator):
+    def __init__(self, phase, zid, config, resolved_paths):
+        self.phase = phase
+        self.zid = zid
+        self.config = config
+        self.resolved_paths = resolved_paths
+        
+        self.enabled = False
+        self.max_mb = 5
+        if self.config and hasattr(self.config, 'getboolean'):
+            try:
+                self.enabled = self.config.getboolean('Settings', 'enable_performance_tracing', fallback=False)
+            except Exception:
+                self.enabled = False
+            try:
+                self.max_mb = self.config.getint('Settings', 'trace_log_max_mb', fallback=5)
+            except Exception:
+                self.max_mb = 5
+
+    def __enter__(self):
+        if not self.enabled:
+            return self
+        self.start = time.perf_counter()
+        return self
+
+    def __exit__(self, *exc):
+        global _HAS_BOOTED
+        if not self.enabled:
+            return False
+            
+        duration = time.perf_counter() - self.start
+        
+        cold_start = not _HAS_BOOTED
+        if not _HAS_BOOTED:
+            _HAS_BOOTED = True
+            
+        try:
+            results_dir = resolve_results_dir(self.resolved_paths, self.config) if 'resolve_results_dir' in globals() else self.resolved_paths.get('results_dir', '')
+            if not results_dir:
+                return False
+                
+            log_file = os.path.join(results_dir, 'speed_trace.jsonl')
+            
+            if os.path.exists(log_file) and os.path.getsize(log_file) > self.max_mb * 1024 * 1024:
+                try:
+                    with open(log_file, 'r', encoding='utf-8') as f:
+                        lines = f.readlines()
+                    with open(log_file, 'w', encoding='utf-8') as f:
+                        f.writelines(lines[len(lines)//2:])
+                except Exception:
+                    pass
+                    
+            entry = {
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "zid": self.zid,
+                "phase": self.phase,
+                "duration": duration,
+                "cold_start": cold_start
+            }
+            with open(log_file, 'a', encoding='utf-8') as f:
+                f.write(json.dumps(entry) + '\n')
+        except Exception:
+            pass
+        return False
+
 _last_zid = None
 def generate_unique_zid():
     global _last_zid
@@ -1496,7 +1565,11 @@ def is_network_online_multi(hosts, port=53, timeout=1.0):
                 return True
         return False
 
-def translate_text(text, source, target, config, resolved_paths, provider):
+def translate_text(text, source, target, config, resolved_paths, provider, zid=None):
+    with TraceTimer("translate_text", zid or "unknown", config, resolved_paths):
+        return _translate_text_impl(text, source, target, config, resolved_paths, provider)
+
+def _translate_text_impl(text, source, target, config, resolved_paths, provider):
     auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=True)
     
     check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1'))
@@ -2392,6 +2465,10 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
         return False, e.stderr
 
 def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single'):
+    with TraceTimer("lemmatization", zid, config, resolved_paths):
+        return _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=ttl_seconds, cache_key=cache_key, text_mode=text_mode)
+
+def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single'):
     eff_mode = _effective_text_mode(text, text_mode)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
@@ -2809,6 +2886,15 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
     return selected_positions, len(selected_positions) > 0
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
+    if zid in _ACTIVE_ZIDS:
+        return
+    _ACTIVE_ZIDS.add(zid)
+    try:
+        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num)
+    finally:
+        _ACTIVE_ZIDS.discard(zid)
+
+def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     children_tsv_paths = []
@@ -2940,6 +3026,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
         master_trans_path.write_text(translated_paragraph, encoding='utf-8')
         
+        _the_cut_timer = TraceTimer("the_cut", zid, config, resolved_paths)
+        _the_cut_timer.__enter__()
+        
         sub_tsv_paths = []
         token_cfg = RuntimeTokenConfig.from_config(config)
         apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
@@ -3015,6 +3104,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
             save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
             sub_tsv_paths.append(sub_tsv_path)
+            
+        _the_cut_timer.__exit__(None, None, None)
             
         master_seq = seq_num if seq_num is not None else 1
         ahk_args = []
@@ -5721,6 +5812,10 @@ def render_section(token, ctx):
     return html_output
 
 def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+    with TraceTimer("html_generation", zid, config, resolved_paths):
+        return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+
+def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
     sections = goldendict['sections']
     column_tokens = goldendict['lemma_columns']
     
@@ -7100,6 +7195,11 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         logger.error(f"Failed to atomically move update js file after 10 retries: {update_js_path}")
 
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+    zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
+    with TraceTimer("background_text_translation", zid, config, resolved_paths):
+        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+
+def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
