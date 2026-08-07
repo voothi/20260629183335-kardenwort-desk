@@ -84,16 +84,15 @@ def analyze():
             except json.JSONDecodeError:
                 pass
 
-    print("=" * 80)
-    print(f"{'PERFORMANCE DYNAMICS OVER TIME (BY GIT COMMIT)':^80}")
-    print("=" * 80)
+    print("# Performance Dynamics Over Time (By Git Commit)")
+    print()
 
     active_commits = sorted(runs_by_commit.keys(), key=lambda h: commit_lookup[h]['ts'] if h in commit_lookup else 0)
 
     for h in active_commits:
         subj = commit_lookup[h]['subj'] if h in commit_lookup else "Unknown"
-        print(f"\n[Commit: {h}] {subj}")
-        print("-" * 80)
+        print(f"## [Commit: {h}] {subj}")
+        print("```text")
         
         zids = runs_by_commit[h]
         valid_zids = [z for z in zids.keys() if z != 'unknown']
@@ -122,7 +121,8 @@ def analyze():
             total_time = max_end_ts - min_start_ts
             if total_time <= 0: total_time = 1
             
-            print(f"  ZID: {latest_zid} (Total E2E Pipeline Duration: {total_time:.3f}s)")
+            print(f"ZID: {latest_zid} (Total E2E Pipeline Duration: {total_time:.3f}s)")
+            print("-" * 75)
             
             parsed_events.sort(key=lambda x: x['start_t'])
             chart_width = 40
@@ -136,20 +136,21 @@ def analyze():
                     
                 bar = (" " * start_idx) + ("█" * dur_idx)
                 bar = bar.ljust(chart_width)
-                print(f"    {p['phase']:<30} | {bar} | {p['dur']:.3f}s")
+                print(f"{p['phase']:<30} | {bar} | {p['dur']:.3f}s")
+            print()
+            
+        print("```\n")
                 
-    print("\n" + "=" * 80)
-    print(f"{'GOLDEN RUN AGGREGATES':^80}")
-    print("=" * 80)
-    print(f"{'Phase':<30} | {'Cnt':<4} | {'Min':<7} | {'Avg':<7} | {'Max':<7}")
-    print("-" * 80)
+    print("## Golden Run Aggregates")
+    print("| Phase | Cnt | Min (s) | Avg (s) | Max (s) |")
+    print("| :--- | :---: | :---: | :---: | :---: |")
     sorted_phases = sorted(phase_aggregates.items(), key=lambda x: sum(x[1])/len(x[1]), reverse=True)
     for phase, durations in sorted_phases:
         count = len(durations)
         avg = sum(durations) / count
         min_d = min(durations)
         max_d = max(durations)
-        print(f"{phase:<30} | {count:<4} | {min_d:<7.3f} | {avg:<7.3f} | {max_d:<7.3f}")
+        print(f"| `{phase}` | {count} | {min_d:.3f} | {avg:.3f} | {max_d:.3f} |")
 
 if __name__ == '__main__':
     analyze()
