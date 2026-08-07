@@ -4,10 +4,21 @@ from pathlib import Path
 from datetime import datetime, timezone
 import subprocess
 import bisect
+import re
+
+def get_golden_prefixes():
+    fixtures_dir = Path("tests/fixtures")
+    prefixes = set()
+    if fixtures_dir.exists():
+        for f in fixtures_dir.glob("*-golden.*.txt"):
+            match = re.match(r"^(\d{14})", f.name)
+            if match:
+                zid = match.group(1)
+                prefixes.add(zid[:12])
+    return prefixes
 
 def get_git_commits():
     try:
-        # Get all commits: Hash | ISO_Date | Subject
         output = subprocess.check_output(
             ['git', 'log', '--format=%h|%cI|%s'],
             universal_newlines=True
@@ -27,20 +38,14 @@ def get_git_commits():
                 commits.append({'hash': h, 'ts': dt, 'subj': subj})
             except ValueError:
                 pass
-    
-    # Sort chronological (oldest first) for bisect
     commits.sort(key=lambda x: x['ts'])
     return commits
 
 def get_commit_for_time(commits, timestamp):
-    if not commits:
-        return "unknown"
-    # Find the last commit that happened *before* the trace timestamp
-    # Extract timestamps
+    if not commits: return "unknown"
     timestamps = [c['ts'] for c in commits]
     idx = bisect.bisect_right(timestamps, timestamp)
-    if idx == 0:
-        return commits[0]['hash'] # Trace is before first commit
+    if idx == 0: return commits[0]['hash']
     return commits[idx-1]['hash']
 
 def analyze():
@@ -49,11 +54,12 @@ def analyze():
         print(f"Trace file not found at {trace_file}")
         return
 
+    golden_prefixes = get_golden_prefixes()
     commits = get_git_commits()
     commit_lookup = {c['hash']: c for c in commits}
 
-    # Group runs by git commit -> ZID -> events
     runs_by_commit = collections.defaultdict(lambda: collections.defaultdict(list))
+    phase_aggregates = collections.defaultdict(list)
 
     with open(trace_file, 'r', encoding='utf-8') as f:
         for line in f:
@@ -65,11 +71,16 @@ def analyze():
                 zid = data.get("zid")
                 ts_str = data.get("timestamp")
                 if phase and duration is not None and ts_str:
-                    if zid in ("000", "00000000000000"): continue
+                    if zid in ("000", "00000000000000", "unknown"): continue
                     
+                    # Filter: Only include Golden Runs (and their children)
+                    if golden_prefixes and zid[:12] not in golden_prefixes:
+                        continue
+                        
                     event_ts = datetime.fromisoformat(ts_str).timestamp()
                     c_hash = get_commit_for_time(commits, event_ts)
                     runs_by_commit[c_hash][zid].append(data)
+                    phase_aggregates[phase].append(duration)
             except json.JSONDecodeError:
                 pass
 
@@ -77,7 +88,6 @@ def analyze():
     print(f"{'PERFORMANCE DYNAMICS OVER TIME (BY GIT COMMIT)':^80}")
     print("=" * 80)
 
-    # Sort commits chronological
     active_commits = sorted(runs_by_commit.keys(), key=lambda h: commit_lookup[h]['ts'] if h in commit_lookup else 0)
 
     for h in active_commits:
@@ -89,11 +99,7 @@ def analyze():
         valid_zids = [z for z in zids.keys() if z != 'unknown']
         valid_zids.sort(reverse=True)
         
-        if not valid_zids:
-            print("  No full pipeline runs in this commit.")
-            continue
-            
-        for latest_zid in valid_zids[:3]: # top 3 runs per commit
+        for latest_zid in valid_zids:
             events = zids[latest_zid]
             if not events: continue
             
@@ -131,6 +137,19 @@ def analyze():
                 bar = (" " * start_idx) + ("█" * dur_idx)
                 bar = bar.ljust(chart_width)
                 print(f"    {p['phase']:<30} | {bar} | {p['dur']:.3f}s")
+                
+    print("\n" + "=" * 80)
+    print(f"{'GOLDEN RUN AGGREGATES':^80}")
+    print("=" * 80)
+    print(f"{'Phase':<30} | {'Cnt':<4} | {'Min':<7} | {'Avg':<7} | {'Max':<7}")
+    print("-" * 80)
+    sorted_phases = sorted(phase_aggregates.items(), key=lambda x: sum(x[1])/len(x[1]), reverse=True)
+    for phase, durations in sorted_phases:
+        count = len(durations)
+        avg = sum(durations) / count
+        min_d = min(durations)
+        max_d = max(durations)
+        print(f"{phase:<30} | {count:<4} | {min_d:<7.3f} | {avg:<7.3f} | {max_d:<7.3f}")
 
 if __name__ == '__main__':
     analyze()
