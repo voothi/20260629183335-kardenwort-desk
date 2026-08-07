@@ -8270,7 +8270,11 @@ def cmd_merge(args):
         sys.exit(1)
 
 def spawn_ahk(args_list, base_dir):
-    ahk_script = base_dir.parent / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
+    ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None)
+    if not ahk_repo:
+        logger.error("Could not find autohotkey repository in parent directory.")
+        return
+    ahk_script = ahk_repo / "kardenwort-window" / "kardenwort-window.ahk"
     
     import shutil
     ahk_exes = ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]
