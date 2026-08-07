@@ -25,7 +25,7 @@ def get_git_commits():
             universal_newlines=True
         )
     except Exception as e:
-        print("Could not get git history:", e)
+        out("Could not get git history:", e)
         return []
 
     commits = []
@@ -49,10 +49,22 @@ def get_commit_for_time(commits, timestamp):
     if idx == 0: return commits[0]['hash']
     return commits[idx-1]['hash']
 
+
+class TeeLogger:
+    def __init__(self, filename):
+        self.filename = filename
+        open(filename, 'w', encoding='utf-8').close()
+    def __call__(self, *args, **kwargs):
+        print(*args, **kwargs)
+        with open(self.filename, 'a', encoding='utf-8') as f:
+            print(*args, file=f, **kwargs)
+
+out = TeeLogger('speed_analysis.md')
+
 def analyze():
     trace_file = Path("results/speed_trace.jsonl")
     if not trace_file.exists():
-        print(f"Trace file not found at {trace_file}")
+        out(f"Trace file not found at {trace_file}")
         return
 
     golden_prefixes = get_golden_prefixes()
@@ -88,15 +100,15 @@ def analyze():
             except json.JSONDecodeError:
                 pass
 
-    print("# Performance Dynamics Over Time (By Git Commit)")
-    print()
+    out("# Performance Dynamics Over Time (By Git Commit)")
+    out()
 
     active_commits = sorted(runs_by_commit.keys(), key=lambda h: commit_lookup[h]['ts'] if h in commit_lookup else 0)
 
     for h in active_commits:
         subj = commit_lookup[h]['subj'] if h in commit_lookup else "Unknown"
-        print(f"## [Commit: {h}] {subj}")
-        print("```text")
+        out(f"## [Commit: {h}] {subj}")
+        out("```text")
         
         sessions = runs_by_commit[h]
         valid_sessions = [s for s in sessions.keys() if s != 'unknown']
@@ -127,8 +139,8 @@ def analyze():
             if total_time <= 0: total_time = 1
             
             label = golden_prefixes.get(latest_session, "Unknown")
-            print(f"Run Session: {latest_session}** [{label}] (Total Batch E2E Duration: {total_time:.3f}s)")
-            print("-" * 75)
+            out(f"Run Session: {latest_session}** [{label}] (Total Batch E2E Duration: {total_time:.3f}s)")
+            out("-" * 75)
             
             parsed_events.sort(key=lambda x: x['start_t'])
             chart_width = 40
@@ -147,27 +159,27 @@ def analyze():
                 suffix = f"({p['zid'][-2:]})" if len(p['zid']) == 14 else ""
                 phase_label = f"{p['phase']} {suffix}".strip()
                 
-                print(f"{phase_label:<30} | {bar} | {p['dur']:.3f}s")
-            print()
+                out(f"{phase_label:<30} | {bar} | {p['dur']:.3f}s")
+            out()
             
-        print("```\n")
+        out("```\n")
                 
-    print("## Golden Run Aggregates")
-    print("| Phase | Cnt | Min (s) | Avg (s) | Max (s) |")
-    print("| :--- | :---: | :---: | :---: | :---: |")
+    out("## Golden Run Aggregates")
+    out("| Phase | Cnt | Min (s) | Avg (s) | Max (s) |")
+    out("| :--- | :---: | :---: | :---: | :---: |")
     sorted_phases = sorted(phase_aggregates.items(), key=lambda x: sum(x[1])/len(x[1]), reverse=True)
     for phase, durations in sorted_phases:
         count = len(durations)
         avg = sum(durations) / count
         min_d = min(durations)
         max_d = max(durations)
-        print(f"| `{phase}` | {count} | {min_d:.3f} | {avg:.3f} | {max_d:.3f} |")
+        out(f"| `{phase}` | {count} | {min_d:.3f} | {avg:.3f} | {max_d:.3f} |")
         
-    print("\n## Phase Glossary")
-    print("- **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).")
-    print("- **`lemmatization`**: (CPU-Bound) Tokenizing text and executing morphological/Anki lookups via Kardenwort Core to generate the data grid.")
-    print("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
-    print("- **`background_text_translation`**: The progressive worker updating BOTH the text translation AND the individual base lemma translations asynchronously without blocking the UI.")
+    out("\n## Phase Glossary")
+    out("- **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).")
+    out("- **`lemmatization`**: (CPU-Bound) Tokenizing text and executing morphological/Anki lookups via Kardenwort Core to generate the data grid.")
+    out("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
+    out("- **`background_text_translation`**: The progressive worker updating BOTH the text translation AND the individual base lemma translations asynchronously without blocking the UI.")
 
 if __name__ == '__main__':
     analyze()
