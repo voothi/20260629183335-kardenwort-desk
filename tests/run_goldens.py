@@ -120,18 +120,7 @@ def main():
                     print(f"Wait script not found at {ahk_script}")
                     continue
                 
-                ahk_exe = None
-                for name in ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]:
-                    if shutil.which(name):
-                        ahk_exe = shutil.which(name)
-                        break
-                if not ahk_exe:
-                    for d in [Path(r"C:\Program Files\AutoHotkey\v2"), Path(r"C:\Program Files\AutoHotkey")]:
-                        for name in ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]:
-                            if (d / name).exists():
-                                ahk_exe = str(d / name)
-                                break
-                        if ahk_exe: break
+                ahk_exe = kardenwort_desk.get_ahk_executable()
                         
                 if ahk_exe:
                     try:

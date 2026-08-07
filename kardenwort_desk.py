@@ -8268,6 +8268,40 @@ def cmd_merge(args):
             input("\nPress Enter to exit...")
         sys.exit(1)
 
+def get_ahk_executable():
+    import shutil
+    ahk_exes = ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]
+    
+    # 1. Try to find any in PATH
+    for name in ahk_exes:
+        path_match = shutil.which(name)
+        if path_match:
+            return path_match
+            
+    # 2. Check common installation directories
+    possible_dirs = [
+        Path(r"C:\Program Files\AutoHotkey\v2"),
+        Path(r"C:\Program Files\AutoHotkey"),
+        Path(r"C:\Program Files (x86)\AutoHotkey"),
+    ]
+    # Scan C:\AHK and its subfolders (like C:\AHK\AutoHotkey_2.0.18)
+    try:
+        c_ahk = Path(r"C:\AHK")
+        if c_ahk.exists():
+            possible_dirs.append(c_ahk)
+            for sub in c_ahk.iterdir():
+                if sub.is_dir() and "autohotkey" in sub.name.lower():
+                    possible_dirs.append(sub)
+    except Exception:
+        pass
+        
+    for p_dir in possible_dirs:
+        for name in ahk_exes:
+            if (p_dir / name).exists():
+                return str(p_dir / name)
+                
+    return None
+
 def spawn_ahk(args_list, base_dir):
     ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None)
     if not ahk_repo:
@@ -8278,44 +8312,8 @@ def spawn_ahk(args_list, base_dir):
         logger.error(f"AHK script not found at {ahk_script}")
         return False
     
-    import shutil
-    ahk_exes = ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]
-    found_exe = None
+    found_exe = get_ahk_executable()
     
-    # 1. Try to find any in PATH
-    for name in ahk_exes:
-        path_match = shutil.which(name)
-        if path_match:
-            found_exe = path_match
-            break
-            
-    # 2. Check common installation directories
-    if not found_exe:
-        possible_dirs = [
-            Path(r"C:\Program Files\AutoHotkey\v2"),
-            Path(r"C:\Program Files\AutoHotkey"),
-            Path(r"C:\Program Files (x86)\AutoHotkey"),
-        ]
-        # Scan C:\AHK and its subfolders (like C:\AHK\AutoHotkey_2.0.18)
-        try:
-            c_ahk = Path(r"C:\AHK")
-            if c_ahk.exists():
-                possible_dirs.append(c_ahk)
-                for sub in c_ahk.iterdir():
-                    if sub.is_dir() and "autohotkey" in sub.name.lower():
-                        possible_dirs.append(sub)
-        except Exception:
-            pass
-            
-        for p_dir in possible_dirs:
-            for name in ahk_exes:
-                candidate = p_dir / name
-                if candidate.exists():
-                    found_exe = str(candidate)
-                    break
-            if found_exe:
-                break
-                
     if found_exe:
         cmd = [found_exe, str(ahk_script)] + args_list
         logger.info(f"Spawning AHK via executable: {' '.join(cmd)}")
