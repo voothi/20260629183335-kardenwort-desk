@@ -6,7 +6,7 @@ from pathlib import Path
 def main():
     repo_root = Path(__file__).parent.parent.resolve()
     fixtures_dir = repo_root / "tests" / "fixtures"
-    ahk_script = Path("U:/voothi/20240411110510-autohotkey/kardenwort-window/kardenwort-window.ahk")
+    ahk_script = repo_root.parent / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
 
     runs = []
     for f in sorted(fixtures_dir.glob("*-golden.*.txt")):
