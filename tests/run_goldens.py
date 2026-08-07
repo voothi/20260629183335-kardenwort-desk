@@ -12,13 +12,13 @@ def main():
         {
             "name": "English Golden Sample",
             "lang": "en",
-            "zid": "20260807190001",
+            "zid": "20260807190100",
             "file": fixtures_dir / "en_golden.txt"
         },
         {
             "name": "German Golden Sample",
             "lang": "de",
-            "zid": "20260807190002",
+            "zid": "20260807190200",
             "file": fixtures_dir / "de_golden.txt"
         }
     ]
@@ -26,9 +26,9 @@ def main():
     for i, run in enumerate(runs):
         print(f"==================================================")
         if i == 0:
-            input(f"Ready to test {run['lang']}? Press Enter to start...")
+            input(f"Please close ALL open desk windows right now (so the window counter resets to 1).\nReady to test {run['lang']}? Press Enter to start...")
         else:
-            input(f"Please close any open desk windows now.\nReady to test {run['lang']}? Press Enter to start...")
+            input(f"Please close the current desk window now (so the counter resets to 1 again).\nReady to test {run['lang']}? Press Enter to start...")
             
         print(f"Running {run['name']} (ZID: {run['zid']})...")
         
