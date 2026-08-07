@@ -3120,8 +3120,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         ahk_args = []
         
         # If running headlessly (like run_goldens.py), we need to spawn the master window too
-        if getattr(args, 'spawn_master', False) and resolved_paths.get('master_tsv'):
-            ahk_args.extend(["--seq-num", str(master_seq), "--restore", str(resolved_paths['master_tsv'])])
+        if getattr(args, 'spawn_master', False) and 'master_tsv_path' in locals():
+            ahk_args.extend(["--seq-num", str(master_seq), "--restore", str(master_tsv_path)])
             
         paths_to_spawn = [(master_seq + i + 1, path) for i, path in enumerate(sub_tsv_paths)]
         if spawn_order == 'reverse':

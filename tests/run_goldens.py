@@ -4,6 +4,8 @@ import subprocess
 import importlib.util
 from pathlib import Path
 
+import time
+
 def main():
     repo_root = Path(__file__).parent.parent.resolve()
     desk_script = repo_root / "kardenwort_desk.py"
@@ -27,9 +29,13 @@ def main():
     for i, run in enumerate(runs):
         print(f"==================================================")
         if i == 0:
-            input(f"Please close ALL open desk windows right now (so the window counter resets to 1).\nReady to test {run['lang']}? Press Enter to start...")
+            print(f"WARNING: Please ensure ALL desk windows are closed before testing so the AHK counter starts at 1.")
+            time.sleep(2)
+            print(f"Starting test for {run['lang']}...")
         else:
-            input(f"Please close the current desk window now (so the counter resets to 1 again).\nReady to test {run['lang']}? Press Enter to start...")
+            print(f"\nWARNING: Please close the previous desk window now to reset the counter.")
+            time.sleep(4)
+            print(f"Starting test for {run['lang']}...")
             
         print(f"Running {run['name']} (ZID: {run['zid']})...")
         
