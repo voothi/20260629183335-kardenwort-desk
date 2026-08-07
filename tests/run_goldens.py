@@ -5,12 +5,10 @@ from pathlib import Path
 
 def main():
     repo_root = Path(__file__).parent.parent.resolve()
+    sys.path.insert(0, str(repo_root))
+    import kardenwort_desk
+    
     fixtures_dir = repo_root / "tests" / "fixtures"
-    ahk_repo = next(repo_root.parent.glob("*-autohotkey"), None)
-    if not ahk_repo:
-        print("ERROR: Could not find autohotkey repository in parent directory.")
-        sys.exit(1)
-    ahk_script = ahk_repo / "kardenwort-window" / "kardenwort-window.ahk"
 
     runs = []
     for f in sorted(fixtures_dir.glob("*-golden.*.txt")):
@@ -50,25 +48,10 @@ def main():
             
         # Instead of calling Python directly, we trigger the resident AHK script exactly
         # as if the user triggered it via hotkey or tray menu.
-        AHK_PATH = r"C:\AHK\AutoHotkey_2.0.18\AutoHotkey64.exe"
-        
-        if os.path.exists(AHK_PATH):
-            cmd = [AHK_PATH, str(ahk_script), "--zid", run['zid'], "--desk", str(run['file'])]
-            cmd_kwargs = {"capture_output": True, "text": True}
-        else:
-            # Fall back to using cmd.exe start to natively delegate to the OS's .ahk 
-            # file association, which avoids WinError 2 if AutoHotkey.exe is not in PATH.
-            cmd = f'start "" "{ahk_script}" --zid "{run["zid"]}" --desk "{run["file"]}"'
-            cmd_kwargs = {"shell": True, "capture_output": True, "text": True}
-        
         try:
-            result = subprocess.run(cmd, **cmd_kwargs)
-            if result.returncode != 0:
-                print(f"ERROR: AHK launcher failed for {run['lang']}:")
-                print(result.stderr)
-            else:
-                print(f"SUCCESS: {run['name']} initiated via AHK.")
-                print(f"The actual speed trace will be asynchronously appended to results/speed_trace.jsonl")
+            kardenwort_desk.spawn_ahk(["--zid", run['zid'], "--desk", str(run['file'])], repo_root)
+            print(f"SUCCESS: {run['name']} initiated via AHK.")
+            print(f"The actual speed trace will be asynchronously appended to results/speed_trace.jsonl")
                     
         except Exception as e:
             print(f"ERROR: {e}")
