@@ -7,11 +7,13 @@ import os
 import re
 import subprocess
 import tempfile
-import shutil
+import atexit
 import contextlib
+import concurrent.futures
+from concurrent.futures import ThreadPoolExecutor
+import shutil
 import html
 import socket
-import concurrent.futures
 import threading
 import time
 import traceback
@@ -2962,15 +2964,51 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
         
-        # Translate paragraph holistically
+        master_slug = generate_slug(text)
+        master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
+        
         translated_sentences = []
         translated_paragraph = ""
-        try:
-            translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
-            translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
-        except Exception as e:
-            logger.warning(f"Holistic translation failed: {e}")
+        master_tsv_path = None
+        
+        parallelize = config.getboolean(SEC_PIPELINE, 'parallelize_core_and_translation', fallback=True)
+        
+        def do_translation():
+            logger.info(f"[{zid}] [Translation Worker] Starting background translation via {main_text_provider}")
+            return translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
             
+        def do_core():
+            logger.info(f"[{zid}] [Core Worker] Starting background TSV generation")
+            return prepare_lookup_tsv(
+                text, language, target_lang, config, resolved_paths, zid,
+                ttl_seconds=0, cache_key=master_cache_key, text_mode=text_mode
+            )
+            
+        if parallelize:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                future_trans = executor.submit(do_translation)
+                future_core = executor.submit(do_core)
+                
+                try:
+                    translated_paragraph = future_trans.result()
+                    translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
+                except Exception as e:
+                    logger.warning(f"Holistic translation failed in parallel executor: {e}")
+                    
+                try:
+                    master_tsv_path = future_core.result()
+                except Exception as e:
+                    logger.error(f"Core TSV generation failed in parallel executor: {e}")
+                    raise e
+        else:
+            try:
+                translated_paragraph = do_translation()
+                translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
+            except Exception as e:
+                logger.warning(f"Holistic translation failed: {e}")
+                
+            master_tsv_path = do_core()
+                
         # Fallback to newline_join block translation
         do_fallback = (len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join')
         if do_fallback and alignment_method != 'proportion':
@@ -2996,14 +3034,6 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         while len(translated_sentences) < len(source_sentences):
             translated_sentences.append("")
         translated_sentences = translated_sentences[:len(source_sentences)]
-        
-        # Extract master TSV
-        master_slug = generate_slug(text)
-        master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
-        master_tsv_path = prepare_lookup_tsv(
-            text, language, target_lang, config, resolved_paths, zid,
-            ttl_seconds=0, cache_key=master_cache_key, text_mode=text_mode
-        )
         
         comments, headers, data_rows = load_tsv_rows(master_tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])

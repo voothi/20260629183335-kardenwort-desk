@@ -80,7 +80,10 @@ def analyze():
                         
                     event_ts = datetime.fromisoformat(ts_str).timestamp()
                     c_hash = get_commit_for_time(commits, event_ts)
-                    runs_by_commit[c_hash][zid].append(data)
+                    
+                    # Group by the 12-digit run session prefix so children are merged with the master
+                    run_session = zid[:12]
+                    runs_by_commit[c_hash][run_session].append(data)
                     phase_aggregates[phase].append(duration)
             except json.JSONDecodeError:
                 pass
@@ -95,12 +98,12 @@ def analyze():
         print(f"## [Commit: {h}] {subj}")
         print("```text")
         
-        zids = runs_by_commit[h]
-        valid_zids = [z for z in zids.keys() if z != 'unknown']
-        valid_zids.sort(reverse=True)
+        sessions = runs_by_commit[h]
+        valid_sessions = [s for s in sessions.keys() if s != 'unknown']
+        valid_sessions.sort(reverse=True)
         
-        for latest_zid in valid_zids:
-            events = zids[latest_zid]
+        for latest_session in valid_sessions:
+            events = sessions[latest_session]
             if not events: continue
             
             min_start_ts = float('inf')
@@ -114,6 +117,7 @@ def analyze():
                 
                 parsed_events.append({
                     'phase': e['phase'],
+                    'zid': e.get('zid', 'unknown'),
                     'start_t': start_t,
                     'end_t': end_t,
                     'dur': e['duration']
@@ -122,8 +126,8 @@ def analyze():
             total_time = max_end_ts - min_start_ts
             if total_time <= 0: total_time = 1
             
-            label = golden_prefixes.get(latest_zid[:12], "Unknown")
-            print(f"ZID: {latest_zid} [{label}] (Total E2E Pipeline Duration: {total_time:.3f}s)")
+            label = golden_prefixes.get(latest_session, "Unknown")
+            print(f"Run Session: {latest_session}** [{label}] (Total Batch E2E Duration: {total_time:.3f}s)")
             print("-" * 75)
             
             parsed_events.sort(key=lambda x: x['start_t'])
@@ -138,7 +142,12 @@ def analyze():
                     
                 bar = (" " * start_idx) + ("█" * dur_idx)
                 bar = bar.ljust(chart_width)
-                print(f"{p['phase']:<30} | {bar} | {p['dur']:.3f}s")
+                
+                # Suffix to show if it's master (00) or child (01, 02)
+                suffix = f"({p['zid'][-2:]})" if len(p['zid']) == 14 else ""
+                phase_label = f"{p['phase']} {suffix}".strip()
+                
+                print(f"{phase_label:<30} | {bar} | {p['dur']:.3f}s")
             print()
             
         print("```\n")
