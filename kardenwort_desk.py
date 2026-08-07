@@ -808,11 +808,11 @@ class TraceTimer(contextlib.ContextDecorator):
         self.max_mb = 5
         if self.config and hasattr(self.config, 'getboolean'):
             try:
-                self.enabled = self.config.getboolean('Settings', 'enable_performance_tracing', fallback=False)
+                self.enabled = self.config.getboolean(SEC_SETTINGS, 'enable_performance_tracing', fallback=False)
             except Exception:
                 self.enabled = False
             try:
-                self.max_mb = self.config.getint('Settings', 'trace_log_max_mb', fallback=5)
+                self.max_mb = self.config.getint(SEC_SETTINGS, 'trace_log_max_mb', fallback=5)
             except Exception:
                 self.max_mb = 5
 
