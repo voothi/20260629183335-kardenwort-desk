@@ -3699,6 +3699,9 @@ html, body {{
             word_counter += 1
         token_manifest.append(tok_data)
         
+    _html_gen_timer = TraceTimer("html_generation", zid, config, resolved_paths)
+    _html_gen_timer.__enter__()
+    
     html_page = """<!DOCTYPE html>
 <!-- saved from url=(0014)about:internet -->
 <html>
@@ -5574,6 +5577,7 @@ html, body {{
         children_div = f'<div id="kardenwort-children" style="display:none;">{paths_str}</div>'
         html_page = html_page.replace("</body>", f"{children_div}</body>")
     
+    _html_gen_timer.__exit__(None, None, None)
     return html_page
 
 def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid, text_mode='single', wordfill_cfg=None):
