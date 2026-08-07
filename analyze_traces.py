@@ -8,13 +8,14 @@ import re
 
 def get_golden_prefixes():
     fixtures_dir = Path("tests/fixtures")
-    prefixes = set()
+    prefixes = {}
     if fixtures_dir.exists():
         for f in fixtures_dir.glob("*-golden.*.txt"):
             match = re.match(r"^(\d{14})", f.name)
             if match:
                 zid = match.group(1)
-                prefixes.add(zid[:12])
+                lang = f.suffixes[-2].strip('.').upper()
+                prefixes[zid[:12]] = f"Golden {lang}"
     return prefixes
 
 def get_git_commits():
@@ -121,7 +122,8 @@ def analyze():
             total_time = max_end_ts - min_start_ts
             if total_time <= 0: total_time = 1
             
-            print(f"ZID: {latest_zid} (Total E2E Pipeline Duration: {total_time:.3f}s)")
+            label = golden_prefixes.get(latest_zid[:12], "Unknown")
+            print(f"ZID: {latest_zid} [{label}] (Total E2E Pipeline Duration: {total_time:.3f}s)")
             print("-" * 75)
             
             parsed_events.sort(key=lambda x: x['start_t'])
