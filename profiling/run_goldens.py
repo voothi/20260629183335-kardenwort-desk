@@ -12,28 +12,37 @@ def main():
     fixtures_dir = repo_root / "tests" / "fixtures"
 
     runs = []
-    for f in sorted(fixtures_dir.glob("*-golden.*.txt")):
-        name_parts = f.name.split('-')
-        if len(name_parts) >= 2 and len(f.suffixes) >= 2:
+    # Find directory-based fixtures
+    for d in sorted(fixtures_dir.glob("*-golden.*")):
+        if not d.is_dir():
+            continue
+        name_parts = d.name.split('-')
+        if len(name_parts) >= 2 and len(d.suffixes) >= 1:
             zid = name_parts[0]
-            lang = f.suffixes[-2].strip('.')
+            lang = d.suffixes[-1].strip('.')
+            
+            source_file = d / "source.txt"
+            config_file = d / "config.ini"
+            
+            if not source_file.exists():
+                print(f"Skipping {d.name} - missing source.txt")
+                continue
+                
             runs.append({
                 "name": f"{lang.upper()} Golden Sample",
                 "lang": lang,
                 "zid": zid,
-                "file": f
+                "dir": d,
+                "file": source_file,
+                "config": config_file
             })
 
     config_path = repo_root / "config.ini"
     config_backup = repo_root / "config.ini.backup"
-    config_golden = fixtures_dir / "config_golden.ini"
     
     if config_path.exists():
         shutil.copy2(config_path, config_backup)
-        print(f"Backed up config.ini to {config_backup.name}")
-    if config_golden.exists():
-        shutil.copy2(config_golden, config_path)
-        print(f"Swapped in config_golden.ini for testing\n")
+        print(f"Backed up live config.ini to {config_backup.name}")
     
     try:
         for i, run in enumerate(runs):
@@ -45,10 +54,13 @@ def main():
                 
             print(f"Running {run['name']} (Native AHK Flow)...")
             
-            if not run['file'].exists():
-                print(f"ERROR: Missing fixture {run['file']}")
-                continue
-                
+            # Swap in the directory-specific config.ini
+            if run['config'].exists():
+                shutil.copy2(run['config'], config_path)
+                print(f"Swapped in test-specific config.ini from {run['dir'].name}")
+            else:
+                print(f"WARNING: No test-specific config.ini found for {run['dir'].name}. Proceeding with previous config.")
+            
             # Clean up any existing generated files for this ZID to force a real performance test
             results_dir = repo_root / "results"
             for existing_file in results_dir.rglob(f"{run['zid']}*"):
@@ -147,20 +159,21 @@ def main():
                             print(f"Failed to run AHK wait script: {e}")
                     else:
                         print("Could not find AutoHotkey executable to run wait_for_windows.ahk")
-    
+
                 else:
                     print(f"FAILED: {run['name']} could not be initiated.")
                         
             except Exception as e:
                 print(f"ERROR: {e}")
-    
+
         print(f"==================================================")
         print(f"Check results/speed_trace.jsonl to view the authentic performance traces.")
-    
+
     finally:
         if config_backup.exists():
             shutil.copy2(config_backup, config_path)
             config_backup.unlink()
             print("\nRestored original config.ini")
+
 if __name__ == "__main__":
     main()
