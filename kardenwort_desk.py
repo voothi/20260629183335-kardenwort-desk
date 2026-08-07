@@ -3129,7 +3129,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     
                 sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
                 save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
-            sub_tsv_paths.append(sub_tsv_path)
+                sub_tsv_paths.append(sub_tsv_path)
             
         if sub_tsv_paths and 'master_tsv_path' in locals() and master_tsv_path.exists():
             try:
