@@ -2912,19 +2912,16 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         try:
             p_tsv = Path(tsv_path)
             if p_tsv.exists():
-                my_zid_match = re.match(r'^(\d{14})', p_tsv.name)
-                if my_zid_match:
-                    my_zid = my_zid_match.group(1)
-                    my_idx = int(my_zid[-2:])
-                    prefix = my_zid[:-2]
-                    for sibling in p_tsv.parent.glob(f"{prefix}*.tsv"):
-                        if sibling != p_tsv:
-                            sib_match = re.match(r'^(\d{14})', sibling.name)
-                            if sib_match:
-                                sib_idx = int(sib_match.group(1)[-2:])
-                                if sib_idx > my_idx:
-                                    children_tsv_paths.append(sibling)
-                    children_tsv_paths.sort(key=lambda p: p.name)
+                c, _, _ = load_tsv_rows(p_tsv)
+                for line in c:
+                    if line.startswith("# Children:"):
+                        paths = line.replace("# Children:", "").strip().split(",")
+                        for fname in paths:
+                            if fname.strip():
+                                child_path = p_tsv.parent / fname.strip()
+                                if child_path.exists():
+                                    children_tsv_paths.append(child_path)
+                        break
         except Exception:
             pass
             
@@ -3135,6 +3132,16 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             sub_tsv_paths.append(sub_tsv_path)
             
         _the_cut_timer.__exit__(None, None, None)
+            
+        if sub_tsv_paths and 'master_tsv_path' in locals() and master_tsv_path.exists():
+            try:
+                m_comments, m_headers, m_data_rows = load_tsv_rows(master_tsv_path)
+                children_str = ",".join(p.name for p in sub_tsv_paths)
+                m_comments = [c for c in m_comments if not c.startswith("# Children:")]
+                m_comments.append(f"# Children: {children_str}")
+                save_tsv_rows_safely(master_tsv_path, m_comments, m_headers, m_data_rows)
+            except Exception as e:
+                logger.warning(f"Failed to write children to master TSV: {e}")
             
         master_seq = seq_num if seq_num is not None else 1
         ahk_args = []
