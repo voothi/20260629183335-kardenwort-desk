@@ -23,8 +23,13 @@ def main():
         }
     ]
 
-    for run in runs:
+    for i, run in enumerate(runs):
         print(f"==================================================")
+        if i == 0:
+            input(f"Ready to test {run['lang']}? Press Enter to start...")
+        else:
+            input(f"Please close any open desk windows now.\nReady to test {run['lang']}? Press Enter to start...")
+            
         print(f"Running {run['name']} (ZID: {run['zid']})...")
         
         if not run['file'].exists():
