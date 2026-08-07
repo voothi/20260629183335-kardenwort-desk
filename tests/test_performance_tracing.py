@@ -30,8 +30,9 @@ class TestPerformanceTracing(unittest.TestCase):
     @patch('kardenwort_desk.resolve_results_dir')
     def test_tracetimer_enabled(self, mock_resolve_dir):
         config = configparser.ConfigParser()
-        config.add_section("Settings")
-        config.set("Settings", "enable_performance_tracing", "True")
+        from kardenwort_desk import SEC_SETTINGS
+        config.add_section(SEC_SETTINGS)
+        config.set(SEC_SETTINGS, "enable_performance_tracing", "True")
 
         import tempfile
         with tempfile.TemporaryDirectory() as tmpdir:

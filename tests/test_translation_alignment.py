@@ -91,7 +91,7 @@ def test_translate_source_text_split_modes(monkeypatch):
     
     # 1. newline_join
     config.set(SEC_TRANSLATION, 'translation_split_mode', 'newline_join')
-    def mock_translate_text_newline(text, source_lang, target_lang, cfg, paths, provider):
+    def mock_translate_text_newline(text, source_lang, target_lang, cfg, paths, provider, **kwargs):
         return "\n".join(f"Trans_{l}" for l in text.splitlines())
     monkeypatch.setattr(desk, "translate_text", mock_translate_text_newline)
     
@@ -105,7 +105,7 @@ def test_translate_source_text_split_modes(monkeypatch):
     
     # 3. marker
     config.set(SEC_TRANSLATION, 'translation_split_mode', 'marker')
-    def mock_translate_marker(text, source_lang, target_lang, cfg, paths, provider):
+    def mock_translate_marker(text, source_lang, target_lang, cfg, paths, provider, **kwargs):
         return text.replace("line1", "Trans_line1").replace("line2", "Trans_line2")
     monkeypatch.setattr(desk, "translate_text", mock_translate_marker)
     
@@ -122,7 +122,7 @@ def test_single_mode_routing(monkeypatch):
     config.set(SEC_TRANSLATION, 'translation_wrap_max_chars', '10')
     
     called_multi = False
-    def mock_translate(text, source_lang, target_lang, cfg, paths, provider):
+    def mock_translate(text, source_lang, target_lang, cfg, paths, provider, **kwargs):
         nonlocal called_multi
         if "\n" in text:
             called_multi = True
@@ -149,7 +149,7 @@ def test_translation_alignment_error_rescue(monkeypatch):
     # Chunk 1: [line1, line2] -> translates fine
     # Chunk 2: [line3, line4] -> chunk fails (wrong line count), triggers rescue.
     # Rescue: line3 succeeds, line4 raises exception
-    def mock_translate(text, source_lang, target_lang, cfg, paths, provider):
+    def mock_translate(text, source_lang, target_lang, cfg, paths, provider, **kwargs):
         if "line3" in text and "line4" in text:
             return "only_one_line"
         if text == "line3":
@@ -267,7 +267,7 @@ def test_single_mode_punctuation_no_recursion(monkeypatch):
     text = "Here is a sentence with a comma, which is over 50 characters."
     
     translate_called = 0
-    def mock_translate(t, source_lang, target_lang, cfg, paths, provider):
+    def mock_translate(t, source_lang, target_lang, cfg, paths, provider, **kwargs):
         nonlocal translate_called
         translate_called += 1
         # Avoid infinite loops during test runs

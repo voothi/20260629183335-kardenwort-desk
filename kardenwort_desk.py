@@ -2282,6 +2282,11 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     return translations
 
 def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False):
+    zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
+    with TraceTimer("intellifiller_enrichment", zid, config, resolved_paths):
+        return _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows, reprocess)
+
+def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False):
     python_exe = resolved_paths['kardenwort_python']
     headless_script = resolved_paths['intellifiller_headless']
     
@@ -7201,9 +7206,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
     zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
     with TraceTimer("background_text_translation", zid, config, resolved_paths):
-        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid)
 
-def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
