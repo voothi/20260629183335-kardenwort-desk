@@ -3057,78 +3057,78 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         try:
             sub_tsv_paths = []
             token_cfg = RuntimeTokenConfig.from_config(config)
-        apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
-        apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
-        import datetime as dt_mod
-        try:
-            master_time = dt_mod.datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
-        except Exception:
-            master_time = dt_mod.datetime.now()
-            
-        for i in range(len(source_sentences)):
-            sub_text = source_sentences[i]
-            sub_trans = translated_sentences[i]
-            
-            sub_dt = master_time + dt_mod.timedelta(seconds=i+1)
-            sub_zid = sub_dt.strftime('%Y%m%d%H%M%S')
-            
-            sub_slug = generate_slug(sub_text)
-            
-            sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.txt"
-            sub_txt_path.write_text(sub_text, encoding='utf-8')
-            
-            sub_trans_path = results_dir / f"{sub_zid}-{sub_slug}.{target_lang}.txt"
-            sub_trans_path.write_text(sub_trans, encoding='utf-8')
-            
-            sub_rows = []
-            sub_tokens = tok.build_word_list_internal(sub_text, keep_spaces=True)
-            sub_words = {t["lower_clean"] for t in sub_tokens if t.get("is_word") and "lower_clean" in t}
-            
-            for row in data_rows:
-                row_sent_idx = -1
-                if col_index != -1 and len(row) > col_index:
-                    try:
-                        row_sent_idx = int(row[col_index]) - 1
-                    except ValueError:
-                        pass
+            apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
+            apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
+            import datetime as dt_mod
+            try:
+                master_time = dt_mod.datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
+            except Exception:
+                master_time = dt_mod.datetime.now()
                 
-                matches_sentence = (row_sent_idx == i)
-                if not matches_sentence:
-                    row_inf = row[col_inflected].strip() if col_inflected != -1 and len(row) > col_inflected else ""
-                    row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
-                    forms_to_check = [f.strip() for f in row_inf.split(',')] if row_inf else ([row_lem] if row_lem else [])
-                    for f in forms_to_check:
-                        if not f: continue
-                        clean_f = "".join(ch for ch in f.lower() if ch.isalnum() or ch in apo_set)
-                        if clean_f in sub_words:
-                            matches_sentence = True
-                            break
-                        parts = re.findall(apo_regex, f.lower())
-                        if any("".join(ch for ch in p if ch.isalnum() or ch in apo_set) in sub_words for p in parts if p):
-                            matches_sentence = True
-                            break
-                            
-                if matches_sentence:
-                    sub_row = list(row)
-                    if col_index != -1:
-                        while len(sub_row) <= col_index:
-                            sub_row.append("")
-                        sub_row[col_index] = "1"
-                    if col_sentence_source != -1:
-                        while len(sub_row) <= col_sentence_source:
-                            sub_row.append("")
-                        sub_row[col_sentence_source] = sub_text
-                    if col_sentence_dest != -1:
-                        while len(sub_row) <= col_sentence_dest:
-                            sub_row.append("")
-                        sub_row[col_sentence_dest] = sub_trans
-                    sub_rows.append(sub_row)
+            for i in range(len(source_sentences)):
+                sub_text = source_sentences[i]
+                sub_trans = translated_sentences[i]
+                
+                sub_dt = master_time + dt_mod.timedelta(seconds=i+1)
+                sub_zid = sub_dt.strftime('%Y%m%d%H%M%S')
+                
+                sub_slug = generate_slug(sub_text)
+                
+                sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.txt"
+                sub_txt_path.write_text(sub_text, encoding='utf-8')
+                
+                sub_trans_path = results_dir / f"{sub_zid}-{sub_slug}.{target_lang}.txt"
+                sub_trans_path.write_text(sub_trans, encoding='utf-8')
+                
+                sub_rows = []
+                sub_tokens = tok.build_word_list_internal(sub_text, keep_spaces=True)
+                sub_words = {t["lower_clean"] for t in sub_tokens if t.get("is_word") and "lower_clean" in t}
+                
+                for row in data_rows:
+                    row_sent_idx = -1
+                    if col_index != -1 and len(row) > col_index:
+                        try:
+                            row_sent_idx = int(row[col_index]) - 1
+                        except ValueError:
+                            pass
                     
-            if col_word_source != -1 and dedup_scope_cfg == 'sentence':
-                sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths)
-                
-            sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
-            save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
+                    matches_sentence = (row_sent_idx == i)
+                    if not matches_sentence:
+                        row_inf = row[col_inflected].strip() if col_inflected != -1 and len(row) > col_inflected else ""
+                        row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
+                        forms_to_check = [f.strip() for f in row_inf.split(',')] if row_inf else ([row_lem] if row_lem else [])
+                        for f in forms_to_check:
+                            if not f: continue
+                            clean_f = "".join(ch for ch in f.lower() if ch.isalnum() or ch in apo_set)
+                            if clean_f in sub_words:
+                                matches_sentence = True
+                                break
+                            parts = re.findall(apo_regex, f.lower())
+                            if any("".join(ch for ch in p if ch.isalnum() or ch in apo_set) in sub_words for p in parts if p):
+                                matches_sentence = True
+                                break
+                                
+                    if matches_sentence:
+                        sub_row = list(row)
+                        if col_index != -1:
+                            while len(sub_row) <= col_index:
+                                sub_row.append("")
+                            sub_row[col_index] = "1"
+                        if col_sentence_source != -1:
+                            while len(sub_row) <= col_sentence_source:
+                                sub_row.append("")
+                            sub_row[col_sentence_source] = sub_text
+                        if col_sentence_dest != -1:
+                            while len(sub_row) <= col_sentence_dest:
+                                sub_row.append("")
+                            sub_row[col_sentence_dest] = sub_trans
+                        sub_rows.append(sub_row)
+                        
+                if col_word_source != -1 and dedup_scope_cfg == 'sentence':
+                    sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths)
+                    
+                sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
+                save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
             sub_tsv_paths.append(sub_tsv_path)
         finally:
             _the_cut_timer.__exit__(None, None, None)
