@@ -2902,6 +2902,29 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     children_tsv_paths = []
     
+    if tsv_path and text_mode == 'multi':
+        try:
+            p_tsv = Path(tsv_path)
+            if p_tsv.exists():
+                # STRICT CONTRACT WARNING: DO NOT change this logic to read `# Children` tags or any other arbitrary metadata from the TSV file!
+                # The TSV file format is a strict cross-repository contract (desk, core, window, Anki, etc.).
+                # Child relationships MUST be resolved purely by parsing the ZID sequences in filenames on disk.
+                my_zid_match = re.match(r'^(\d{14})', p_tsv.name)
+                if my_zid_match:
+                    my_zid = my_zid_match.group(1)
+                    my_idx = int(my_zid[-2:])
+                    prefix = my_zid[:-2]
+                    for sibling in p_tsv.parent.glob(f"{prefix}*.tsv"):
+                        if sibling != p_tsv:
+                            sib_match = re.match(r'^(\d{14})', sibling.name)
+                            if sib_match:
+                                sib_idx = int(sib_match.group(1)[-2:])
+                                if sib_idx > my_idx:
+                                    children_tsv_paths.append(sibling)
+                    children_tsv_paths.sort(key=lambda p: p.name)
+        except Exception:
+            pass
+            
     smc = SentencesModeConfig.from_config(config)
     sentences_enabled = smc.enabled
     min_sentences = smc.min_sentences
