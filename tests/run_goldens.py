@@ -8,18 +8,18 @@ def main():
     fixtures_dir = repo_root / "tests" / "fixtures"
     ahk_script = Path("U:/voothi/20240411110510-autohotkey/kardenwort-window/kardenwort-window.ahk")
 
-    runs = [
-        {
-            "name": "English Golden Sample",
-            "lang": "en",
-            "file": fixtures_dir / "en_golden.en.txt"
-        },
-        {
-            "name": "German Golden Sample",
-            "lang": "de",
-            "file": fixtures_dir / "de_golden.de.txt"
-        }
-    ]
+    runs = []
+    for f in sorted(fixtures_dir.glob("*-golden.*.txt")):
+        name_parts = f.name.split('-')
+        if len(name_parts) >= 2 and len(f.suffixes) >= 2:
+            zid = name_parts[0]
+            lang = f.suffixes[-2].strip('.')
+            runs.append({
+                "name": f"{lang.upper()} Golden Sample",
+                "lang": lang,
+                "zid": zid,
+                "file": f
+            })
 
     for i, run in enumerate(runs):
         print(f"==================================================")
@@ -39,12 +39,12 @@ def main():
         AHK_PATH = r"C:\AHK\AutoHotkey_2.0.18\AutoHotkey64.exe"
         
         if os.path.exists(AHK_PATH):
-            cmd = [AHK_PATH, str(ahk_script), "--desk", str(run['file'])]
+            cmd = [AHK_PATH, str(ahk_script), "--desk", str(run['file']), "--zid", run['zid']]
             cmd_kwargs = {"capture_output": True, "text": True}
         else:
             # Fall back to using cmd.exe start to natively delegate to the OS's .ahk 
             # file association, which avoids WinError 2 if AutoHotkey.exe is not in PATH.
-            cmd = f'start "" "{ahk_script}" --desk "{run["file"]}"'
+            cmd = f'start "" "{ahk_script}" --desk "{run["file"]}" --zid "{run["zid"]}"'
             cmd_kwargs = {"shell": True, "capture_output": True, "text": True}
         
         try:
