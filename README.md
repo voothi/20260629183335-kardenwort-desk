@@ -138,6 +138,16 @@ Restore mode (opens a .txt or .tsv file and reconstitutes the desk window state)
 python kardenwort_desk.py restore --file <ZID>-<slug>.txt [--config <path>]
 ```
 
+Manual trace/golden-sample rendering (bypasses UI to directly test pipeline outputs and generate traces):
+
+```
+# English pipeline
+python kardenwort_desk.py render --language en --zid 20260807190001 --text "$(Get-Content -Raw tests\fixtures\en_golden.txt)"
+
+# German pipeline
+python kardenwort_desk.py render --language de --zid 20260807190002 --text "$(Get-Content -Raw tests\fixtures\de_golden.txt)"
+```
+
 All modes accept `--config <path>` (default: `config.ini` next to `kardenwort_desk.py`).
 All paths, the favorites output directory, the headless IntelliFiller entrypoint
 path, provider slots, and schema mapping are read from `config.ini`.
