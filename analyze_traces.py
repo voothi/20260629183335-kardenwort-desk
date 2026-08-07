@@ -153,6 +153,12 @@ def analyze():
         min_d = min(durations)
         max_d = max(durations)
         print(f"| `{phase}` | {count} | {min_d:.3f} | {avg:.3f} | {max_d:.3f} |")
+        
+    print("\n## Phase Glossary")
+    print("- **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).")
+    print("- **`lemmatization`**: (CPU-Bound) Tokenizing text and executing morphological/Anki lookups via Kardenwort Core to generate the data grid.")
+    print("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
+    print("- **`background_text_translation`**: The progressive worker updating translation asynchronously without blocking the UI.")
 
 if __name__ == '__main__':
     analyze()
