@@ -64,7 +64,6 @@ def main():
             try:
                 import time
                 import json
-                import shutil
                 start_time = time.time()
                 success = kardenwort_desk.spawn_ahk(["--zid", run['zid'], "--desk", str(run['file'])], repo_root)
                 if success:
