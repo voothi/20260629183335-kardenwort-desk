@@ -2892,13 +2892,13 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 
     return selected_positions, len(selected_positions) > 0
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, spawn_master=False):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
             raise RuntimeError(f"Concurrent render requested for ZID: {zid}. The previous request is still being processed.")
         _ACTIVE_ZIDS.add(zid)
     try:
-        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, spawn_master)
+        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num)
     finally:
         with _ACTIVE_ZIDS_LOCK:
             _ACTIVE_ZIDS.discard(zid)
