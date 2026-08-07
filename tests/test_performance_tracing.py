@@ -5,6 +5,7 @@ import threading
 import time
 from unittest.mock import patch, MagicMock
 import configparser
+from pathlib import Path
 
 import kardenwort_desk
 from kardenwort_desk import TraceTimer, run_render_flow
@@ -67,16 +68,24 @@ class TestPerformanceTracing(unittest.TestCase):
 
     @patch('kardenwort_desk._effective_text_mode', return_value='single')
     @patch('kardenwort_desk.split_single_mode_text', return_value=['sentence'])
-    @patch('kardenwort_desk.prepare_lookup_tsv')
+    @patch('kardenwort_desk.prepare_lookup_tsv', return_value=Path('/tmp/20260807205400-test.en.tsv'))
     @patch('kardenwort_desk.load_tsv_rows', return_value=([], [], []))
-    @patch('kardenwort_desk.load_anki_mapping', return_value={})
+    @patch('kardenwort_desk.load_anki_mapping', return_value=configparser.ConfigParser())
     @patch('kardenwort_desk.get_role_fields', return_value={})
     def test_run_render_flow_debounced(self, *mocks):
         # We simulate a slow run_render_flow and try to enter it again with the same ZID
         config = configparser.ConfigParser()
         config.add_section("Settings")
         config.set("Settings", "default_target_language", "en")
-        resolved_paths = {}
+        resolved_paths = {
+            'kardenwort_workspace': Path('/mock/workspace'), 
+            'base_dir': Path('/mock/base_dir'),
+            'anki_mapping_file': Path('/mock/mapping.json'),
+            'anki_tts_cli': Path('/mock/anki_tts_cli.py'),
+            'kardenwort_python': Path('/mock/python.exe'),
+            'deep_translator_python': Path('/mock/deep_translator_python.exe'),
+            'translate_google_script': Path('/mock/translate_google.py')
+        }
 
         # We'll use an event to hold the first thread inside run_render_flow
         in_flow_event = threading.Event()
