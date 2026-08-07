@@ -5,21 +5,19 @@ from pathlib import Path
 
 def main():
     repo_root = Path(__file__).parent.parent.resolve()
-    desk_script = repo_root / "kardenwort_desk.py"
     fixtures_dir = repo_root / "tests" / "fixtures"
+    ahk_script = Path("U:/voothi/20240411110510-autohotkey/kardenwort-window/kardenwort-window.ahk")
 
     runs = [
         {
             "name": "English Golden Sample",
             "lang": "en",
-            "zid": "20260807190100",
-            "file": fixtures_dir / "en_golden.txt"
+            "file": fixtures_dir / "en_golden.en.txt"
         },
         {
             "name": "German Golden Sample",
             "lang": "de",
-            "zid": "20260807190200",
-            "file": fixtures_dir / "de_golden.txt"
+            "file": fixtures_dir / "de_golden.de.txt"
         }
     ]
 
@@ -28,42 +26,38 @@ def main():
         if i == 0:
             input(f"WARNING: Please ensure ALL desk windows are closed before testing.\nReady to test {run['lang']}? Press Enter to start...")
         else:
-            input(f"\nWARNING: Please CLOSE the current desk windows (1, 4, 3, 2).\nOnce they are closed, press Enter to test {run['lang']}...")
+            input(f"\nWARNING: Please CLOSE the current desk windows.\nOnce they are closed, press Enter to test {run['lang']}...")
             
-        print(f"Running {run['name']} (ZID: {run['zid']})...")
+        print(f"Running {run['name']} (Native AHK Flow)...")
         
         if not run['file'].exists():
             print(f"ERROR: Missing fixture {run['file']}")
             continue
             
-        text_content = run['file'].read_text(encoding="utf-8")
-        
+        # Instead of calling Python directly, we trigger the resident AHK script exactly
+        # as if the user triggered it via hotkey or tray menu.
+        # This guarantees 100% End-to-End architectural authenticity.
         cmd = [
-            sys.executable,
-            str(desk_script),
-            "render",
-            "--language", run['lang'],
-            "--zid", run['zid'],
-            "--text", text_content,
-            "--spawn-master"
+            "AutoHotkey.exe",
+            str(ahk_script),
+            "--desk",
+            str(run['file'])
         ]
         
         try:
-            # We capture stdout so it doesn't flood the terminal with HTML Base64
-            # We let stderr stream normally so any errors/logs are visible
             result = subprocess.run(cmd, capture_output=True, text=True)
             if result.returncode != 0:
-                print(f"ERROR: Backend failed for {run['lang']}:")
+                print(f"ERROR: AHK launcher failed for {run['lang']}:")
                 print(result.stderr)
             else:
-                print(f"SUCCESS: {run['name']} completed.")
-                print(f"Rendered HTML length: {len(result.stdout)} characters.")
+                print(f"SUCCESS: {run['name']} initiated via AHK.")
+                print(f"The actual speed trace will be asynchronously appended to results/speed_trace.jsonl")
                     
         except Exception as e:
             print(f"ERROR: {e}")
 
     print(f"==================================================")
-    print(f"Check results/speed_trace.jsonl to view the performance traces.")
+    print(f"Check results/speed_trace.jsonl to view the authentic performance traces.")
 
 if __name__ == "__main__":
     main()
