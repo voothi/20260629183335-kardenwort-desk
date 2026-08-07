@@ -107,6 +107,16 @@ def analyze():
 
     active_commits = sorted(runs_by_commit.keys(), key=lambda h: commit_lookup[h]['ts'] if h in commit_lookup else 0)
 
+    out("## Table of Contents")
+    for h in active_commits:
+        subj = commit_lookup[h]['subj'] if h in commit_lookup else "Unknown"
+        anchor = f"commit-{h}-{subj}".lower()
+        anchor = re.sub(r'[^a-z0-9\s\-]', '', anchor).strip().replace(' ', '-')
+        out(f"- [[Commit: {h}] {subj}](#{anchor})")
+    out("- [Golden Run Aggregates](#golden-run-aggregates)")
+    out("- [Phase Glossary](#phase-glossary)")
+    out()
+
     for h in active_commits:
         subj = commit_lookup[h]['subj'] if h in commit_lookup else "Unknown"
         out(f"## [Commit: {h}] {subj}")

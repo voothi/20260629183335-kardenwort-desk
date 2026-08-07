@@ -1,5 +1,13 @@
 # Performance Dynamics Over Time (By Git Commit)
 
+## Table of Contents
+- [[Commit: 503019f] 20260807221238](#commit-503019f-20260807221238)
+- [[Commit: 0fbc1c5] 20260807230723](#commit-0fbc1c5-20260807230723)
+- [[Commit: 8122154] 20260807233307](#commit-8122154-20260807233307)
+- [[Commit: 209b691] 20260808000327](#commit-209b691-20260808000327)
+- [Golden Run Aggregates](#golden-run-aggregates)
+- [Phase Glossary](#phase-glossary)
+
 ## [Commit: 503019f] 20260807221238
 ```text
 Run Session: 202608071901** [Golden EN] (Total Batch E2E Duration: 2.362s)
