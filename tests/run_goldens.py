@@ -1,6 +1,7 @@
 import os
 import sys
 import subprocess
+import importlib.util
 from pathlib import Path
 
 def main():
@@ -50,12 +51,26 @@ def main():
         try:
             # We capture stdout so it doesn't flood the terminal with HTML Base64
             # We let stderr stream normally so any errors/logs are visible
-            result = subprocess.run(cmd, cwd=str(repo_root), capture_output=True, text=True, check=True)
-            print(f"SUCCESS: {run['name']} completed.")
-            print(f"Rendered HTML length: {len(result.stdout)} characters.")
-        except subprocess.CalledProcessError as e:
-            print(f"FAILED: {run['name']} crashed with exit code {e.returncode}")
-            print(f"Stderr:\n{e.stderr}")
+            result = subprocess.run(cmd, capture_output=True, text=True)
+            if result.returncode != 0:
+                print(f"ERROR: Backend failed for {run['lang']}:")
+                print(result.stderr)
+            else:
+                print(f"SUCCESS: {run['name']} completed.")
+                print(f"Rendered HTML length: {len(result.stdout)} characters.")
+                
+                # Spawn Window 1 explicitly so it's not missing
+                spec = importlib.util.spec_from_file_location("desk", desk_script)
+                desk = importlib.util.module_from_spec(spec)
+                spec.loader.exec_module(desk)
+                
+                results_dir = repo_root / "results"
+                master_tsvs = list(results_dir.glob(f"{run['zid']}-*.tsv"))
+                if master_tsvs:
+                    desk.spawn_ahk(["--seq-num", "1", "--restore", str(master_tsvs[0])], repo_root)
+                    
+        except Exception as e:
+            print(f"ERROR: {e}")
 
     print(f"==================================================")
     print(f"Check results/speed_trace.jsonl to view the performance traces.")
