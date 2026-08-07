@@ -34,6 +34,16 @@ def main():
             print(f"ERROR: Missing fixture {run['file']}")
             continue
             
+        # Clean up any existing generated files for this ZID to force a real performance test
+        data_dir = repo_root / "data"
+        for existing_file in data_dir.rglob(f"{run['zid']}*"):
+            if existing_file.is_file() and existing_file.suffix in ['.tsv', '.txt']:
+                try:
+                    existing_file.unlink()
+                    print(f"Cleaned up existing file: {existing_file.name}")
+                except Exception as e:
+                    print(f"Warning: Could not delete {existing_file.name}: {e}")
+            
         # Instead of calling Python directly, we trigger the resident AHK script exactly
         # as if the user triggered it via hotkey or tray menu.
         AHK_PATH = r"C:\AHK\AutoHotkey_2.0.18\AutoHotkey64.exe"
