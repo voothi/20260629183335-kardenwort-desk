@@ -35,8 +35,8 @@ def main():
             continue
             
         # Clean up any existing generated files for this ZID to force a real performance test
-        data_dir = repo_root / "data"
-        for existing_file in data_dir.rglob(f"{run['zid']}*"):
+        results_dir = repo_root / "results"
+        for existing_file in results_dir.rglob(f"{run['zid']}*"):
             if existing_file.is_file() and existing_file.suffix in ['.tsv', '.txt']:
                 try:
                     existing_file.unlink()

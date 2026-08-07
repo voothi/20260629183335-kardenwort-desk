@@ -3054,9 +3054,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         
         _the_cut_timer = TraceTimer("the_cut", zid, config, resolved_paths)
         _the_cut_timer.__enter__()
-        
-        sub_tsv_paths = []
-        token_cfg = RuntimeTokenConfig.from_config(config)
+        try:
+            sub_tsv_paths = []
+            token_cfg = RuntimeTokenConfig.from_config(config)
         apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
         apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
         import datetime as dt_mod
@@ -3130,8 +3130,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
             save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
             sub_tsv_paths.append(sub_tsv_path)
-            
-        _the_cut_timer.__exit__(None, None, None)
+        finally:
+            _the_cut_timer.__exit__(None, None, None)
             
         if sub_tsv_paths and 'master_tsv_path' in locals() and master_tsv_path.exists():
             try:
