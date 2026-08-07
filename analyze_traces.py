@@ -158,7 +158,7 @@ def analyze():
     print("- **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).")
     print("- **`lemmatization`**: (CPU-Bound) Tokenizing text and executing morphological/Anki lookups via Kardenwort Core to generate the data grid.")
     print("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
-    print("- **`background_text_translation`**: The progressive worker updating translation asynchronously without blocking the UI.")
+    print("- **`background_text_translation`**: The progressive worker updating BOTH the text translation AND the individual base lemma translations asynchronously without blocking the UI.")
 
 if __name__ == '__main__':
     analyze()
