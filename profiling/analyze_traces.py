@@ -6,8 +6,10 @@ import subprocess
 import bisect
 import re
 
+REPO_ROOT = Path(__file__).parent.parent.resolve()
+
 def get_golden_prefixes():
-    fixtures_dir = Path("tests/fixtures")
+    fixtures_dir = REPO_ROOT / "tests" / "fixtures"
     prefixes = {}
     if fixtures_dir.exists():
         for f in fixtures_dir.glob("*-golden.*.txt"):
@@ -59,10 +61,10 @@ class TeeLogger:
         with open(self.filename, 'a', encoding='utf-8') as f:
             print(*args, file=f, **kwargs)
 
-out = TeeLogger('speed_analysis.md')
+out = TeeLogger(Path(__file__).parent / 'speed_analysis.md')
 
 def analyze():
-    trace_file = Path("results/speed_trace.jsonl")
+    trace_file = REPO_ROOT / "results" / "speed_trace.jsonl"
     if not trace_file.exists():
         out(f"Trace file not found at {trace_file}")
         return
