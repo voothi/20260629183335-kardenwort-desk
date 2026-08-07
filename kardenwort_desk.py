@@ -1589,6 +1589,9 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider)
             return run_deepl_translation(text, source, target, config, resolved_paths)
         elif provider == 'argos':
             return run_argos_translation(text, source, target, config, resolved_paths)
+        elif provider == 'mock':
+            time.sleep(0.01) # Simulate deterministic micro-delay
+            return f"[MOCK] {text}"
         elif provider in ('combined', 'intellifiller'):
             try:
                 return run_google_translation(text, source, target, config, resolved_paths)
