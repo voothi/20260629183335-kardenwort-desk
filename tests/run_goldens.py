@@ -59,15 +59,22 @@ def main():
                 print(f"SUCCESS: {run['name']} completed.")
                 print(f"Rendered HTML length: {len(result.stdout)} characters.")
                 
-                # Spawn Window 1 explicitly so it's not missing
-                spec = importlib.util.spec_from_file_location("desk", desk_script)
-                desk = importlib.util.module_from_spec(spec)
-                spec.loader.exec_module(desk)
-                
                 results_dir = repo_root / "results"
                 master_tsvs = list(results_dir.glob(f"{run['zid']}-*.tsv"))
                 if master_tsvs:
-                    desk.spawn_ahk(["--seq-num", "1", "--restore", str(master_tsvs[0])], repo_root)
+                    ahk_script = repo_root.parent / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
+                    
+                    import shutil
+                    ahk_exe = shutil.which("AutoHotkey.exe") or shutil.which("AutoHotkey64.exe")
+                    if not ahk_exe:
+                        ahk_exe = r"C:\Program Files\AutoHotkey\v2\AutoHotkey.exe"
+                        if not Path(ahk_exe).exists():
+                            ahk_exe = r"C:\Program Files\AutoHotkey\AutoHotkey.exe"
+                            
+                    subprocess.Popen(
+                        [str(ahk_exe), str(ahk_script), "--seq-num", "1", "--restore", str(master_tsvs[0])],
+                        creationflags=subprocess.DETACHED_PROCESS | subprocess.CREATE_NEW_PROCESS_GROUP
+                    )
                     
         except Exception as e:
             print(f"ERROR: {e}")
