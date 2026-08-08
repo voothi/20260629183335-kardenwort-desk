@@ -3008,7 +3008,13 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         (text_mode == 'multi' and smc.legacy_spawn_children and len(source_sentences) >= 2)
     )
     
-    if (will_split or (tsv_path and sentences_enabled)) and (display_mode_val == 'progressive' or is_progressive_translation_enabled):
+    # Progressive mode is incompatible with Sentences Mode multi-window architecture ONLY when:
+    #   a) We are about to split a fresh text into child windows (will_split), OR
+    #   b) A TSV is provided AND it is a parent window with actual child TSVs already on disk.
+    # A standalone merged TSV being re-rendered (no children) MUST stay progressive so that
+    # the progressive worker is launched and lemma_base_provider translation runs correctly.
+    tsv_has_active_children = bool(tsv_path and sentences_enabled and children_tsv_paths)
+    if (will_split or tsv_has_active_children) and (display_mode_val == 'progressive' or is_progressive_translation_enabled):
         logger.info(f"[{zid}] Progressive mode disabled (incompatible with Sentences Mode multi-window architecture)")
         display_mode_val = 'monolithic'
         is_progressive_translation_enabled = False
