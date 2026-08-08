@@ -129,14 +129,11 @@ def analyze():
     out()
 
     for h in active_commits:
-        subj = commit_lookup[h]['subj'] if h in commit_lookup else "Unknown"
-        out(f"## [Commit: {h}] {subj}")
-        out("```text")
-        
         sessions = runs_by_commit[h]
         valid_sessions = [s for s in sessions.keys() if s != 'unknown']
-        valid_sessions.sort(reverse=True)
+        valid_sessions.sort(reverse=False)  # Chronological order
         
+        session_stats = []
         for latest_session in valid_sessions:
             events = sessions[latest_session]
             if not events: continue
@@ -166,6 +163,29 @@ def analyze():
                 
             total_time = max_end_ts - min_start_ts
             if total_time <= 0: total_time = 1
+            
+            session_stats.append({
+                'session_id': latest_session,
+                'min_start_ts': min_start_ts,
+                'max_end_ts': max_end_ts,
+                'total_time': total_time,
+                'parsed_events': parsed_events
+            })
+            
+        gap_info = ""
+        if len(session_stats) >= 2:
+            gap = session_stats[1]['min_start_ts'] - session_stats[0]['max_end_ts']
+            gap_info = f" (Wait between runs: {gap:.2f}s)"
+            
+        subj = commit_lookup[h]['subj'] if h in commit_lookup else "Unknown"
+        out(f"## [Commit: {h}] {subj}{gap_info}")
+        out("```text")
+            
+        for stat in reversed(session_stats):
+            latest_session = stat['session_id']
+            parsed_events = stat['parsed_events']
+            total_time = stat['total_time']
+            min_start_ts = stat['min_start_ts']
             
             if latest_session in golden_prefixes:
                 master_zid, label = golden_prefixes[latest_session]

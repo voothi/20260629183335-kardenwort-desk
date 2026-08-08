@@ -8,7 +8,7 @@
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
-## [Commit: a463eb0] 20260808021042
+## [Commit: a463eb0] 20260808021042 (Wait between runs: 6.44s)
 ```text
 Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 16.739s)
 ---------------------------------------------------------------------------
@@ -50,7 +50,7 @@ background_text_translation (01)    |                            █████
 
 ```
 
-## [Commit: e88d77e] 20260808024001
+## [Commit: e88d77e] 20260808024001 (Wait between runs: 25.66s)
 ```text
 Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 16.889s)
 ---------------------------------------------------------------------------
@@ -92,7 +92,7 @@ background_text_translation (01)    |                            ████   
 
 ```
 
-## [Commit: de01b5d] 20260808025419
+## [Commit: de01b5d] 20260808025419 (Wait between runs: 29.00s)
 ```text
 Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 9.093s)
 ---------------------------------------------------------------------------
@@ -121,7 +121,7 @@ html_generation (01)                |                                        █
 
 ```
 
-## [Commit: 2b39df3] 20260808031021
+## [Commit: 2b39df3] 20260808031021 (Wait between runs: 89.26s)
 ```text
 Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 10.036s)
 ---------------------------------------------------------------------------
