@@ -7815,15 +7815,16 @@ def cmd_retext_worker(args):
         text_reprocess_provider = config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
         
+        slug = generate_slug(text)
+        m = re.match(r"^(\d{14})", tsv_path.name)
+        zid = m.group(1) if m else "session"
+        
         try:
             sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider, zid=zid)
         except TranslationAlignmentError as tae:
             logger.error(f"Retext worker translation alignment error: {tae}")
             sentence_translations = tae.partial_dict
             
-        slug = generate_slug(text)
-        m = re.match(r"^(\d{14})", tsv_path.name)
-        zid = m.group(1) if m else "session"
         target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
         eff_mode = _effective_text_mode(text, text_mode)
         _write_translation_txt(text, eff_mode, sentence_translations, target_text_path, save_flag=True, overwrite=True)
