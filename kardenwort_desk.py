@@ -3251,6 +3251,24 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         while len(translated_sentences) < len(source_sentences):
             translated_sentences.append("")
         translated_sentences = translated_sentences[:len(source_sentences)]
+        # Compute padding for the master TSV and all child windows
+        apply_source_padding = False
+        apply_translated_padding = False
+        if sbc.words_before > 0 or sbc.words_after > 0:
+            if sbc.context_mode in ('both', 'single'):
+                apply_source_padding = True
+        
+        if sbc.translated_words_before > 0 or sbc.translated_words_after > 0:
+            if sbc.context_mode in ('both', 'single'):
+                apply_translated_padding = True
+
+        padded_source_sentences = source_sentences
+        if apply_source_padding:
+            padded_source_sentences = pad_sentences(source_sentences, text, sbc.words_before, sbc.words_after, max_words=sbc.max_words)
+            
+        padded_translated_sentences = translated_sentences
+        if apply_translated_padding:
+            padded_translated_sentences = pad_translated_sentences(translated_sentences, sbc.translated_words_before, sbc.translated_words_after, max_words=sbc.translated_max_words)
         
         comments, headers, data_rows = load_tsv_rows(master_tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
@@ -3260,7 +3278,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else -1
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
         
-        # Populate translations back into master TSV
+        # Populate translations back into master TSV using the padded sentences
         for row in data_rows:
             row_sent_idx = -1
             if col_index != -1 and len(row) > col_index:
@@ -3272,11 +3290,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 if col_sentence_source != -1:
                     while len(row) <= col_sentence_source:
                         row.append("")
-                    row[col_sentence_source] = source_sentences[row_sent_idx]
+                    row[col_sentence_source] = padded_source_sentences[row_sent_idx]
                 if col_sentence_dest != -1:
                     while len(row) <= col_sentence_dest:
                         row.append("")
-                    row[col_sentence_dest] = translated_sentences[row_sent_idx]
+                    row[col_sentence_dest] = padded_translated_sentences[row_sent_idx]
                     
         col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
@@ -3363,11 +3381,12 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         if col_sentence_source != -1:
                             while len(sub_row) <= col_sentence_source:
                                 sub_row.append("")
-                            sub_row[col_sentence_source] = sub_text
+                            sub_row[col_sentence_source] = padded_source_sentences[i]
                         if col_sentence_dest != -1:
                             while len(sub_row) <= col_sentence_dest:
                                 sub_row.append("")
-                            sub_row[col_sentence_dest] = sub_trans
+                            sub_trans_padded = padded_translated_sentences[i] if i < len(padded_translated_sentences) else sub_trans
+                            sub_row[col_sentence_dest] = sub_trans_padded
                         sub_rows.append(sub_row)
                         
                 if col_word_source != -1 and dedup_scope_cfg == 'sentence':
