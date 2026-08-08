@@ -130,22 +130,27 @@ def analyze():
             events = sessions[latest_session]
             if not events: continue
             
-            min_start_ts = float('inf')
-            max_end_ts = 0
-            parsed_events = []
+            # Deduplicate by (zid, phase) taking the latest execution
+            latest_events = {}
             for e in events:
                 end_t = datetime.fromisoformat(e['timestamp']).timestamp()
                 start_t = end_t - e['duration']
-                if start_t < min_start_ts: min_start_ts = start_t
-                if end_t > max_end_ts: max_end_ts = end_t
+                key = (e.get('zid', 'unknown'), e['phase'])
                 
-                parsed_events.append({
-                    'phase': e['phase'],
-                    'zid': e.get('zid', 'unknown'),
-                    'start_t': start_t,
-                    'end_t': end_t,
-                    'dur': e['duration']
-                })
+                # Update if not exists or if this is a newer execution
+                if key not in latest_events or end_t > latest_events[key]['end_t']:
+                    latest_events[key] = {
+                        'phase': e['phase'],
+                        'zid': key[0],
+                        'start_t': start_t,
+                        'end_t': end_t,
+                        'dur': e['duration']
+                    }
+            
+            parsed_events = list(latest_events.values())
+            
+            min_start_ts = min((p['start_t'] for p in parsed_events), default=0)
+            max_end_ts = max((p['end_t'] for p in parsed_events), default=0)
                 
             total_time = max_end_ts - min_start_ts
             if total_time <= 0: total_time = 1
@@ -171,7 +176,7 @@ def analyze():
                 suffix = f"({p['zid'][-2:]})" if len(p['zid']) == 14 else ""
                 phase_label = f"{p['phase']} {suffix}".strip()
                 
-                out(f"{phase_label:<30} | {bar} | {p['dur']:.3f}s")
+                out(f"{phase_label:<35} | {bar} | {p['dur']:.3f}s")
             out()
             
         out("```\n")

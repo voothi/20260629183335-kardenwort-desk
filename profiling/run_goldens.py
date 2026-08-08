@@ -40,15 +40,6 @@ def main():
     config_path = repo_root / "config.ini"
     config_backup = repo_root / "config.ini.backup"
     
-    # Wipe the existing speed trace to start fresh for this suite run
-    trace_file = repo_root / "results" / "speed_trace.jsonl"
-    if trace_file.exists():
-        try:
-            trace_file.unlink()
-            print("Wiped existing speed_trace.jsonl")
-        except Exception as e:
-            print(f"Warning: Could not wipe speed_trace.jsonl: {e}")
-
     if config_path.exists():
         shutil.copy2(config_path, config_backup)
         print(f"Backed up live config.ini to {config_backup.name}")
