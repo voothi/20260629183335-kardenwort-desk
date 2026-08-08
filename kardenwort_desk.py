@@ -536,6 +536,9 @@ class SentenceBoundaryConfig:
     words_before: int = 0
     words_after: int = 0
     max_words: int = 0
+    translated_words_before: int = 0
+    translated_words_after: int = 0
+    translated_max_words: int = 0
     context_mode: str = "single"
 
     @classmethod
@@ -550,6 +553,9 @@ class SentenceBoundaryConfig:
         words_before = 0
         words_after = 0
         max_words = 0
+        translated_words_before = 0
+        translated_words_after = 0
+        translated_max_words = 0
         context_mode = "single"
 
         if config and hasattr(config, "get"):
@@ -606,6 +612,18 @@ class SentenceBoundaryConfig:
                 max_words = config.getint(SEC_SETTINGS, 'anki_context_max_words', fallback=0)
             except Exception:
                 max_words = 0
+            try:
+                translated_words_before = config.getint(SEC_SETTINGS, 'anki_translated_context_words_before', fallback=0)
+            except Exception:
+                translated_words_before = 0
+            try:
+                translated_words_after = config.getint(SEC_SETTINGS, 'anki_translated_context_words_after', fallback=0)
+            except Exception:
+                translated_words_after = 0
+            try:
+                translated_max_words = config.getint(SEC_SETTINGS, 'anki_translated_context_max_words', fallback=0)
+            except Exception:
+                translated_max_words = 0
 
         return cls(
             terminators=terminators,
@@ -615,6 +633,9 @@ class SentenceBoundaryConfig:
             words_before=words_before,
             words_after=words_after,
             max_words=max_words,
+            translated_words_before=translated_words_before,
+            translated_words_after=translated_words_after,
+            translated_max_words=translated_max_words,
             context_mode=context_mode,
         )
 
@@ -2124,13 +2145,47 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             sbc = SentenceBoundaryConfig.from_config(config)
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
             
-            apply_padding = False
+            apply_source_padding = False
+            apply_translated_padding = False
             if sbc.words_before > 0 or sbc.words_after > 0:
                 if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
-                    apply_padding = True
+                    apply_source_padding = True
+            
+            if sbc.translated_words_before > 0 or sbc.translated_words_after > 0:
+                if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
+                    apply_translated_padding = True
                     
             try:
-                if apply_padding:
+                # Always translate the unpadded sentences first (for Translate View and TextDestination)
+                unpadded_translations = translate_source_text(
+                    "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
+                    config, resolved_paths, provider, zid=zid
+                )
+                
+                full_text_trans = " ".join(
+                    unpadded_translations.get(i, "").strip() 
+                    for i in sorted(unpadded_translations.keys()) 
+                    if isinstance(i, int) and unpadded_translations.get(i, "")
+                )
+
+                if apply_translated_padding:
+                    # Native Python Subtitle Padding Algorithm
+                    # We pad the already-translated array natively, avoiding a second network call
+                    translated_array = [unpadded_translations.get(i, "").strip() for i in sorted(unpadded_translations.keys()) if isinstance(i, int)]
+                    padded_translated_array = pad_translated_sentences(
+                        translated_array, 
+                        words_before=sbc.translated_words_before, 
+                        words_after=sbc.translated_words_after, 
+                        max_words=sbc.translated_max_words
+                    )
+                    
+                    pseudo_translations = {i: padded_translated_array[i] for i in range(len(padded_translated_array))}
+                    if full_text_trans:
+                        pseudo_translations['FULL_TEXT'] = full_text_trans
+                    return pseudo_translations
+                    
+                elif apply_source_padding:
+                    # Legacy fallback: source-based padding requires a second API call
                     padded_lines = pad_sentences(pseudo_lines, text, sbc.words_before, sbc.words_after, max_words=sbc.max_words)
                     
                     # 1. Translate the padded sentences for the TSV (SentenceDestination)
@@ -2139,43 +2194,14 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid
                     )
                     
-                    # 2. Translate the unpadded pseudo-lines for the Translate View (.ru.txt) and TextDestination
-                    # This preserves the literal piecemeal formatting that the user prefers (avoiding DeepL reformatting a giant text block)
-                    full_text_trans = ""
-                    try:
-                        api_delay = config.getfloat(SEC_TRANSLATION, 'translation_api_delay', fallback=0.0)
-                        if api_delay > 0:
-                            import time
-                            time.sleep(api_delay)
-                            
-                        # Disable fallback for unpadded run so we don't accidentally downgrade the UI 
-                        # to Argo if the network drops between the two passes.
-                        original_fallback = config.get(SEC_PIPELINE, 'auto_offline_fallback', fallback='true')
-                        config.set(SEC_PIPELINE, 'auto_offline_fallback', 'false')
-                        try:
-                            unpadded_translations = translate_source_text(
-                                "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                                config, resolved_paths, provider, zid=zid
-                            )
-                            full_text_trans = " ".join(
-                                unpadded_translations.get(i, "").strip() 
-                                for i in sorted(unpadded_translations.keys()) 
-                                if isinstance(i, int) and unpadded_translations.get(i, "")
-                            )
-                        finally:
-                            config.set(SEC_PIPELINE, 'auto_offline_fallback', original_fallback)
-                    except Exception as e:
-                        logger.error(f"Failed to translate unpadded lines block: {e}")
-                    
                     if full_text_trans:
                         pseudo_translations['FULL_TEXT'] = full_text_trans
                         
                     return pseudo_translations
                 else:
-                    return translate_source_text(
-                        "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                        config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid
-                    )
+                    if full_text_trans:
+                        unpadded_translations['FULL_TEXT'] = full_text_trans
+                    return unpadded_translations
             except TranslationAlignmentError as tae:
                 raise TranslationAlignmentError(
                     tae.args[0],
@@ -7099,6 +7125,76 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
             if run_enrich == 'auto':
                 write_update_js(tsv_path, data_rows, headers, role_fields)
     return data_rows
+
+def pad_translated_sentences(translated_sentences, words_before=0, words_after=0, max_words=0):
+    if not (words_before or words_after) or not translated_sentences:
+        return translated_sentences
+        
+    padded = []
+    num_sentences = len(translated_sentences)
+    
+    for i, s in enumerate(translated_sentences):
+        words_b = []
+        if words_before > 0 and i > 0:
+            prev_s = translated_sentences[i-1]
+            prev_words = tok.build_word_list_internal(prev_s, keep_spaces=True)
+            # Find the last `words_before` valid words
+            valid_word_indices = [idx for idx, t in enumerate(prev_words) if t["is_word"]]
+            if len(valid_word_indices) >= words_before:
+                start_token_idx = valid_word_indices[-words_before]
+                words_b_str = "".join(t["text"] for t in prev_words[start_token_idx:])
+            else:
+                words_b_str = prev_s
+            words_b.append(words_b_str.strip())
+            
+        words_a = []
+        if words_after > 0 and i < num_sentences - 1:
+            next_s = translated_sentences[i+1]
+            next_words = tok.build_word_list_internal(next_s, keep_spaces=True)
+            # Find the first `words_after` valid words
+            valid_word_indices = [idx for idx, t in enumerate(next_words) if t["is_word"]]
+            if len(valid_word_indices) >= words_after:
+                end_token_idx = valid_word_indices[words_after - 1]
+                # Include spaces up to the end token
+                words_a_str = "".join(t["text"] for t in next_words[:end_token_idx+1])
+            else:
+                words_a_str = next_s
+            words_a.append(words_a_str.strip())
+            
+        parts = []
+        if words_b:
+            parts.extend(words_b)
+        parts.append(s.strip())
+        if words_a:
+            parts.extend(words_a)
+            
+        padded_sentence = " ".join(parts).replace('\n', ' ').replace('\r', ' ').strip()
+        import re
+        padded_sentence = re.sub(r'\s+', ' ', padded_sentence)
+        
+        # Truncate context if it exceeds max_words
+        if max_words > 0:
+            padded_words = tok.build_word_list(padded_sentence)
+            if len(padded_words) > max_words:
+                target_words = tok.build_word_list(s)
+                if target_words:
+                    n_p = len(padded_words)
+                    n_t = len(target_words)
+                    excess = n_p - max_words
+                    if excess > 0:
+                        # Simple truncation logic: remove from ends
+                        to_remove_start = min(len(words_b) if words_b else 0, excess)
+                        excess -= to_remove_start
+                        to_remove_end = excess
+                        
+                        start_idx = to_remove_start
+                        end_idx = n_p - to_remove_end
+                        padded_words = padded_words[start_idx:end_idx]
+                        padded_sentence = " ".join(padded_words)
+        
+        padded.append(padded_sentence)
+        
+    return padded
 
 def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows):
     batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)

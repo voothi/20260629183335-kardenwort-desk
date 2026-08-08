@@ -559,6 +559,54 @@ def test_lookup_simplemma_new_flags_forwarding(monkeypatch, tmp_path):
     assert "--simplemma-pos-aware" in mock_cmds[0]
     assert "--simplemma-smart-fallback" in mock_cmds[0]
 
+def test_pad_translated_sentences():
+    from kardenwort_desk import pad_translated_sentences
+    sentences = [
+        "Он вошел в темную комнату.",
+        "Он включил свет.",
+        "Лампочка слегка мигнула.",
+        "Внутри было очень холодно."
+    ]
+    
+    padded = pad_translated_sentences(sentences, words_before=5, words_after=5)
+    
+    # 2nd sentence: takes 5 from end of 1st, 5 from start of 3rd
+    assert padded[1] == "Он вошел в темную комнату. Он включил свет. Лампочка слегка мигнула."
+    
+    # 3rd sentence
+    assert padded[2] == "Он включил свет. Лампочка слегка мигнула. Внутри было очень холодно."
+    
+    # 1st sentence (no before)
+    assert padded[0] == "Он вошел в темную комнату. Он включил свет."
+    
+    # 4th sentence (no after)
+    assert padded[3] == "Лампочка слегка мигнула. Внутри было очень холодно."
 
-
-
+def test_translate_source_text_native_padding(monkeypatch, tmp_path):
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    config.set('settings', 'anki_translated_context_words_before', '5')
+    config.set('settings', 'anki_translated_context_words_after', '5')
+    config.set('settings', 'anki_context_words_before', '0')
+    config.set('settings', 'anki_context_words_after', '0')
+    
+    # Must NOT have newlines, otherwise _effective_text_mode forces 'multi' and bypasses padding!
+    text = "He walked into the dark room. He turned on the light. The bulb flickered slightly. It was very cold inside."
+    
+    mock_calls = []
+    def mock_translate_text(txt, source_lang, target_lang, config, resolved_paths, provider, **kwargs):
+        mock_calls.append(txt)
+        if "He walked into the dark room." in txt:
+            return "Он вошел в темную комнату.\nОн включил свет.\nЛампочка слегка мигнула.\nВнутри было очень холодно."
+        return "fallback"
+        
+    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_translate_text)
+    
+    res = kardenwort_desk.translate_source_text(text, "en", "ru", "single", config, resolved_paths, "google")
+    
+    # Assert API was called exactly ONCE for the block
+    assert len(mock_calls) == 1
+    assert "He walked into the dark room." in mock_calls[0]
+    
+    # Assert padding was natively applied in the returned dictionary
+    assert "FULL_TEXT" in res
+    assert res[1] == "Он вошел в темную комнату. Он включил свет. Лампочка слегка мигнула."
