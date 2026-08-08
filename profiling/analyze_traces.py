@@ -124,7 +124,7 @@ def analyze():
                     c_hash = get_commit_for_time(commits, event_ts)
                     
                     runs_by_commit[c_hash][run_session].append(data)
-                    phase_aggregates[phase].append(duration)
+                    phase_aggregates[(run_session, phase)].append(duration)
             except json.JSONDecodeError:
                 pass
 
@@ -263,15 +263,29 @@ def analyze():
         out("```\n")
                 
     out("## Golden Run Aggregates")
-    out("| Phase | Cnt | Min (s) | Avg (s) | Max (s) |")
-    out("| :--- | :---: | :---: | :---: | :---: |")
-    sorted_phases = sorted(phase_aggregates.items(), key=lambda x: sum(x[1])/len(x[1]), reverse=True)
-    for phase, durations in sorted_phases:
-        count = len(durations)
-        avg = sum(durations) / count
-        min_d = min(durations)
-        max_d = max(durations)
-        out(f"| `{phase}` | {count} | {min_d:.3f} | {avg:.3f} | {max_d:.3f} |")
+    
+    session_aggregates = collections.defaultdict(lambda: collections.defaultdict(list))
+    for (session, phase), durations in phase_aggregates.items():
+        session_aggregates[session][phase].extend(durations)
+        
+    for session in sorted(session_aggregates.keys()):
+        aggregates = session_aggregates[session]
+        if session in golden_prefixes:
+            master_zid, label = golden_prefixes[session]
+        else:
+            master_zid = session + "00"
+            label = "Unknown"
+            
+        out(f"\n### {master_zid} [{label}]")
+        out("| Phase | Cnt | Min (s) | Avg (s) | Max (s) |")
+        out("| :--- | :---: | :---: | :---: | :---: |")
+        sorted_phases = sorted(aggregates.items(), key=lambda x: sum(x[1])/len(x[1]), reverse=True)
+        for phase, durations in sorted_phases:
+            count = len(durations)
+            avg = sum(durations) / count
+            min_d = min(durations)
+            max_d = max(durations)
+            out(f"| `{phase}` | {count} | {min_d:.3f} | {avg:.3f} | {max_d:.3f} |")
         
     out("\n## Phase Glossary")
     out("- **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).")
@@ -279,5 +293,59 @@ def analyze():
     out("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
     out("- **`background_text_translation`**: The progressive worker updating BOTH the text translation AND the individual base lemma translations asynchronously without blocking the UI.")
 
+import os
+import sys
+import shutil
+
+def delete_commit_traces(target_subject):
+    trace_file = REPO_ROOT / "results" / "speed_trace.jsonl"
+    if not trace_file.exists():
+        print(f"Trace file not found at {trace_file}")
+        return
+
+    commits = get_git_commits()
+    commit_lookup = {c['hash']: c for c in commits}
+    
+    # Find the hash for the target subject
+    target_hashes = set()
+    for c in commits:
+        if c['subj'] == target_subject:
+            target_hashes.add(c['hash'])
+            
+    if not target_hashes:
+        print(f"No commit found with subject: {target_subject}")
+        return
+        
+    temp_file = trace_file.with_name("speed_trace_tmp.jsonl")
+    deleted_count = 0
+    kept_count = 0
+    
+    with open(trace_file, 'r', encoding='utf-8') as f_in, open(temp_file, 'w', encoding='utf-8') as f_out:
+        for line in f_in:
+            if not line.strip():
+                f_out.write(line)
+                continue
+            try:
+                data = json.loads(line)
+                ts_str = data.get("timestamp")
+                if ts_str:
+                    ts_str_clean = ts_str.replace('Z', '+00:00')
+                    event_ts = datetime.fromisoformat(ts_str_clean).timestamp()
+                    c_hash = get_commit_for_time(commits, event_ts)
+                    if c_hash in target_hashes:
+                        deleted_count += 1
+                        continue
+            except Exception:
+                pass
+            f_out.write(line)
+            kept_count += 1
+            
+    shutil.copy2(temp_file, trace_file)
+    temp_file.unlink()
+    print(f"Deleted {deleted_count} records for commit subject '{target_subject}'. Kept {kept_count} records.")
+
 if __name__ == '__main__':
-    analyze()
+    if len(sys.argv) == 3 and sys.argv[1] == '--delete-commit':
+        delete_commit_traces(sys.argv[2])
+    else:
+        analyze()
