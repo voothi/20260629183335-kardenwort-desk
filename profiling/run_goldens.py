@@ -77,7 +77,11 @@ def main():
                 import time
                 import json
                 start_time = time.time()
-                success = kardenwort_desk.spawn_ahk(["--zid", run['zid'], "--desk", str(run['file'])], repo_root)
+                success = kardenwort_desk.spawn_ahk([
+                    "--zid", run['zid'], 
+                    "--language", run['lang'],
+                    "--desk", str(run['file'])
+                ], repo_root)
                 if success:
                     print(f"SUCCESS: {run['name']} initiated via AHK.")
                     
