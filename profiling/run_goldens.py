@@ -16,7 +16,7 @@ def main():
             ahk_exe = kardenwort_desk.get_ahk_executable()
             if not ahk_exe: return
             print("Cleaning up existing Kardenwort desk windows...")
-            script = 'SetTitleMatchMode(2)\nids := WinGetList("Kardenwort - ")\nfor id in ids {\n    try { WinClose(id) }\n}'
+            script = 'SetTitleMatchMode(2)\nids := WinGetList("Kardenwort - ")\nfor id in ids\n    try WinClose(id)'
             subprocess.run([ahk_exe, "*"], input=script, text=True, timeout=15)
             import time
             time.sleep(1) # wait for close
