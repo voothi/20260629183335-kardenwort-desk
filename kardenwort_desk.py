@@ -2228,9 +2228,9 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
 
             if apply_source_padding and apply_translated_padding:
                 logger.warning(
-                    "Both anki_context_words_* (source padding) and "
-                    "anki_translated_context_words_* (translated padding) are active. "
-                    "Source padding will be suppressed — translated padding takes precedence."
+                    "Both anki_context_words_* and anki_translated_context_words_* are active. "
+                    "Source padding is bypassed for translation input, but will still apply to the SentenceSource column. "
+                    "Translated padding takes precedence for the destination text."
                 )
 
             try:
