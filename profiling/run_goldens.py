@@ -26,11 +26,23 @@ def main():
         except Exception as e:
             print(f"Cleanup warning: {e}")
 
+    filters = sys.argv[1:]
+    
     runs = []
     # Find directory-based fixtures
     for d in sorted(fixtures_dir.glob("*-golden.*")):
         if not d.is_dir():
             continue
+            
+        if filters:
+            matched = False
+            for f in filters:
+                if f in d.name:
+                    matched = True
+                    break
+            if not matched:
+                continue
+                
         name_parts = d.name.split('-')
         if len(name_parts) >= 2 and len(d.suffixes) >= 1:
             zid = name_parts[0]
