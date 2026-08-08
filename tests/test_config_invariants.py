@@ -793,3 +793,205 @@ def test_sentences_mode_config_matrix_resolution(params):
     split = params["enabled"] and 5 >= params["min_sentences"]
     expected_count = 5 + (1 if params["parent_mode"] != 'none' else 0) if split else 1
     assert cfg.get_expected_window_count(5) == expected_count
+
+
+# ---------------------------------------------------------------------------
+# Progressive-mode disable guard invariants
+#
+# Regression: lemma_base_provider not filled when a merged TSV is re-rendered
+# and sentences_mode.enabled=true. The guard must ONLY disable progressive mode
+# when there is active multi-window splitting — NOT for standalone TSV re-renders.
+#
+# Guard logic (kardenwort_desk.py _run_render_flow_impl):
+#   tsv_has_active_children = bool(tsv_path and sentences_enabled and children_tsv_paths)
+#   if (will_split or tsv_has_active_children) and (display_mode == 'progressive' OR prog_text_trans):
+#       → disable progressive
+# ---------------------------------------------------------------------------
+
+def _make_progressive_guard_config(
+    sentences_enabled: bool,
+    legacy_spawn_children: bool,
+    progressive_text_translation: bool,
+    display_mode: str,
+) -> configparser.ConfigParser:
+    """Build a minimal ConfigParser matching the relevant guard inputs."""
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_PIPELINE)
+    cp.add_section(SEC_RENDERING)
+    cp.add_section(SEC_SENTENCES_MODE)
+
+    cp.set(SEC_PIPELINE, "progressive_text_translation", str(progressive_text_translation))
+    cp.set(SEC_RENDERING, "display_mode", display_mode)
+    cp.set(SEC_SENTENCES_MODE, "enabled", str(sentences_enabled))
+    cp.set(SEC_SENTENCES_MODE, "legacy_spawn_children", str(legacy_spawn_children))
+    cp.set(SEC_SENTENCES_MODE, "min_sentences", "2")
+    return cp
+
+
+def _compute_guard(
+    cp: configparser.ConfigParser,
+    tsv_path_truthy: bool,
+    children_truthy: bool,
+    num_source_sentences: int,
+    text_mode: str,
+) -> bool:
+    """
+    Mirrors the exact guard logic in _run_render_flow_impl.
+    Returns True if progressive mode would be DISABLED.
+    """
+    display_mode_val = cp.get(SEC_RENDERING, "display_mode", fallback="progressive")
+    is_progressive_text = cp.getboolean(SEC_PIPELINE, "progressive_text_translation", fallback=False)
+    if display_mode_val != "progressive":
+        is_progressive_text = False
+
+    smc = SentencesModeConfig.from_config(cp)
+    sentences_enabled = smc.enabled
+
+    will_split = (not tsv_path_truthy) and (
+        smc.should_split_sentences(num_source_sentences)
+        or (text_mode == "multi" and smc.legacy_spawn_children and num_source_sentences >= 2)
+    )
+
+    tsv_has_active_children = bool(tsv_path_truthy and sentences_enabled and children_truthy)
+
+    needs_disable = (will_split or tsv_has_active_children) and (
+        display_mode_val == "progressive" or is_progressive_text
+    )
+    return needs_disable
+
+
+# Parametrize the exact user config combination (sentences_mode=true,
+# legacy_spawn_children=false, progressive_text_translation=false, display_mode=progressive)
+# against all TSV / children combinations.
+_REGRESSION_CASES = [
+    # (tsv_path_truthy, children_truthy, num_sentences, text_mode, expect_disabled, label)
+    # --- REGRESSION: merged/standalone TSV, no children → MUST stay progressive ---
+    (True,  False, 3, "single", False, "merged_tsv_no_children_single"),
+    (True,  False, 3, "multi",  False, "merged_tsv_no_children_multi"),
+    # --- Parent TSV with active children → MUST disable progressive ---
+    (True,  True,  3, "single", True,  "parent_tsv_with_children_single"),
+    (True,  True,  3, "multi",  True,  "parent_tsv_with_children_multi"),
+    # --- Fresh text, enough sentences, sentences_mode → MUST disable progressive ---
+    (False, False, 3, "single", True,  "fresh_text_enough_sentences"),
+    (False, False, 1, "single", False, "fresh_text_below_min_sentences"),
+    # --- No TSV, multi, legacy_spawn_children=false → will_split stays False ---
+    (False, False, 3, "multi",  True,  "fresh_multi_text_enough_sentences"),
+]
+
+
+@pytest.mark.parametrize(
+    "tsv_path_truthy,children_truthy,num_sentences,text_mode,expect_disabled,label",
+    _REGRESSION_CASES,
+    ids=[c[-1] for c in _REGRESSION_CASES],
+)
+def test_progressive_guard_regression_sentences_mode_enabled(
+    tsv_path_truthy, children_truthy, num_sentences, text_mode, expect_disabled, label
+):
+    """
+    Verify the progressive-mode disable guard for the exact production config combination
+    that caused the lemma_base_provider regression:
+      sentences_mode.enabled=true, legacy_spawn_children=false,
+      progressive_text_translation=false, display_mode=progressive.
+
+    CRITICAL: A merged/standalone TSV (tsv_path provided, no child TSVs on disk)
+    MUST NOT disable progressive mode, regardless of sentences_mode.enabled.
+    The progressive worker must be launched so lemma_base_provider translation runs.
+    """
+    cp = _make_progressive_guard_config(
+        sentences_enabled=True,
+        legacy_spawn_children=False,
+        progressive_text_translation=False,
+        display_mode="progressive",
+    )
+    result = _compute_guard(cp, tsv_path_truthy, children_truthy, num_sentences, text_mode)
+    assert result == expect_disabled, (
+        f"[{label}] progressive guard mismatch: "
+        f"tsv={tsv_path_truthy} children={children_truthy} "
+        f"n_sent={num_sentences} text_mode={text_mode} "
+        f"expected disabled={expect_disabled}, got {result}"
+    )
+
+
+# Full mode matrix: all combinations of the three config knobs the user pointed to
+_FULL_MATRIX_CASES = list(itertools.product(
+    [True, False],  # sentences_enabled
+    [True, False],  # legacy_spawn_children
+    [True, False],  # progressive_text_translation
+    ["progressive", "monolithic"],  # display_mode
+    [True, False],  # tsv_path_truthy
+    [True, False],  # children_truthy
+))
+
+
+@pytest.mark.parametrize(
+    "sentences_enabled,legacy_children,prog_text,display_mode,tsv_path_truthy,children_truthy",
+    _FULL_MATRIX_CASES,
+)
+def test_progressive_guard_full_mode_matrix(
+    sentences_enabled, legacy_children, prog_text, display_mode, tsv_path_truthy, children_truthy
+):
+    """
+    Exhaustive matrix test across all combinations of the three config knobs
+    (sentences_mode.enabled, legacy_spawn_children, progressive_text_translation),
+    display_mode, and TSV/children presence.
+
+    Invariants verified:
+    1. If display_mode=monolithic AND progressive_text_translation=false:
+       guard NEVER disables (already monolithic, nothing to disable).
+    2. If tsv_path is provided but children is empty:
+       guard MUST NOT disable due to sentences_mode alone (regression guard).
+    3. If will_split is True (fresh text, enough sentences, sentences_enabled):
+       guard MUST disable if any progressive mode flag is active.
+    4. If tsv_path provided and children present and sentences_enabled:
+       guard MUST disable if any progressive mode flag is active.
+    """
+    cp = _make_progressive_guard_config(
+        sentences_enabled=sentences_enabled,
+        legacy_spawn_children=legacy_children,
+        progressive_text_translation=prog_text,
+        display_mode=display_mode,
+    )
+
+    # Use 3 sentences (above min_sentences=2) for fresh-text split scenario
+    num_sentences = 3
+    text_mode = "single"
+
+    result = _compute_guard(cp, tsv_path_truthy, children_truthy, num_sentences, text_mode)
+
+    # Invariant 1: if neither progressive flag is active, guard can never fire
+    eff_prog_text = prog_text and display_mode == "progressive"
+    any_progressive_active = (display_mode == "progressive") or eff_prog_text
+    if not any_progressive_active:
+        assert result is False, (
+            "Guard must never fire when no progressive mode is active "
+            f"(display_mode={display_mode}, prog_text={prog_text})"
+        )
+
+    # Invariant 2: TSV present but no children → guard must not fire due to sentences_mode alone
+    if tsv_path_truthy and not children_truthy:
+        # will_split is False (tsv_path_truthy=True suppresses will_split)
+        # tsv_has_active_children is False (children_truthy=False)
+        assert result is False, (
+            "Guard must NOT disable progressive mode for a standalone/merged TSV "
+            f"(sentences_enabled={sentences_enabled}, tsv_path=True, children=False). "
+            "The progressive worker must be launched so lemma_base_provider runs."
+        )
+
+    # Invariant 3: will_split=True (fresh text, sentences_enabled, enough sentences)
+    # + any progressive flag → must disable
+    if not tsv_path_truthy and sentences_enabled and num_sentences >= 2:
+        will_split_expected = True
+        if will_split_expected and any_progressive_active:
+            assert result is True, (
+                "Guard MUST disable progressive for fresh text with sentences split "
+                f"(sentences_enabled={sentences_enabled}, will_split=True, "
+                f"display_mode={display_mode}, prog_text={prog_text})"
+            )
+
+    # Invariant 4: parent TSV with children + sentences_enabled + any progressive
+    if tsv_path_truthy and children_truthy and sentences_enabled and any_progressive_active:
+        assert result is True, (
+            "Guard MUST disable progressive for parent TSV with active child windows "
+            f"(sentences_enabled={sentences_enabled}, children=True, "
+            f"display_mode={display_mode}, prog_text={prog_text})"
+        )
