@@ -1925,6 +1925,77 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
     return padded
 
 
+def pad_translated_sentences(translated_sentences, words_before=0, words_after=0, max_words=0):
+    """Pad each translated sentence with context words from neighbouring translated sentences.
+
+    Unlike pad_sentences() which works on source-language character spans, this function
+    operates entirely on the translated word arrays — no second API call is required.
+    """
+    if not (words_before or words_after) or not translated_sentences:
+        return translated_sentences
+
+    padded = []
+    num_sentences = len(translated_sentences)
+
+    for i, s in enumerate(translated_sentences):
+        words_b_str = ""
+        if words_before > 0 and i > 0:
+            prev_s = translated_sentences[i - 1]
+            prev_words = tok.build_word_list_internal(prev_s, keep_spaces=True)
+            valid_word_indices = [idx for idx, t in enumerate(prev_words) if t["is_word"]]
+            if len(valid_word_indices) >= words_before:
+                start_token_idx = valid_word_indices[-words_before]
+                words_b_str = "".join(t["text"] for t in prev_words[start_token_idx:])
+            else:
+                words_b_str = prev_s
+            words_b_str = words_b_str.strip()
+
+        words_a_str = ""
+        if words_after > 0 and i < num_sentences - 1:
+            next_s = translated_sentences[i + 1]
+            next_words = tok.build_word_list_internal(next_s, keep_spaces=True)
+            valid_word_indices = [idx for idx, t in enumerate(next_words) if t["is_word"]]
+            if len(valid_word_indices) >= words_after:
+                end_token_idx = valid_word_indices[words_after - 1]
+                words_a_str = "".join(t["text"] for t in next_words[:end_token_idx + 1])
+            else:
+                words_a_str = next_s
+            words_a_str = words_a_str.strip()
+
+        parts = []
+        if words_b_str:
+            parts.append(words_b_str)
+        parts.append(s.strip())
+        if words_a_str:
+            parts.append(words_a_str)
+
+        padded_sentence = " ".join(parts).replace('\n', ' ').replace('\r', ' ').strip()
+        padded_sentence = re.sub(r'\s+', ' ', padded_sentence)
+
+        # Truncate context if it exceeds max_words by removing words from the edges.
+        # We count actual word counts of before/after context strings — the previous
+        # implementation used len(words_b) which was always 0 or 1 (list length, not word count).
+        if max_words > 0:
+            padded_words = tok.build_word_list(padded_sentence)
+            if len(padded_words) > max_words:
+                before_word_count = len(tok.build_word_list(words_b_str)) if words_b_str else 0
+                after_word_count = len(tok.build_word_list(words_a_str)) if words_a_str else 0
+                n_p = len(padded_words)
+                excess = n_p - max_words
+                # Remove excess from context only — never touch target sentence words.
+                to_remove_start = min(before_word_count, excess)
+                excess -= to_remove_start
+                to_remove_end = min(after_word_count, excess)
+
+                start_idx = to_remove_start
+                end_idx = n_p - to_remove_end if to_remove_end > 0 else n_p
+                padded_words = padded_words[start_idx:end_idx]
+                padded_sentence = " ".join(padded_words)
+
+        padded.append(padded_sentence)
+
+    return padded
+
 
 def _effective_text_mode(text, configured_text_mode=None):
     if configured_text_mode == 'multi':
@@ -2154,34 +2225,47 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             if sbc.translated_words_before > 0 or sbc.translated_words_after > 0:
                 if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
                     apply_translated_padding = True
-                    
+
+            if apply_source_padding and apply_translated_padding:
+                logger.warning(
+                    "Both anki_context_words_* (source padding) and "
+                    "anki_translated_context_words_* (translated padding) are active. "
+                    "Source padding will be suppressed — translated padding takes precedence."
+                )
+
             try:
-                # Always translate the unpadded sentences first (for Translate View and TextDestination)
+                # Always translate the unpadded sentences first (for Translate View and TextDestination).
+                # chunk_callback is forwarded so progressive workers receive partial streaming
+                # updates even when native padding is applied afterwards.
                 unpadded_translations = translate_source_text(
                     "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                    config, resolved_paths, provider, zid=zid
+                    config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid
                 )
-                
+
                 full_text_trans = " ".join(
-                    unpadded_translations.get(i, "").strip() 
-                    for i in sorted(unpadded_translations.keys()) 
+                    unpadded_translations.get(i, "").strip()
+                    for i in sorted(unpadded_translations.keys())
                     if isinstance(i, int) and unpadded_translations.get(i, "")
                 )
 
                 if apply_translated_padding:
-                    # Native Python Subtitle Padding Algorithm
-                    # We pad the already-translated array natively, avoiding a second network call
+                    # Native Python Subtitle Padding Algorithm.
+                    # We pad the already-translated array natively, avoiding a second network call.
                     translated_array = [unpadded_translations.get(i, "").strip() for i in sorted(unpadded_translations.keys()) if isinstance(i, int)]
                     padded_translated_array = pad_translated_sentences(
-                        translated_array, 
-                        words_before=sbc.translated_words_before, 
-                        words_after=sbc.translated_words_after, 
+                        translated_array,
+                        words_before=sbc.translated_words_before,
+                        words_after=sbc.translated_words_after,
                         max_words=sbc.translated_max_words
                     )
-                    
+
                     pseudo_translations = {i: padded_translated_array[i] for i in range(len(padded_translated_array))}
                     if full_text_trans:
                         pseudo_translations['FULL_TEXT'] = full_text_trans
+                    # Fire callback with the final padded result so progressive workers
+                    # receive context-enriched values in their final TSV write.
+                    if chunk_callback:
+                        chunk_callback(pseudo_translations)
                     return pseudo_translations
                     
                 elif apply_source_padding:
@@ -7126,75 +7210,6 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                 write_update_js(tsv_path, data_rows, headers, role_fields)
     return data_rows
 
-def pad_translated_sentences(translated_sentences, words_before=0, words_after=0, max_words=0):
-    if not (words_before or words_after) or not translated_sentences:
-        return translated_sentences
-        
-    padded = []
-    num_sentences = len(translated_sentences)
-    
-    for i, s in enumerate(translated_sentences):
-        words_b = []
-        if words_before > 0 and i > 0:
-            prev_s = translated_sentences[i-1]
-            prev_words = tok.build_word_list_internal(prev_s, keep_spaces=True)
-            # Find the last `words_before` valid words
-            valid_word_indices = [idx for idx, t in enumerate(prev_words) if t["is_word"]]
-            if len(valid_word_indices) >= words_before:
-                start_token_idx = valid_word_indices[-words_before]
-                words_b_str = "".join(t["text"] for t in prev_words[start_token_idx:])
-            else:
-                words_b_str = prev_s
-            words_b.append(words_b_str.strip())
-            
-        words_a = []
-        if words_after > 0 and i < num_sentences - 1:
-            next_s = translated_sentences[i+1]
-            next_words = tok.build_word_list_internal(next_s, keep_spaces=True)
-            # Find the first `words_after` valid words
-            valid_word_indices = [idx for idx, t in enumerate(next_words) if t["is_word"]]
-            if len(valid_word_indices) >= words_after:
-                end_token_idx = valid_word_indices[words_after - 1]
-                # Include spaces up to the end token
-                words_a_str = "".join(t["text"] for t in next_words[:end_token_idx+1])
-            else:
-                words_a_str = next_s
-            words_a.append(words_a_str.strip())
-            
-        parts = []
-        if words_b:
-            parts.extend(words_b)
-        parts.append(s.strip())
-        if words_a:
-            parts.extend(words_a)
-            
-        padded_sentence = " ".join(parts).replace('\n', ' ').replace('\r', ' ').strip()
-        import re
-        padded_sentence = re.sub(r'\s+', ' ', padded_sentence)
-        
-        # Truncate context if it exceeds max_words
-        if max_words > 0:
-            padded_words = tok.build_word_list(padded_sentence)
-            if len(padded_words) > max_words:
-                target_words = tok.build_word_list(s)
-                if target_words:
-                    n_p = len(padded_words)
-                    n_t = len(target_words)
-                    excess = n_p - max_words
-                    if excess > 0:
-                        # Simple truncation logic: remove from ends
-                        to_remove_start = min(len(words_b) if words_b else 0, excess)
-                        excess -= to_remove_start
-                        to_remove_end = excess
-                        
-                        start_idx = to_remove_start
-                        end_idx = n_p - to_remove_end
-                        padded_words = padded_words[start_idx:end_idx]
-                        padded_sentence = " ".join(padded_words)
-        
-        padded.append(padded_sentence)
-        
-    return padded
 
 def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows):
     batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)

@@ -588,6 +588,9 @@ def test_translate_source_text_native_padding(monkeypatch, tmp_path):
     config.set('settings', 'anki_translated_context_words_after', '5')
     config.set('settings', 'anki_context_words_before', '0')
     config.set('settings', 'anki_context_words_after', '0')
+    if not config.has_section('translation'):
+        config.add_section('translation')
+    config.set('translation', 'translation_wrap_max_chars', '90')
     
     # Must NOT have newlines, otherwise _effective_text_mode forces 'multi' and bypasses padding!
     text = "He walked into the dark room. He turned on the light. The bulb flickered slightly. It was very cold inside."
