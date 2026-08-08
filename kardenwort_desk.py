@@ -2917,13 +2917,15 @@ def parse_source_sentences(text, text_mode, config):
     if eff_mode == 'single':
         source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
     else:
+        # Match kardenwort.py core behavior: if multi_mode_remove_empty_lines is true, drop empty lines.
+        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True) if config.has_section('settings') else True
         if smc.multi_mode_decompose:
             source_sentences = []
             for line in text.splitlines():
                 if line.strip():
                     # Pass max_chars=0 to disable arbitrary length wrapping for multi mode paragraphs
                     source_sentences.extend(split_single_mode_text(line, 0, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks))
-                else:
+                elif not remove_empty:
                     source_sentences.append(line)
             # CRITICAL: Overwrite the original text with joined flattened sentences.
             # In multi mode, kardenwort.py core determines data array length strictly by newlines via splitlines().
@@ -2932,7 +2934,11 @@ def parse_source_sentences(text, text_mode, config):
             text = "\n".join(source_sentences)
         else:
             # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
-            source_sentences = text.splitlines()
+            if remove_empty:
+                source_sentences = [line for line in text.splitlines() if line.strip()]
+                text = "\n".join(source_sentences)
+            else:
+                source_sentences = text.splitlines()
     return source_sentences, text, smc
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
@@ -8445,12 +8451,12 @@ def spawn_ahk(args_list, base_dir):
     
     found_exe = get_ahk_executable()
     
-    def chunk_args(args_list, base_cmd, max_len=8000):
+    def chunk_args(args_list, base_cmd, max_len=8000, chunk_size=4):
         base_len = sum(len(c) + 1 for c in base_cmd)
         current_chunk = []
         current_len = base_len
-        for i in range(0, len(args_list), 4):
-            block = args_list[i:i+4]
+        for i in range(0, len(args_list), chunk_size):
+            block = args_list[i:i+chunk_size]
             block_len = sum(len(str(a)) + 1 for a in block)
             if current_len + block_len > max_len and current_chunk:
                 yield current_chunk
