@@ -7,7 +7,7 @@
 
 ## [Commit: a463eb0] 20260808021042
 ```text
-Run Session: 202608071902** [Unknown] (Total Batch E2E Duration: 16.739s)
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 16.739s)
 ---------------------------------------------------------------------------
 translate_text (00)                 | ██                                       | 0.930s
 lemmatization (00)                  | ██████                                   | 2.798s
@@ -31,7 +31,7 @@ background_text_translation (02)    |                   ███████   
 html_generation (01)                |                    █                     | 0.003s
 background_text_translation (01)    |                    ██████                | 2.824s
 
-Run Session: 202608071901** [Unknown] (Total Batch E2E Duration: 9.160s)
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 9.160s)
 ---------------------------------------------------------------------------
 lemmatization (00)                  | █████████████                            | 3.070s
 translate_text (00)                 | █████                                    | 1.169s

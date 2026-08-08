@@ -12,12 +12,13 @@ def get_golden_prefixes():
     fixtures_dir = REPO_ROOT / "tests" / "fixtures"
     prefixes = {}
     if fixtures_dir.exists():
-        for f in fixtures_dir.glob("*-golden.*.txt"):
-            match = re.match(r"^(\d{14})", f.name)
-            if match:
-                zid = match.group(1)
-                lang = f.suffixes[-2].strip('.').upper()
-                prefixes[zid[:12]] = f"Golden {lang}"
+        for d in fixtures_dir.glob("*-golden.*"):
+            if d.is_dir():
+                match = re.match(r"^(\d{14})", d.name)
+                if match:
+                    zid = match.group(1)
+                    lang = d.suffixes[-1].strip('.').upper()
+                    prefixes[zid[:12]] = (zid, f"Golden {lang}")
     return prefixes
 
 def get_git_commits():
@@ -155,8 +156,13 @@ def analyze():
             total_time = max_end_ts - min_start_ts
             if total_time <= 0: total_time = 1
             
-            label = golden_prefixes.get(latest_session, "Unknown")
-            out(f"Run Session: {latest_session}** [{label}] (Total Batch E2E Duration: {total_time:.3f}s)")
+            if latest_session in golden_prefixes:
+                master_zid, label = golden_prefixes[latest_session]
+            else:
+                master_zid = latest_session + "00"
+                label = "Unknown"
+                
+            out(f"Run Session: {master_zid} [{label}] (Total Batch E2E Duration: {total_time:.3f}s)")
             out("-" * 75)
             
             parsed_events.sort(key=lambda x: x['start_t'])
