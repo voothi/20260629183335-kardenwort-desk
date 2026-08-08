@@ -839,7 +839,7 @@ class TraceTimer(contextlib.ContextDecorator):
         if not self.enabled:
             return False
             
-        duration = time.perf_counter() - self.start
+        duration = time.perf_counter() - getattr(self, 'start', time.perf_counter())
         
         with _BOOT_LOCK:
             cold_start = not _HAS_BOOTED
@@ -847,7 +847,12 @@ class TraceTimer(contextlib.ContextDecorator):
                 _HAS_BOOTED = True
             
         try:
-            results_dir = resolve_results_dir(self.resolved_paths, self.config)
+            try:
+                _kw_workspace = self.resolved_paths.get('kardenwort_workspace') if isinstance(self.resolved_paths, dict) else None
+                _kw_cfg = load_kardenwort_config(_kw_workspace) if _kw_workspace else self.config
+            except Exception:
+                _kw_cfg = self.config
+            results_dir = resolve_results_dir(self.resolved_paths, _kw_cfg)
             if not results_dir:
                 return False
                 
@@ -2947,7 +2952,8 @@ def parse_source_sentences(text, text_mode, config):
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
-            raise RuntimeError(f"Concurrent render requested for ZID: {zid}. The previous request is still being processed.")
+            logger.warning(f"[{zid}] Concurrent render skipped — already active. Rapid duplicate hotkey fire detected.")
+            return ""
         _ACTIVE_ZIDS.add(zid)
     try:
         return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num)
@@ -2962,6 +2968,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     display_mode_val = config.get(SEC_RENDERING, 'display_mode', fallback='progressive')
     is_progressive_translation_enabled = config.getboolean(SEC_PIPELINE, 'progressive_text_translation', fallback=False)
     if display_mode_val != 'progressive':
+        if is_progressive_translation_enabled:
+            logger.info(f"[{zid}] progressive_text_translation=true has no effect: display_mode is '{display_mode_val}' (must be 'progressive').")
         is_progressive_translation_enabled = False
         
     progressive_timeout_seconds = config.getint(SEC_PIPELINE, 'progressive_timeout_seconds', fallback=15)
@@ -2990,19 +2998,19 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         except Exception:
             pass
             
-    smc = SentencesModeConfig.from_config(config)
+    sbc = SentenceBoundaryConfig.from_config(config)
+        
+    wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
+    
+    # parse_source_sentences builds SentencesModeConfig internally and returns it as the third value.
+    # Reuse it here to avoid constructing SentencesModeConfig twice from the same config.
+    source_sentences, text, smc = parse_source_sentences(text, text_mode, config)
     sentences_enabled = smc.enabled
     min_sentences = smc.min_sentences
     alignment_method = smc.alignment_method
     spawn_order = smc.spawn_order
     parent_mode = smc.parent_mode
     multi_mode_decompose = smc.multi_mode_decompose
-    
-    sbc = SentenceBoundaryConfig.from_config(config)
-        
-    wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
-    
-    source_sentences, text, _ = parse_source_sentences(text, text_mode, config)
     will_split = not tsv_path and (
         smc.should_split_sentences(len(source_sentences)) or 
         (text_mode == 'multi' and smc.legacy_spawn_children and len(source_sentences) >= 2)
@@ -3270,6 +3278,15 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     master_trans_path.unlink()
             except Exception:
                 pass
+            try:
+                # Clean up orphaned .updates/ directory created by write_update_js for progressive mode.
+                # Without this, stub-mode TSV deletions leave empty directories accumulating in results/.
+                master_updates_dir = master_tsv_path.parent / f"{master_tsv_path.stem}.updates"
+                if master_updates_dir.exists() and master_updates_dir.is_dir():
+                    import shutil
+                    shutil.rmtree(master_updates_dir, ignore_errors=True)
+            except Exception:
+                pass
 
             bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
             text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
@@ -3436,7 +3453,8 @@ html, body {{
     if not is_progressive and run_base == 'auto':
         try:
             if not sentence_translated:
-                sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
+                with TraceTimer("monolithic_text_translation", zid, config, resolved_paths):
+                    sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
                 resolve_translations(
                     text, text_mode, data_rows, col_index, col_sentence_dest,
                     sentence_translations_raw, working_tsv_path, comments, headers,
@@ -7512,7 +7530,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     try:
-        batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
+        batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=30)
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
             

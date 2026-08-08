@@ -115,9 +115,9 @@ class TestPerformanceTracing(unittest.TestCase):
             # wait for t1 to be inside the flow
             in_flow_event.wait()
 
-            # now t2 tries with the same zid, it should raise RuntimeError
-            with self.assertRaises(RuntimeError):
-                run_flow()
+            # now t2 tries with the same zid — it should be silently debounced (not raise, return "")
+            debounced_result = run_flow()
+            self.assertEqual(debounced_result, "", "Debounced concurrent render must return '' silently without raising")
 
             # finish t1
             resume_event.set()
