@@ -26,7 +26,12 @@ def main():
         except Exception as e:
             print(f"Cleanup warning: {e}")
 
-    filters = sys.argv[1:]
+    import argparse
+    parser = argparse.ArgumentParser(description="Run Kardenwort Golden Fixtures")
+    parser.add_argument("--filter", nargs="+", help="Filter fixtures to run by ZID or full name")
+    args = parser.parse_args()
+    
+    filters = args.filter if args.filter else []
     
     runs = []
     # Find directory-based fixtures
