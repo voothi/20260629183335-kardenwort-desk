@@ -179,10 +179,21 @@ def main():
                 print(f"ERROR: {e}")
 
         print(f"==================================================")
-        print(f"Check results/speed_trace.jsonl to view the authentic performance traces.")
-
+        print("Check results/speed_trace.jsonl to view the authentic performance traces.")
+        
+        print("\nCleaning up final Kardenwort desk windows...")
+        ahk_exe = kardenwort_desk.get_ahk_executable()
+        if ahk_exe:
+            try:
+                script = 'SetTitleMatchMode(2)\nids := WinGetList("Kardenwort - ")\nfor id in ids\n    try WinClose(id)'
+                subprocess.run([ahk_exe, "*"], input=script, text=True, timeout=15)
+            except Exception as e:
+                print(f"Final cleanup warning: {e}")
+                
     finally:
+        # Restore original config
         if config_backup.exists():
+            import shutil
             shutil.copy2(config_backup, config_path)
             config_backup.unlink()
             print("\nRestored original config.ini")
