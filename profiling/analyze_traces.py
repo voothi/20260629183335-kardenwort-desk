@@ -175,8 +175,11 @@ def analyze():
             
         gap_info = ""
         if len(session_stats) >= 2:
-            gap = session_stats[1]['min_start_ts'] - session_stats[0]['max_end_ts']
-            gap_info = f" (Wait between runs: {gap:.2f}s)"
+            gaps = []
+            for i in range(1, len(session_stats)):
+                gaps.append(session_stats[i]['min_start_ts'] - session_stats[i-1]['max_end_ts'])
+            avg_gap = sum(gaps) / len(gaps)
+            gap_info = f" (Avg wait between runs: {avg_gap:.2f}s)"
             
         subj = commit_lookup[h]['subj'] if h in commit_lookup else "Unknown"
         out(f"## [Commit: {h}] {subj}{gap_info}")

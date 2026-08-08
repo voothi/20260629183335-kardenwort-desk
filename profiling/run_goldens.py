@@ -116,8 +116,17 @@ def main():
                 if success:
                     print(f"SUCCESS: {run['name']} initiated via AHK.")
                     
-                    # 1. Determine expected windows based on Golden text
-                    expected_count = 4 if run['lang'] == 'en' else 9
+                    # 1. Determine expected windows based on Golden text dynamically
+                    try:
+                        source_text = run['file'].read_text(encoding='utf-8')
+                        import split_by_clause as sbc
+                        sentences = kardenwort_desk.split_single_mode_text(
+                            source_text, 60, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks
+                        )
+                        expected_count = len(sentences) + 1
+                    except Exception as e:
+                        print(f"Warning: Could not dynamically count sentences: {e}")
+                        expected_count = 4 if run['lang'] == 'en' else 9
                     print(f"Expected {expected_count} windows for golden run.")
                     
                     speed_trace = results_dir / "speed_trace.jsonl"
