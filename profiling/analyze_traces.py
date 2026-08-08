@@ -100,12 +100,17 @@ def analyze():
                     matched_golden_session = None
                     if golden_prefixes:
                         try:
-                            zid_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                            # Use the ZID from the trace to match against golden sessions, not the system timestamp
+                            trace_zid_dt = datetime.strptime(zid, "%Y%m%d%H%M%S")
+                            best_match = None
+                            min_diff = 900
                             for g_zid in golden_prefixes:
-                                g_dt = datetime.strptime(g_zid, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
-                                if 0 <= (zid_dt - g_dt).total_seconds() <= 900:  # Within 15 minutes of golden start
-                                    matched_golden_session = g_zid
-                                    break
+                                g_dt = datetime.strptime(g_zid, "%Y%m%d%H%M%S")
+                                diff = (trace_zid_dt - g_dt).total_seconds()
+                                if 0 <= diff <= min_diff:
+                                    min_diff = diff
+                                    best_match = g_zid
+                            matched_golden_session = best_match
                         except Exception:
                             pass
                             
