@@ -153,15 +153,38 @@ def analyze():
             events = sessions[latest_session]
             if not events: continue
             
-            # Deduplicate by (zid, phase) taking the latest execution
-            latest_events = {}
+            # Sort events by timestamp
+            events_sorted = []
             for e in events:
                 ts_str_clean = e['timestamp'].replace('Z', '+00:00')
                 end_t = datetime.fromisoformat(ts_str_clean).timestamp()
+                events_sorted.append((end_t, e))
+            events_sorted.sort(key=lambda x: x[0])
+            
+            # Cluster events that occur within 60 seconds of each other
+            clusters = []
+            current_cluster = []
+            for end_t, e in events_sorted:
+                if not current_cluster:
+                    current_cluster.append((end_t, e))
+                else:
+                    last_t = current_cluster[-1][0]
+                    if end_t - last_t > 60:
+                        clusters.append(current_cluster)
+                        current_cluster = [(end_t, e)]
+                    else:
+                        current_cluster.append((end_t, e))
+            if current_cluster:
+                clusters.append(current_cluster)
+                
+            # Take only the latest execution cluster
+            latest_cluster = clusters[-1] if clusters else []
+            
+            latest_events = {}
+            for end_t, e in latest_cluster:
                 start_t = end_t - e['duration']
                 key = (e.get('zid', 'unknown'), e['phase'])
-                
-                # Update if not exists or if this is a newer execution
+                # Within the same cluster, keep the latest if duplicates exist
                 if key not in latest_events or end_t > latest_events[key]['end_t']:
                     latest_events[key] = {
                         'phase': e['phase'],
