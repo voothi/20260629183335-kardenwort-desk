@@ -3628,24 +3628,39 @@ html, body {{
             run_enrich = 'manual'
                 
         if has_untranslated_lemmas:
-            lemmas_to_translate = []
-            for row in data_rows:
-                if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                    if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
-                        lemmas_to_translate.append(row[col_lemma].strip())
-            lemmas_to_translate = list(set(lemmas_to_translate))
-            
-            lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
-            
-            for row in data_rows:
-                if col_lemma != -1 and len(row) > col_lemma:
-                    lemma_val = row[col_lemma]
-                    if col_word_dest != -1:
-                        while len(row) <= col_word_dest:
-                            row.append("")
-                        row[col_word_dest] = lemma_translations.get(lemma_val, "")
-            with file_lock(working_tsv_path):
-                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            if base_provider == 'intellifiller':
+                selected_rows_to_translate = []
+                for i, row in enumerate(data_rows):
+                    if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                        if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
+                            selected_rows_to_translate.append(i)
+                            
+                if selected_rows_to_translate:
+                    with file_lock(working_tsv_path):
+                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                    prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_translate)
+                    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+            else:
+                lemmas_to_translate = []
+                for row in data_rows:
+                    if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                        if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
+                            lemmas_to_translate.append(row[col_lemma].strip())
+                lemmas_to_translate = list(set(lemmas_to_translate))
+                
+                lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
+                
+                for row in data_rows:
+                    if col_lemma != -1 and len(row) > col_lemma:
+                        lemma_val = row[col_lemma]
+                        if col_word_dest != -1:
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            if not row[col_word_dest].strip():
+                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                with file_lock(working_tsv_path):
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                 
     translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
     
