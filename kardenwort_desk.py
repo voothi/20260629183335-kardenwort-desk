@@ -8433,27 +8433,49 @@ def spawn_ahk(args_list, base_dir):
     
     found_exe = get_ahk_executable()
     
+    def chunk_args(args_list, base_cmd, max_len=8000):
+        base_len = sum(len(c) + 1 for c in base_cmd)
+        current_chunk = []
+        current_len = base_len
+        for i in range(0, len(args_list), 4):
+            block = args_list[i:i+4]
+            block_len = sum(len(str(a)) + 1 for a in block)
+            if current_len + block_len > max_len and current_chunk:
+                yield current_chunk
+                current_chunk = []
+                current_len = base_len
+            current_chunk.extend(block)
+            current_len += block_len
+        if current_chunk:
+            yield current_chunk
+
+    success = True
     if found_exe:
-        cmd = [found_exe, str(ahk_script)] + args_list
-        logger.info(f"Spawning AHK via executable: {' '.join(cmd)}")
-        try:
-            subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
-            return True
-        except Exception as e:
-            logger.error(f"Failed to spawn AHK window process: {e}")
-            return False
+        base_cmd = [found_exe, str(ahk_script)]
+        for chunk in chunk_args(args_list, base_cmd):
+            cmd = base_cmd + chunk
+            logger.info(f"Spawning AHK via executable: {' '.join(cmd)}")
+            try:
+                subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
+            except Exception as e:
+                logger.error(f"Failed to spawn AHK window process: {e}")
+                success = False
+        return success
     else:
         logger.warning(f"No AutoHotkey executable found, falling back to shell execution for {ahk_script.name}")
-        try:
-            args_str = ' '.join(f'"{a}"' for a in args_list)
-            if sys.version_info >= (3, 10):
-                os.startfile(str(ahk_script), operation='open', arguments=args_str)
-            else:
-                subprocess.Popen(["cmd.exe", "/c", "start", '""', str(ahk_script)] + args_list, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
-            return True
-        except Exception as e2:
-            logger.error(f"Failed to spawn AHK via fallback: {e2}")
-            return False
+        base_cmd = ["cmd.exe", "/c", "start", '""', str(ahk_script)] if sys.version_info < (3, 10) else [str(ahk_script)]
+        for chunk in chunk_args(args_list, base_cmd):
+            try:
+                if sys.version_info >= (3, 10):
+                    args_str = ' '.join(f'"{a}"' for a in chunk)
+                    os.startfile(str(ahk_script), operation='open', arguments=args_str)
+                else:
+                    cmd = base_cmd + chunk
+                    subprocess.Popen(cmd, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, close_fds=True)
+            except Exception as e2:
+                logger.error(f"Failed to spawn AHK via fallback: {e2}")
+                success = False
+        return success
 
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")

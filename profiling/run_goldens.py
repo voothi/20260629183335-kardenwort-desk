@@ -93,13 +93,23 @@ def main():
             
             # Clean up any existing generated files for this ZID to force a real performance test
             results_dir = repo_root / "results"
-            for existing_file in results_dir.rglob(f"{run['zid'][:12]}*"):
-                if existing_file.is_file() and existing_file.suffix in ['.tsv', '.txt', '.js']:
+            from datetime import datetime, timedelta
+            master_dt = datetime.strptime(run['zid'], '%Y%m%d%H%M%S')
+            end_dt = master_dt + timedelta(minutes=15)
+            end_zid = end_dt.strftime('%Y%m%d%H%M%S')
+            
+            for existing_file in results_dir.rglob("*.tsv"):
+                if run['zid'] <= existing_file.name[:14] <= end_zid:
                     try:
                         existing_file.unlink()
-                        print(f"Cleaned up existing file: {existing_file.name}")
                     except Exception as e:
-                        print(f"Warning: Could not delete {existing_file.name}: {e}")
+                        print(f"Warning: could not delete {existing_file}: {e}")
+            for existing_file in results_dir.rglob("*.txt"):
+                if run['zid'] <= existing_file.name[:14] <= end_zid:
+                    try:
+                        existing_file.unlink()
+                    except Exception as e:
+                        print(f"Warning: could not delete {existing_file}: {e}")
                 
             # Instead of calling Python directly, we trigger the resident AHK script exactly
             # as if the user triggered it via hotkey or tray menu.
@@ -140,8 +150,10 @@ def main():
                                     for line in f:
                                         try:
                                             data = json.loads(line)
-                                            if data.get('phase') == 'html_generation' and str(data.get('zid')).startswith(run['zid'][:12]):
-                                                completed_zids.add(data['zid'])
+                                            if data.get('phase') == 'html_generation' and data.get('zid'):
+                                                trace_zid = str(data.get('zid'))
+                                                if run['zid'] <= trace_zid <= end_zid:
+                                                    completed_zids.add(trace_zid)
                                         except:
                                             pass
                             except Exception as e:

@@ -15,11 +15,10 @@ def get_golden_prefixes():
     if fixtures_dir.exists():
         for d in fixtures_dir.glob("*-golden.*"):
             if d.is_dir():
-                match = re.match(r"^(\d{14})", d.name)
+                match = re.match(r"^(\d{14})-golden\.(.*)", d.name)
                 if match:
-                    zid = match.group(1)
-                    lang = d.suffixes[-1].strip('.').upper()
-                    prefixes[zid[:12]] = (zid, f"Golden {lang}")
+                    zid, lang = match.groups()
+                    prefixes[zid] = (zid, f"Golden {lang.upper()}")
     return prefixes
 
 def get_git_commits():
@@ -98,16 +97,27 @@ def analyze():
                 if phase and duration is not None and ts_str:
                     if zid in ("000", "00000000000000", "unknown"): continue
                     
-                    # Filter: Only include Golden Runs (and their children)
-                    if golden_prefixes and zid[:12] not in golden_prefixes:
-                        continue
-                        
+                    matched_golden_session = None
+                    if golden_prefixes:
+                        try:
+                            zid_dt = datetime.fromisoformat(ts_str.replace('Z', '+00:00'))
+                            for g_zid in golden_prefixes:
+                                g_dt = datetime.strptime(g_zid, "%Y%m%d%H%M%S").replace(tzinfo=timezone.utc)
+                                if 0 <= (zid_dt - g_dt).total_seconds() <= 900:  # Within 15 minutes of golden start
+                                    matched_golden_session = g_zid
+                                    break
+                        except Exception:
+                            pass
+                            
+                        if not matched_golden_session:
+                            continue
+                            
+                    run_session = matched_golden_session if matched_golden_session else zid
+                    
                     ts_str_clean = ts_str.replace('Z', '+00:00')
                     event_ts = datetime.fromisoformat(ts_str_clean).timestamp()
                     c_hash = get_commit_for_time(commits, event_ts)
                     
-                    # Group by the 12-digit run session prefix so children are merged with the master
-                    run_session = zid[:12]
                     runs_by_commit[c_hash][run_session].append(data)
                     phase_aggregates[phase].append(duration)
             except json.JSONDecodeError:
