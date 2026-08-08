@@ -180,7 +180,6 @@ def main():
 
                 else:
                     print(f"FAILED: {run['name']} could not be initiated.")
-                    print(f"SUCCESS: Found {expected_count} Kardenwort windows.")
             except Exception as e:
                 print(f"ERROR: {e}")
 

@@ -153,7 +153,8 @@ def analyze():
                         'zid': key[0],
                         'start_t': start_t,
                         'end_t': end_t,
-                        'dur': e['duration']
+                        'dur': e['duration'],
+                        'status': e.get('status', 'success')
                     }
             
             parsed_events = list(latest_events.values())
@@ -211,6 +212,8 @@ def analyze():
                 
                 # Suffix to show if it's master (00) or child (01, 02)
                 suffix = f"({p['zid'][-2:]})" if len(p['zid']) == 14 else ""
+                if p.get('status') == 'error':
+                    suffix += " [ERROR]"
                 phase_label = f"{p['phase']} {suffix}".strip()
                 
                 out(f"{phase_label:<35} | {bar} | {p['dur']:.3f}s")
