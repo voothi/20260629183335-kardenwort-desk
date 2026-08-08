@@ -629,10 +629,13 @@ class SentencesModeConfig:
     multi_mode_decompose: bool = False
     deduplication_scope: str = "sentence"
     
-    def get_expected_window_count(self, num_sentences: int) -> int:
-        """Returns the number of Kardenwort Desk windows that will spawn (including parent)."""
+    def get_expected_window_count(self, num_sentences: int, has_tsv_path: bool = False) -> int:
+        """Returns the number of Kardenwort Desk windows that will spawn."""
+        if has_tsv_path:
+            return 1
         if self.enabled and num_sentences >= self.min_sentences:
-            return num_sentences + 1
+            parent_spawns = 0 if self.parent_mode == 'none' else 1
+            return num_sentences + parent_spawns
         return 1
 
     @classmethod
