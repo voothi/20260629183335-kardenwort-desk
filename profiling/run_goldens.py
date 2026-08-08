@@ -120,7 +120,7 @@ def main():
                     try:
                         source_text = run['file'].read_text(encoding='utf-8')
                         test_config = configparser.ConfigParser()
-                        test_config.read(run['config'] if run['config'].exists() else config_path)
+                        test_config.read(run['config'] if run['config'].exists() else config_path, encoding='utf-8')
                         
                         sentences, _ = kardenwort_desk.parse_source_sentences(source_text, 'multi', test_config)
                         smc = kardenwort_desk.SentencesModeConfig.from_config(test_config)

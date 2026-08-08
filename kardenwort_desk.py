@@ -3131,7 +3131,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 
             for i in range(len(source_sentences)):
                 sub_text = source_sentences[i]
-                sub_trans = translated_sentences[i]
+                sub_trans = translated_sentences[i] if i < len(translated_sentences) else ""
                 
                 sub_dt = master_time + dt_mod.timedelta(seconds=i+1)
                 sub_zid = sub_dt.strftime('%Y%m%d%H%M%S')
