@@ -2992,10 +2992,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     source_sentences, text, _ = parse_source_sentences(text, text_mode, config)
     will_split = not tsv_path and smc.should_split_sentences(len(source_sentences))
     
-    progressive_config_flag = config.getboolean(SEC_PIPELINE, 'progressive_text_translation', fallback=False)
-    if progressive_config_flag and will_split:
+    if is_progressive_translation_enabled and will_split:
         logger.info(f"[{zid}] Progressive translation disabled (incompatible with multi-window sentences mode)")
-        progressive_config_flag = False
+        is_progressive_translation_enabled = False
     
     if will_split:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
