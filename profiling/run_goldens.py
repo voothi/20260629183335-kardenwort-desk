@@ -40,6 +40,15 @@ def main():
     config_path = repo_root / "config.ini"
     config_backup = repo_root / "config.ini.backup"
     
+    # Wipe the existing speed trace to start fresh for this suite run
+    trace_file = repo_root / "results" / "speed_trace.jsonl"
+    if trace_file.exists():
+        try:
+            trace_file.unlink()
+            print("Wiped existing speed_trace.jsonl")
+        except Exception as e:
+            print(f"Warning: Could not wipe speed_trace.jsonl: {e}")
+
     if config_path.exists():
         shutil.copy2(config_path, config_backup)
         print(f"Backed up live config.ini to {config_backup.name}")
@@ -48,9 +57,9 @@ def main():
         for i, run in enumerate(runs):
             print(f"==================================================")
             if i == 0:
-                input(f"WARNING: Please ensure ALL desk windows are closed before testing.\nReady to test {run['lang']}? Press Enter to start...")
+                print(f"WARNING: Please ensure ALL desk windows are closed before testing.\nReady to test {run['lang']}?")
             else:
-                input(f"\nWARNING: Please CLOSE the current desk windows.\nOnce they are closed, press Enter to test {run['lang']}...")
+                print(f"\nWARNING: Please CLOSE the current desk windows.\nReady to test {run['lang']}?")
                 
             print(f"Running {run['name']} (Native AHK Flow)...")
             
