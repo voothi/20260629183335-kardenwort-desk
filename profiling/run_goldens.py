@@ -86,6 +86,7 @@ def main():
     if config_backup.exists():
         print(f"Found existing {config_backup.name}. A previous run likely crashed. Restoring it first.")
         shutil.copy2(config_backup, config_path)
+        config_backup.unlink()  # Delete immediately — prevents orphan backup from poisoning the next run if we crash before creating a new one
         
     if config_path.exists():
         shutil.copy2(config_path, config_backup)

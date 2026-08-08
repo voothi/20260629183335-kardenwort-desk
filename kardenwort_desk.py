@@ -3637,20 +3637,20 @@ html, body {{
                 
         if has_untranslated_lemmas:
             if base_provider == 'intellifiller':
-                selected_rows_to_translate = []
+                selected_rows_to_enrich = []
                 for i, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                         need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
                         need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
                         need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
                         if need_dest or need_ipa or need_morph:
-                            selected_rows_to_translate.append(i)
+                            selected_rows_to_enrich.append(i)
                             
-                if selected_rows_to_translate:
+                if selected_rows_to_enrich:
                     with file_lock(working_tsv_path):
                         save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                     prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_translate, reprocess=True)
+                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_enrich, reprocess=True)
                     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
             else:
                 lemmas_to_translate = []
@@ -7257,6 +7257,9 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
 
 
 def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows):
+    # Fallback: 5 (smaller than the progressive worker's default of 30).
+    # This is user-triggered (interactive reprocess), so smaller batches give faster
+    # intermediate UI updates between each IntelliFiller call. Config key: intellifiller_batch_size.
     batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
     for i in range(0, len(selected_rows), batch_size):
         batch = selected_rows[i:i + batch_size]
@@ -7646,7 +7649,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if lemmas_to_translate:
                 provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
                 if provider == 'intellifiller':
-                    selected_rows_to_translate = []
+                    selected_rows_to_enrich = []
                     col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
                     col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
 
@@ -7656,11 +7659,11 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
                             need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
                             if need_dest or need_ipa or need_morph:
-                                selected_rows_to_translate.append(i)
+                                selected_rows_to_enrich.append(i)
                             
-                    if selected_rows_to_translate:
+                    if selected_rows_to_enrich:
                         data_rows = _progressive_worker_stage_enrichment(
-                            tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_translate
+                            tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_enrich
                         )
                     else:
                         write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
@@ -7707,6 +7710,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     try:
+        # Fallback: 30 (larger than the reprocess worker's default of 5).
+        # Progressive enrichment runs fully in the background without blocking the UI,
+        # so larger batches are fine for throughput. Config key: intellifiller_batch_size.
         batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=30)
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))

@@ -1,5 +1,9 @@
 import json
 import collections
+import configparser
+import os
+import sys
+import shutil
 from pathlib import Path
 from datetime import datetime, timezone
 import subprocess
@@ -8,6 +12,22 @@ import re
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
 CHART_WIDTH = 40
+
+
+def _get_cluster_gap_seconds():
+    """Read the cluster gap threshold from config.ini.
+    Uses max(backend_timeout, ui_timeout) so that even slow runs are not
+    accidentally split across two clusters by the deduplication logic.
+    Fallback: 90 seconds (matches the default backend/ui timeout values).
+    """
+    try:
+        cfg = configparser.ConfigParser()
+        cfg.read(REPO_ROOT / 'config.ini', encoding='utf-8')
+        backend = cfg.getint('profiling', 'backend_timeout', fallback=90)
+        ui = cfg.getint('profiling', 'ui_timeout', fallback=90)
+        return max(backend, ui)
+    except Exception:
+        return 90
 
 def get_golden_prefixes():
     fixtures_dir = REPO_ROOT / "tests" / "fixtures"
@@ -161,7 +181,10 @@ def analyze():
                 events_sorted.append((end_t, e))
             events_sorted.sort(key=lambda x: x[0])
             
-            # Cluster events that occur within 60 seconds of each other
+            # Cluster events that occur within the configured gap window.
+            # Uses max(backend_timeout, ui_timeout) from config.ini so that a slow run
+            # whose last phase lands >60s after the first is not split across two clusters.
+            cluster_gap = _get_cluster_gap_seconds()
             clusters = []
             current_cluster = []
             for end_t, e in events_sorted:
@@ -169,7 +192,7 @@ def analyze():
                     current_cluster.append((end_t, e))
                 else:
                     last_t = current_cluster[-1][0]
-                    if end_t - last_t > 60:
+                    if end_t - last_t > cluster_gap:
                         clusters.append(current_cluster)
                         current_cluster = [(end_t, e)]
                     else:
@@ -293,9 +316,6 @@ def analyze():
     out("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
     out("- **`background_text_translation`**: The progressive worker updating BOTH the text translation AND the individual base lemma translations asynchronously without blocking the UI.")
 
-import os
-import sys
-import shutil
 
 def delete_trace_by_zid(target_zid):
     trace_file = REPO_ROOT / "results" / "speed_trace.jsonl"
@@ -307,25 +327,28 @@ def delete_trace_by_zid(target_zid):
     deleted_count = 0
     kept_count = 0
     
-    with open(trace_file, 'r', encoding='utf-8') as f_in, open(temp_file, 'w', encoding='utf-8') as f_out:
-        for line in f_in:
-            if not line.strip():
-                f_out.write(line)
-                continue
-            try:
-                data = json.loads(line)
-                zid_val = data.get("zid", "")
-                if zid_val == target_zid or zid_val.startswith(target_zid):
-                    deleted_count += 1
+    try:
+        with open(trace_file, 'r', encoding='utf-8') as f_in, open(temp_file, 'w', encoding='utf-8') as f_out:
+            for line in f_in:
+                if not line.strip():
+                    f_out.write(line)
                     continue
-            except Exception:
-                pass
-            f_out.write(line)
-            kept_count += 1
-            
-    shutil.copy2(temp_file, trace_file)
-    temp_file.unlink()
-    print(f"Deleted {deleted_count} records matching ZID '{target_zid}'. Kept {kept_count} records.")
+                try:
+                    data = json.loads(line)
+                    zid_val = data.get("zid", "")
+                    if zid_val == target_zid or zid_val.startswith(target_zid):
+                        deleted_count += 1
+                        continue
+                except Exception:
+                    pass
+                f_out.write(line)
+                kept_count += 1
+                
+        shutil.copy2(temp_file, trace_file)
+        print(f"Deleted {deleted_count} records matching ZID '{target_zid}'. Kept {kept_count} records.")
+    finally:
+        if temp_file.exists():
+            temp_file.unlink()
 
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--delete':

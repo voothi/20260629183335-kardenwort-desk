@@ -259,7 +259,7 @@ def test_progressive_worker_stages(monkeypatch, tmp_path):
     monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {"word1": "trans1", "word2": "trans2", "word3": "trans3"})
     
     # Mock IntelliFiller - it will write filled fields to tsv
-    def mock_run_headless_intellifiller(tsv_p, prompt, conf, res_paths, selected_rows=None):
+    def mock_run_headless_intellifiller(tsv_p, prompt, conf, res_paths, selected_rows=None, reprocess=False):
         # fill morphology and ipa for selected_rows
         comments, headers, data_rows = kardenwort_desk.load_tsv_rows(tsv_p)
         col_morph = headers.index('WordSourceMorphologyAI')
