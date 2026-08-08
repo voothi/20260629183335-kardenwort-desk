@@ -629,14 +629,19 @@ class SentencesModeConfig:
     multi_mode_decompose: bool = False
     deduplication_scope: str = "sentence"
     
+    def should_split_sentences(self, num_sentences: int, has_tsv_path: bool = False) -> bool:
+        """Returns True if the text should be decomposed into multiple sentence windows."""
+        if has_tsv_path:
+            return False
+        return self.enabled and num_sentences >= self.min_sentences
+        
     def get_expected_window_count(self, num_sentences: int, has_tsv_path: bool = False) -> int:
         """Returns the number of Kardenwort Desk windows that will spawn."""
-        if has_tsv_path:
+        if not self.should_split_sentences(num_sentences, has_tsv_path):
             return 1
-        if self.enabled and num_sentences >= self.min_sentences:
-            parent_spawns = 0 if self.parent_mode == 'none' else 1
-            return num_sentences + parent_spawns
-        return 1
+            
+        parent_spawns = 0 if self.parent_mode == 'none' else 1
+        return num_sentences + parent_spawns
 
     @classmethod
     def from_config(cls, config: Any) -> "SentencesModeConfig":
@@ -2988,7 +2993,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     
     source_sentences, text, _ = parse_source_sentences(text, text_mode, config)
     
-    if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
+    if smc.should_split_sentences(len(source_sentences), has_tsv_path=bool(tsv_path)):
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
         
         master_slug = generate_slug(text)
