@@ -3,6 +3,7 @@
 ## Table of Contents
 - [[Commit: a45dffb] 20260808231515](#commit-a45dffb-20260808231515)
 - [[Commit: 871b3dd] 20260808234145](#commit-871b3dd-20260808234145)
+- [[Commit: 4a2ff25] 20260809003548](#commit-4a2ff25-20260809003548)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -81,17 +82,38 @@ html_generation (01)                |                                        █
 
 ```
 
+## [Commit: 4a2ff25] 20260809003548
+```text
+Run Session: 20260807230100 [Golden EN] (Total Batch E2E Duration: 13.747s)
+---------------------------------------------------------------------------
+translate_text (00)                 | █                                        | 0.665s
+lemmatization (00)                  | ████████                                 | 2.858s
+the_cut (00)                        |           █                              | 0.014s
+intellifiller_enrichment (00)       |           █████████████████████████████  | 9.974s
+html_generation (03)                |             █                            | 0.004s
+background_text_translation (03)    |              ██████████████████████████  | 9.006s
+intellifiller_enrichment (03)       |              ██████████████████████████  | 8.990s
+html_generation (02)                |               █                          | 0.003s
+background_text_translation (02)    |                ███                       | 1.192s
+intellifiller_enrichment (02)       |                ███                       | 1.184s
+html_generation (01)                |                  █                       | 0.002s
+intellifiller_enrichment (01)       |                  █████                   | 1.947s
+background_text_translation (01)    |                  █████                   | 1.964s
+html_generation (00)                |                                        █ | 0.003s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807230100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 6 | 2.580 | 2.807 | 2.945 |
-| `intellifiller_enrichment` | 16 | 0.276 | 2.469 | 15.356 |
-| `translate_text` | 6 | 0.562 | 0.609 | 0.722 |
-| `the_cut` | 6 | 0.011 | 0.014 | 0.016 |
-| `html_generation` | 24 | 0.002 | 0.004 | 0.019 |
-| `background_text_translation` | 12 | 0.003 | 0.004 | 0.006 |
+| `intellifiller_enrichment` | 20 | 0.276 | 3.080 | 15.356 |
+| `lemmatization` | 8 | 2.580 | 2.828 | 2.945 |
+| `background_text_translation` | 15 | 0.003 | 0.814 | 9.006 |
+| `translate_text` | 8 | 0.562 | 0.619 | 0.722 |
+| `the_cut` | 8 | 0.011 | 0.014 | 0.016 |
+| `html_generation` | 32 | 0.002 | 0.004 | 0.019 |
 
 ### 20260807230200 [Golden DE]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |

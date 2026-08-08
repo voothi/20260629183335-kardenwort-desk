@@ -3585,10 +3585,18 @@ html, body {{
             sentence_translated = True
             
     has_untranslated_lemmas = False
+    
+    # Get column indices for IPA and Morphology to check if they are missing
+    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
+
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
-                if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                need_dest = len(row) <= col_word_dest or not row[col_word_dest].strip()
+                need_ipa = base_provider == 'intellifiller' and col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+                need_morph = base_provider == 'intellifiller' and col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                if need_dest or need_ipa or need_morph:
                     has_untranslated_lemmas = True
                     break
     elif col_word_dest != -1:
@@ -3632,14 +3640,17 @@ html, body {{
                 selected_rows_to_translate = []
                 for i, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                        if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
+                        need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
+                        need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+                        need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                        if need_dest or need_ipa or need_morph:
                             selected_rows_to_translate.append(i)
                             
                 if selected_rows_to_translate:
                     with file_lock(working_tsv_path):
                         save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                     prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_translate)
+                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_translate, reprocess=True)
                     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
             else:
                 lemmas_to_translate = []
@@ -7636,9 +7647,15 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                 provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
                 if provider == 'intellifiller':
                     selected_rows_to_translate = []
+                    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+                    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
+
                     for i, row in enumerate(data_rows):
                         if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
-                            if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
+                            need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
+                            need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+                            need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                            if need_dest or need_ipa or need_morph:
                                 selected_rows_to_translate.append(i)
                             
                     if selected_rows_to_translate:
@@ -7731,7 +7748,10 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         for i in range(0, len(selected_rows), batch_size):
             batch = selected_rows[i:i + batch_size]
             logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
-            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch)
+            # We explicitly pass reprocess=True here because Kardenwort Desk already carefully filtered this batch 
+            # to only include rows that actually need processing. Without reprocess=True, IntelliFiller's headless
+            # script would skip rows that already have WordDestination populated, ignoring our explicit selection.
+            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch, reprocess=True)
             
             # reload data rows after each batch
             comments, headers, data_rows = load_tsv_rows(tsv_path)
