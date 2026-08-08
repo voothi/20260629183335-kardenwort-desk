@@ -119,11 +119,16 @@ def main():
                     # 1. Determine expected windows based on Golden text dynamically
                     try:
                         source_text = run['file'].read_text(encoding='utf-8')
-                        import split_by_clause as sbc
-                        sentences = kardenwort_desk.split_single_mode_text(
-                            source_text, 60, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks
-                        )
-                        expected_count = len(sentences) + 1
+                        test_config = configparser.ConfigParser()
+                        test_config.read(run['config'] if run['config'].exists() else config_path)
+                        
+                        sentences, _ = kardenwort_desk.parse_source_sentences(source_text, 'multi', test_config)
+                        smc = kardenwort_desk.SentencesModeConfig.from_config(test_config)
+                        
+                        if smc.enabled and len(sentences) >= smc.min_sentences:
+                            expected_count = len(sentences) + 1
+                        else:
+                            expected_count = 1
                     except Exception as e:
                         print(f"Warning: Could not dynamically count sentences: {e}")
                         expected_count = 4 if run['lang'] == 'en' else 9

@@ -2892,6 +2892,33 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 
     return selected_positions, len(selected_positions) > 0
 
+def parse_source_sentences(text, text_mode, config):
+    smc = SentencesModeConfig.from_config(config)
+    sbc = SentenceBoundaryConfig.from_config(config)
+    wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
+    eff_mode = _effective_text_mode(text, text_mode)
+    
+    if eff_mode == 'single':
+        source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
+    else:
+        if smc.multi_mode_decompose:
+            source_sentences = []
+            for line in text.splitlines():
+                if line.strip():
+                    # Pass max_chars=0 to disable arbitrary length wrapping for multi mode paragraphs
+                    source_sentences.extend(split_single_mode_text(line, 0, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks))
+                else:
+                    source_sentences.append(line)
+            # CRITICAL: Overwrite the original text with joined flattened sentences.
+            # In multi mode, kardenwort.py core determines data array length strictly by newlines via splitlines().
+            # If we don't sync this string, the core will generate fewer items than the frontend expects,
+            # causing fatal misalignments between generated sentence windows and TSV lemma mappings.
+            text = "\n".join(source_sentences)
+        else:
+            # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
+            source_sentences = text.splitlines()
+    return source_sentences, text
+
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
@@ -2950,27 +2977,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
-    eff_mode = _effective_text_mode(text, text_mode)
-    if eff_mode == 'single':
-        source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
-    else:
-        if multi_mode_decompose:
-            source_sentences = []
-            for line in text.splitlines():
-                if line.strip():
-                    # Pass max_chars=0 to disable arbitrary length wrapping for multi mode paragraphs
-                    source_sentences.extend(split_single_mode_text(line, 0, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks))
-                else:
-                    source_sentences.append(line)
-            
-            # CRITICAL: Overwrite the original text with joined flattened sentences.
-            # In multi mode, kardenwort.py core determines data array length strictly by newlines via splitlines().
-            # If we don't sync this string, the core will generate fewer items than the frontend expects,
-            # causing fatal misalignments between generated sentence windows and TSV lemma mappings.
-            text = "\n".join(source_sentences)
-        else:
-            # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
-            source_sentences = text.splitlines()
+    source_sentences, text = parse_source_sentences(text, text_mode, config)
     
     if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
