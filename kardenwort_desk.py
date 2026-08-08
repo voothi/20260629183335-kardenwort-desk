@@ -627,6 +627,7 @@ class SentencesModeConfig:
     spawn_order: str = "normal"
     parent_mode: str = "full"
     multi_mode_decompose: bool = False
+    legacy_spawn_children: bool = False
     deduplication_scope: str = "sentence"
     
     def should_split_sentences(self, num_sentences: int) -> bool:
@@ -652,6 +653,7 @@ class SentencesModeConfig:
         spawn_order = "normal"
         parent_mode = "full"
         multi_mode_decompose = False
+        legacy_spawn_children = False
         deduplication_scope = "sentence"
 
         if config and hasattr(config, "has_section") and hasattr(config, "get"):
@@ -660,6 +662,7 @@ class SentencesModeConfig:
                     if hasattr(config, "getboolean"):
                         enabled = config.getboolean(SEC_SENTENCES_MODE, "enabled", fallback=False)
                         multi_mode_decompose = config.getboolean(SEC_SENTENCES_MODE, "multi_mode_sentence_decomposition", fallback=False)
+                        legacy_spawn_children = config.getboolean(SEC_SENTENCES_MODE, "legacy_spawn_children", fallback=False)
                     if hasattr(config, "getint"):
                         min_sentences = config.getint(SEC_SENTENCES_MODE, "min_sentences", fallback=2)
                     alignment_method = config.get(SEC_SENTENCES_MODE, "alignment_method", fallback="auto")
@@ -676,6 +679,7 @@ class SentencesModeConfig:
             spawn_order=spawn_order,
             parent_mode=parent_mode,
             multi_mode_decompose=multi_mode_decompose,
+            legacy_spawn_children=legacy_spawn_children,
             deduplication_scope=deduplication_scope,
         )
 
@@ -2990,7 +2994,10 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
     source_sentences, text, _ = parse_source_sentences(text, text_mode, config)
-    will_split = not tsv_path and smc.should_split_sentences(len(source_sentences))
+    will_split = not tsv_path and (
+        smc.should_split_sentences(len(source_sentences)) or 
+        (text_mode == 'multi' and smc.legacy_spawn_children and len(source_sentences) >= 2)
+    )
     
     if (will_split or (tsv_path and sentences_enabled)) and (display_mode_val == 'progressive' or is_progressive_translation_enabled):
         logger.info(f"[{zid}] Progressive mode disabled (incompatible with Sentences Mode multi-window architecture)")

@@ -17,6 +17,7 @@
 - [[Commit: e442fbe] 20260808112401](#commit-e442fbe-20260808112401)
 - [[Commit: f2d0089] 20260808113932](#commit-f2d0089-20260808113932)
 - [[Commit: feebde2] 20260808120810](#commit-feebde2-20260808120810)
+- [[Commit: 7dfaef7] 20260808124319](#commit-7dfaef7-20260808124319)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -507,14 +508,44 @@ html_generation (01)                |                                        █
 
 ```
 
+## [Commit: 7dfaef7] 20260808124319 (Avg wait between runs: -85.02s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 108.703s)
+---------------------------------------------------------------------------
+background_text_translation (00)    | █                                        | 1.909s
+lemmatization (00)                  |                                    █     | 4.977s
+translate_text (00)                 |                                    █     | 1.529s
+the_cut (00)                        |                                      █   | 0.030s
+html_generation (00)                |                                      █   | 0.007s
+html_generation (08)                |                                      █   | 0.003s
+html_generation (07)                |                                       █  | 0.003s
+html_generation (06)                |                                       █  | 0.003s
+html_generation (05)                |                                       █  | 0.003s
+html_generation (04)                |                                        █ | 0.002s
+html_generation (03)                |                                        █ | 0.004s
+html_generation (02)                |                                        █ | 0.003s
+html_generation (01)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 5.728s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ███████                                  | 1.028s
+lemmatization (00)                  | ██████████████████                       | 2.696s
+the_cut (00)                        |                          █               | 0.012s
+html_generation (00)                |                           █              | 0.003s
+html_generation (03)                |                               █          | 0.003s
+html_generation (02)                |                                    █     | 0.003s
+html_generation (01)                |                                        █ | 0.003s
+
+```
+
 ## Golden Run Aggregates
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 57 | 2.493 | 3.772 | 6.081 |
-| `background_text_translation` | 39 | 0.573 | 3.289 | 13.441 |
-| `translate_text` | 57 | 0.855 | 1.185 | 8.031 |
-| `the_cut` | 57 | 0.009 | 0.021 | 0.041 |
-| `html_generation` | 345 | 0.002 | 0.003 | 0.013 |
+| `lemmatization` | 66 | 2.493 | 3.939 | 10.907 |
+| `background_text_translation` | 42 | 0.573 | 3.187 | 13.441 |
+| `translate_text` | 69 | 0.767 | 1.168 | 8.031 |
+| `the_cut` | 63 | 0.009 | 0.020 | 0.041 |
+| `html_generation` | 377 | 0.002 | 0.003 | 0.013 |
 
 ## Phase Glossary
 - **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).

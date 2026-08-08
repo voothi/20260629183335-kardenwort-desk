@@ -216,11 +216,14 @@ def main():
         close_all_kardenwort_windows()
                 
     finally:
+        print("\nCleaning up remaining test windows...")
+        close_all_kardenwort_windows()
+        
         # Restore original config
         if config_backup.exists():
             shutil.copy2(config_backup, config_path)
             config_backup.unlink()
-            print("\nRestored original config.ini")
+            print("Restored original config.ini\n")
 
 if __name__ == "__main__":
     main()
