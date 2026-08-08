@@ -809,11 +809,12 @@ _BOOT_LOCK = threading.Lock()
 _HAS_BOOTED = False
 
 class TraceTimer(contextlib.ContextDecorator):
-    def __init__(self, phase, zid, config, resolved_paths):
+    def __init__(self, phase, zid, config, resolved_paths, extra=None):
         self.phase = phase
         self.zid = zid
         self.config = config
         self.resolved_paths = resolved_paths
+        self.extra = extra
         
         self.enabled = False
         self.max_mb = 5
@@ -870,6 +871,8 @@ class TraceTimer(contextlib.ContextDecorator):
                     "cold_start": cold_start,
                     "status": "error" if exc and exc[0] is not None else "success"
                 }
+                if self.extra:
+                    entry["extra"] = self.extra
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(entry) + '\n')
         except Exception:
@@ -3427,7 +3430,7 @@ html, body {{
     if not is_progressive and run_base == 'auto':
         try:
             if not sentence_translated:
-                sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, base_provider, zid=zid)
+                sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
                 resolve_translations(
                     text, text_mode, data_rows, col_index, col_sentence_dest,
                     sentence_translations_raw, working_tsv_path, comments, headers,
@@ -4354,7 +4357,7 @@ html, body {{
                     if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
                         var div = tds[2].querySelector('.scrollable-cell');
                         var val = rowData.trans || "";
-                        if (globalStage === 'translated_words' || globalStage === 'translated' || globalStage === 'finished' || window.AppState.isFinished) {
+                        if (globalStage === 'translated_words' || globalStage === 'finished' || window.AppState.isFinished) {
                             if (div) setCellText(div, val);
                             else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
                             updated = true;
@@ -4362,7 +4365,7 @@ html, body {{
                             var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
                             var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
                             var shouldUpdate = (oldVal !== val);
-                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'translated') || (globalStage === 'finished') || window.AppState.isFinished;
+                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished') || window.AppState.isFinished;
                             if (shouldUpdate) {
                                 if (div) setCellText(div, val);
                                 else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
@@ -4373,7 +4376,7 @@ html, body {{
                     if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
                         var div = tds[3].querySelector('.scrollable-cell');
                         var val = rowData.ipa || "";
-                        if (globalStage === 'translated_words' || globalStage === 'translated' || globalStage === 'finished' || window.AppState.isFinished) {
+                        if (globalStage === 'translated_words' || globalStage === 'finished' || window.AppState.isFinished) {
                             if (div) setCellText(div, val);
                             else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
                             updated = true;
@@ -4381,7 +4384,7 @@ html, body {{
                             var oldVal = div ? (div.textContent || div.innerText) : (tds[3].classList.contains('editing') ? null : (tds[3].textContent || tds[3].innerText));
                             var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
                             var shouldUpdate = (oldVal !== val);
-                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'translated') || (globalStage === 'finished') || window.AppState.isFinished;
+                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished') || window.AppState.isFinished;
                             if (shouldUpdate) {
                                 if (div) setCellText(div, val);
                                 else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
@@ -4392,7 +4395,7 @@ html, body {{
                     if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
                         var div = tds[4].querySelector('.scrollable-cell');
                         var val = rowData.morph || "";
-                        if (globalStage === 'translated_words' || globalStage === 'translated' || globalStage === 'finished' || window.AppState.isFinished) {
+                        if (globalStage === 'translated_words' || globalStage === 'finished' || window.AppState.isFinished) {
                             if (div) div.innerHTML = val;
                             else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
                             updated = true;
@@ -4400,7 +4403,7 @@ html, body {{
                             var oldVal = div ? div.innerHTML : (tds[4].classList.contains('editing') ? null : tds[4].innerHTML);
                             var hasSkeleton = (div || tds[4]).querySelector('.skeleton-loader') !== null;
                             var shouldUpdate = (oldVal !== val);
-                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'translated') || (globalStage === 'finished') || window.AppState.isFinished;
+                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished') || window.AppState.isFinished;
                             if (shouldUpdate) {
                                 if (div) div.innerHTML = val;
                                 else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
