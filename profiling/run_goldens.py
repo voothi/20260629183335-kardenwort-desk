@@ -11,6 +11,18 @@ def main():
     
     fixtures_dir = repo_root / "tests" / "fixtures"
 
+    def close_all_kardenwort_windows():
+        try:
+            ahk_exe = kardenwort_desk.get_ahk_executable()
+            if not ahk_exe: return
+            print("Cleaning up existing Kardenwort desk windows...")
+            script = 'SetTitleMatchMode(2)\nids := WinGetList("Kardenwort - ")\nfor id in ids {\n    try { WinClose(id) }\n}'
+            subprocess.run([ahk_exe, "*"], input=script, text=True, timeout=15)
+            import time
+            time.sleep(1) # wait for close
+        except Exception as e:
+            print(f"Cleanup warning: {e}")
+
     runs = []
     # Find directory-based fixtures
     for d in sorted(fixtures_dir.glob("*-golden.*")):
@@ -55,10 +67,12 @@ def main():
         for i, run in enumerate(runs):
             print(f"==================================================")
             if i == 0:
-                print(f"WARNING: Please ensure ALL desk windows are closed before testing.\nReady to test {run['lang']}?")
+                print(f"Ready to test {run['lang']}?")
             else:
-                print(f"\nWARNING: Please CLOSE the current desk windows.\nReady to test {run['lang']}?")
+                print(f"\nReady to test {run['lang']}?")
                 
+            close_all_kardenwort_windows()
+            
             print(f"Running {run['name']} (Native AHK Flow)...")
             
             # Swap in the directory-specific config.ini
@@ -70,7 +84,7 @@ def main():
             
             # Clean up any existing generated files for this ZID to force a real performance test
             results_dir = repo_root / "results"
-            for existing_file in results_dir.rglob(f"{run['zid']}*"):
+            for existing_file in results_dir.rglob(f"{run['zid'][:12]}*"):
                 if existing_file.is_file() and existing_file.suffix in ['.tsv', '.txt']:
                     try:
                         existing_file.unlink()
@@ -92,44 +106,22 @@ def main():
                 if success:
                     print(f"SUCCESS: {run['name']} initiated via AHK.")
                     
-                    # 1. Wait for all expected TSV files to appear in results/
-                    expected_zids = set()
-                    last_count = -1
-                    stable_count = 0
-                    print("Polling for TSV generation...")
-                    while True:
-                        current_tsvs = list(results_dir.glob(f"{run['zid']}*.tsv"))
-                        if len(current_tsvs) == last_count and len(current_tsvs) > 0:
-                            stable_count += 1
-                        else:
-                            stable_count = 0
-                            last_count = len(current_tsvs)
-                            
-                        if stable_count >= 3:
-                            break
-                            
-                        if time.time() - start_time > 15:
-                            print("TIMEOUT waiting for TSVs to stabilize.")
-                            break
-                        time.sleep(0.25)
-                        
-                    for t in current_tsvs:
-                        expected_zids.add(t.name[:14])
-                        
-                    print(f"Expected {len(expected_zids)} windows based on TSV generation.")
+                    # 1. Determine expected windows based on Golden text
+                    expected_count = 4 if run['lang'] == 'en' else 9
+                    print(f"Expected {expected_count} windows for golden run.")
                     
                     # 2. Poll speed_trace.jsonl for all html_generation events
                     speed_trace = results_dir / "speed_trace.jsonl"
                     completed_zids = set()
                     print("Waiting for backend html_generation traces...")
-                    while len(completed_zids) < len(expected_zids):
+                    while len(completed_zids) < expected_count:
                         if speed_trace.exists():
                             try:
                                 with open(speed_trace, 'r', encoding='utf-8') as f:
                                     for line in f:
                                         try:
                                             data = json.loads(line)
-                                            if data.get('phase') == 'html_generation' and data.get('zid') in expected_zids:
+                                            if data.get('phase') == 'html_generation' and str(data.get('zid')).startswith(run['zid'][:12]):
                                                 completed_zids.add(data['zid'])
                                         except:
                                             pass
@@ -137,15 +129,15 @@ def main():
                                 pass
                         
                         if time.time() - start_time > backend_timeout:
-                            print(f"TIMEOUT waiting for backend traces. Found {len(completed_zids)}/{len(expected_zids)}")
+                            print(f"TIMEOUT waiting for backend traces. Found {len(completed_zids)}/{expected_count}")
                             break
                         time.sleep(0.5)
                         
                     backend_duration = time.time() - start_time
                     print(f"Backend E2E Duration: {backend_duration:.2f} seconds.")
                     
-                    # 3. Call native AHK script to wait for physical UI
-                    print(f"Waiting for {len(expected_zids)} physical AHK windows to render...")
+                    # 3. Spawn AHK to poll UI windows appearance
+                    print(f"Waiting for {expected_count} physical AHK windows to render...")
                     ahk_repo = os.environ.get("AHK_REPO_PATH")
                     if ahk_repo:
                         ahk_repo = Path(ahk_repo)
@@ -164,7 +156,7 @@ def main():
                             
                     if ahk_exe:
                         try:
-                            res = subprocess.run([ahk_exe, str(ahk_script), str(len(expected_zids)), str(ui_timeout)], capture_output=True, text=True)
+                            res = subprocess.run([ahk_exe, str(ahk_script), str(expected_count), str(ui_timeout)], capture_output=True, text=True)
                             if res.returncode == 0:
                                 total_duration = time.time() - start_time
                                 print(f"UI E2E Duration: {total_duration:.2f} seconds.")
