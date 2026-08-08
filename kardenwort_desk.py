@@ -2906,6 +2906,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
+    progressive_config_flag = config.getboolean(SEC_PIPELINE, 'progressive_text_translation', fallback=False)
+    progressive_timeout_seconds = config.getint(SEC_PIPELINE, 'progressive_timeout_seconds', fallback=15)
     children_tsv_paths = []
     
     if tsv_path and text_mode == 'multi':
@@ -2978,6 +2980,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         parallelize = config.getboolean(SEC_PIPELINE, 'parallelize_core_and_translation', fallback=True)
         
         def do_translation():
+            if progressive_config_flag:
+                logger.info(f"[{zid}] [Translation Worker] Bypassed background translation due to progressive_text_translation=true")
+                return ""
             logger.info(f"[{zid}] [Translation Worker] Starting background translation via {main_text_provider}")
             return translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
             
@@ -3027,7 +3032,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             master_tsv_path = do_core()
                 
         # Fallback to newline_join block translation
-        do_fallback = (len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join')
+        do_fallback = not progressive_config_flag and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
         if do_fallback and alignment_method != 'proportion':
             try:
                 translations_dict = translate_source_text(
@@ -3039,7 +3044,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 logger.error(f"Newline-join alignment fallback failed: {e}")
                 
         # Final proportional safety net fallback
-        if len(translated_sentences) != len(source_sentences):
+        if not progressive_config_flag and len(translated_sentences) != len(source_sentences):
             if not translated_paragraph:
                 try:
                     translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
@@ -5581,6 +5586,25 @@ html, body {{
 </body>
 </html>
 """
+
+    watchdog_js = ""
+    if progressive_config_flag:
+        timeout_ms = progressive_timeout_seconds * 1000
+        watchdog_js = f"""<script>
+setTimeout(function() {{
+    var pendings = document.querySelectorAll('[data-pending="true"]');
+    if (pendings.length > 0) {{
+        for (var i = 0; i < pendings.length; i++) {{
+            pendings[i].classList.remove("skeleton-loader");
+            pendings[i].innerHTML = "[Timeout: Background Process Failed]";
+            pendings[i].removeAttribute("data-pending");
+        }}
+    }}
+}}, {timeout_ms});
+</script>"""
+
+    html_page = html_page.replace("</body>", f"{watchdog_js}\n</body>")
+
     # zoom_level is now passed as an argument
     
     try:
