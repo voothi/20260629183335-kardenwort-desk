@@ -136,7 +136,7 @@ def test_single_mode_routing(monkeypatch):
     
     # Long single sentence wrapped
     res_long = desk.translate_source_text("this is a very long paragraph", "en", "ru", "single", config, {}, "google")
-    assert res_long == {0: "THIS IS A", 1: "VERY LONG", 2: "PARAGRAPH"}
+    assert res_long == {0: "THIS IS A", 1: "VERY LONG", 2: "PARAGRAPH", "FULL_TEXT": "THIS IS A VERY LONG PARAGRAPH"}
     assert called_multi
 
 def test_translation_alignment_error_rescue(monkeypatch):
@@ -278,6 +278,6 @@ def test_single_mode_punctuation_no_recursion(monkeypatch):
     monkeypatch.setattr(desk, "translate_text", mock_translate)
     
     res = desk.translate_source_text(text, "en", "ru", "single", config, {}, "google")
-    assert res == {0: text.upper()}
+    assert res == {0: text.upper(), "FULL_TEXT": text.upper()}
     assert translate_called == 1
 
