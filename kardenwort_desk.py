@@ -18,7 +18,7 @@ import threading
 import time
 import traceback
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
 from typing import Optional, Any, Union, List, FrozenSet, TypedDict
 from enum import Enum, auto
@@ -2986,7 +2986,6 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 if my_zid_match:
                     my_zid = my_zid_match.group(1)
                     try:
-                        from datetime import timedelta
                         my_dt = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
                         # Children are spawned 1..N seconds after the master ZID.
                         # Glob two or three minute-prefixes to survive minute-boundary rollovers
@@ -3197,17 +3196,16 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             token_cfg = RuntimeTokenConfig.from_config(config)
             apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
             apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
-            import datetime as dt_mod
             try:
-                master_time = dt_mod.datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
+                master_time = datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
             except Exception:
-                master_time = dt_mod.datetime.now()
+                master_time = datetime.now()
                 
             for i in range(len(source_sentences)):
                 sub_text = source_sentences[i]
                 sub_trans = translated_sentences[i] if i < len(translated_sentences) else ""
                 
-                sub_dt = master_time + dt_mod.timedelta(seconds=i+1)
+                sub_dt = master_time + timedelta(seconds=i+1)
                 sub_zid = sub_dt.strftime('%Y%m%d%H%M%S')
                 
                 sub_slug = generate_slug(sub_text)
