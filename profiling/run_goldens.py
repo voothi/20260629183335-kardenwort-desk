@@ -28,10 +28,13 @@ def main():
 
     import argparse
     parser = argparse.ArgumentParser(description="Run Kardenwort Golden Fixtures")
-    parser.add_argument("--filter", nargs="+", help="Filter fixtures to run by ZID or full name")
+    parser.add_argument("--include", nargs="+", help="Only run fixtures matching these ZIDs or names")
+    parser.add_argument("--exclude", nargs="+", help="Skip fixtures matching these ZIDs or names")
+    parser.add_argument("--count", type=int, default=1, help="Number of times to repeat the suite")
     args = parser.parse_args()
     
-    filters = args.filter if args.filter else []
+    includes = args.include if args.include else []
+    excludes = args.exclude if args.exclude else []
     
     runs = []
     # Find directory-based fixtures
@@ -39,13 +42,12 @@ def main():
         if not d.is_dir():
             continue
             
-        if filters:
-            matched = False
-            for f in filters:
-                if f in d.name:
-                    matched = True
-                    break
-            if not matched:
+        if includes:
+            if not any(inc in d.name for inc in includes):
+                continue
+                
+        if excludes:
+            if any(exc in d.name for exc in excludes):
                 continue
                 
         name_parts = d.name.split('-')
@@ -68,6 +70,8 @@ def main():
                 "file": source_file,
                 "config": config_file
             })
+
+    runs = runs * args.count
 
     config_path = repo_root / "config.ini"
     config_backup = repo_root / "config.ini.backup"
