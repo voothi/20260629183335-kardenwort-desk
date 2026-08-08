@@ -121,13 +121,8 @@ def main():
                         source_text = run['file'].read_text(encoding='utf-8')
                         test_config = kardenwort_desk.load_kardenwort_config(repo_root)
                         
-                        sentences, _ = kardenwort_desk.parse_source_sentences(source_text, 'multi', test_config)
-                        smc = kardenwort_desk.SentencesModeConfig.from_config(test_config)
-                        
-                        if smc.enabled and len(sentences) >= smc.min_sentences:
-                            expected_count = len(sentences) + 1
-                        else:
-                            expected_count = 1
+                        sentences, _, smc = kardenwort_desk.parse_source_sentences(source_text, 'multi', test_config)
+                        expected_count = smc.get_expected_window_count(len(sentences))
                     except Exception as e:
                         print(f"Warning: Could not dynamically count sentences: {e}")
                         expected_count = 4 if run['lang'] == 'en' else 9

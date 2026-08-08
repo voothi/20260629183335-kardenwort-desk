@@ -628,6 +628,12 @@ class SentencesModeConfig:
     parent_mode: str = "full"
     multi_mode_decompose: bool = False
     deduplication_scope: str = "sentence"
+    
+    def get_expected_window_count(self, num_sentences: int) -> int:
+        """Returns the number of Kardenwort Desk windows that will spawn (including parent)."""
+        if self.enabled and num_sentences >= self.min_sentences:
+            return num_sentences + 1
+        return 1
 
     @classmethod
     def from_config(cls, config: Any) -> "SentencesModeConfig":
@@ -2917,7 +2923,7 @@ def parse_source_sentences(text, text_mode, config):
         else:
             # In multi mode, preserve the exact line structure to match kardenwort.py's indexing
             source_sentences = text.splitlines()
-    return source_sentences, text
+    return source_sentences, text, smc
 
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
     with _ACTIVE_ZIDS_LOCK:
@@ -2977,7 +2983,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
-    source_sentences, text = parse_source_sentences(text, text_mode, config)
+    source_sentences, text, _ = parse_source_sentences(text, text_mode, config)
     
     if sentences_enabled and len(source_sentences) >= min_sentences and not tsv_path:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
