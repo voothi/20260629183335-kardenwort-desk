@@ -2,6 +2,9 @@ import os
 import shutil
 import sys
 import subprocess
+import time
+import json
+import configparser
 from pathlib import Path
 
 def main():
@@ -52,7 +55,6 @@ def main():
     config_path = repo_root / "config.ini"
     config_backup = repo_root / "config.ini.backup"
     
-    import configparser
     live_config = configparser.ConfigParser()
     if config_path.exists():
         live_config.read(config_path)
@@ -67,7 +69,6 @@ def main():
     try:
         for i, run in enumerate(runs):
             if i > 0 and cleanup_delay > 0:
-                import time
                 print(f"Waiting {cleanup_delay}s for visual inspection before next run...")
                 time.sleep(cleanup_delay)
                 
@@ -86,12 +87,14 @@ def main():
                 shutil.copy2(run['config'], config_path)
                 print(f"Swapped in test-specific config.ini from {run['dir'].name}")
             else:
-                print(f"WARNING: No test-specific config.ini found for {run['dir'].name}. Proceeding with previous config.")
+                if config_backup.exists():
+                    shutil.copy2(config_backup, config_path)
+                print(f"WARNING: No test-specific config.ini found for {run['dir'].name}. Restored original config.")
             
             # Clean up any existing generated files for this ZID to force a real performance test
             results_dir = repo_root / "results"
             for existing_file in results_dir.rglob(f"{run['zid'][:12]}*"):
-                if existing_file.is_file() and existing_file.suffix in ['.tsv', '.txt']:
+                if existing_file.is_file() and existing_file.suffix in ['.tsv', '.txt', '.js']:
                     try:
                         existing_file.unlink()
                         print(f"Cleaned up existing file: {existing_file.name}")
@@ -101,8 +104,6 @@ def main():
             # Instead of calling Python directly, we trigger the resident AHK script exactly
             # as if the user triggered it via hotkey or tray menu.
             try:
-                import time
-                import json
                 start_time = time.time()
                 speed_trace = results_dir / "speed_trace.jsonl"
                 initial_size = speed_trace.stat().st_size if speed_trace.exists() else 0
@@ -190,16 +191,9 @@ def main():
             
         print("Generating performance trace analysis...")
         subprocess.run([sys.executable, str(repo_root / "profiling" / "analyze_traces.py")])
-        print("Done! Check profiling/speed_analysis.md to view the authentic performance traces.")
+        print("Done! Check profiling/speed_analysis.md to view the authentic performance traces.\n")
         
-        print("\nCleaning up final Kardenwort desk windows...")
-        ahk_exe = kardenwort_desk.get_ahk_executable()
-        if ahk_exe:
-            try:
-                script = 'SetTitleMatchMode(2)\nids := WinGetList("Kardenwort - ")\nfor id in ids\n    try WinClose(id)'
-                subprocess.run([ahk_exe, "*"], input=script, text=True, timeout=15)
-            except Exception as e:
-                print(f"Final cleanup warning: {e}")
+        close_all_kardenwort_windows()
                 
     finally:
         # Restore original config
