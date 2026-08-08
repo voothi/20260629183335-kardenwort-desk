@@ -189,7 +189,9 @@ def main():
             print(f"Waiting {cleanup_delay}s for visual inspection...")
             time.sleep(cleanup_delay)
             
-        print("Check results/speed_trace.jsonl to view the authentic performance traces.")
+        print("Generating performance trace analysis...")
+        subprocess.run([sys.executable, str(repo_root / "profiling" / "analyze_traces.py")])
+        print("Done! Check profiling/speed_analysis.md to view the authentic performance traces.")
         
         print("\nCleaning up final Kardenwort desk windows...")
         ahk_exe = kardenwort_desk.get_ahk_executable()

@@ -5,6 +5,13 @@
 - [[Commit: e88d77e] 20260808024001](#commit-e88d77e-20260808024001)
 - [[Commit: de01b5d] 20260808025419](#commit-de01b5d-20260808025419)
 - [[Commit: 2b39df3] 20260808031021](#commit-2b39df3-20260808031021)
+- [[Commit: 0fdf1cd] 20260808032420](#commit-0fdf1cd-20260808032420)
+- [[Commit: 4fb7ab6] 20260808033502](#commit-4fb7ab6-20260808033502)
+- [[Commit: da3461a] 20260808033732](#commit-da3461a-20260808033732)
+- [[Commit: d2d36c1] 20260808034503](#commit-d2d36c1-20260808034503)
+- [[Commit: 661df45] 20260808034829](#commit-661df45-20260808034829)
+- [[Commit: 7878d05] 20260808035015](#commit-7878d05-20260808035015)
+- [[Commit: e4551fb] 20260808035500](#commit-e4551fb-20260808035500)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -150,14 +157,214 @@ html_generation (01)                |                                        █
 
 ```
 
+## [Commit: 0fdf1cd] 20260808032420 (Wait between runs: -177.11s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 199.204s)
+---------------------------------------------------------------------------
+html_generation (05)                | █                                        | 0.003s
+html_generation (04)                | █                                        | 0.003s
+html_generation (03)                | █                                        | 0.003s
+html_generation (02)                | █                                        | 0.004s
+html_generation (01)                | █                                        | 0.003s
+translate_text (00)                 |                                       █  | 1.095s
+lemmatization (00)                  |                                       █  | 4.579s
+the_cut (00)                        |                                        █ | 0.036s
+html_generation (00)                |                                        █ | 0.006s
+html_generation (08)                |                                        █ | 0.003s
+html_generation (07)                |                                        █ | 0.002s
+html_generation (06)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 6.118s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ████████                                 | 1.255s
+lemmatization (00)                  | ██████████████████                       | 2.880s
+the_cut (00)                        |                          █               | 0.013s
+html_generation (00)                |                           █              | 0.004s
+html_generation (03)                |                              █           | 0.003s
+html_generation (02)                |                                    █     | 0.002s
+html_generation (01)                |                                        █ | 0.003s
+
+```
+
+## [Commit: 4fb7ab6] 20260808033502 (Wait between runs: 1.88s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 9.113s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ████                                     | 1.048s
+lemmatization (00)                  | ██████████████████████                   | 5.211s
+the_cut (00)                        |                       █                  | 0.032s
+html_generation (00)                |                          █               | 0.006s
+html_generation (08)                |                           █              | 0.003s
+html_generation (07)                |                               █          | 0.003s
+html_generation (06)                |                                  █       | 0.002s
+html_generation (05)                |                                     █    | 0.003s
+html_generation (04)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 6.392s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ██████                                   | 1.000s
+lemmatization (00)                  | ██████████████████                       | 2.978s
+the_cut (00)                        |                           █              | 0.012s
+html_generation (00)                |                            █             | 0.004s
+html_generation (03)                |                               █          | 0.003s
+html_generation (02)                |                                    █     | 0.002s
+html_generation (01)                |                                        █ | 0.003s
+
+```
+
+## [Commit: da3461a] 20260808033732 (Wait between runs: 1.68s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 10.971s)
+---------------------------------------------------------------------------
+lemmatization (00)                  | ████████████████                         | 4.639s
+translate_text (00)                 | ███                                      | 0.990s
+the_cut (00)                        |                 █                        | 0.028s
+html_generation (00)                |                   █                      | 0.006s
+html_generation (08)                |                    █                     | 0.003s
+html_generation (07)                |                      █                   | 0.003s
+html_generation (06)                |                        █                 | 0.002s
+html_generation (05)                |                          █               | 0.002s
+html_generation (04)                |                             █            | 0.003s
+html_generation (03)                |                               █          | 0.003s
+html_generation (02)                |                                    █     | 0.003s
+html_generation (01)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 5.443s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ███████                                  | 1.026s
+lemmatization (00)                  | ██████████████████                       | 2.563s
+the_cut (00)                        |                          █               | 0.011s
+html_generation (00)                |                           █              | 0.004s
+html_generation (03)                |                              █           | 0.003s
+html_generation (02)                |                                    █     | 0.003s
+html_generation (01)                |                                        █ | 0.002s
+
+```
+
+## [Commit: d2d36c1] 20260808034503 (Wait between runs: 2.82s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 9.580s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ████                                     | 1.057s
+lemmatization (00)                  | ████████████████████                     | 4.796s
+the_cut (00)                        |                     █                    | 0.028s
+html_generation (00)                |                      █                   | 0.007s
+html_generation (08)                |                       █                  | 0.004s
+html_generation (07)                |                          █               | 0.002s
+html_generation (06)                |                            █             | 0.002s
+html_generation (05)                |                              █           | 0.002s
+html_generation (04)                |                                 █        | 0.002s
+html_generation (03)                |                                   █      | 0.003s
+html_generation (02)                |                                      █   | 0.003s
+html_generation (01)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 10.989s)
+---------------------------------------------------------------------------
+translate_text (00)                 | █████████████████████████████            | 8.031s
+lemmatization (00)                  | █████████                                | 2.606s
+the_cut (00)                        |                                 █        | 0.017s
+html_generation (00)                |                                  █       | 0.006s
+html_generation (03)                |                                    █     | 0.004s
+html_generation (02)                |                                      █   | 0.002s
+html_generation (01)                |                                        █ | 0.003s
+
+```
+
+## [Commit: 661df45] 20260808034829 (Wait between runs: 2.88s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 12.371s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ███                                      | 0.935s
+lemmatization (00)                  | ███████████████████                      | 5.938s
+the_cut (00)                        |                    █                     | 0.035s
+html_generation (00)                |                     █                    | 0.008s
+html_generation (08)                |                      █                   | 0.003s
+html_generation (07)                |                         █                | 0.002s
+html_generation (06)                |                           █              | 0.002s
+html_generation (05)                |                             █            | 0.003s
+html_generation (04)                |                                 █        | 0.004s
+html_generation (03)                |                                    █     | 0.004s
+html_generation (02)                |                                      █   | 0.003s
+html_generation (01)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 5.840s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ███████                                  | 1.030s
+lemmatization (00)                  | ██████████████████                       | 2.728s
+the_cut (00)                        |                          █               | 0.013s
+html_generation (00)                |                          █               | 0.003s
+html_generation (03)                |                              █           | 0.003s
+html_generation (02)                |                                    █     | 0.003s
+html_generation (01)                |                                        █ | 0.002s
+
+```
+
+## [Commit: 7878d05] 20260808035015 (Wait between runs: 8.26s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 12.371s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ███                                      | 1.090s
+lemmatization (00)                  | ███████████████████                      | 6.081s
+the_cut (00)                        |                    █                     | 0.039s
+html_generation (00)                |                      █                   | 0.006s
+html_generation (08)                |                       █                  | 0.003s
+html_generation (07)                |                         █                | 0.002s
+html_generation (06)                |                            █             | 0.002s
+html_generation (05)                |                              █           | 0.002s
+html_generation (04)                |                                 █        | 0.003s
+html_generation (03)                |                                   █      | 0.004s
+html_generation (02)                |                                      █   | 0.003s
+html_generation (01)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 7.437s)
+---------------------------------------------------------------------------
+lemmatization (00)                  | █████████████████████                    | 4.031s
+translate_text (00)                 | █████                                    | 1.069s
+the_cut (00)                        |                            █             | 0.014s
+html_generation (00)                |                             █            | 0.004s
+html_generation (03)                |                                █         | 0.004s
+html_generation (02)                |                                     █    | 0.002s
+html_generation (01)                |                                        █ | 0.003s
+
+```
+
+## [Commit: e4551fb] 20260808035500 (Wait between runs: 8.16s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 9.294s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ████                                     | 1.049s
+lemmatization (00)                  | ██████████████████                       | 4.379s
+the_cut (00)                        |                   █                      | 0.029s
+html_generation (00)                |                     █                    | 0.008s
+html_generation (08)                |                      █                   | 0.003s
+html_generation (07)                |                         █                | 0.002s
+html_generation (06)                |                           █              | 0.002s
+html_generation (05)                |                              █           | 0.002s
+html_generation (04)                |                                 █        | 0.002s
+html_generation (03)                |                                   █      | 0.003s
+html_generation (02)                |                                      █   | 0.003s
+html_generation (01)                |                                        █ | 0.003s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 5.599s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ██████                                   | 0.925s
+lemmatization (00)                  | ████████████████████                     | 2.865s
+the_cut (00)                        |                           █              | 0.011s
+html_generation (00)                |                            █             | 0.004s
+html_generation (03)                |                                █         | 0.003s
+html_generation (02)                |                                    █     | 0.002s
+html_generation (01)                |                                        █ | 0.002s
+
+```
+
 ## Golden Run Aggregates
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 13 | 2.715 | 3.726 | 5.848 |
+| `lemmatization` | 40 | 2.493 | 3.780 | 6.081 |
 | `background_text_translation` | 39 | 0.573 | 3.289 | 13.441 |
-| `translate_text` | 13 | 0.855 | 1.008 | 1.169 |
-| `the_cut` | 13 | 0.010 | 0.020 | 0.032 |
-| `html_generation` | 79 | 0.002 | 0.003 | 0.013 |
+| `translate_text` | 40 | 0.855 | 1.216 | 8.031 |
+| `the_cut` | 40 | 0.010 | 0.021 | 0.041 |
+| `html_generation` | 237 | 0.002 | 0.003 | 0.013 |
 
 ## Phase Glossary
 - **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).
