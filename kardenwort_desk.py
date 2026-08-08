@@ -1053,7 +1053,7 @@ def load_config(config_path=None):
     # 1. Resolve environment paths
     if SEC_ENVIRONMENT in config:
         for key, value in config[SEC_ENVIRONMENT].items():
-            if value.startswith('../') or value.startswith('./'):
+            if not Path(value).is_absolute():
                 resolved_path = (base_dir / value).resolve()
             else:
                 resolved_path = Path(value).resolve()
@@ -1141,7 +1141,7 @@ def load_config(config_path=None):
             raw_root = raw_root.strip()
             if not raw_root:
                 continue
-            if raw_root.startswith('../') or raw_root.startswith('./'):
+            if not Path(raw_root).is_absolute():
                 parsed_roots.append((base_dir / raw_root).resolve())
             else:
                 parsed_roots.append(Path(raw_root).resolve())
