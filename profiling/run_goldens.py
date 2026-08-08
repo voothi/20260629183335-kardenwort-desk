@@ -62,6 +62,10 @@ def main():
     ui_timeout = live_config.getint("profiling", "ui_timeout", fallback=90)
     cleanup_delay = live_config.getint("profiling", "cleanup_delay", fallback=5)
     
+    if config_backup.exists():
+        print(f"Found existing {config_backup.name}. A previous run likely crashed. Restoring it first.")
+        shutil.copy2(config_backup, config_path)
+        
     if config_path.exists():
         shutil.copy2(config_path, config_backup)
         print(f"Backed up live config.ini to {config_backup.name}")
