@@ -19,6 +19,7 @@
 - [[Commit: feebde2] 20260808120810](#commit-feebde2-20260808120810)
 - [[Commit: 7dfaef7] 20260808124319](#commit-7dfaef7-20260808124319)
 - [[Commit: c01cea3] 20260808140351](#commit-c01cea3-20260808140351)
+- [[Commit: c9c1f35] 20260808190717 to desk](#commit-c9c1f35-20260808190717-to-desk)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -568,14 +569,32 @@ html_generation (01)                |                                        █
 
 ```
 
+## [Commit: c9c1f35] 20260808190717 to desk (Avg wait between runs: 11.09s)
+```text
+Run Session: 20260807190200 [Golden DE] (Total Batch E2E Duration: 6.618s)
+---------------------------------------------------------------------------
+lemmatization (00)                  | ██████████████████████████               | 4.418s
+html_generation (00)                |                            █             | 0.006s
+background_text_translation (00)    |                               █████████  | 1.649s
+translate_text (00)                 |                                    ████  | 0.705s
+
+Run Session: 20260807190100 [Golden EN] (Total Batch E2E Duration: 4.378s)
+---------------------------------------------------------------------------
+lemmatization (00)                  | ██████████████████████████               | 2.869s
+html_generation (00)                |                           █              | 0.004s
+background_text_translation (00)    |                               █████████  | 1.058s
+translate_text (00)                 |                               █████████  | 1.029s
+
+```
+
 ## Golden Run Aggregates
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 72 | 2.493 | 3.953 | 10.907 |
-| `background_text_translation` | 42 | 0.573 | 3.187 | 13.441 |
-| `translate_text` | 75 | 0.767 | 1.176 | 8.031 |
+| `lemmatization` | 74 | 2.493 | 3.945 | 10.907 |
+| `background_text_translation` | 44 | 0.573 | 3.103 | 13.441 |
+| `translate_text` | 78 | 0.705 | 1.165 | 8.031 |
 | `the_cut` | 69 | 0.009 | 0.020 | 0.041 |
-| `html_generation` | 416 | 0.002 | 0.003 | 0.013 |
+| `html_generation` | 418 | 0.002 | 0.003 | 0.013 |
 
 ## Phase Glossary
 - **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).
