@@ -86,3 +86,34 @@ def test_parallel_execution_exception_handling(tmp_path, monkeypatch):
 
     # Should gracefully catch and fallback without crashing
     run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
+
+def test_parallel_core_failure(tmp_path, monkeypatch):
+    config, resolved_paths = setup_test_env(tmp_path)
+    
+    def mock_prepare_lookup_tsv(*args, **kwargs):
+        raise RuntimeError("Fatal TSV error")
+        
+    def mock_translate_text(*args, **kwargs):
+        return "Translated"
+        
+    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
+    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_translate_text)
+    
+    with pytest.raises(RuntimeError, match="Fatal TSV error"):
+        run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
+
+def test_parallel_exception_priority(tmp_path, monkeypatch):
+    config, resolved_paths = setup_test_env(tmp_path)
+    
+    def mock_prepare_lookup_tsv(*args, **kwargs):
+        time.sleep(0.1)
+        raise RuntimeError("Fatal TSV error")
+        
+    def mock_translate_text(*args, **kwargs):
+        raise ValueError("Network error")
+        
+    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
+    monkeypatch.setattr(kardenwort_desk, 'translate_text', mock_translate_text)
+    
+    with pytest.raises(RuntimeError, match="Fatal TSV error"):
+        run_render_flow("Hello", "en", "123", "single", config, resolved_paths)

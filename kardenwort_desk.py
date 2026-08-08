@@ -851,7 +851,8 @@ class TraceTimer(contextlib.ContextDecorator):
                     "zid": self.zid,
                     "phase": self.phase,
                     "duration": duration,
-                    "cold_start": cold_start
+                    "cold_start": cold_start,
+                    "status": "error" if exc and exc[0] is not None else "success"
                 }
                 with open(log_file, 'a', encoding='utf-8') as f:
                     f.write(json.dumps(entry) + '\n')

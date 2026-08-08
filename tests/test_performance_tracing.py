@@ -125,3 +125,52 @@ class TestPerformanceTracing(unittest.TestCase):
 
             # check if _ACTIVE_ZIDS is clean
             self.assertNotIn(zid, kardenwort_desk._ACTIVE_ZIDS)
+
+    @patch('kardenwort_desk.resolve_results_dir')
+    def test_trace_timer_exception(self, mock_resolve_dir):
+        config = configparser.ConfigParser()
+        from kardenwort_desk import SEC_SETTINGS
+        config.add_section(SEC_SETTINGS)
+        config.set(SEC_SETTINGS, "enable_performance_tracing", "True")
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_resolve_dir.return_value = tmpdir
+            resolved_paths = {"results_dir": tmpdir}
+
+            with self.assertRaises(ValueError):
+                with TraceTimer("test_exception", "zid_err", config, resolved_paths):
+                    raise ValueError("Simulated error")
+
+            trace_file = os.path.join(tmpdir, "speed_trace.jsonl")
+            self.assertTrue(os.path.exists(trace_file))
+            
+            with open(trace_file, "r", encoding='utf-8') as f:
+                lines = f.readlines()
+                self.assertEqual(len(lines), 1)
+                entry = json.loads(lines[0])
+                self.assertEqual(entry["status"], "error")
+
+    @patch('kardenwort_desk.resolve_results_dir')
+    def test_trace_timer_encoding(self, mock_resolve_dir):
+        config = configparser.ConfigParser()
+        from kardenwort_desk import SEC_SETTINGS
+        config.add_section(SEC_SETTINGS)
+        config.set(SEC_SETTINGS, "enable_performance_tracing", "True")
+
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_resolve_dir.return_value = tmpdir
+            resolved_paths = {"results_dir": tmpdir}
+
+            with TraceTimer("mül_phase", "zid_enc", config, resolved_paths):
+                time.sleep(0.01)
+
+            trace_file = os.path.join(tmpdir, "speed_trace.jsonl")
+            self.assertTrue(os.path.exists(trace_file))
+            
+            with open(trace_file, "r", encoding='utf-8') as f:
+                lines = f.readlines()
+                self.assertEqual(len(lines), 1)
+                entry = json.loads(lines[0])
+                self.assertEqual(entry["phase"], "mül_phase")
