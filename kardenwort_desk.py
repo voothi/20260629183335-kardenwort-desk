@@ -629,15 +629,13 @@ class SentencesModeConfig:
     multi_mode_decompose: bool = False
     deduplication_scope: str = "sentence"
     
-    def should_split_sentences(self, num_sentences: int, has_tsv_path: bool = False) -> bool:
-        """Returns True if the text should be decomposed into multiple sentence windows."""
-        if has_tsv_path:
-            return False
+    def should_split_sentences(self, num_sentences: int) -> bool:
+        """Returns True if the configuration dictates that this text should be decomposed into multiple sentence windows."""
         return self.enabled and num_sentences >= self.min_sentences
         
-    def get_expected_window_count(self, num_sentences: int, has_tsv_path: bool = False) -> int:
-        """Returns the number of Kardenwort Desk windows that will spawn."""
-        if not self.should_split_sentences(num_sentences, has_tsv_path):
+    def get_expected_window_count(self, num_sentences: int) -> int:
+        """Returns the number of Kardenwort Desk windows that will spawn under this configuration."""
+        if not self.should_split_sentences(num_sentences):
             return 1
             
         parent_spawns = 0 if self.parent_mode == 'none' else 1
@@ -2992,10 +2990,15 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
     source_sentences, text, _ = parse_source_sentences(text, text_mode, config)
+    will_split = not tsv_path and smc.should_split_sentences(len(source_sentences))
     
-    if smc.should_split_sentences(len(source_sentences), has_tsv_path=bool(tsv_path)):
+    progressive_config_flag = config.getboolean(SEC_PIPELINE, 'progressive_text_translation', fallback=False)
+    if progressive_config_flag and will_split:
+        logger.info(f"[{zid}] Progressive translation disabled (incompatible with multi-window sentences mode)")
+        progressive_config_flag = False
+    
+    if will_split:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
-        
         master_slug = generate_slug(text)
         master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
         
