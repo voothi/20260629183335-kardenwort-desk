@@ -40,6 +40,13 @@ def main():
     config_path = repo_root / "config.ini"
     config_backup = repo_root / "config.ini.backup"
     
+    import configparser
+    live_config = configparser.ConfigParser()
+    if config_path.exists():
+        live_config.read(config_path)
+    backend_timeout = live_config.getint("profiling", "backend_timeout", fallback=90)
+    ui_timeout = live_config.getint("profiling", "ui_timeout", fallback=90)
+    
     if config_path.exists():
         shutil.copy2(config_path, config_backup)
         print(f"Backed up live config.ini to {config_backup.name}")
@@ -129,7 +136,7 @@ def main():
                             except Exception as e:
                                 pass
                         
-                        if time.time() - start_time > 90:
+                        if time.time() - start_time > backend_timeout:
                             print(f"TIMEOUT waiting for backend traces. Found {len(completed_zids)}/{len(expected_zids)}")
                             break
                         time.sleep(0.5)
@@ -157,7 +164,7 @@ def main():
                             
                     if ahk_exe:
                         try:
-                            res = subprocess.run([ahk_exe, str(ahk_script), str(len(expected_zids)), "90"], capture_output=True, text=True)
+                            res = subprocess.run([ahk_exe, str(ahk_script), str(len(expected_zids)), str(ui_timeout)], capture_output=True, text=True)
                             if res.returncode == 0:
                                 total_duration = time.time() - start_time
                                 print(f"UI E2E Duration: {total_duration:.2f} seconds.")
