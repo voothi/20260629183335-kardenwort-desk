@@ -815,13 +815,13 @@ class TraceTimer(contextlib.ContextDecorator):
         self.max_mb = 5
         if self.config and hasattr(self.config, 'getboolean'):
             try:
-                self.enabled = self.config.getboolean(SEC_SETTINGS, 'enable_performance_tracing', fallback=False)
+                self.enabled = self.config.getboolean('profiling', 'enable_performance_tracing', fallback=self.config.getboolean(SEC_SETTINGS, 'enable_performance_tracing', fallback=False))
             except Exception:
                 self.enabled = False
             try:
-                self.max_mb = self.config.getint(SEC_SETTINGS, 'trace_log_max_mb', fallback=5)
+                self.max_mb = self.config.getfloat('profiling', 'trace_log_max_mb', fallback=self.config.getfloat(SEC_SETTINGS, 'trace_log_max_mb', fallback=5.0))
             except Exception:
-                self.max_mb = 5
+                self.max_mb = 5.0
 
     def __enter__(self):
         if not self.enabled:
@@ -2992,9 +2992,14 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     source_sentences, text, _ = parse_source_sentences(text, text_mode, config)
     will_split = not tsv_path and smc.should_split_sentences(len(source_sentences))
     
-    if is_progressive_translation_enabled and will_split:
-        logger.info(f"[{zid}] Progressive translation disabled (incompatible with multi-window sentences mode)")
+    if (will_split or (tsv_path and sentences_enabled)) and (display_mode_val == 'progressive' or is_progressive_translation_enabled):
+        logger.info(f"[{zid}] Progressive mode disabled (incompatible with Sentences Mode multi-window architecture)")
+        display_mode_val = 'monolithic'
         is_progressive_translation_enabled = False
+        if config.has_section(SEC_RENDERING):
+            config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+        if config.has_section(SEC_PIPELINE):
+            config.set(SEC_PIPELINE, 'progressive_text_translation', 'false')
     
     if will_split:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
@@ -6534,7 +6539,7 @@ def cmd_render(args):
             text = "\n".join(new_lines)
         
     try:
-        zoom_val = args.zoom if args.zoom else config.get(SEC_SETTINGS, 'default_zoom', fallback='100')
+        zoom_val = args.zoom if args.zoom else config.get(SEC_RENDERING, 'default_zoom', fallback=config.get(SEC_SETTINGS, 'default_zoom', fallback='100'))
         split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60)
         html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill, seq_num=getattr(args, 'seq_num', None))
         from b64util import encode
