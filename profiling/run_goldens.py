@@ -193,7 +193,6 @@ def main():
     finally:
         # Restore original config
         if config_backup.exists():
-            import shutil
             shutil.copy2(config_backup, config_path)
             config_backup.unlink()
             print("\nRestored original config.ini")
