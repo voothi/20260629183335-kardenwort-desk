@@ -297,23 +297,10 @@ import os
 import sys
 import shutil
 
-def delete_commit_traces(target_subject):
+def delete_trace_by_zid(target_zid):
     trace_file = REPO_ROOT / "results" / "speed_trace.jsonl"
     if not trace_file.exists():
         print(f"Trace file not found at {trace_file}")
-        return
-
-    commits = get_git_commits()
-    commit_lookup = {c['hash']: c for c in commits}
-    
-    # Find the hash for the target subject
-    target_hashes = set()
-    for c in commits:
-        if c['subj'] == target_subject:
-            target_hashes.add(c['hash'])
-            
-    if not target_hashes:
-        print(f"No commit found with subject: {target_subject}")
         return
         
     temp_file = trace_file.with_name("speed_trace_tmp.jsonl")
@@ -327,14 +314,10 @@ def delete_commit_traces(target_subject):
                 continue
             try:
                 data = json.loads(line)
-                ts_str = data.get("timestamp")
-                if ts_str:
-                    ts_str_clean = ts_str.replace('Z', '+00:00')
-                    event_ts = datetime.fromisoformat(ts_str_clean).timestamp()
-                    c_hash = get_commit_for_time(commits, event_ts)
-                    if c_hash in target_hashes:
-                        deleted_count += 1
-                        continue
+                zid_val = data.get("zid", "")
+                if zid_val == target_zid or zid_val.startswith(target_zid):
+                    deleted_count += 1
+                    continue
             except Exception:
                 pass
             f_out.write(line)
@@ -342,10 +325,10 @@ def delete_commit_traces(target_subject):
             
     shutil.copy2(temp_file, trace_file)
     temp_file.unlink()
-    print(f"Deleted {deleted_count} records for commit subject '{target_subject}'. Kept {kept_count} records.")
+    print(f"Deleted {deleted_count} records matching ZID '{target_zid}'. Kept {kept_count} records.")
 
 if __name__ == '__main__':
-    if len(sys.argv) == 3 and sys.argv[1] == '--delete-commit':
-        delete_commit_traces(sys.argv[2])
+    if len(sys.argv) == 3 and sys.argv[1] == '--delete':
+        delete_trace_by_zid(sys.argv[2])
     else:
         analyze()
