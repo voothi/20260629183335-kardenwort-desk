@@ -58,6 +58,7 @@ def main():
         live_config.read(config_path)
     backend_timeout = live_config.getint("profiling", "backend_timeout", fallback=90)
     ui_timeout = live_config.getint("profiling", "ui_timeout", fallback=90)
+    cleanup_delay = live_config.getint("profiling", "cleanup_delay", fallback=5)
     
     if config_path.exists():
         shutil.copy2(config_path, config_backup)
@@ -65,6 +66,11 @@ def main():
     
     try:
         for i, run in enumerate(runs):
+            if i > 0 and cleanup_delay > 0:
+                import time
+                print(f"Waiting {cleanup_delay}s for visual inspection before next run...")
+                time.sleep(cleanup_delay)
+                
             print(f"==================================================")
             if i == 0:
                 print(f"Ready to test {run['lang']}?")
@@ -174,11 +180,15 @@ def main():
 
                 else:
                     print(f"FAILED: {run['name']} could not be initiated.")
-                        
+                    print(f"SUCCESS: Found {expected_count} Kardenwort windows.")
             except Exception as e:
                 print(f"ERROR: {e}")
 
         print(f"==================================================")
+        if cleanup_delay > 0:
+            print(f"Waiting {cleanup_delay}s for visual inspection...")
+            time.sleep(cleanup_delay)
+            
         print("Check results/speed_trace.jsonl to view the authentic performance traces.")
         
         print("\nCleaning up final Kardenwort desk windows...")
