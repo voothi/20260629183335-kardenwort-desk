@@ -98,6 +98,9 @@ def main():
                 import time
                 import json
                 start_time = time.time()
+                speed_trace = results_dir / "speed_trace.jsonl"
+                initial_size = speed_trace.stat().st_size if speed_trace.exists() else 0
+                
                 success = kardenwort_desk.spawn_ahk([
                     "--zid", run['zid'], 
                     "--language", run['lang'],
@@ -110,14 +113,15 @@ def main():
                     expected_count = 4 if run['lang'] == 'en' else 9
                     print(f"Expected {expected_count} windows for golden run.")
                     
-                    # 2. Poll speed_trace.jsonl for all html_generation events
                     speed_trace = results_dir / "speed_trace.jsonl"
                     completed_zids = set()
                     print("Waiting for backend html_generation traces...")
+                    
                     while len(completed_zids) < expected_count:
                         if speed_trace.exists():
                             try:
                                 with open(speed_trace, 'r', encoding='utf-8') as f:
+                                    f.seek(initial_size)
                                     for line in f:
                                         try:
                                             data = json.loads(line)
