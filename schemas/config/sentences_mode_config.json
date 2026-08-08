@@ -18,19 +18,19 @@
     },
     "alignment_method": {
       "type": "string",
-      "enum": ["auto", "proportional", "sequential"],
+      "enum": ["auto", "proportional", "sequential", "newline_join", "proportion"],
       "default": "auto",
-      "description": "Algorithm used to align source and target sentence sequences. Supported: 'auto', 'proportional', 'sequential'."
+      "description": "Algorithm used to align source and target sentence sequences. Supported: 'auto', 'proportional', 'sequential', 'newline_join', 'proportion'."
     },
     "spawn_order": {
       "type": "string",
-      "enum": ["normal", "reversed"],
+      "enum": ["normal", "reversed", "reverse"],
       "default": "normal",
       "description": "Order in which spawned sentence-level processing tasks are dispatched."
     },
     "parent_mode": {
       "type": "string",
-      "enum": ["full", "summary"],
+      "enum": ["full", "summary", "stub", "none"],
       "default": "full",
       "description": "How the parent sentence context is represented in multi-sentence output."
     },
@@ -39,11 +39,16 @@
       "default": false,
       "description": "Whether multi-mode processing decomposes each sentence independently before combining results."
     },
+    "legacy_spawn_children": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether to forcibly spawn child windows in multi-mode even when sentences_mode is disabled."
+    },
     "deduplication_scope": {
       "type": "string",
-      "enum": ["sentence", "global"],
+      "enum": ["sentence", "global", "none"],
       "default": "sentence",
-      "description": "Scope at which deduplication is applied: 'sentence' (per-sentence local) or 'global' (cross-sentence combined)."
+      "description": "Scope at which deduplication is applied: 'sentence' (per-sentence local), 'global' (cross-sentence combined), or 'none'."
     }
   },
   "required": [
@@ -53,6 +58,7 @@
     "spawn_order",
     "parent_mode",
     "multi_mode_decompose",
+    "legacy_spawn_children",
     "deduplication_scope"
   ],
   "additionalProperties": false

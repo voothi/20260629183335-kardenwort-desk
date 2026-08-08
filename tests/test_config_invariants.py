@@ -124,6 +124,28 @@ def generate_sentence_boundary_config_matrix() -> List[Dict[str, Any]]:
     return [dict(zip(keys, item)) for item in matrix]
 
 
+def generate_sentences_mode_config_matrix() -> List[Dict[str, Any]]:
+    """
+    Generates deterministic test combinations for SentencesModeConfig resolution.
+    """
+    keys = [
+        "enabled", "min_sentences", "alignment_method", "spawn_order", 
+        "parent_mode", "multi_mode_decompose", "legacy_spawn_children", "dedup_scope"
+    ]
+    values = [
+        [True, False],
+        [2, 5],
+        ["auto", "newline_join", "proportion"],
+        ["normal", "reverse"],
+        ["full", "stub"],
+        [True, False],
+        [True, False],
+        ["sentence", "global", "none"]
+    ]
+    matrix = list(itertools.product(*values))
+    return [dict(zip(keys, item)) for item in matrix]
+
+
 def test_matrix_generator_dimensions():
     """Verify that deterministic matrix generators produce exact expected permutations."""
     bool_matrix = generate_boolean_matrix()
@@ -145,6 +167,9 @@ def test_matrix_generator_dimensions():
 
     sbc_matrix = generate_sentence_boundary_config_matrix()
     assert len(sbc_matrix) == 32
+
+    smc_matrix = generate_sentences_mode_config_matrix()
+    assert len(smc_matrix) == 576
 
 
 @pytest.mark.parametrize("params", generate_runtime_token_config_matrix())
@@ -733,3 +758,38 @@ class TestErrorCatalogSynchronization:
             assert serialized == f'"{member.value}"', (
                 f"ErrorCode.{member.name} did not serialize as a plain JSON string: {serialized!r}"
             )
+
+@pytest.mark.parametrize("params", generate_sentences_mode_config_matrix())
+def test_sentences_mode_config_matrix_resolution(params):
+    """
+    Verify complete runtime resolution across all permutations of SentencesModeConfig parameters.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_SENTENCES_MODE)
+    
+    cp.set(SEC_SENTENCES_MODE, "enabled", str(params["enabled"]))
+    cp.set(SEC_SENTENCES_MODE, "min_sentences", str(params["min_sentences"]))
+    cp.set(SEC_SENTENCES_MODE, "alignment_method", params["alignment_method"])
+    cp.set(SEC_SENTENCES_MODE, "spawn_order", params["spawn_order"])
+    cp.set(SEC_SENTENCES_MODE, "parent_mode", params["parent_mode"])
+    cp.set(SEC_SENTENCES_MODE, "multi_mode_sentence_decomposition", str(params["multi_mode_decompose"]))
+    cp.set(SEC_SENTENCES_MODE, "legacy_spawn_children", str(params["legacy_spawn_children"]))
+    cp.set(SEC_SENTENCES_MODE, "deduplication_scope", params["dedup_scope"])
+
+    cfg = SentencesModeConfig.from_config(cp)
+    
+    assert cfg.enabled == params["enabled"]
+    assert cfg.min_sentences == params["min_sentences"]
+    assert cfg.alignment_method == params["alignment_method"]
+    assert cfg.spawn_order == params["spawn_order"]
+    assert cfg.parent_mode == params["parent_mode"]
+    assert cfg.multi_mode_decompose == params["multi_mode_decompose"]
+    assert cfg.legacy_spawn_children == params["legacy_spawn_children"]
+    assert cfg.deduplication_scope == params["dedup_scope"]
+    
+    validate_dataclass(cfg)
+    
+    # Also explicitly test logic invariant: get_expected_window_count
+    split = params["enabled"] and 5 >= params["min_sentences"]
+    expected_count = 5 + (1 if params["parent_mode"] != 'none' else 0) if split else 1
+    assert cfg.get_expected_window_count(5) == expected_count
