@@ -119,8 +119,7 @@ def main():
                     # 1. Determine expected windows based on Golden text dynamically
                     try:
                         source_text = run['file'].read_text(encoding='utf-8')
-                        test_config = configparser.ConfigParser()
-                        test_config.read(run['config'] if run['config'].exists() else config_path, encoding='utf-8')
+                        test_config = kardenwort_desk.load_kardenwort_config(repo_root)
                         
                         sentences, _ = kardenwort_desk.parse_source_sentences(source_text, 'multi', test_config)
                         smc = kardenwort_desk.SentencesModeConfig.from_config(test_config)
