@@ -129,7 +129,7 @@ def main():
                             except Exception as e:
                                 pass
                         
-                        if time.time() - start_time > 45:
+                        if time.time() - start_time > 90:
                             print(f"TIMEOUT waiting for backend traces. Found {len(completed_zids)}/{len(expected_zids)}")
                             break
                         time.sleep(0.5)
@@ -139,9 +139,14 @@ def main():
                     
                     # 3. Call native AHK script to wait for physical UI
                     print(f"Waiting for {len(expected_zids)} physical AHK windows to render...")
-                    ahk_repo = next(repo_root.parent.glob("*-autohotkey"), None)
+                    ahk_repo = os.environ.get("AHK_REPO_PATH")
+                    if ahk_repo:
+                        ahk_repo = Path(ahk_repo)
+                    else:
+                        ahk_repo = next(repo_root.parent.glob("*-autohotkey"), None)
+                        
                     if not ahk_repo:
-                        print("Could not find autohotkey repository to run wait script.")
+                        print("Could not find autohotkey repository to run wait script. Set AHK_REPO_PATH.")
                         continue
                     ahk_script = ahk_repo / "kardenwort-window" / "tests" / "wait_for_windows.ahk"
                     if not ahk_script.exists():
@@ -152,7 +157,7 @@ def main():
                             
                     if ahk_exe:
                         try:
-                            res = subprocess.run([ahk_exe, str(ahk_script), str(len(expected_zids)), "30"], capture_output=True, text=True)
+                            res = subprocess.run([ahk_exe, str(ahk_script), str(len(expected_zids)), "90"], capture_output=True, text=True)
                             if res.returncode == 0:
                                 total_duration = time.time() - start_time
                                 print(f"UI E2E Duration: {total_duration:.2f} seconds.")

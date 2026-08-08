@@ -30,14 +30,14 @@ def test_parallel_execution_time(tmp_path, monkeypatch):
     
     # Mock prepare_lookup_tsv
     def mock_prepare_lookup_tsv(*args, **kwargs):
-        time.sleep(0.3)
+        time.sleep(1.0)
         p = tmp_path / "mock.tsv"
         p.write_text("Row1\nRow2", encoding='utf-8')
         return p
         
     # Mock translate_text
     def mock_translate_text(*args, **kwargs):
-        time.sleep(0.3)
+        time.sleep(1.0)
         return "Translated Text"
         
     monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
@@ -58,8 +58,8 @@ def test_parallel_execution_time(tmp_path, monkeypatch):
     
     duration = end_time - start_time
     
-    # If sequential, it would be 0.6s. If parallel, it should be ~0.3s.
-    assert duration < 0.5, f"Execution was too slow: {duration}s, expected parallel execution (~0.3s)"
+    # If sequential, it would be 2.0s. If parallel, it should be ~1.0s.
+    assert duration < 1.5, f"Execution was too slow: {duration}s, expected parallel execution (~1.0s)"
 
 def test_parallel_execution_exception_handling(tmp_path, monkeypatch):
     config, resolved_paths = setup_test_env(tmp_path)

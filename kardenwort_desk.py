@@ -2988,21 +2988,34 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             )
             
         if parallelize:
-            with ThreadPoolExecutor(max_workers=2) as executor:
-                future_trans = executor.submit(do_translation)
-                future_core = executor.submit(do_core)
+            executor = ThreadPoolExecutor(max_workers=2)
+            future_trans = executor.submit(do_translation)
+            future_core = executor.submit(do_core)
+            
+            concurrent.futures.wait(
+                [future_trans, future_core], 
+                return_when=concurrent.futures.FIRST_EXCEPTION
+            )
+            
+            if future_core.exception():
+                e = future_core.exception()
+                logger.error(f"Core TSV generation failed in parallel executor: {e}")
+                executor.shutdown(wait=False)
+                raise e
                 
+            if future_trans.exception():
+                logger.warning(f"Holistic translation failed in parallel executor: {future_trans.exception()}")
+            else:
                 try:
                     translated_paragraph = future_trans.result()
                     translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
                 except Exception as e:
-                    logger.warning(f"Holistic translation failed in parallel executor: {e}")
+                    logger.warning(f"Holistic translation failed in parallel executor during split: {e}")
                     
-                try:
-                    master_tsv_path = future_core.result()
-                except Exception as e:
-                    logger.error(f"Core TSV generation failed in parallel executor: {e}")
-                    raise e
+            if not future_core.exception():
+                master_tsv_path = future_core.result()
+                
+            executor.shutdown(wait=False)
         else:
             try:
                 translated_paragraph = do_translation()
