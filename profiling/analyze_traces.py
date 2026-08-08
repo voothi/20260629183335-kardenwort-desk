@@ -7,6 +7,7 @@ import bisect
 import re
 
 REPO_ROOT = Path(__file__).parent.parent.resolve()
+CHART_WIDTH = 40
 
 def get_golden_prefixes():
     fixtures_dir = REPO_ROOT / "tests" / "fixtures"
@@ -24,7 +25,7 @@ def get_golden_prefixes():
 def get_git_commits():
     try:
         output = subprocess.check_output(
-            ['git', 'log', '--format=%h|%cI|%s'],
+            ['git', 'log', '-n', '100', '--format=%h|%cI|%s'],
             universal_newlines=True
         )
     except Exception as e:
@@ -38,7 +39,8 @@ def get_git_commits():
         if len(parts) == 3:
             h, dt_str, subj = parts
             try:
-                dt = datetime.fromisoformat(dt_str).timestamp()
+                dt_str_clean = dt_str.replace('Z', '+00:00')
+                dt = datetime.fromisoformat(dt_str_clean).timestamp()
                 commits.append({'hash': h, 'ts': dt, 'subj': subj})
             except ValueError:
                 pass
@@ -56,11 +58,18 @@ def get_commit_for_time(commits, timestamp):
 class TeeLogger:
     def __init__(self, filename):
         self.filename = filename
-        open(filename, 'w', encoding='utf-8').close()
+        self.file = open(filename, 'w', encoding='utf-8')
+        
     def __call__(self, *args, **kwargs):
         print(*args, **kwargs)
-        with open(self.filename, 'a', encoding='utf-8') as f:
-            print(*args, file=f, **kwargs)
+        print(*args, file=self.file, **kwargs)
+        self.file.flush()
+        
+    def __del__(self):
+        try:
+            self.file.close()
+        except:
+            pass
 
 out = TeeLogger(Path(__file__).parent / 'speed_analysis.md')
 
@@ -93,7 +102,8 @@ def analyze():
                     if golden_prefixes and zid[:12] not in golden_prefixes:
                         continue
                         
-                    event_ts = datetime.fromisoformat(ts_str).timestamp()
+                    ts_str_clean = ts_str.replace('Z', '+00:00')
+                    event_ts = datetime.fromisoformat(ts_str_clean).timestamp()
                     c_hash = get_commit_for_time(commits, event_ts)
                     
                     # Group by the 12-digit run session prefix so children are merged with the master
@@ -134,7 +144,8 @@ def analyze():
             # Deduplicate by (zid, phase) taking the latest execution
             latest_events = {}
             for e in events:
-                end_t = datetime.fromisoformat(e['timestamp']).timestamp()
+                ts_str_clean = e['timestamp'].replace('Z', '+00:00')
+                end_t = datetime.fromisoformat(ts_str_clean).timestamp()
                 start_t = end_t - e['duration']
                 key = (e.get('zid', 'unknown'), e['phase'])
                 
@@ -166,7 +177,7 @@ def analyze():
             out("-" * 75)
             
             parsed_events.sort(key=lambda x: x['start_t'])
-            chart_width = 40
+            chart_width = CHART_WIDTH
             for p in parsed_events:
                 rel_start = p['start_t'] - min_start_ts
                 start_idx = int((rel_start / total_time) * chart_width)
