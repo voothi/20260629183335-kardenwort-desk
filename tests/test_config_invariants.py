@@ -849,7 +849,8 @@ def _compute_guard(
 
     will_split = (not tsv_path_truthy) and (
         smc.should_split_sentences(num_source_sentences)
-        or (text_mode == "multi" and smc.legacy_spawn_children and num_source_sentences >= 2)
+        # legacy_spawn_children only fires when sentences_mode is enabled (mirrors production fix).
+        or (text_mode == "multi" and smc.enabled and smc.legacy_spawn_children and num_source_sentences >= 2)
     )
 
     tsv_has_active_children = bool(tsv_path_truthy and sentences_enabled and children_truthy)

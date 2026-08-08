@@ -2926,7 +2926,7 @@ def parse_source_sentences(text, text_mode, config):
         source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
     else:
         # Match kardenwort.py core behavior: if multi_mode_remove_empty_lines is true, drop empty lines.
-        remove_empty = config.getboolean('settings', 'multi_mode_remove_empty_lines', fallback=True) if config.has_section('settings') else True
+        remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
         if smc.multi_mode_decompose:
             source_sentences = []
             for line in text.splitlines():
@@ -2985,15 +2985,33 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 my_zid_match = re.match(r'^(\d{14})', p_tsv.name)
                 if my_zid_match:
                     my_zid = my_zid_match.group(1)
-                    my_idx = int(my_zid[-2:])
-                    prefix = my_zid[:-2]
-                    for sibling in p_tsv.parent.glob(f"{prefix}*.tsv"):
-                        if sibling != p_tsv:
-                            sib_match = re.match(r'^(\d{14})', sibling.name)
-                            if sib_match:
-                                sib_idx = int(sib_match.group(1)[-2:])
-                                if sib_idx > my_idx:
-                                    children_tsv_paths.append(sibling)
+                    try:
+                        from datetime import timedelta
+                        my_dt = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+                        # Children are spawned 1..N seconds after the master ZID.
+                        # Glob two or three minute-prefixes to survive minute-boundary rollovers
+                        # (e.g. master at :43 → child #17 lands at the next minute's :00).
+                        # Supports up to 120 child sentences (well above typical use).
+                        minute_prefixes = {
+                            (my_dt + timedelta(seconds=s)).strftime('%Y%m%d%H%M')
+                            for s in range(0, 121, 60)
+                        }
+                        for prefix in sorted(minute_prefixes):
+                            for sibling in p_tsv.parent.glob(f"{prefix}*.tsv"):
+                                if sibling == p_tsv:
+                                    continue
+                                sib_match = re.match(r'^(\d{14})', sibling.name)
+                                if not sib_match:
+                                    continue
+                                try:
+                                    sib_dt = datetime.strptime(sib_match.group(1), '%Y%m%d%H%M%S')
+                                    delta = (sib_dt - my_dt).total_seconds()
+                                    if 0 < delta <= 120:
+                                        children_tsv_paths.append(sibling)
+                                except (ValueError, TypeError):
+                                    continue
+                    except (ValueError, TypeError):
+                        pass
                     children_tsv_paths.sort(key=lambda p: p.name)
         except Exception:
             pass
@@ -3013,7 +3031,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     multi_mode_decompose = smc.multi_mode_decompose
     will_split = not tsv_path and (
         smc.should_split_sentences(len(source_sentences)) or 
-        (text_mode == 'multi' and smc.legacy_spawn_children and len(source_sentences) >= 2)
+        # legacy_spawn_children only fires when sentences_mode is enabled to avoid
+        # unexpected splits from old config files migrated with enabled=false.
+        (text_mode == 'multi' and smc.enabled and smc.legacy_spawn_children and len(source_sentences) >= 2)
     )
     
     # Progressive mode is incompatible with Sentences Mode multi-window architecture ONLY when:
@@ -3026,10 +3046,10 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         logger.info(f"[{zid}] Progressive mode disabled (incompatible with Sentences Mode multi-window architecture)")
         display_mode_val = 'monolithic'
         is_progressive_translation_enabled = False
-        if config.has_section(SEC_RENDERING):
-            config.set(SEC_RENDERING, 'display_mode', 'monolithic')
-        if config.has_section(SEC_PIPELINE):
-            config.set(SEC_PIPELINE, 'progressive_text_translation', 'false')
+        # NOTE: Do NOT mutate the shared config object here. The caller may reuse the same
+        # ConfigParser across subsequent renders (e.g. cmd_restore calling run_render_flow
+        # in a loop). Use the local variables display_mode_val and
+        # is_progressive_translation_enabled throughout this function to track effective mode.
     
     if will_split:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
@@ -3097,9 +3117,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 
             master_tsv_path = do_core()
                 
-        # Fallback to newline_join block translation
-        do_fallback = not is_progressive_translation_enabled and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
-        if do_fallback and alignment_method != 'proportion':
+        # Fallback to newline_join block translation when sentence-count alignment fails
+        attempt_newline_join = not is_progressive_translation_enabled and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
+        if attempt_newline_join and alignment_method != 'proportion':
             try:
                 translations_dict = translate_source_text(
                     "\n".join(source_sentences), language, target_lang, 'multi',
@@ -3408,7 +3428,7 @@ html, body {{
 
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
-    is_progressive = config.get(SEC_RENDERING, 'display_mode', fallback='progressive') == 'progressive'
+    is_progressive = display_mode_val == 'progressive'
     updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
     if is_progressive and updates_dir.exists():
         try:
@@ -7372,7 +7392,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         logger.error(f"Failed to atomically move update js file after 10 retries: {update_js_path}")
 
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
-    zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
+    m = re.match(r'^(\d{14})', tsv_path.name)
+    zid = m.group(1) if m else "unknown"
     with TraceTimer("background_text_translation", zid, config, resolved_paths):
         return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid)
 
@@ -7421,8 +7442,6 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     )
                     save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
                     slug = generate_slug(text)
-                    m = re.match(r"^(\d{14})", tsv_path.name)
-                    zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
                     _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
@@ -7440,8 +7459,6 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     )
                     save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
                     slug = generate_slug(text)
-                    m = re.match(r"^(\d{14})", tsv_path.name)
-                    zid = m.group(1) if m else "session"
                     translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
                     eff_mode = _effective_text_mode(text, args.text_mode)
                     _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=True)
