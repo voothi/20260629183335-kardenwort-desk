@@ -129,19 +129,15 @@ def main():
             end_dt = master_dt + timedelta(minutes=15)
             end_zid = end_dt.strftime('%Y%m%d%H%M%S')
             
-            for existing_file in results_dir.rglob("*.tsv"):
-                if run['zid'] <= existing_file.name[:14] <= end_zid:
-                    try:
-                        existing_file.unlink()
-                    except Exception as e:
-                        print(f"Warning: could not delete {existing_file}: {e}")
-            for existing_file in results_dir.rglob("*.txt"):
-                if run['zid'] <= existing_file.name[:14] <= end_zid:
-                    try:
-                        existing_file.unlink()
-                    except Exception as e:
-                        print(f"Warning: could not delete {existing_file}: {e}")
-                
+            if results_dir.exists():
+                for existing_file in results_dir.rglob("*"):
+                    if existing_file.is_file() and len(existing_file.name) >= 14 and existing_file.name[:14].isdigit():
+                        if run['zid'] <= existing_file.name[:14] <= end_zid:
+                            try:
+                                existing_file.unlink()
+                            except Exception as e:
+                                print(f"Warning: could not delete {existing_file}: {e}")
+
             # Instead of calling Python directly, we trigger the resident AHK script exactly
             # as if the user triggered it via hotkey or tray menu.
             try:
