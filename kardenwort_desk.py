@@ -3619,16 +3619,16 @@ html, body {{
 
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
-            if len(row) > col_lemma and row[col_lemma].strip():
-                need_dest = len(row) <= col_word_dest or not row[col_word_dest].strip()
-                need_ipa = base_provider == 'intellifiller' and col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                need_morph = base_provider == 'intellifiller' and col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+            if not is_field_empty(row, col_lemma):
+                need_dest = is_field_empty(row, col_word_dest)
+                need_ipa = base_provider == 'intellifiller' and col_ipa != -1 and is_field_empty(row, col_ipa)
+                need_morph = base_provider == 'intellifiller' and col_morph != -1 and is_field_empty(row, col_morph)
                 if need_dest or need_ipa or need_morph:
                     has_untranslated_lemmas = True
                     break
     elif col_word_dest != -1:
         # Fallback if col_lemma is not defined but we have word_dest
-        if not all(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows if any(row)):
+        if not all(not is_field_empty(row, col_word_dest) for row in data_rows if any(row)):
             has_untranslated_lemmas = True
             
     # If monolithic mode and run_base is auto, run base translation synchronously
@@ -3662,14 +3662,14 @@ html, body {{
             _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
-        if has_untranslated_lemmas:
+        if has_untranslated_lemmas and not children_tsv_paths:
             if base_provider == 'intellifiller':
                 selected_rows_to_enrich = []
                 for i, row in enumerate(data_rows):
-                    if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                        need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                        need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                        need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                    if not is_field_empty(row, col_lemma):
+                        need_dest = col_word_dest == -1 or is_field_empty(row, col_word_dest)
+                        need_ipa = col_ipa != -1 and is_field_empty(row, col_ipa)
+                        need_morph = col_morph != -1 and is_field_empty(row, col_morph)
                         if need_dest or need_ipa or need_morph:
                             selected_rows_to_enrich.append(i)
                             
@@ -3682,8 +3682,8 @@ html, body {{
             else:
                 lemmas_to_translate = []
                 for row in data_rows:
-                    if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                        if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
+                    if not is_field_empty(row, col_lemma):
+                        if col_word_dest == -1 or is_field_empty(row, col_word_dest):
                             lemmas_to_translate.append(row[col_lemma].strip())
                 lemmas_to_translate = list(set(lemmas_to_translate))
                 
