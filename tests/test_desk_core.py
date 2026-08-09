@@ -1157,6 +1157,159 @@ def test_is_base_translation_finished():
     assert desk.is_base_translation_finished(headers, [], role_fields) is True
 
 
+# ---------------------------------------------------------------------------
+# Task 3.1: is_base_translation_finished — IntelliFiller IPA/Morphology requirement
+# ---------------------------------------------------------------------------
+
+def test_is_base_translation_finished_intellifiller():
+    """
+    When lemma_base_provider == 'intellifiller', is_base_translation_finished()
+    must return False if WordDestination is filled but WordSourceIPA is still
+    missing — it should not be satisfied by WordDestination alone.
+    """
+    headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "word_ipa": "WordSourceIPA",
+        "word_morphology_ai": "WordSourceMorphologyAI",
+    }
+
+    # Case A: dest filled, IPA missing → must return False for intellifiller
+    rows_dest_only = [["Haus", "house", "", ""]]
+    assert desk.is_base_translation_finished(
+        headers, rows_dest_only, role_fields, lemma_base_provider="intellifiller"
+    ) is False, (
+        "With intellifiller, missing WordSourceIPA must prevent 'finished' from being True"
+    )
+
+    # Case B: dest filled, IPA filled, morphology missing → must return False
+    rows_no_morph = [["Haus", "house", "/haʊs/", ""]]
+    assert desk.is_base_translation_finished(
+        headers, rows_no_morph, role_fields, lemma_base_provider="intellifiller"
+    ) is False, (
+        "With intellifiller, missing WordSourceMorphologyAI must prevent 'finished' from being True"
+    )
+
+    # Case C: all fields filled → True
+    rows_all_filled = [["Haus", "house", "/haʊs/", "Noun, neuter"]]
+    assert desk.is_base_translation_finished(
+        headers, rows_all_filled, role_fields, lemma_base_provider="intellifiller"
+    ) is True, (
+        "With intellifiller, all fields filled should return True"
+    )
+
+    # Case D: non-intellifiller provider ignores IPA absence
+    assert desk.is_base_translation_finished(
+        headers, rows_dest_only, role_fields, lemma_base_provider="google"
+    ) is True, (
+        "Non-intellifiller provider must NOT require IPA — dest alone is sufficient"
+    )
+
+    # Case E: skeleton-loader placeholder counts as missing
+    rows_skeleton = [["Haus", '<span class="skeleton-loader" style="width: 60px;"></span>', "", ""]]
+    assert desk.is_base_translation_finished(
+        headers, rows_skeleton, role_fields, lemma_base_provider="intellifiller"
+    ) is False, (
+        "A skeleton-loader placeholder in WordDestination must count as missing"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Task 3.2: has_untranslated_lemmas — intellifiller sets flag on missing IPA
+# ---------------------------------------------------------------------------
+
+def test_has_untranslated_lemmas_intellifiller(monkeypatch, tmp_path):
+    """
+    In run_render_flow's has_untranslated_lemmas logic, when base_provider is
+    'intellifiller' and a row has WordDestination filled but WordSourceIPA or
+    WordSourceMorphologyAI is missing, the flag must be True (i.e., enrichment
+    must still be triggered for that row).
+    """
+    import configparser
+    import types
+
+    config = configparser.ConfigParser()
+    config.read_string(
+        "[settings]\ndefault_language=en\ndefault_target_language=ru\n"
+        "[pipeline]\n"
+        "lemma_base_provider=intellifiller\n"
+        "lemma_reprocess_provider=intellifiller\n"
+        "display_mode=progressive\n"
+        "[triggers]\n"
+        "run_lemma_base_translation=auto\n"
+        "run_text_translation=manual\n"
+        "run_lemma_enrichment=auto\n"
+        "[rendering]\nauto_inject_updates=false\n"
+        "[sentences_mode]\nenabled=false\n"
+        "[languages]\nen_prompt=test-prompt\n"
+        "[fields]\n"
+    )
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\n"
+        "WordSource=lemma\n"
+        "WordDestination=word_translation\n"
+        "WordSourceIPA=word_ipa\n"
+        "WordSourceMorphologyAI=word_morphology_ai\n",
+        encoding="utf-8",
+    )
+
+    resolved_paths = {
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+        "kardenwort_workspace": tmp_path,
+        "settings_file": tmp_path / "settings.ini",
+        "kardenwort_core_py": tmp_path / "core.py",
+        "kardenwort_python": "python",
+    }
+
+    # TSV with dest filled but IPA/Morphology missing
+    tsv_path = tmp_path / "20260809190000-test.en.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\n"
+        "Haus\thouse\t\t\n",
+        encoding="utf-8",
+    )
+
+    progressive_worker_was_launched = []
+
+    def mock_run_progressive_worker_async(tsv, lang, tgt_lang, prompt, base_provider, has_untranslated, skip_intelli, mode):
+        progressive_worker_was_launched.append(has_untranslated)
+
+    monkeypatch.setattr(desk, "prepare_lookup_tsv", lambda *a, **kw: tsv_path)
+    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "ipa": "WordSourceIPA",
+        "morphology": "WordSourceMorphologyAI",
+    })
+    monkeypatch.setattr(desk, "load_tsv_rows", lambda p: (
+        [],
+        ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"],
+        [["Haus", "house", "", ""]],
+    ))
+    monkeypatch.setattr(desk, "run_progressive_worker_async", mock_run_progressive_worker_async)
+    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "load_kardenwort_config", lambda x: configparser.ConfigParser())
+    monkeypatch.setattr(desk, "resolve_results_dir", lambda a, b: tmp_path)
+    monkeypatch.setattr(desk, "find_wordfill_match", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "spawn_ahk", lambda *a, **kw: None)
+
+    desk.run_render_flow("Haus", "en", "20260809190000", "single", config, resolved_paths)
+
+    assert len(progressive_worker_was_launched) > 0, (
+        "run_progressive_worker_async was NOT called — "
+        "has_untranslated_lemmas must be True when IPA is missing even if WordDestination is filled"
+    )
+    assert progressive_worker_was_launched[0] == "True", (
+        "has_untranslated_lemmas must be passed as 'True' when IPA/Morphology is still empty "
+        f"(got: {progressive_worker_was_launched[0]!r})"
+    )
+
+
 def test_wait_for_older_siblings_in_batch(tmp_path):
     # Setup older filled sibling TSV and younger working TSV
     sibling_tsv = tmp_path / "20260729010000-part1.tsv"

@@ -1,4 +1,5 @@
 import time
+import types
 import pytest
 import configparser
 from pathlib import Path
@@ -74,3 +75,177 @@ def test_progressive_bypassed(monkeypatch, tmp_path):
     assert "skeleton-loader" in html_out
     assert "data-pending=\"true\"" in html_out
     assert "Timeout: Background Process Failed" in html_out # from the JS watchdog
+
+
+# ---------------------------------------------------------------------------
+# Task 1.1: cmd_progressive_worker lifecycle — happy path marker ordering
+# ---------------------------------------------------------------------------
+
+def _make_worker_args(tmp_path, config_path):
+    """Return a minimal argparse-compatible namespace for cmd_progressive_worker."""
+    args = types.SimpleNamespace()
+    args.tsv = str(tmp_path / "20260809190000-test.en.tsv")
+    args.config = str(config_path)
+    args.text_mode = "single"
+    args.skip_intellifiller = True  # keep unit test isolated from enrichment
+    return args
+
+
+def _write_worker_tsv(path):
+    path.write_text(
+        "WordSource\tWordDestination\tWordSourceIPA\n"
+        "Haus\t\t\n",
+        encoding="utf-8",
+    )
+
+
+def test_progressive_worker_lifecycle(monkeypatch, tmp_path):
+    """
+    Verifies that cmd_progressive_worker:
+    1. Calls the translation stage.
+    2. Touches .base_translation_done BEFORE attempting enrichment.
+    3. Touches .enrichment_done at the very end (in finally).
+    """
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        "[settings]\ndefault_language=en\n"
+        "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+        "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+        "[fields]\n",
+        encoding="utf-8",
+    )
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
+        encoding="utf-8",
+    )
+
+    tsv_path = tmp_path / "20260809190000-test.en.tsv"
+    _write_worker_tsv(tsv_path)
+
+    translation_order = []
+
+    def mock_load_config(cfg_path):
+        config = configparser.ConfigParser()
+        config.read_string(
+            "[settings]\ndefault_language=en\n"
+            "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+            "[fields]\n"
+        )
+        resolved = {
+            "results_dir": tmp_path,
+            "anki_mapping_file": mapping_path,
+            "kardenwort_workspace": tmp_path,
+            "settings_file": tmp_path / "settings.ini",
+        }
+        return config, resolved, None, None
+
+    def mock_translation_stage(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+        translation_order.append("translation_called")
+        # Simulate: translation fills WordDestination
+        for row in data_rows:
+            if len(row) > 0 and row[0].strip() and len(row) < 2:
+                row.append("Haus-DE")
+            elif len(row) > 1 and not row[1].strip():
+                row[1] = "house"
+        return data_rows
+
+    monkeypatch.setattr(desk, "load_config", mock_load_config)
+    monkeypatch.setattr(desk, "_progressive_worker_stage_translation", mock_translation_stage)
+    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "word_ipa": "WordSourceIPA",
+    })
+
+    args = _make_worker_args(tmp_path, config_path)
+    desk.cmd_progressive_worker(args)
+
+    assert "translation_called" in translation_order, "Translation stage was not called"
+
+    base_done = tsv_path.with_suffix(".base_translation_done")
+    enrich_done = tsv_path.with_suffix(".enrichment_done")
+
+    assert base_done.exists(), ".base_translation_done marker was not created"
+    assert enrich_done.exists(), ".enrichment_done marker was not created"
+
+    # Ensure base comes before or at the same time as enrichment
+    base_mtime = base_done.stat().st_mtime
+    enrich_mtime = enrich_done.stat().st_mtime
+    assert base_mtime <= enrich_mtime, ".base_translation_done must be created before .enrichment_done"
+
+
+# ---------------------------------------------------------------------------
+# Task 1.2: cmd_progressive_worker exception fallback — markers written on crash
+# ---------------------------------------------------------------------------
+
+def test_progressive_worker_exception_fallback(monkeypatch, tmp_path):
+    """
+    Verifies that when cmd_progressive_worker crashes during translation,
+    the finally block still creates both .base_translation_done and .enrichment_done
+    so that waiting child windows are never left deadlocked.
+    """
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        "[settings]\ndefault_language=en\n"
+        "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+        "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+        "[fields]\n",
+        encoding="utf-8",
+    )
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\n",
+        encoding="utf-8",
+    )
+
+    tsv_path = tmp_path / "20260809190000-test.en.tsv"
+    _write_worker_tsv(tsv_path)
+
+    def mock_load_config(cfg_path):
+        config = configparser.ConfigParser()
+        config.read_string(
+            "[settings]\ndefault_language=en\n"
+            "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+            "[fields]\n"
+        )
+        resolved = {
+            "results_dir": tmp_path,
+            "anki_mapping_file": mapping_path,
+            "kardenwort_workspace": tmp_path,
+            "settings_file": tmp_path / "settings.ini",
+        }
+        return config, resolved, None, None
+
+    def mock_crashing_translation_stage(*args, **kwargs):
+        raise RuntimeError("Simulated crash in translation stage")
+
+    monkeypatch.setattr(desk, "load_config", mock_load_config)
+    monkeypatch.setattr(desk, "_progressive_worker_stage_translation", mock_crashing_translation_stage)
+    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+    })
+
+    args = _make_worker_args(tmp_path, config_path)
+
+    # Must NOT propagate — the inner exception is caught by the worker's except block
+    desk.cmd_progressive_worker(args)
+
+    base_done = tsv_path.with_suffix(".base_translation_done")
+    enrich_done = tsv_path.with_suffix(".enrichment_done")
+
+    assert base_done.exists(), (
+        ".base_translation_done MUST be created in the finally block even on crash — "
+        "child windows will deadlock otherwise"
+    )
+    assert enrich_done.exists(), (
+        ".enrichment_done MUST be created in the finally block even on crash — "
+        "child windows will deadlock otherwise"
+    )
