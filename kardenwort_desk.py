@@ -2164,7 +2164,7 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         
     out_path.write_text(translation_text_out, encoding='utf-8')
 
-def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest,
+def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest, col_text_dest,
                          sentence_translations_raw, tsv_path, comments, headers,
                          *, persist=True, return_single=False):
     eff_mode = _effective_text_mode(text, text_mode)
@@ -2191,6 +2191,11 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             while len(row) <= col_sentence_dest:
                 row.append("")
             row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
+            
+        if eff_mode == 'single' and col_text_dest != -1:
+            while len(row) <= col_text_dest:
+                row.append("")
+            row[col_text_dest] = sentence_translations_raw.get('FULL_TEXT', sentence_translations_raw.get(0, ""))
             
     if persist and tsv_path:
         with file_lock(tsv_path):
@@ -7770,7 +7775,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 need_ipa = col_ipa != -1 and not has_ipa
                 need_morph = col_morph != -1 and not has_morph
                 
-                if not need_dest:
+                if not (need_dest or need_ipa or need_morph):
                     continue
                 valid_selected.append(r)
                 
@@ -7916,10 +7921,11 @@ def cmd_retext_worker(args):
         
         comments, headers, data_rows = load_tsv_rows(tsv_path)
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+        col_text_dest = headers.index(role_fields['text_destination']) if 'text_destination' in role_fields and role_fields['text_destination'] in headers else -1
         col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
         
         resolve_translations(
-            text, text_mode, data_rows, col_index, col_sentence_dest,
+            text, text_mode, data_rows, col_index, col_sentence_dest, col_text_dest,
             sentence_translations, tsv_path, comments, headers,
             persist=True, return_single=False
         )
@@ -7951,9 +7957,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     if not zid_match: return
     my_zid = zid_match.group(1)
     
-    max_wait = 15
-    if lemma_base_provider and lemma_base_provider.lower() == 'intellifiller':
-        max_wait = 15 + (data_rows_count * 15)
+    max_wait = 3600
     
     def check_siblings():
         for sibling in working_tsv_path.parent.glob("*.tsv"):
@@ -8035,7 +8039,7 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
     if not zid_match: return
     my_zid = zid_match.group(1)
     
-    max_wait = 15 + (data_rows_count * 15)
+    max_wait = 3600
     
     def check_siblings():
         for sibling in working_tsv_path.parent.glob("*.tsv"):
@@ -8171,7 +8175,9 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                         if len(target_row) <= max_idx:
                             target_row.extend([''] * (max_idx - len(target_row) + 1))
                             
-                        target_is_empty = not target_row[col_word_dest].strip() or 'skeleton-loader' in target_row[col_word_dest]
+                        target_is_empty = False
+                        if col_word_dest != -1:
+                            target_is_empty = not target_row[col_word_dest].strip() or 'skeleton-loader' in target_row[col_word_dest]
                         if col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and target_is_empty:
                             target_row[col_word_dest] = sib_row[sib_col_dest]
                             modified = True
