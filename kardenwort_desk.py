@@ -3755,6 +3755,9 @@ html, body {{
                 needs_worker = True
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not children_tsv_paths:
                 needs_worker = True
+            # Master window in multi mode: launch worker to receive cross-pollinated data from children.
+            if children_tsv_paths and eff_mode == 'multi':
+                needs_worker = True
                 
             if needs_worker:
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
@@ -8267,10 +8270,13 @@ def cmd_progressive_worker(args):
                     
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
+            # In multi mode, always cross-pollinate from siblings regardless of skip_intellifiller.
+            # This allows the master window to receive enriched data from its children
+            # even when its own IntelliFiller is disabled (e.g. run_lemma_enrichment=manual).
+            if getattr(args, 'text_mode', 'single') == 'multi':
+                wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
+                data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
             if not skip_intellifiller:
-                if getattr(args, 'text_mode', 'single') == 'multi':
-                    wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
-                    data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
                 data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                     
         except SystemExit as se:
