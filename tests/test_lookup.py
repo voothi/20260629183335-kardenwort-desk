@@ -141,6 +141,9 @@ def test_lookup_translation_failure(monkeypatch, tmp_path):
 
 def test_lookup_intellifiller(monkeypatch, tmp_path):
     config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    if not config.has_section(kardenwort_desk.SEC_RENDERING):
+        config.add_section(kardenwort_desk.SEC_RENDERING)
+    config.set(kardenwort_desk.SEC_RENDERING, 'display_mode', 'monolithic')
     
     mock_run_headless_intellifiller = MagicMock()
     
