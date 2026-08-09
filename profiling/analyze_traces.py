@@ -334,37 +334,52 @@ def analyze():
 
 
 def delete_trace_by_zid(target_zid):
-    trace_file = REPO_ROOT / "results" / "speed_trace.jsonl"
-    if not trace_file.exists():
-        print(f"Trace file not found at {trace_file}")
+    trace_files = []
+    
+    main_trace = REPO_ROOT / "results" / "speed_trace.jsonl"
+    if main_trace.exists():
+        trace_files.append(main_trace)
+        
+    fixtures_dir = REPO_ROOT / "tests" / "fixtures"
+    if fixtures_dir.exists():
+        for d in fixtures_dir.glob("*-golden.*"):
+            if d.is_dir():
+                fixture_trace = d / "results" / "speed_trace.jsonl"
+                if fixture_trace.exists():
+                    trace_files.append(fixture_trace)
+                    
+    if not trace_files:
+        print("No trace files found to delete from.")
         return
         
-    temp_file = trace_file.with_name("speed_trace_tmp.jsonl")
-    deleted_count = 0
-    kept_count = 0
-    
-    try:
-        with open(trace_file, 'r', encoding='utf-8') as f_in, open(temp_file, 'w', encoding='utf-8') as f_out:
-            for line in f_in:
-                if not line.strip():
-                    f_out.write(line)
-                    continue
-                try:
-                    data = json.loads(line)
-                    zid_val = data.get("zid", "")
-                    if zid_val == target_zid or zid_val.startswith(target_zid):
-                        deleted_count += 1
+    for trace_file in trace_files:
+        temp_file = trace_file.with_name("speed_trace_tmp.jsonl")
+        deleted_count = 0
+        kept_count = 0
+        
+        try:
+            with open(trace_file, 'r', encoding='utf-8') as f_in, open(temp_file, 'w', encoding='utf-8') as f_out:
+                for line in f_in:
+                    if not line.strip():
+                        f_out.write(line)
                         continue
-                except Exception:
-                    pass
-                f_out.write(line)
-                kept_count += 1
-                
-        shutil.copy2(temp_file, trace_file)
-        print(f"Deleted {deleted_count} records matching ZID '{target_zid}'. Kept {kept_count} records.")
-    finally:
-        if temp_file.exists():
-            temp_file.unlink()
+                    try:
+                        data = json.loads(line)
+                        zid_val = data.get("zid", "")
+                        if zid_val == target_zid or zid_val.startswith(target_zid):
+                            deleted_count += 1
+                            continue
+                    except Exception:
+                        pass
+                    f_out.write(line)
+                    kept_count += 1
+                    
+            if deleted_count > 0:
+                shutil.copy2(temp_file, trace_file)
+                print(f"[{trace_file.parent.parent.name}] Deleted {deleted_count} records matching ZID '{target_zid}'. Kept {kept_count} records.")
+        finally:
+            if temp_file.exists():
+                temp_file.unlink()
 
 if __name__ == '__main__':
     if len(sys.argv) == 3 and sys.argv[1] == '--delete':
