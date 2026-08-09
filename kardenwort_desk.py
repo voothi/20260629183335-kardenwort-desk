@@ -8251,14 +8251,22 @@ def cmd_progressive_worker(args):
         col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
         col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
         
+        base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+        
         prefilled_lemmas = set()
-        if col_lemma != -1 and col_word_dest != -1:
+        if col_lemma != -1:
+            col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+            col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
+            
             for row in data_rows:
                 if len(row) > col_lemma and not is_field_empty(row, col_lemma):
-                    if not is_field_empty(row, col_word_dest):
+                    needs_dest = col_word_dest != -1 and is_field_empty(row, col_word_dest)
+                    needs_ipa = base_provider == 'intellifiller' and col_ipa != -1 and is_field_empty(row, col_ipa)
+                    needs_morph = base_provider == 'intellifiller' and col_morph != -1 and is_field_empty(row, col_morph)
+                    
+                    if not (needs_dest or needs_ipa or needs_morph):
                         prefilled_lemmas.add(row[col_lemma].strip())
 
-        base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
         if getattr(args, 'text_mode', 'single') == 'multi':
             wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows))
             data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
