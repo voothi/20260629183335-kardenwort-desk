@@ -8064,6 +8064,7 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
     max_wait = 3600
     
     def check_siblings():
+        found_older = False
         for sibling in working_tsv_path.parent.glob("*.tsv"):
             if sibling == working_tsv_path: continue
             sib_match = re.match(r'^(\d{14})', sibling.name)
@@ -8076,11 +8077,32 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
                 diff_sec = (dt_my - dt_sib).total_seconds()
                 
                 if 0 < diff_sec <= 120:
+                    found_older = True
                     marker_file = sibling.with_suffix('.enrichment_done')
                     if not marker_file.exists():
                         return False
             except Exception as e:
                 logger.warning(f"Error checking sibling TSV {sibling} for enrichment: {e}")
+        
+        # Master role auto-detection: if no older siblings exist, wait for younger siblings (children).
+        # This ensures cross-pollination happens after all children finish enrichment.
+        if not found_older:
+            for sibling in working_tsv_path.parent.glob("*.tsv"):
+                if sibling == working_tsv_path: continue
+                sib_match = re.match(r'^(\d{14})', sibling.name)
+                if not sib_match: continue
+                sib_zid = sib_match.group(1)
+                try:
+                    dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+                    dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
+                    diff_sec = (dt_sib - dt_my).total_seconds()  # reversed: younger siblings
+                    if 0 < diff_sec <= 120:
+                        marker_file = sibling.with_suffix('.enrichment_done')
+                        if not marker_file.exists():
+                            return False
+                except Exception as e:
+                    logger.warning(f"Error checking child TSV {sibling} for enrichment: {e}")
+        
         return True
 
     if check_siblings():
