@@ -75,12 +75,14 @@ def get_commit_for_time(commits, timestamp):
 
 
 class TeeLogger:
-    def __init__(self, filename):
+    def __init__(self, filename, quiet=True):
         self.filename = filename
         self.file = open(filename, 'w', encoding='utf-8')
+        self.quiet = quiet
         
     def __call__(self, *args, **kwargs):
-        print(*args, **kwargs)
+        if not self.quiet:
+            print(*args, **kwargs)
         print(*args, file=self.file, **kwargs)
         self.file.flush()
         
@@ -90,7 +92,7 @@ class TeeLogger:
         except:
             pass
 
-out = TeeLogger(Path(__file__).parent / 'speed_analysis.md')
+out = TeeLogger(Path(__file__).parent / 'speed_analysis.md', quiet=True)
 
 def analyze():
     trace_files = []
