@@ -248,6 +248,18 @@ def main():
                                         if not (base_done and enrich_done):
                                             all_passed = False
                                             missing_details.append(f"    [VALIDATION PENDING] Missing completion markers for {existing_file.name}")
+                                        else:
+                                            # Once markers are found, run the deep validation to flag true failures (e.g., 429 or Wordfill)
+                                            try:
+                                                with kardenwort_desk.file_lock(existing_file):
+                                                    _, headers, data_rows = kardenwort_desk.load_tsv_rows(existing_file)
+                                                role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+                                                if not kardenwort_desk.is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider='intellifiller'):
+                                                    all_passed = False
+                                                    missing_details.append(f"    [VALIDATION FAILED] Missing or incomplete fields detected in {existing_file.name}")
+                                            except Exception as e:
+                                                all_passed = False
+                                                missing_details.append(f"    [VALIDATION ERROR] Could not validate {existing_file.name}: {e}")
                         
                         if all_passed:
                             validation_failed = False
