@@ -3615,7 +3615,9 @@ html, body {{
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
                 need_dest = len(row) <= col_word_dest or not row[col_word_dest].strip()
-                if need_dest:
+                need_ipa = base_provider == 'intellifiller' and col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+                need_morph = base_provider == 'intellifiller' and col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                if need_dest or need_ipa or need_morph:
                     has_untranslated_lemmas = True
                     break
     elif col_word_dest != -1:
@@ -3660,7 +3662,9 @@ html, body {{
                 for i, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                         need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                        if need_dest:
+                        need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+                        need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                        if need_dest or need_ipa or need_morph:
                             selected_rows_to_enrich.append(i)
                             
                 if selected_rows_to_enrich:
@@ -7693,7 +7697,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     for i, row in enumerate(data_rows):
                         if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
                             need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                            if need_dest:
+                            need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+                            need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                            if need_dest or need_ipa or need_morph:
                                 selected_rows_to_enrich.append(i)
                             
                     if selected_rows_to_enrich:
