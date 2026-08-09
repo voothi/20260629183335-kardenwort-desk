@@ -3656,7 +3656,7 @@ html, body {{
             _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
-        if has_untranslated_lemmas:
+        if has_untranslated_lemmas and not children_tsv_paths:
             if base_provider == 'intellifiller':
                 selected_rows_to_enrich = []
                 for i, row in enumerate(data_rows):
