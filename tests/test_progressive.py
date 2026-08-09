@@ -331,3 +331,41 @@ def test_cross_pollinate_corrupted_sibling(tmp_path):
     result = desk.cross_pollinate_from_siblings(working_tsv, data_rows, headers, role_fields)
     assert result == data_rows
     assert result[0][1] == ""
+
+def test_is_field_empty_evaluations():
+    """
+    Validate that is_field_empty handles short arrays, blank strings, 
+    skeleton loaders, and API error strings correctly.
+    """
+    assert desk.is_field_empty([], 1) == True, "Out of bounds should be empty"
+    assert desk.is_field_empty(["apple"], -1) == True, "Column -1 should be empty"
+    
+    row = ["", "  ", "apple", "skeleton-loader", "Error calling Gemini API: HTTP 429"]
+    assert desk.is_field_empty(row, 0) == True, "Empty string is empty"
+    assert desk.is_field_empty(row, 1) == True, "Whitespace is empty"
+    assert desk.is_field_empty(row, 2) == False, "Valid string is NOT empty"
+    assert desk.is_field_empty(row, 3) == True, "Skeleton loader is empty"
+    assert desk.is_field_empty(row, 4) == True, "API error string is empty"
+
+def test_cross_pollinate_api_error_handling(tmp_path):
+    """
+    Ensure that if an older sibling crashed and left an API error in WordDestination,
+    it is NOT copied over to the younger sibling.
+    """
+    working_tsv = tmp_path / "20260809190000-test.en.tsv"
+    # Target row is completely empty for destination and IPA
+    working_tsv.write_text("WordSource\tWordDestination\tWordSourceIPA\napple\t\t\n", encoding="utf-8")
+    
+    sibling_tsv = tmp_path / "20260809185959-sib.en.tsv"
+    # Sibling row has API errors
+    sibling_tsv.write_text("WordSource\tWordDestination\tWordSourceIPA\napple\tError calling Gemini API\tError calling Gemini API\n", encoding="utf-8")
+        
+    headers = ["WordSource", "WordDestination", "WordSourceIPA"]
+    data_rows = [["apple", "", ""]]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA"}
+    
+    # Should not copy the error text!
+    result = desk.cross_pollinate_from_siblings(working_tsv, data_rows, headers, role_fields)
+    assert result == [["apple", "", ""]]
+    assert desk.is_field_empty(result[0], 1) == True
+    assert desk.is_field_empty(result[0], 2) == True

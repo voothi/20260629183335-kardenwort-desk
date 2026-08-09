@@ -1489,6 +1489,12 @@ def is_tsv_llm_filled(headers, data_rows, mapping):
     return True
 
 
+def is_field_empty(row, col_idx):
+    if col_idx == -1 or len(row) <= col_idx:
+        return True
+    val = row[col_idx].strip()
+    return not val or 'skeleton-loader' in val or 'Error calling' in val
+
 def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider=None):
     if not data_rows:
         return True
@@ -1499,13 +1505,13 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
     
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
-            if len(row) > col_lemma and row[col_lemma].strip():
-                if len(row) <= col_word_dest or not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
+            if not is_field_empty(row, col_lemma):
+                if is_field_empty(row, col_word_dest):
                     return False
                 if lemma_base_provider == 'intellifiller':
-                    if col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip() or 'skeleton-loader' in row[col_ipa]):
+                    if col_ipa != -1 and is_field_empty(row, col_ipa):
                         return False
-                    if col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip() or 'skeleton-loader' in row[col_morph]):
+                    if col_morph != -1 and is_field_empty(row, col_morph):
                         return False
     return True
 
@@ -8123,13 +8129,17 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                     for target_row_idx in missing_lemmas[sib_lemma]:
                         target_row = data_rows[target_row_idx]
                         
-                        target_is_empty = False
-                        if col_word_dest != -1:
-                            target_is_empty = not target_row[col_word_dest].strip() or 'skeleton-loader' in target_row[col_word_dest]
+                        target_empty_dest = is_field_empty(target_row, col_word_dest)
+                        target_empty_ipa = is_field_empty(target_row, col_ipa)
+                        target_empty_morph = is_field_empty(target_row, col_morph)
+
+                        sib_valid_dest = not is_field_empty(sib_row, sib_col_dest)
+                        sib_valid_ipa = not is_field_empty(sib_row, sib_col_ipa)
+                        sib_valid_morph = not is_field_empty(sib_row, sib_col_morph)
                         
-                        apply_dest = col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and target_is_empty
-                        apply_ipa = col_ipa != -1 and sib_col_ipa != -1 and len(sib_row) > sib_col_ipa and sib_row[sib_col_ipa].strip() and not target_row[col_ipa].strip()
-                        apply_morph = col_morph != -1 and sib_col_morph != -1 and len(sib_row) > sib_col_morph and sib_row[sib_col_morph].strip() and not target_row[col_morph].strip()
+                        apply_dest = col_word_dest != -1 and sib_col_dest != -1 and sib_valid_dest and target_empty_dest
+                        apply_ipa = col_ipa != -1 and sib_col_ipa != -1 and sib_valid_ipa and target_empty_ipa
+                        apply_morph = col_morph != -1 and sib_col_morph != -1 and sib_valid_morph and target_empty_morph
                         
                         if apply_dest or apply_ipa or apply_morph:
                             if target_row_idx not in updates:
