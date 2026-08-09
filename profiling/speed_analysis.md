@@ -11,6 +11,7 @@
 - [[Commit: 4c6f61d] 20260809163850](#commit-4c6f61d-20260809163850)
 - [[Commit: cd71fc4] 20260809172340](#commit-cd71fc4-20260809172340)
 - [[Commit: 33dce05] 20260809193341](#commit-33dce05-20260809193341)
+- [[Commit: f98d63a] 20260809200034](#commit-f98d63a-20260809200034)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -308,6 +309,26 @@ html_generation (00)                |                                        █
 
 ```
 
+## [Commit: f98d63a] 20260809200034
+```text
+Run Session: 20260807230100 [Golden EN] (Total Batch E2E Duration: 14.944s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ██                                       | 0.752s
+lemmatization (00)                  | ████████████████                         | 6.097s
+the_cut (00)                        |                    █                     | 0.026s
+intellifiller_enrichment (00)       |                      ██████████████████  | 6.855s
+html_generation (03)                |                         █                | 0.006s
+background_text_translation (03)    |                            ██            | 1.048s
+intellifiller_enrichment (03)       |                            ██            | 1.011s
+html_generation (02)                |                             █            | 0.005s
+background_text_translation (02)    |                               █          | 0.005s
+html_generation (01)                |                                █         | 0.004s
+background_text_translation (01)    |                                 ██       | 0.953s
+intellifiller_enrichment (01)       |                                 ██       | 0.942s
+html_generation (00)                |                                        █ | 0.004s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807190100 [Golden EN]
@@ -383,12 +404,12 @@ html_generation (00)                |                                        █
 ### 20260807230100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 2 | 4.815 | 5.029 | 5.243 |
-| `intellifiller_enrichment` | 65 | 0.547 | 3.309 | 10.530 |
-| `background_text_translation` | 68 | 0.002 | 2.978 | 10.546 |
-| `translate_text` | 2 | 0.751 | 0.756 | 0.762 |
-| `the_cut` | 2 | 0.017 | 0.017 | 0.017 |
-| `html_generation` | 74 | 0.002 | 0.003 | 0.007 |
+| `lemmatization` | 3 | 4.815 | 5.385 | 6.097 |
+| `intellifiller_enrichment` | 68 | 0.547 | 3.293 | 10.530 |
+| `background_text_translation` | 71 | 0.002 | 2.881 | 10.546 |
+| `translate_text` | 3 | 0.751 | 0.755 | 0.762 |
+| `the_cut` | 3 | 0.017 | 0.020 | 0.026 |
+| `html_generation` | 78 | 0.002 | 0.003 | 0.007 |
 
 ### 20260807230200 [Golden DE]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |

@@ -249,3 +249,85 @@ def test_progressive_worker_exception_fallback(monkeypatch, tmp_path):
         ".enrichment_done MUST be created in the finally block even on crash — "
         "child windows will deadlock otherwise"
     )
+
+
+def test_sibling_wait_watchdog_missing(monkeypatch, tmp_path):
+    """
+    Simulate ImportError when importing watchdog to ensure _wait_for_sibling_sync_impl
+    gracefully degrades to the time.sleep() polling loop.
+    """
+    tsv_path = tmp_path / "20260809190000-test.en.tsv"
+    tsv_path.write_text("WordSource\tWordDestination\napple\t\n", encoding="utf-8")
+    
+    sibling = tmp_path / "20260809185959-sib.en.tsv"
+    sibling.write_text("WordSource\tWordDestination\napple\t\n", encoding="utf-8")
+    
+    # We want to mock _wait_for_sibling_sync_impl's internal check_func to return True
+    # so it exits immediately after 1 poll, but we must verify it took the polling path.
+    # To do this, we can mock time.sleep to record calls.
+    sleep_calls = []
+    
+    original_sleep = time.sleep
+    def mock_sleep(secs):
+        sleep_calls.append(secs)
+        # On first sleep, create the marker so next poll succeeds
+        sibling.with_suffix(".base_translation_done").touch()
+        
+    monkeypatch.setattr(time, "sleep", mock_sleep)
+    
+    # Mock __import__ to raise ImportError for watchdog
+    import builtins
+    real_import = builtins.__import__
+    def mock_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if name.startswith('watchdog'):
+            raise ImportError(f"No module named '{name}'")
+        return real_import(name, globals, locals, fromlist, level)
+        
+    monkeypatch.setattr(builtins, "__import__", mock_import)
+    
+    desk.wait_for_older_siblings_in_batch(tsv_path, mapping={'fields': {}, 'fields_mapping.word': {'WordSource': 'WordSource', 'WordDestination': 'WordDestination'}}, lemma_base_provider='google', data_rows_count=1)
+    
+    # Assert sleep was called at least once, proving we fell back to the polling loop
+    assert len(sleep_calls) > 0
+
+def test_sibling_wait_timeout(monkeypatch, tmp_path):
+    """
+    Verify that if sibling never finishes, the wait function times out
+    and breaks the deadlock.
+    """
+    tsv_path = tmp_path / "20260809190000-test.en.tsv"
+    tsv_path.write_text("dummy", encoding="utf-8")
+    
+    sibling = tmp_path / "20260809185959-sib.en.tsv"
+    sibling.write_text("dummy", encoding="utf-8")
+    
+    # Patch the timeout constant
+    monkeypatch.setattr(desk, "SYNC_TIMEOUT_SEC", 0.1)
+    
+    start = time.time()
+    desk.wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=1)
+    duration = time.time() - start
+    
+    # Should exit after approximately 0.1 seconds, not 3600
+    assert duration < 1.5
+
+def test_cross_pollinate_corrupted_sibling(tmp_path):
+    """
+    Ensure that a corrupted sibling TSV doesn't crash cross_pollinate_from_siblings.
+    """
+    working_tsv = tmp_path / "20260809190000-test.en.tsv"
+    working_tsv.write_text("WordSource\tWordDestination\napple\t\n", encoding="utf-8")
+    
+    sibling_tsv = tmp_path / "20260809185959-sib.en.tsv"
+    # Write garbage bytes that will raise UnicodeDecodeError or CSV parsing error
+    with open(sibling_tsv, "wb") as f:
+        f.write(b'\x80\x81\x82corrupted')
+        
+    headers = ["WordSource", "WordDestination"]
+    data_rows = [["apple", ""]]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination"}
+    
+    # Should not crash, should just return the unmodified data_rows
+    result = desk.cross_pollinate_from_siblings(working_tsv, data_rows, headers, role_fields)
+    assert result == data_rows
+    assert result[0][1] == ""

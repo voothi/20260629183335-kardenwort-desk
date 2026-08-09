@@ -7953,7 +7953,10 @@ def cmd_retext_worker(args):
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
-def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0):
+SYNC_TIMEOUT_SEC = 3600
+BATCH_DELTA_SEC = 120
+
+def _wait_for_sibling_sync_impl(working_tsv_path, check_func, marker_suffix):
     import time
     from datetime import datetime
     import threading
@@ -7967,8 +7970,6 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
     if not zid_match: return
     my_zid = zid_match.group(1)
-    
-    max_wait = 3600
     
     def check_siblings():
         for sibling in working_tsv_path.parent.glob("*.tsv"):
@@ -7983,18 +7984,11 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
                 diff_sec = (dt_my - dt_sib).total_seconds()
                 
                 # Check if it's an OLDER sibling from the SAME batch
-                if 0 < diff_sec <= 120:
-                    marker_file = sibling.with_suffix('.base_translation_done')
-                    if marker_file.exists():
-                        continue
-                        
-                    with file_lock(sibling):
-                        _, headers, data_rows = load_tsv_rows(sibling)
-                    role_fields = get_role_fields(mapping, headers)
-                    if not is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider=lemma_base_provider):
+                if 0 < diff_sec <= BATCH_DELTA_SEC:
+                    if not check_func(sibling):
                         return False
             except Exception as e:
-                logger.warning(f"Error checking sibling TSV {sibling}: {e}")
+                logger.warning(f"Error checking sibling TSV {sibling} ({marker_suffix}): {e}")
         return True
 
     if check_siblings():
@@ -8002,7 +7996,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
 
     if not has_watchdog:
         start_wait = time.time()
-        while time.time() - start_wait < max_wait:
+        while time.time() - start_wait < SYNC_TIMEOUT_SEC:
             if check_siblings():
                 break
             time.sleep(1)
@@ -8011,11 +8005,11 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     event_cond = threading.Condition()
     class SiblingChangeHandler(FileSystemEventHandler):
         def on_modified(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done'):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith(marker_suffix):
                 with event_cond:
                     event_cond.notify_all()
         def on_created(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done'):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith(marker_suffix):
                 with event_cond:
                     event_cond.notify_all()
                     
@@ -8027,88 +8021,35 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     try:
         start_wait = time.time()
         with event_cond:
-            while time.time() - start_wait < max_wait:
+            while time.time() - start_wait < SYNC_TIMEOUT_SEC:
                 if check_siblings():
                     break
                 event_cond.wait(timeout=1.0)
     finally:
         observer.stop()
         observer.join()
+
+def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0):
+    def check_func(sibling):
+        marker_file = sibling.with_suffix('.base_translation_done')
+        if marker_file.exists():
+            return True
+        try:
+            with file_lock(sibling):
+                _, headers, data_rows = load_tsv_rows(sibling)
+            role_fields = get_role_fields(mapping, headers)
+            return is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider=lemma_base_provider)
+        except Exception:
+            return False
+            
+    _wait_for_sibling_sync_impl(working_tsv_path, check_func, '.base_translation_done')
 
 def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_count=0):
-    import time
-    from datetime import datetime
-    import threading
-    try:
-        from watchdog.observers import Observer
-        from watchdog.events import FileSystemEventHandler
-        has_watchdog = True
-    except ImportError:
-        has_watchdog = False
-
-    zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
-    if not zid_match: return
-    my_zid = zid_match.group(1)
-    
-    max_wait = 3600
-    
-    def check_siblings():
-        for sibling in working_tsv_path.parent.glob("*.tsv"):
-            if sibling == working_tsv_path: continue
-            sib_match = re.match(r'^(\d{14})', sibling.name)
-            if not sib_match: continue
-            sib_zid = sib_match.group(1)
-            
-            try:
-                dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-                dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
-                diff_sec = (dt_my - dt_sib).total_seconds()
-                
-                if 0 < diff_sec <= 120:
-                    marker_file = sibling.with_suffix('.enrichment_done')
-                    if not marker_file.exists():
-                        return False
-            except Exception as e:
-                logger.warning(f"Error checking sibling TSV {sibling} for enrichment: {e}")
-        return True
-
-    if check_siblings():
-        return
-
-    if not has_watchdog:
-        start_wait = time.time()
-        while time.time() - start_wait < max_wait:
-            if check_siblings():
-                break
-            time.sleep(1)
-        return
-
-    event_cond = threading.Condition()
-    class SiblingChangeHandler(FileSystemEventHandler):
-        def on_modified(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done'):
-                with event_cond:
-                    event_cond.notify_all()
-        def on_created(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done'):
-                with event_cond:
-                    event_cond.notify_all()
-                    
-    observer = Observer()
-    handler = SiblingChangeHandler()
-    observer.schedule(handler, path=str(working_tsv_path.parent), recursive=False)
-    observer.start()
-    
-    try:
-        start_wait = time.time()
-        with event_cond:
-            while time.time() - start_wait < max_wait:
-                if check_siblings():
-                    break
-                event_cond.wait(timeout=1.0)
-    finally:
-        observer.stop()
-        observer.join()
+    def check_func(sibling):
+        marker_file = sibling.with_suffix('.enrichment_done')
+        return marker_file.exists()
+        
+    _wait_for_sibling_sync_impl(working_tsv_path, check_func, '.enrichment_done')
 
 def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fields):
     if not data_rows:
@@ -8157,7 +8098,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
             from datetime import datetime
             dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
             dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
-            if abs((dt_my - dt_sib).total_seconds()) > 120:
+            if abs((dt_my - dt_sib).total_seconds()) > BATCH_DELTA_SEC:
                 continue
         except Exception:
             continue
