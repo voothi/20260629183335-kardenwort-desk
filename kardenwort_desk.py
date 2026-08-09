@@ -1491,13 +1491,8 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
-                if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                if len(row) <= col_word_dest or not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
                     return False
-                if lemma_base_provider and lemma_base_provider.lower() == 'intellifiller':
-                    if col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip()):
-                        return False
-                    if col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip()):
-                        return False
     return True
 
 
@@ -7662,6 +7657,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             lemmas_to_translate = []
             for row in data_rows:
                 if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                    if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
+                        if 'skeleton-loader' not in row[col_word_dest]:
+                            continue
                     val = row[col_lemma]
                     if val not in seen:
                         seen.add(val)
@@ -8170,7 +8168,8 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                         if len(target_row) <= max_idx:
                             target_row.extend([''] * (max_idx - len(target_row) + 1))
                             
-                        if col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and not target_row[col_word_dest].strip():
+                        target_is_empty = not target_row[col_word_dest].strip() or 'skeleton-loader' in target_row[col_word_dest]
+                        if col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and target_is_empty:
                             target_row[col_word_dest] = sib_row[sib_col_dest]
                             modified = True
                         if col_ipa != -1 and sib_col_ipa != -1 and len(sib_row) > sib_col_ipa and sib_row[sib_col_ipa].strip() and not target_row[col_ipa].strip():
