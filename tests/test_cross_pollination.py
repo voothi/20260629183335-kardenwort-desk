@@ -98,18 +98,45 @@ def test_cross_pollinate_bounds(tmp_path):
         encoding="utf-8",
     )
 
-    # Create a valid sibling with data (it should still be ignored when col_lemma == -1)
-    sibling_tsv = tmp_path / sibling_name
-    sibling_tsv.write_text(
-        "WordSource\tWordDestination\tWordSourceIPA\n"
-        "Haus\thouse\t/haʊs/\n",
+    result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers_no_lemma, role_fields_no_lemma)
+    assert result == child_rows, "Must return rows unchanged if col_lemma == -1"
+
+# ---------------------------------------------------------------------------
+# Task 2.3: test_cross_pollinate_api_error
+# ---------------------------------------------------------------------------
+
+def test_cross_pollinate_api_error(tmp_path):
+    """
+    Verify that if a child TSV has an API error message (e.g. HTTP 429) in its
+    destination field, it correctly recognizes the field as empty and inherits
+    from a sibling TSV.
+    """
+    child_name = "20260809190000-child.en.tsv"
+    sibling_name = "20260809185900-sibling.en.tsv"
+
+    headers = _make_headers()
+    role_fields = _make_role_fields()
+
+    # Child TSV: has the lemma but dest field contains API error
+    child_rows = [
+        ["Haus", "Error calling Gemini API: HTTP 429 Too Many Requests", "", ""],
+    ]
+    child_tsv = tmp_path / child_name
+    child_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(child_rows[0]) + "\n",
         encoding="utf-8",
     )
 
-    # Should return data_rows unchanged — no merge, no exception
-    result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers_no_lemma, role_fields_no_lemma)
-
-    assert result == child_rows, (
-        "cross_pollinate_from_siblings must return data_rows unchanged when "
-        "col_lemma == -1 (no WordSource column in child TSV)"
+    # Sibling TSV: same lemma, valid translation
+    sibling_rows = [
+        ["Haus", "house", "/haʊs/", "Noun, neuter"],
+    ]
+    sibling_tsv = tmp_path / sibling_name
+    sibling_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(sibling_rows[0]) + "\n",
+        encoding="utf-8",
     )
+
+    result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers, role_fields)
+
+    assert result[0][1] == "house", "WordDestination should overwrite API error from sibling"

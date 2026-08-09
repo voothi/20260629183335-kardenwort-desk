@@ -1141,6 +1141,23 @@ def test_write_update_js_empty_payload(tmp_path):
     assert 'дом' not in content
 
 
+def test_is_field_empty():
+    # Basic cases
+    assert desk.is_field_empty(["a", "b"], 1) is False
+    assert desk.is_field_empty(["a", "b"], 2) is True
+    assert desk.is_field_empty(["a", ""], 1) is True
+    assert desk.is_field_empty(["a", "   "], 1) is True
+    
+    # Special skeleton loader cases
+    assert desk.is_field_empty(["a", '<span class="skeleton-loader"></span>'], 1) is True
+    
+    # Special API Error cases
+    assert desk.is_field_empty(["a", 'Error calling Gemini API: HTTP 429 Too Many Requests'], 1) is True
+    
+    # Boundary cases
+    assert desk.is_field_empty([], 0) is True
+    assert desk.is_field_empty(["a"], -1) is True
+
 def test_is_base_translation_finished():
     headers = ["WordSource", "WordDestination"]
     role_fields = {"lemma": "WordSource", "word_translation": "WordDestination"}
@@ -1212,6 +1229,14 @@ def test_is_base_translation_finished_intellifiller():
         headers, rows_skeleton, role_fields, lemma_base_provider="intellifiller"
     ) is False, (
         "A skeleton-loader placeholder in WordDestination must count as missing"
+    )
+
+    # Case F: Error calling API counts as missing
+    rows_error = [["Haus", 'Error calling Gemini API: HTTP 429 Too Many Requests', "", ""]]
+    assert desk.is_base_translation_finished(
+        headers, rows_error, role_fields, lemma_base_provider="intellifiller"
+    ) is False, (
+        "An API error message in WordDestination must count as missing"
     )
 
 
