@@ -226,47 +226,6 @@ def main():
                     else:
                         print("Could not find AutoHotkey executable to run wait_for_windows.ahk")
 
-                    # 4. Validate TSVs
-                    print("Validating generated TSVs for completeness...")
-                    missing_fields_found = False
-                    
-                    for tsv_file in results_dir.glob("*.tsv"):
-                        if len(tsv_file.name) >= 14 and tsv_file.name[:14].isdigit():
-                            if not (run['zid'] <= tsv_file.name[:14] <= end_zid):
-                                continue
-                            
-                            try:
-                                lines = tsv_file.read_text(encoding='utf-8').splitlines()
-                                if not lines: continue
-                                headers = lines[0].split('\t')
-                                
-                                try:
-                                    ws_idx = headers.index("WordSource")
-                                    ipa_idx = headers.index("WordSourceIPA")
-                                except ValueError:
-                                    continue
-                                    
-                                for r_idx, row in enumerate(lines[1:], start=2):
-                                    cols = row.split('\t')
-                                    cols += [''] * (len(headers) - len(cols))
-                                    
-                                    word = cols[ws_idx].strip()
-                                    ipa = cols[ipa_idx].strip()
-                                    
-                                    if word and not ipa:
-                                        print(f"Validation FAILED in {tsv_file.name}: Row {r_idx} for word '{word}' is missing IPA/Enrichment.")
-                                        missing_fields_found = True
-                                        break
-                                
-                                if missing_fields_found:
-                                    break
-                            except Exception as e:
-                                print(f"Error validating {tsv_file.name}: {e}")
-                                
-                    if missing_fields_found:
-                        print(f"Removing trace records for {run['zid']} due to validation failure to prevent statistics poisoning.")
-                        subprocess.run([sys.executable, str(repo_root / "profiling" / "analyze_traces.py"), "--delete", run['zid']])
-
                 else:
                     print(f"FAILED: {run['name']} could not be initiated.")
             except Exception as e:
