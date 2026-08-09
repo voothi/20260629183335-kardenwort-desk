@@ -8145,7 +8145,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
     if not missing_lemmas:
         return data_rows
 
-    modified = False
+    updates = {}
     
     for sibling in working_tsv_path.parent.glob("*.tsv"):
         if sibling == working_tsv_path: continue
@@ -8182,29 +8182,55 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                     for target_row_idx in missing_lemmas[sib_lemma]:
                         target_row = data_rows[target_row_idx]
                         
-                        max_idx = max(col_word_dest, col_ipa, col_morph)
-                        if len(target_row) <= max_idx:
-                            target_row.extend([''] * (max_idx - len(target_row) + 1))
-                            
                         target_is_empty = False
                         if col_word_dest != -1:
                             target_is_empty = not target_row[col_word_dest].strip() or 'skeleton-loader' in target_row[col_word_dest]
-                        if col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and target_is_empty:
-                            target_row[col_word_dest] = sib_row[sib_col_dest]
-                            modified = True
-                        if col_ipa != -1 and sib_col_ipa != -1 and len(sib_row) > sib_col_ipa and sib_row[sib_col_ipa].strip() and not target_row[col_ipa].strip():
-                            target_row[col_ipa] = sib_row[sib_col_ipa]
-                            modified = True
-                        if col_morph != -1 and sib_col_morph != -1 and len(sib_row) > sib_col_morph and sib_row[sib_col_morph].strip() and not target_row[col_morph].strip():
-                            target_row[col_morph] = sib_row[sib_col_morph]
-                            modified = True
+                        
+                        apply_dest = col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and target_is_empty
+                        apply_ipa = col_ipa != -1 and sib_col_ipa != -1 and len(sib_row) > sib_col_ipa and sib_row[sib_col_ipa].strip() and not target_row[col_ipa].strip()
+                        apply_morph = col_morph != -1 and sib_col_morph != -1 and len(sib_row) > sib_col_morph and sib_row[sib_col_morph].strip() and not target_row[col_morph].strip()
+                        
+                        if apply_dest or apply_ipa or apply_morph:
+                            if target_row_idx not in updates:
+                                updates[target_row_idx] = {}
+                            if apply_dest:
+                                updates[target_row_idx][col_word_dest] = sib_row[sib_col_dest]
+                                max_idx = max(col_word_dest, col_ipa, col_morph)
+                                if len(target_row) <= max_idx:
+                                    target_row.extend([''] * (max_idx - len(target_row) + 1))
+                                target_row[col_word_dest] = sib_row[sib_col_dest]
+                            if apply_ipa:
+                                updates[target_row_idx][col_ipa] = sib_row[sib_col_ipa]
+                                max_idx = max(col_word_dest, col_ipa, col_morph)
+                                if len(target_row) <= max_idx:
+                                    target_row.extend([''] * (max_idx - len(target_row) + 1))
+                                target_row[col_ipa] = sib_row[sib_col_ipa]
+                            if apply_morph:
+                                updates[target_row_idx][col_morph] = sib_row[sib_col_morph]
+                                max_idx = max(col_word_dest, col_ipa, col_morph)
+                                if len(target_row) <= max_idx:
+                                    target_row.extend([''] * (max_idx - len(target_row) + 1))
+                                target_row[col_morph] = sib_row[sib_col_morph]
 
-    if modified:
-        with file_lock(working_tsv_path):
-            comments, headers_latest, _ = load_tsv_rows(working_tsv_path)
-            save_tsv_rows_safely(working_tsv_path, comments, headers_latest, data_rows)
-
-    return data_rows
+    # Always reload the fresh data to prevent stale data_rows from overwriting parallel UI modifications
+    with file_lock(working_tsv_path):
+        comments, headers_latest, latest_data_rows = load_tsv_rows(working_tsv_path)
+        
+        if updates:
+            for row_idx, row_updates in updates.items():
+                if row_idx < len(latest_data_rows):
+                    target_row = latest_data_rows[row_idx]
+                    
+                    if len(target_row) < len(headers_latest):
+                        target_row.extend([''] * (len(headers_latest) - len(target_row)))
+                        
+                    for col_idx, val in row_updates.items():
+                        if col_idx < len(target_row):
+                            target_row[col_idx] = val
+                            
+            save_tsv_rows_safely(working_tsv_path, comments, headers_latest, latest_data_rows)
+            
+        return latest_data_rows
 
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
