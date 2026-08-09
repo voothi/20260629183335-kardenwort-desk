@@ -162,18 +162,12 @@ def analyze():
                     c_hash = get_commit_for_time(commits, event_ts)
                     
                     runs_by_commit[c_hash][run_session].append(data)
-                    phase_aggregates[(run_session, phase)].append(duration)
 
     out("# Performance Dynamics Over Time (By Git Commit)")
     out()
 
-    failed_sessions = set()
-    for c_hash, sessions in runs_by_commit.items():
-        for run_session, events in sessions.items():
-            if any(e.get("phase") == "validation_failed" for e in events):
-                failed_sessions.add(run_session)
-
     active_commits = sorted(runs_by_commit.keys(), key=lambda h: commit_lookup[h]['ts'] if h in commit_lookup else 0)
+    latest_session_failed = {}
 
     out("## Table of Contents")
     for h in active_commits:
@@ -242,6 +236,8 @@ def analyze():
             
             parsed_events = list(latest_events.values())
             
+            is_failed = any(p['phase'] == 'validation_failed' for p in parsed_events)
+            
             min_start_ts = min((p['start_t'] for p in parsed_events), default=0)
             max_end_ts = max((p['end_t'] for p in parsed_events), default=0)
                 
@@ -253,8 +249,15 @@ def analyze():
                 'min_start_ts': min_start_ts,
                 'max_end_ts': max_end_ts,
                 'total_time': total_time,
-                'parsed_events': parsed_events
+                'parsed_events': parsed_events,
+                'is_failed': is_failed
             })
+            
+            if not is_failed:
+                for p in parsed_events:
+                    phase_aggregates[(latest_session, p['phase'])].append(p['dur'])
+            
+            latest_session_failed[latest_session] = is_failed
             
         gap_info = ""
         if len(session_stats) >= 2:
@@ -280,7 +283,7 @@ def analyze():
                 master_zid = latest_session + "00"
                 label = "Unknown"
                 
-            if latest_session in failed_sessions:
+            if stat.get('is_failed'):
                 label += " [FAILED - EXCLUDED FROM STATS]"
                 
             out(f"Run Session: {master_zid} [{label}] (Total Batch E2E Duration: {total_time:.3f}s)")
@@ -314,7 +317,7 @@ def analyze():
     
     session_aggregates = collections.defaultdict(lambda: collections.defaultdict(list))
     for (session, phase), durations in phase_aggregates.items():
-        if session in failed_sessions:
+        if latest_session_failed.get(session, False):
             continue
         session_aggregates[session][phase].extend(durations)
         
