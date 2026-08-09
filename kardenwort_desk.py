@@ -2169,9 +2169,9 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         
     out_path.write_text(translation_text_out, encoding='utf-8')
 
-def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest, col_text_dest,
+def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest,
                          sentence_translations_raw, tsv_path, comments, headers,
-                         *, persist=True, return_single=False):
+                         *, col_text_dest=-1, persist=True, return_single=False):
     eff_mode = _effective_text_mode(text, text_mode)
     
     content_to_absolute = {}
@@ -7936,9 +7936,9 @@ def cmd_retext_worker(args):
         col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
         
         resolve_translations(
-            text, text_mode, data_rows, col_index, col_sentence_dest, col_text_dest,
+            text, text_mode, data_rows, col_index, col_sentence_dest,
             sentence_translations, tsv_path, comments, headers,
-            persist=True, return_single=False
+            col_text_dest=col_text_dest, persist=True, return_single=False
         )
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_retext_worker: {e}")
