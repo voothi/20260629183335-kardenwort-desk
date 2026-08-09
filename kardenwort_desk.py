@@ -3656,7 +3656,7 @@ html, body {{
             _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
-        if has_untranslated_lemmas:
+        if has_untranslated_lemmas and not children_tsv_paths:
             if base_provider == 'intellifiller':
                 selected_rows_to_enrich = []
                 for i, row in enumerate(data_rows):
@@ -3748,7 +3748,15 @@ html, body {{
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt')
         
         if is_progressive:
-            if (run_text == 'auto' and not sentence_translated) or (run_base == 'auto' and has_untranslated_lemmas) or (run_enrich == 'auto' and enrich_provider == 'intellifiller'):
+            needs_worker = False
+            if run_text == 'auto' and not sentence_translated:
+                needs_worker = True
+            if run_base == 'auto' and has_untranslated_lemmas and not children_tsv_paths:
+                needs_worker = True
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not children_tsv_paths:
+                needs_worker = True
+                
+            if needs_worker:
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
                 try:
                     run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, str(has_untranslated_lemmas), skip_intellifiller, eff_mode)
