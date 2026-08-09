@@ -118,7 +118,12 @@ def main():
                 print(f"WARNING: No test-specific config.ini found for {run['dir'].name}. Restored original config.")
             
             # Clean up any existing generated files for this ZID to force a real performance test
-            results_dir = repo_root / "results"
+            test_config = kardenwort_desk.load_kardenwort_config(repo_root)
+            results_dir_str = test_config.get('project_structure', 'generated_results_dir', fallback='./results')
+            results_dir = Path(results_dir_str)
+            if not results_dir.is_absolute():
+                results_dir = (repo_root / results_dir).resolve()
+                
             from datetime import datetime, timedelta
             master_dt = datetime.strptime(run['zid'], '%Y%m%d%H%M%S')
             end_dt = master_dt + timedelta(minutes=15)

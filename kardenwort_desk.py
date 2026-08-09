@@ -1135,10 +1135,10 @@ def load_config(config_path=None):
     if SEC_PROJECT_STRUCTURE in config:
         res_dir = config[SEC_PROJECT_STRUCTURE].get('generated_results_dir')
         if res_dir:
-            if res_dir.startswith('../') or res_dir.startswith('./'):
-                resolved_paths['generated_results_dir'] = (base_dir / res_dir).resolve()
-            else:
+            if Path(res_dir).is_absolute():
                 resolved_paths['generated_results_dir'] = Path(res_dir).resolve()
+            else:
+                resolved_paths['generated_results_dir'] = (base_dir / res_dir).resolve()
             
     goldendict = {}
     if SEC_GOLDENDICT in config:

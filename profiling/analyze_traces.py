@@ -93,9 +93,24 @@ class TeeLogger:
 out = TeeLogger(Path(__file__).parent / 'speed_analysis.md')
 
 def analyze():
-    trace_file = REPO_ROOT / "results" / "speed_trace.jsonl"
-    if not trace_file.exists():
-        out(f"Trace file not found at {trace_file}")
+    trace_files = []
+    
+    # Check main results directory
+    main_trace = REPO_ROOT / "results" / "speed_trace.jsonl"
+    if main_trace.exists():
+        trace_files.append(main_trace)
+        
+    # Check fixture-specific results directories
+    fixtures_dir = REPO_ROOT / "tests" / "fixtures"
+    if fixtures_dir.exists():
+        for d in fixtures_dir.glob("*-golden.*"):
+            if d.is_dir():
+                fixture_trace = d / "results" / "speed_trace.jsonl"
+                if fixture_trace.exists():
+                    trace_files.append(fixture_trace)
+                    
+    if not trace_files:
+        out("No trace files found in results/ or tests/fixtures/*/results/")
         return
 
     golden_prefixes = get_golden_prefixes()
@@ -105,11 +120,14 @@ def analyze():
     runs_by_commit = collections.defaultdict(lambda: collections.defaultdict(list))
     phase_aggregates = collections.defaultdict(list)
 
-    with open(trace_file, 'r', encoding='utf-8') as f:
-        for line in f:
-            if not line.strip(): continue
-            try:
-                data = json.loads(line)
+    for trace_file in trace_files:
+        with open(trace_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not line.strip(): continue
+                try:
+                    data = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
                 phase = data.get("phase")
                 duration = data.get("duration")
                 zid = data.get("zid")
@@ -145,8 +163,6 @@ def analyze():
                     
                     runs_by_commit[c_hash][run_session].append(data)
                     phase_aggregates[(run_session, phase)].append(duration)
-            except json.JSONDecodeError:
-                pass
 
     out("# Performance Dynamics Over Time (By Git Commit)")
     out()
