@@ -17,6 +17,7 @@
 - [[Commit: cc52d04] 20260809203845](#commit-cc52d04-20260809203845)
 - [[Commit: f976dd9] 20260809205021](#commit-f976dd9-20260809205021)
 - [[Commit: c296d01] 20260809205659](#commit-c296d01-20260809205659)
+- [[Commit: a975724] 20260809210324](#commit-a975724-20260809210324)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -433,6 +434,26 @@ html_generation (01)                |                              █          
 background_text_translation (01)    |                                ████████  | 2.105s
 intellifiller_enrichment (01)       |                                ████████  | 2.090s
 validation_failed (00)              |                                   █      | 0.000s
+
+```
+
+## [Commit: a975724] 20260809210324
+```text
+Run Session: 20260807230100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 7.848s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ███                                      | 0.604s
+lemmatization (00)                  | ██████████████                           | 2.757s
+the_cut (00)                        |                 █                        | 0.011s
+html_generation (00)                |                   █                      | 0.004s
+html_generation (03)                |                     █                    | 0.003s
+background_text_translation (03)    |                       █████████████      | 2.687s
+intellifiller_enrichment (03)       |                       █████████████      | 2.670s
+html_generation (02)                |                          █               | 0.003s
+background_text_translation (02)    |                            █             | 0.003s
+html_generation (01)                |                              █           | 0.003s
+background_text_translation (01)    |                                ████████  | 1.712s
+intellifiller_enrichment (01)       |                                ████████  | 1.693s
+validation_failed (00)              |                                  █       | 0.000s
 
 ```
 

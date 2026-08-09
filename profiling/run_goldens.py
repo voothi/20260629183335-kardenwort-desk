@@ -4,6 +4,7 @@ import sys
 import subprocess
 import time
 import json
+import re
 import configparser
 from pathlib import Path
 
@@ -229,16 +230,22 @@ def main():
                     print(f"Validating completeness of generated TSV files...")
                     validation_failed = False
                     for existing_file in results_dir.rglob("*.tsv"):
-                        if existing_file.is_file() and existing_file.name.startswith(run['zid']):
-                            try:
-                                _, headers, data_rows = kardenwort_desk.load_tsv_rows(existing_file)
-                                role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
-                                if not kardenwort_desk.is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider='intellifiller'):
-                                    validation_failed = True
-                                    print(f"    [VALIDATION FAILED] Missing or incomplete fields detected in {existing_file.name}")
-                            except Exception as e:
-                                validation_failed = True
-                                print(f"    [VALIDATION ERROR] Could not validate {existing_file.name}: {e}")
+                        if existing_file.is_file():
+                            m = re.match(r'^(\d{14})', existing_file.name)
+                            if m:
+                                file_zid = m.group(1)
+                                if run['zid'] <= file_zid <= end_zid:
+                                    if expected_count > 1 and file_zid == run['zid']:
+                                        continue # Master window is not expected to translate lemmas in sentences mode
+                                    try:
+                                        _, headers, data_rows = kardenwort_desk.load_tsv_rows(existing_file)
+                                        role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+                                        if not kardenwort_desk.is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider='intellifiller'):
+                                            validation_failed = True
+                                            print(f"    [VALIDATION FAILED] Missing or incomplete fields detected in {existing_file.name}")
+                                    except Exception as e:
+                                        validation_failed = True
+                                        print(f"    [VALIDATION ERROR] Could not validate {existing_file.name}: {e}")
                     
                     if validation_failed:
                         print(f"    WARNING: Test run {run['zid']} completed but generated corrupted/incomplete data.")
