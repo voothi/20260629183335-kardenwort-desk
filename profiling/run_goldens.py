@@ -4,6 +4,7 @@ import sys
 import subprocess
 import time
 import json
+import re
 import configparser
 from pathlib import Path
 
@@ -124,7 +125,7 @@ def main():
             if not results_dir.is_absolute():
                 results_dir = (repo_root / results_dir).resolve()
                 
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
             master_dt = datetime.strptime(run['zid'], '%Y%m%d%H%M%S')
             end_dt = master_dt + timedelta(minutes=15)
             end_zid = end_dt.strftime('%Y%m%d%H%M%S')
@@ -226,63 +227,59 @@ def main():
                     else:
                         print("Could not find AutoHotkey executable to run wait_for_windows.ahk")
 
-                    # 4. Validate TSVs
-                    print("Validating generated TSVs for completeness...")
-                    missing_fields_found = False
+                    print(f"Validating completeness of generated TSV files (waiting up to {backend_timeout}s for background enrichment)...")
+                    val_start = time.time()
+                    validation_failed = True
+                    missing_details = []
                     
-                    for tsv_file in results_dir.glob("*.tsv"):
-                        if len(tsv_file.name) >= 14 and tsv_file.name[:14].isdigit():
-                            if not (run['zid'] <= tsv_file.name[:14] <= end_zid):
-                                continue
-                            
-                            try:
-                                lines = tsv_file.read_text(encoding='utf-8').splitlines()
-                                if not lines: continue
-                                headers = lines[0].split('\t')
-                                
-                                try:
-                                    col_lemma = headers.index("WordSource")
-                                    col_word_dest = headers.index("WordDestination") if "WordDestination" in headers else -1
-                                    col_ipa = headers.index("WordSourceIPA") if "WordSourceIPA" in headers else -1
-                                    col_morph = headers.index("WordSourceMorphologyAI") if "WordSourceMorphologyAI" in headers else -1
-                                except ValueError:
-                                    continue
-                                    
-                                base_provider = test_config.get('pipeline', 'lemma_base_provider', fallback='google')
-                                
-                                for r_idx, row_str in enumerate(lines[1:], start=2):
-                                    cols = row_str.split('\t')
-                                    cols += [''] * (len(headers) - len(cols))
-                                    
-                                    if len(cols) > col_lemma and not kardenwort_desk.is_field_empty(cols, col_lemma):
-                                        needs_dest = col_word_dest != -1 and kardenwort_desk.is_field_empty(cols, col_word_dest)
-                                        needs_ipa = base_provider == 'intellifiller' and col_ipa != -1 and kardenwort_desk.is_field_empty(cols, col_ipa)
-                                        needs_morph = base_provider == 'intellifiller' and col_morph != -1 and kardenwort_desk.is_field_empty(cols, col_morph)
-                                        
-                                        if needs_dest or needs_ipa or needs_morph:
-                                            word = cols[col_lemma].strip()
-                                            print(f"Validation FAILED in {tsv_file.name}: Row {r_idx} for word '{word}' is missing required fields.")
-                                            missing_fields_found = True
-                                            break
-                                
-                                if missing_fields_found:
-                                    break
-                            except Exception as e:
-                                print(f"Error validating {tsv_file.name}: {e}")
-                                
-                    if missing_fields_found:
-                        print(f"Recording validation_failed for {run['zid']} to reflect failures in statistics.")
-                        trace_file = results_dir / "speed_trace.jsonl"
-                        record = {
-                            "timestamp": datetime.now(timezone.utc).isoformat(),
-                            "zid": run['zid'],
-                            "phase": "validation_failed",
-                            "duration": 0.0,
-                            "cold_start": False,
-                            "status": "failed"
-                        }
-                        with open(trace_file, "a", encoding="utf-8") as f:
-                            f.write(json.dumps(record) + "\n")
+                    while time.time() - val_start < backend_timeout:
+                        all_passed = True
+                        missing_details = []
+                        for existing_file in results_dir.rglob("*.tsv"):
+                            if existing_file.is_file():
+                                m = re.match(r'^(\d{14})', existing_file.name)
+                                if m:
+                                    file_zid = m.group(1)
+                                    if run['zid'] <= file_zid <= end_zid:
+                                        if expected_count > 1 and file_zid == run['zid']:
+                                            continue # Master window is not expected to translate lemmas in sentences mode
+                                        base_done = existing_file.with_suffix('.base_translation_done').exists()
+                                        enrich_done = existing_file.with_suffix('.enrichment_done').exists()
+                                        if not (base_done and enrich_done):
+                                            all_passed = False
+                                            missing_details.append(f"    [VALIDATION PENDING] Missing completion markers for {existing_file.name}")
+                                        else:
+                                            # Once markers are found, run the deep validation to flag true failures (e.g., 429 or Wordfill)
+                                            try:
+                                                with kardenwort_desk.file_lock(existing_file):
+                                                    _, headers, data_rows = kardenwort_desk.load_tsv_rows(existing_file)
+                                                role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+                                                if not kardenwort_desk.is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider='intellifiller'):
+                                                    all_passed = False
+                                                    missing_details.append(f"    [VALIDATION FAILED] Missing or incomplete fields detected in {existing_file.name}")
+                                            except Exception as e:
+                                                all_passed = False
+                                                missing_details.append(f"    [VALIDATION ERROR] Could not validate {existing_file.name}: {e}")
+                        
+                        if all_passed:
+                            validation_failed = False
+                            break
+                        time.sleep(1.0)
+                    
+                    if validation_failed:
+                        for msg in missing_details:
+                            print(msg.replace("PENDING", "FAILED"))
+                        print(f"    WARNING: Test run {run['zid']} completed but generated corrupted/incomplete data.")
+                        with open(speed_trace, 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                "zid": run['zid'],
+                                "phase": "validation_failed",
+                                "duration": 0.0,
+                                "status": "failed",
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            }) + '\n')
+                    else:
+                        print(f"    Validation PASSED. All expected fields populated.")
 
                 else:
                     print(f"FAILED: {run['name']} could not be initiated.")

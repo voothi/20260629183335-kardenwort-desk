@@ -75,12 +75,14 @@ def get_commit_for_time(commits, timestamp):
 
 
 class TeeLogger:
-    def __init__(self, filename):
+    def __init__(self, filename, quiet=True):
         self.filename = filename
         self.file = open(filename, 'w', encoding='utf-8')
+        self.quiet = quiet
         
     def __call__(self, *args, **kwargs):
-        print(*args, **kwargs)
+        if not self.quiet:
+            print(*args, **kwargs)
         print(*args, file=self.file, **kwargs)
         self.file.flush()
         
@@ -90,7 +92,7 @@ class TeeLogger:
         except:
             pass
 
-out = TeeLogger(Path(__file__).parent / 'speed_analysis.md')
+out = TeeLogger(Path(__file__).parent / 'speed_analysis.md', quiet=True)
 
 def analyze():
     trace_files = []
@@ -162,12 +164,12 @@ def analyze():
                     c_hash = get_commit_for_time(commits, event_ts)
                     
                     runs_by_commit[c_hash][run_session].append(data)
-                    phase_aggregates[(run_session, phase)].append(duration)
 
     out("# Performance Dynamics Over Time (By Git Commit)")
     out()
 
     active_commits = sorted(runs_by_commit.keys(), key=lambda h: commit_lookup[h]['ts'] if h in commit_lookup else 0)
+    latest_session_failed = {}
 
     out("## Table of Contents")
     for h in active_commits:
@@ -236,6 +238,8 @@ def analyze():
             
             parsed_events = list(latest_events.values())
             
+            is_failed = any(p['phase'] == 'validation_failed' for p in parsed_events)
+            
             min_start_ts = min((p['start_t'] for p in parsed_events), default=0)
             max_end_ts = max((p['end_t'] for p in parsed_events), default=0)
                 
@@ -247,8 +251,15 @@ def analyze():
                 'min_start_ts': min_start_ts,
                 'max_end_ts': max_end_ts,
                 'total_time': total_time,
-                'parsed_events': parsed_events
+                'parsed_events': parsed_events,
+                'is_failed': is_failed
             })
+            
+            if not is_failed:
+                for p in parsed_events:
+                    phase_aggregates[(latest_session, p['phase'])].append(p['dur'])
+            
+            latest_session_failed[latest_session] = is_failed
             
         gap_info = ""
         if len(session_stats) >= 2:
@@ -273,6 +284,9 @@ def analyze():
             else:
                 master_zid = latest_session + "00"
                 label = "Unknown"
+                
+            if stat.get('is_failed'):
+                label += " [FAILED - EXCLUDED FROM STATS]"
                 
             out(f"Run Session: {master_zid} [{label}] (Total Batch E2E Duration: {total_time:.3f}s)")
             out("-" * 75)
@@ -305,6 +319,8 @@ def analyze():
     
     session_aggregates = collections.defaultdict(lambda: collections.defaultdict(list))
     for (session, phase), durations in phase_aggregates.items():
+        if latest_session_failed.get(session, False):
+            continue
         session_aggregates[session][phase].extend(durations)
         
     for session in sorted(session_aggregates.keys()):
@@ -331,7 +347,6 @@ def analyze():
     out("- **`lemmatization`**: (CPU-Bound) Tokenizing text and executing morphological/Anki lookups via Kardenwort Core to generate the data grid.")
     out("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
     out("- **`background_text_translation`**: The progressive worker updating BOTH the text translation AND the individual base lemma translations asynchronously without blocking the UI.")
-    out("- **`validation_failed`**: Triggered when a golden test fails to populate all required TSV fields (such as destination words, IPA, or morphology), indicating a breakdown in the enrichment pipeline.")
 
 
 def delete_trace_by_zid(target_zid):
