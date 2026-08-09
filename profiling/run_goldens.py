@@ -124,7 +124,7 @@ def main():
             if not results_dir.is_absolute():
                 results_dir = (repo_root / results_dir).resolve()
                 
-            from datetime import datetime, timedelta
+            from datetime import datetime, timedelta, timezone
             master_dt = datetime.strptime(run['zid'], '%Y%m%d%H%M%S')
             end_dt = master_dt + timedelta(minutes=15)
             end_zid = end_dt.strftime('%Y%m%d%H%M%S')
@@ -225,6 +225,33 @@ def main():
                             print(f"Failed to run AHK wait script: {e}")
                     else:
                         print("Could not find AutoHotkey executable to run wait_for_windows.ahk")
+
+                    print(f"Validating completeness of generated TSV files...")
+                    validation_failed = False
+                    for existing_file in results_dir.rglob("*.tsv"):
+                        if existing_file.is_file() and existing_file.name.startswith(run['zid']):
+                            try:
+                                _, headers, data_rows = kardenwort_desk.load_tsv_rows(existing_file)
+                                role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+                                if not kardenwort_desk.is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider='intellifiller'):
+                                    validation_failed = True
+                                    print(f"    [VALIDATION FAILED] Missing or incomplete fields detected in {existing_file.name}")
+                            except Exception as e:
+                                validation_failed = True
+                                print(f"    [VALIDATION ERROR] Could not validate {existing_file.name}: {e}")
+                    
+                    if validation_failed:
+                        print(f"    WARNING: Test run {run['zid']} completed but generated corrupted/incomplete data.")
+                        with open(speed_trace, 'a', encoding='utf-8') as f:
+                            f.write(json.dumps({
+                                "zid": run['zid'],
+                                "phase": "validation_failed",
+                                "duration": 0.0,
+                                "status": "failed",
+                                "timestamp": datetime.now(timezone.utc).isoformat()
+                            }) + '\n')
+                    else:
+                        print(f"    Validation PASSED. All expected fields populated.")
 
                 else:
                     print(f"FAILED: {run['name']} could not be initiated.")
