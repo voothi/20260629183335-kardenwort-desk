@@ -8075,20 +8075,18 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
         return data_rows
     my_zid = zid_match.group(1)
 
-    missing_lemmas = {}
-    for i, row in enumerate(data_rows):
+    missing_lemmas = set()
+    for row in data_rows:
         if len(row) > col_lemma:
             lemma = row[col_lemma].strip()
             if not lemma: continue
             
-            needs_dest = col_word_dest != -1 and (len(row) <= col_word_dest or not row[col_word_dest].strip())
-            needs_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-            needs_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+            needs_dest = col_word_dest != -1 and is_field_empty(row, col_word_dest)
+            needs_ipa = col_ipa != -1 and is_field_empty(row, col_ipa)
+            needs_morph = col_morph != -1 and is_field_empty(row, col_morph)
             
             if needs_dest or needs_ipa or needs_morph:
-                if lemma not in missing_lemmas:
-                    missing_lemmas[lemma] = []
-                missing_lemmas[lemma].append(i)
+                missing_lemmas.add(lemma)
 
     if not missing_lemmas:
         return data_rows
@@ -8127,59 +8125,44 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
             if len(sib_row) > sib_col_lemma:
                 sib_lemma = sib_row[sib_col_lemma].strip()
                 if sib_lemma in missing_lemmas:
-                    for target_row_idx in missing_lemmas[sib_lemma]:
-                        target_row = data_rows[target_row_idx]
+                    if sib_lemma not in updates:
+                        updates[sib_lemma] = {}
                         
-                        target_empty_dest = is_field_empty(target_row, col_word_dest)
-                        target_empty_ipa = is_field_empty(target_row, col_ipa)
-                        target_empty_morph = is_field_empty(target_row, col_morph)
+                    sib_valid_dest = col_word_dest != -1 and sib_col_dest != -1 and not is_field_empty(sib_row, sib_col_dest)
+                    sib_valid_ipa = col_ipa != -1 and sib_col_ipa != -1 and not is_field_empty(sib_row, sib_col_ipa)
+                    sib_valid_morph = col_morph != -1 and sib_col_morph != -1 and not is_field_empty(sib_row, sib_col_morph)
+                    
+                    if sib_valid_dest and col_word_dest not in updates[sib_lemma]:
+                        updates[sib_lemma][col_word_dest] = sib_row[sib_col_dest]
+                    if sib_valid_ipa and col_ipa not in updates[sib_lemma]:
+                        updates[sib_lemma][col_ipa] = sib_row[sib_col_ipa]
+                    if sib_valid_morph and col_morph not in updates[sib_lemma]:
+                        updates[sib_lemma][col_morph] = sib_row[sib_col_morph]
 
-                        sib_valid_dest = not is_field_empty(sib_row, sib_col_dest)
-                        sib_valid_ipa = not is_field_empty(sib_row, sib_col_ipa)
-                        sib_valid_morph = not is_field_empty(sib_row, sib_col_morph)
-                        
-                        apply_dest = col_word_dest != -1 and sib_col_dest != -1 and sib_valid_dest and target_empty_dest
-                        apply_ipa = col_ipa != -1 and sib_col_ipa != -1 and sib_valid_ipa and target_empty_ipa
-                        apply_morph = col_morph != -1 and sib_col_morph != -1 and sib_valid_morph and target_empty_morph
-                        
-                        if apply_dest or apply_ipa or apply_morph:
-                            if target_row_idx not in updates:
-                                updates[target_row_idx] = {}
-                            if apply_dest:
-                                updates[target_row_idx][col_word_dest] = sib_row[sib_col_dest]
-                                max_idx = max(col_word_dest, col_ipa, col_morph)
-                                if len(target_row) <= max_idx:
-                                    target_row.extend([''] * (max_idx - len(target_row) + 1))
-                                target_row[col_word_dest] = sib_row[sib_col_dest]
-                            if apply_ipa:
-                                updates[target_row_idx][col_ipa] = sib_row[sib_col_ipa]
-                                max_idx = max(col_word_dest, col_ipa, col_morph)
-                                if len(target_row) <= max_idx:
-                                    target_row.extend([''] * (max_idx - len(target_row) + 1))
-                                target_row[col_ipa] = sib_row[sib_col_ipa]
-                            if apply_morph:
-                                updates[target_row_idx][col_morph] = sib_row[sib_col_morph]
-                                max_idx = max(col_word_dest, col_ipa, col_morph)
-                                if len(target_row) <= max_idx:
-                                    target_row.extend([''] * (max_idx - len(target_row) + 1))
-                                target_row[col_morph] = sib_row[sib_col_morph]
+    # Clean up empty updates
+    updates = {k: v for k, v in updates.items() if v}
+
+    if not updates:
+        return data_rows
 
     # Always reload the fresh data to prevent stale data_rows from overwriting parallel UI modifications
     with file_lock(working_tsv_path):
         comments, headers_latest, latest_data_rows = load_tsv_rows(working_tsv_path)
         
-        if updates:
-            for row_idx, row_updates in updates.items():
-                if row_idx < len(latest_data_rows):
-                    target_row = latest_data_rows[row_idx]
-                    
-                    if len(target_row) < len(headers_latest):
-                        target_row.extend([''] * (len(headers_latest) - len(target_row)))
-                        
+        modified = False
+        for row in latest_data_rows:
+            if len(row) > col_lemma:
+                lemma = row[col_lemma].strip()
+                if lemma in updates:
+                    row_updates = updates[lemma]
                     for col_idx, val in row_updates.items():
-                        if col_idx < len(target_row):
-                            target_row[col_idx] = val
+                        if is_field_empty(row, col_idx):
+                            if len(row) <= col_idx:
+                                row.extend([''] * (col_idx - len(row) + 1))
+                            row[col_idx] = val
+                            modified = True
                             
+        if modified:
             save_tsv_rows_safely(working_tsv_path, comments, headers_latest, latest_data_rows)
             
         return latest_data_rows
