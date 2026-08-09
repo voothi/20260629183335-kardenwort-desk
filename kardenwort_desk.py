@@ -7698,7 +7698,11 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         if not translated_text_emitted:
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
 
-        # check if lemmas need translation
+        # Use the spawner's hint: this flag reflects whether any lemmas had empty
+        # WordDestination at spawn time. We trust it rather than re-scanning data_rows
+        # here to avoid triggering simultaneous intellifiller calls across all sibling
+        # windows. Any data missed by intellifiller is picked up later via late
+        # cross-pollination in the finally block of cmd_progressive_worker.
         word_translations_empty = args.word_empty.lower() == 'true'
         if word_translations_empty and col_lemma != -1 and run_base == 'auto':
             provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
@@ -8218,100 +8222,6 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
             
         return latest_data_rows
 
-def push_to_master_if_child(working_tsv_path, data_rows, headers, role_fields):
-    if not data_rows: return
-    
-    col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
-    col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
-    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers else -1
-    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
-    
-    if col_lemma == -1: return
-        
-    my_name = working_tsv_path.name
-    parts = my_name.split('-', 1)
-    if len(parts) < 2: return
-    
-    my_zid = parts[0]
-    
-    siblings = list(working_tsv_path.parent.glob("*.tsv"))
-    if not siblings: return
-    
-    from datetime import datetime
-    try:
-        my_dt = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-    except Exception:
-        return
-        
-    master_path = None
-    oldest_dt = None
-    
-    for sib in siblings:
-        sib_parts = sib.name.split('-', 1)
-        if len(sib_parts) < 2: continue
-        sib_zid = sib_parts[0]
-        try:
-            sib_dt = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
-            if abs((my_dt - sib_dt).total_seconds()) <= 60:
-                if oldest_dt is None or sib_dt < oldest_dt:
-                    oldest_dt = sib_dt
-                    master_path = sib
-        except Exception:
-            continue
-            
-    if master_path == working_tsv_path or master_path is None:
-        return
-        
-    child_lookup = {}
-    for row in data_rows:
-        if len(row) > col_lemma:
-            lemma = row[col_lemma].strip()
-            if not lemma: continue
-            
-            dest = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
-            ipa = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
-            morph = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
-            
-            if dest or ipa or morph:
-                child_lookup[lemma] = {'dest': dest, 'ipa': ipa, 'morph': morph}
-                
-    if not child_lookup: return
-        
-    with file_lock(master_path):
-        comments, master_headers, master_rows = load_tsv_rows(master_path)
-        
-        m_col_lemma = master_headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in master_headers else -1
-        m_col_word_dest = master_headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in master_headers else -1
-        m_col_ipa = master_headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in master_headers else -1
-        m_col_morph = master_headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in master_headers else -1
-        
-        if m_col_lemma == -1: return
-        
-        modified = False
-        for row in master_rows:
-            if len(row) > m_col_lemma:
-                lemma = row[m_col_lemma].strip()
-                if lemma in child_lookup:
-                    c_data = child_lookup[lemma]
-                    
-                    max_idx = max(m_col_word_dest, m_col_ipa, m_col_morph)
-                    if len(row) <= max_idx:
-                        row.extend([''] * (max_idx - len(row) + 1))
-                        
-                    if m_col_word_dest != -1 and c_data['dest']:
-                        if is_field_empty(row, m_col_word_dest):
-                            row[m_col_word_dest] = c_data['dest']
-                            modified = True
-                    if m_col_ipa != -1 and c_data['ipa'] and is_field_empty(row, m_col_ipa):
-                        row[m_col_ipa] = c_data['ipa']
-                        modified = True
-                    if m_col_morph != -1 and c_data['morph'] and is_field_empty(row, m_col_morph):
-                        row[m_col_morph] = c_data['morph']
-                        modified = True
-                        
-        if modified:
-            save_tsv_rows_safely(master_path, comments, master_headers, master_rows)
-
 
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
@@ -8407,15 +8317,22 @@ def cmd_progressive_worker(args):
             except Exception:
                 pass
             try:
-                push_to_master_if_child(tsv_path, data_rows, headers, role_fields)
+                # Late cross-pollination: for multi-mode windows that finished early
+                # (e.g. the oldest in a batch), non-blocking pull from any siblings
+                # that have completed enrichment since we started. This catches cases
+                # where intellifiller filled a lemma (e.g. Prozent) in a younger sibling
+                # but not in this window due to AI non-determinism.
+                if getattr(args, 'text_mode', 'single') == 'multi':
+                    data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
             except Exception as e:
-                logger.error(f"Failed to push to master window: {e}")
+                logger.error(f"Failed late cross-pollination: {e}")
             try:
                 write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
                 import os
                 os.utime(tsv_path, None)
             except Exception as e:
                 logger.error(f"Failed to write finished event: {e}")
+
     finally:
         if file_handler:
             logger.removeHandler(file_handler)
