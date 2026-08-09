@@ -7678,37 +7678,38 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
         if word_translations_empty and col_lemma != -1 and run_base == 'auto':
+            provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+            col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+            col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
+            
             # Preserve row order while deduplicating (set() destroys order via hash)
             seen = set()
             lemmas_to_translate = []
-            for row in data_rows:
+            selected_rows_to_enrich = []
+            
+            for i, row in enumerate(data_rows):
                 if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                    if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
-                        if 'skeleton-loader' not in row[col_word_dest]:
-                            continue
-                    val = row[col_lemma]
-                    if val not in seen:
-                        seen.add(val)
-                        lemmas_to_translate.append(val)
+                    needs_dest = col_word_dest != -1 and is_field_empty(row, col_word_dest)
+                    needs_ipa = False
+                    needs_morph = False
+                    
+                    if provider == 'intellifiller':
+                        needs_ipa = col_ipa != -1 and is_field_empty(row, col_ipa)
+                        needs_morph = col_morph != -1 and is_field_empty(row, col_morph)
+                        
+                    if needs_dest or needs_ipa or needs_morph:
+                        selected_rows_to_enrich.append(i)
+                        val = row[col_lemma].strip()
+                        if val not in seen:
+                            seen.add(val)
+                            lemmas_to_translate.append(val)
             
             translation_order = config.get(SEC_TRANSLATION, 'translation_order', fallback='top_to_bottom').strip().lower()
             if translation_order == 'bottom_to_top':
                 lemmas_to_translate = list(reversed(lemmas_to_translate))
+                
             if lemmas_to_translate:
-                provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
                 if provider == 'intellifiller':
-                    selected_rows_to_enrich = []
-                    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
-                    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
-
-                    for i, row in enumerate(data_rows):
-                        if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
-                            need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                            need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                            need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
-                            if need_dest or need_ipa or need_morph:
-                                selected_rows_to_enrich.append(i)
-                            
                     if selected_rows_to_enrich:
                         data_rows = _progressive_worker_stage_enrichment(
                             tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_enrich
