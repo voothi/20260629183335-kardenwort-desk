@@ -331,6 +331,7 @@ def analyze():
     out("- **`lemmatization`**: (CPU-Bound) Tokenizing text and executing morphological/Anki lookups via Kardenwort Core to generate the data grid.")
     out("- **`the_cut`**: (CPU-Bound) Slicing the master TSV into individual child sentence files during Multi-mode runs.")
     out("- **`background_text_translation`**: The progressive worker updating BOTH the text translation AND the individual base lemma translations asynchronously without blocking the UI.")
+    out("- **`validation_failed`**: Triggered when a golden test fails to populate all required TSV fields (such as destination words, IPA, or morphology), indicating a breakdown in the enrichment pipeline.")
 
 
 def delete_trace_by_zid(target_zid):

@@ -226,6 +226,64 @@ def main():
                     else:
                         print("Could not find AutoHotkey executable to run wait_for_windows.ahk")
 
+                    # 4. Validate TSVs
+                    print("Validating generated TSVs for completeness...")
+                    missing_fields_found = False
+                    
+                    for tsv_file in results_dir.glob("*.tsv"):
+                        if len(tsv_file.name) >= 14 and tsv_file.name[:14].isdigit():
+                            if not (run['zid'] <= tsv_file.name[:14] <= end_zid):
+                                continue
+                            
+                            try:
+                                lines = tsv_file.read_text(encoding='utf-8').splitlines()
+                                if not lines: continue
+                                headers = lines[0].split('\t')
+                                
+                                try:
+                                    col_lemma = headers.index("WordSource")
+                                    col_word_dest = headers.index("WordDestination") if "WordDestination" in headers else -1
+                                    col_ipa = headers.index("WordSourceIPA") if "WordSourceIPA" in headers else -1
+                                    col_morph = headers.index("WordSourceMorphologyAI") if "WordSourceMorphologyAI" in headers else -1
+                                except ValueError:
+                                    continue
+                                    
+                                base_provider = test_config.get('pipeline', 'lemma_base_provider', fallback='google')
+                                
+                                for r_idx, row_str in enumerate(lines[1:], start=2):
+                                    cols = row_str.split('\t')
+                                    cols += [''] * (len(headers) - len(cols))
+                                    
+                                    if len(cols) > col_lemma and not kardenwort_desk.is_field_empty(cols, col_lemma):
+                                        needs_dest = col_word_dest != -1 and kardenwort_desk.is_field_empty(cols, col_word_dest)
+                                        needs_ipa = base_provider == 'intellifiller' and col_ipa != -1 and kardenwort_desk.is_field_empty(cols, col_ipa)
+                                        needs_morph = base_provider == 'intellifiller' and col_morph != -1 and kardenwort_desk.is_field_empty(cols, col_morph)
+                                        
+                                        if needs_dest or needs_ipa or needs_morph:
+                                            word = cols[col_lemma].strip()
+                                            print(f"Validation FAILED in {tsv_file.name}: Row {r_idx} for word '{word}' is missing required fields.")
+                                            missing_fields_found = True
+                                            break
+                                
+                                if missing_fields_found:
+                                    break
+                            except Exception as e:
+                                print(f"Error validating {tsv_file.name}: {e}")
+                                
+                    if missing_fields_found:
+                        print(f"Recording validation_failed for {run['zid']} to reflect failures in statistics.")
+                        trace_file = results_dir / "speed_trace.jsonl"
+                        record = {
+                            "timestamp": datetime.now(timezone.utc).isoformat(),
+                            "zid": run['zid'],
+                            "phase": "validation_failed",
+                            "duration": 0.0,
+                            "cold_start": False,
+                            "status": "failed"
+                        }
+                        with open(trace_file, "a", encoding="utf-8") as f:
+                            f.write(json.dumps(record) + "\n")
+
                 else:
                     print(f"FAILED: {run['name']} could not be initiated.")
             except Exception as e:
