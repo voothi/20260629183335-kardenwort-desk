@@ -1480,17 +1480,24 @@ def is_tsv_llm_filled(headers, data_rows, mapping):
     return True
 
 
-def is_base_translation_finished(headers, data_rows, role_fields):
+def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider=None):
     if not data_rows:
         return True
     col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
     col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
+    col_ipa = headers.index(role_fields.get('word_ipa', 'WordSourceIPA')) if role_fields and role_fields.get('word_ipa', 'WordSourceIPA') in headers else -1
+    col_morph = headers.index(role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI') in headers else -1
     
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
                 if len(row) <= col_word_dest or not row[col_word_dest].strip():
                     return False
+                if lemma_base_provider == 'intellifiller':
+                    if col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip()):
+                        return False
+                    if col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip()):
+                        return False
     return True
 
 
@@ -7928,7 +7935,7 @@ def cmd_retext_worker(args):
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
-def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
+def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0):
     import time
     from datetime import datetime
     import threading
@@ -7944,6 +7951,8 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
     my_zid = zid_match.group(1)
     
     max_wait = 15
+    if lemma_base_provider == 'intellifiller':
+        max_wait = 15 + (data_rows_count * 15)
     
     def check_siblings():
         for sibling in working_tsv_path.parent.glob("*.tsv"):
@@ -7966,7 +7975,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
                     with file_lock(sibling):
                         _, headers, data_rows = load_tsv_rows(sibling)
                     role_fields = get_role_fields(mapping, headers)
-                    if not is_base_translation_finished(headers, data_rows, role_fields):
+                    if not is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider=lemma_base_provider):
                         return False
             except Exception as e:
                 logger.warning(f"Error checking sibling TSV {sibling}: {e}")
@@ -8010,6 +8019,174 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping):
         observer.stop()
         observer.join()
 
+def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_count=0):
+    import time
+    from datetime import datetime
+    import threading
+    try:
+        from watchdog.observers import Observer
+        from watchdog.events import FileSystemEventHandler
+        has_watchdog = True
+    except ImportError:
+        has_watchdog = False
+
+    zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
+    if not zid_match: return
+    my_zid = zid_match.group(1)
+    
+    max_wait = 15 + (data_rows_count * 15)
+    
+    def check_siblings():
+        for sibling in working_tsv_path.parent.glob("*.tsv"):
+            if sibling == working_tsv_path: continue
+            sib_match = re.match(r'^(\d{14})', sibling.name)
+            if not sib_match: continue
+            sib_zid = sib_match.group(1)
+            
+            try:
+                dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+                dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
+                diff_sec = (dt_my - dt_sib).total_seconds()
+                
+                if 0 < diff_sec <= 120:
+                    marker_file = sibling.with_suffix('.enrichment_done')
+                    if not marker_file.exists():
+                        return False
+            except Exception as e:
+                logger.warning(f"Error checking sibling TSV {sibling} for enrichment: {e}")
+        return True
+
+    if check_siblings():
+        return
+
+    if not has_watchdog:
+        start_wait = time.time()
+        while time.time() - start_wait < max_wait:
+            if check_siblings():
+                break
+            time.sleep(1)
+        return
+
+    event_cond = threading.Condition()
+    class SiblingChangeHandler(FileSystemEventHandler):
+        def on_modified(self, event):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done'):
+                with event_cond:
+                    event_cond.notify_all()
+        def on_created(self, event):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done'):
+                with event_cond:
+                    event_cond.notify_all()
+                    
+    observer = Observer()
+    handler = SiblingChangeHandler()
+    observer.schedule(handler, path=str(working_tsv_path.parent), recursive=False)
+    observer.start()
+    
+    try:
+        start_wait = time.time()
+        with event_cond:
+            while time.time() - start_wait < max_wait:
+                if check_siblings():
+                    break
+                event_cond.wait(timeout=1.0)
+    finally:
+        observer.stop()
+        observer.join()
+
+def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fields):
+    if not data_rows:
+        return data_rows
+        
+    col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
+    col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
+    col_ipa = headers.index(role_fields.get('word_ipa', 'WordSourceIPA')) if role_fields and role_fields.get('word_ipa', 'WordSourceIPA') in headers else -1
+    col_morph = headers.index(role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI') in headers else -1
+    
+    if col_lemma == -1:
+        return data_rows
+
+    zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
+    if not zid_match:
+        return data_rows
+    my_zid = zid_match.group(1)
+
+    missing_lemmas = {}
+    for i, row in enumerate(data_rows):
+        if len(row) > col_lemma:
+            lemma = row[col_lemma].strip()
+            if not lemma: continue
+            
+            needs_dest = col_word_dest != -1 and (len(row) <= col_word_dest or not row[col_word_dest].strip())
+            needs_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+            needs_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+            
+            if needs_dest or needs_ipa or needs_morph:
+                if lemma not in missing_lemmas:
+                    missing_lemmas[lemma] = []
+                missing_lemmas[lemma].append(i)
+
+    if not missing_lemmas:
+        return data_rows
+
+    modified = False
+    
+    for sibling in working_tsv_path.parent.glob("*.tsv"):
+        if sibling == working_tsv_path: continue
+        sib_match = re.match(r'^(\d{14})', sibling.name)
+        if not sib_match: continue
+        sib_zid = sib_match.group(1)
+        
+        try:
+            from datetime import datetime
+            dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+            dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
+            if abs((dt_my - dt_sib).total_seconds()) > 120:
+                continue
+        except Exception:
+            continue
+            
+        try:
+            with file_lock(sibling):
+                sib_comments, sib_headers, sib_rows = load_tsv_rows(sibling)
+        except Exception:
+            continue
+            
+        sib_col_lemma = sib_headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in sib_headers else -1
+        sib_col_dest = sib_headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in sib_headers else -1
+        sib_col_ipa = sib_headers.index(role_fields.get('word_ipa', 'WordSourceIPA')) if role_fields and role_fields.get('word_ipa', 'WordSourceIPA') in sib_headers else -1
+        sib_col_morph = sib_headers.index(role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI') in sib_headers else -1
+
+        if sib_col_lemma == -1: continue
+
+        for sib_row in sib_rows:
+            if len(sib_row) > sib_col_lemma:
+                sib_lemma = sib_row[sib_col_lemma].strip()
+                if sib_lemma in missing_lemmas:
+                    for target_row_idx in missing_lemmas[sib_lemma]:
+                        target_row = data_rows[target_row_idx]
+                        
+                        max_idx = max(col_word_dest, col_ipa, col_morph)
+                        if len(target_row) <= max_idx:
+                            target_row.extend([''] * (max_idx - len(target_row) + 1))
+                            
+                        if col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and not target_row[col_word_dest].strip():
+                            target_row[col_word_dest] = sib_row[sib_col_dest]
+                            modified = True
+                        if col_ipa != -1 and sib_col_ipa != -1 and len(sib_row) > sib_col_ipa and sib_row[sib_col_ipa].strip() and not target_row[col_ipa].strip():
+                            target_row[col_ipa] = sib_row[sib_col_ipa]
+                            modified = True
+                        if col_morph != -1 and sib_col_morph != -1 and len(sib_row) > sib_col_morph and sib_row[sib_col_morph].strip() and not target_row[col_morph].strip():
+                            target_row[col_morph] = sib_row[sib_col_morph]
+                            modified = True
+
+    if modified:
+        with file_lock(working_tsv_path):
+            comments, headers_latest, _ = load_tsv_rows(working_tsv_path)
+            save_tsv_rows_safely(working_tsv_path, comments, headers_latest, data_rows)
+
+    return data_rows
+
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
     log_path = tsv_path.with_suffix('.log')
@@ -8040,8 +8217,10 @@ def cmd_progressive_worker(args):
         # Write initial source stage immediately so UI renders without delay
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
             
+        base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
         if getattr(args, 'text_mode', 'single') == 'multi':
-            wait_for_older_siblings_in_batch(tsv_path, mapping)
+            wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows))
+            data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
             
         try:
             run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
@@ -8062,6 +8241,9 @@ def cmd_progressive_worker(args):
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
             if not skip_intellifiller:
+                if getattr(args, 'text_mode', 'single') == 'multi':
+                    wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
+                    data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
                 data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                     
         except SystemExit as se:
@@ -8073,6 +8255,10 @@ def cmd_progressive_worker(args):
                 f.write(f"CRASH: {e}\n{traceback.format_exc()}\n")
         finally:
             # 3. Finished Event
+            try:
+                tsv_path.with_suffix('.enrichment_done').touch()
+            except Exception:
+                pass
             try:
                 write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
                 import os
