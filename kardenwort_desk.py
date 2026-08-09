@@ -8124,6 +8124,26 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
 
     updates = {}
     
+    # 1. Intra-file pollination: check if another row in the same file has the populated data
+    for row in data_rows:
+        if len(row) > col_lemma:
+            lemma = row[col_lemma].strip()
+            if lemma in missing_lemmas:
+                valid_dest = col_word_dest != -1 and not is_field_empty(row, col_word_dest)
+                valid_ipa = col_ipa != -1 and not is_field_empty(row, col_ipa)
+                valid_morph = col_morph != -1 and not is_field_empty(row, col_morph)
+                
+                if valid_dest or valid_ipa or valid_morph:
+                    if lemma not in updates:
+                        updates[lemma] = {}
+                        
+                    if valid_dest and col_word_dest not in updates[lemma]:
+                        updates[lemma][col_word_dest] = row[col_word_dest]
+                    if valid_ipa and col_ipa not in updates[lemma]:
+                        updates[lemma][col_ipa] = row[col_ipa]
+                    if valid_morph and col_morph not in updates[lemma]:
+                        updates[lemma][col_morph] = row[col_morph]
+
     for sibling in working_tsv_path.parent.glob("*.tsv"):
         if sibling == working_tsv_path: continue
         sib_match = re.match(r'^(\d{14})', sibling.name)

@@ -26,3 +26,6 @@ results/
 *.log
 vendor/
 worker_crash.txt
+kardenwort_desk.diff
+profiling.diff
+tests.diff

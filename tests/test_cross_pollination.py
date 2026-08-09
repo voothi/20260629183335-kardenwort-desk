@@ -140,3 +140,43 @@ def test_cross_pollinate_api_error(tmp_path):
     result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers, role_fields)
 
     assert result[0][1] == "house", "WordDestination should overwrite API error from sibling"
+
+# ---------------------------------------------------------------------------
+# Task 2.4: test_cross_pollinate_intra_file
+# ---------------------------------------------------------------------------
+
+def test_cross_pollinate_intra_file(tmp_path):
+    """
+    Verify that if a TSV contains duplicate lemmas, and one row has the translation
+    while the other row is missing it, the missing row is populated from the 
+    populated row in the SAME file, without needing an external sibling file.
+    """
+    tsv_name = "20260809190000-intra.en.tsv"
+    
+    headers = _make_headers()
+    role_fields = _make_role_fields()
+
+    # Same file, two occurrences of "Haus".
+    # Row 0: Translated
+    # Row 1: Empty destination
+    data_rows = [
+        ["Haus", "house", "/haʊs/", "Noun, neuter"],
+        ["Haus", "", "", ""],
+    ]
+    
+    tsv_path = tmp_path / tsv_name
+    
+    # We must write the file because cross_pollinate_from_siblings uses load_tsv_rows / save_tsv_rows
+    # to update the actual file on disk.
+    tsv_path.write_text(
+        "\t".join(headers) + "\n" + 
+        "\t".join(data_rows[0]) + "\n" +
+        "\t".join(data_rows[1]) + "\n",
+        encoding="utf-8"
+    )
+
+    result = desk.cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
+    
+    assert result[1][1] == "house", "Intra-file pollination failed: WordDestination not populated"
+    assert result[1][2] == "/haʊs/", "Intra-file pollination failed: IPA not populated"
+    assert result[1][3] == "Noun, neuter", "Intra-file pollination failed: Morphology not populated"
