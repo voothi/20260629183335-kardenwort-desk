@@ -15,6 +15,7 @@
 - [[Commit: 2ec6a55] 20260809200636](#commit-2ec6a55-20260809200636)
 - [[Commit: 4d0a3d6] 20260809203244](#commit-4d0a3d6-20260809203244)
 - [[Commit: cc52d04] 20260809203845](#commit-cc52d04-20260809203845)
+- [[Commit: f976dd9] 20260809205021](#commit-f976dd9-20260809205021)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -393,6 +394,27 @@ html_generation (00)                |                                        █
 
 ```
 
+## [Commit: f976dd9] 20260809205021
+```text
+Run Session: 20260807230100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 29.019s)
+---------------------------------------------------------------------------
+translate_text (00)                 | █                                        | 0.680s
+lemmatization (00)                  | ████                                     | 3.555s
+the_cut (00)                        |      █                                   | 0.016s
+intellifiller_enrichment (00)       |       █████████████████████████████████  | 24.387s
+html_generation (03)                |        █                                 | 0.004s
+background_text_translation (03)    |         ██                               | 1.794s
+intellifiller_enrichment (03)       |         ██                               | 1.766s
+html_generation (02)                |          █                               | 0.003s
+background_text_translation (02)    |          █                               | 0.005s
+html_generation (01)                |           █                              | 0.003s
+background_text_translation (01)    |            ███                           | 2.308s
+intellifiller_enrichment (01)       |            ███                           | 2.289s
+validation_failed (00)              |                                       █  | 0.000s
+html_generation (00)                |                                        █ | 0.003s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807190100 [Golden EN]
@@ -460,16 +482,6 @@ html_generation (00)                |                                        █
 | `lemmatization` | 1 | 8.400 | 8.400 | 8.400 |
 | `the_cut` | 1 | 0.041 | 0.041 | 0.041 |
 | `html_generation` | 8 | 0.005 | 0.006 | 0.007 |
-
-### 20260807230100 [Golden EN]
-| Phase | Cnt | Min (s) | Avg (s) | Max (s) |
-| :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 4 | 2.903 | 4.538 | 6.097 |
-| `intellifiller_enrichment` | 36 | 0.552 | 3.619 | 23.053 |
-| `background_text_translation` | 38 | 0.002 | 2.332 | 10.497 |
-| `translate_text` | 4 | 0.674 | 0.735 | 0.765 |
-| `the_cut` | 4 | 0.011 | 0.018 | 0.026 |
-| `html_generation` | 43 | 0.003 | 0.004 | 0.006 |
 
 ### 20260807230200 [Golden DE]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |

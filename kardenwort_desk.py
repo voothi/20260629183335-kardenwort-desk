@@ -6058,34 +6058,35 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         except Exception:
             pass
 
-    if not is_progressive_flow and col_lemma != -1 and col_word_dest != -1:
-        lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
-        lemmas_to_translate = []
-        for row in data_rows:
-            if len(row) > col_lemma and row[col_lemma].strip():
-                if len(row) <= col_word_dest or not row[col_word_dest].strip():
-                    lemmas_to_translate.append(row[col_lemma].strip())
-        
-        if lemmas_to_translate:
-            unique_lemmas = list(dict.fromkeys(lemmas_to_translate))
-            translations = translate_lemmas_fast_path(unique_lemmas, language, target_lang, config, resolved_paths, lemmas_provider)
-            
+    if not is_progressive_flow:
+        if col_lemma != -1 and col_word_dest != -1:
+            lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
+            lemmas_to_translate = []
             for row in data_rows:
                 if len(row) > col_lemma and row[col_lemma].strip():
-                    lemma = row[col_lemma].strip()
                     if len(row) <= col_word_dest or not row[col_word_dest].strip():
-                        trans = translations.get(lemma, "")
-                        while len(row) <= col_word_dest:
-                            row.append("")
-                        row[col_word_dest] = trans
+                        lemmas_to_translate.append(row[col_lemma].strip())
             
-            with file_lock(working_tsv_path):
-                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            if lemmas_to_translate:
+                unique_lemmas = list(dict.fromkeys(lemmas_to_translate))
+                translations = translate_lemmas_fast_path(unique_lemmas, language, target_lang, config, resolved_paths, lemmas_provider)
+                
+                for row in data_rows:
+                    if len(row) > col_lemma and row[col_lemma].strip():
+                        lemma = row[col_lemma].strip()
+                        if len(row) <= col_word_dest or not row[col_word_dest].strip():
+                            trans = translations.get(lemma, "")
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            row[col_word_dest] = trans
+                
+                with file_lock(working_tsv_path):
+                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
 
-    if run_intellifiller:
-        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-        run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
-        
+        if run_intellifiller:
+            prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+            
     comments, headers, data_rows = load_tsv_rows(working_tsv_path)
     
     if not run_intellifiller:
