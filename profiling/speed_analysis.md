@@ -8,6 +8,7 @@
 - [[Commit: 7986e1f] 20260809125034](#commit-7986e1f-20260809125034)
 - [[Commit: 931e190] 20260809160755](#commit-931e190-20260809160755)
 - [[Commit: e489fd9] 20260809161110](#commit-e489fd9-20260809161110)
+- [[Commit: 4c6f61d] 20260809163850](#commit-4c6f61d-20260809163850)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -157,17 +158,37 @@ html_generation (00)                |                                        █
 
 ```
 
+## [Commit: 4c6f61d] 20260809163850
+```text
+Run Session: 20260807230100 [Golden EN] (Total Batch E2E Duration: 16.230s)
+---------------------------------------------------------------------------
+translate_text (00)                 | █                                        | 0.699s
+lemmatization (00)                  | ████████                                 | 3.595s
+the_cut (00)                        |           █                              | 0.015s
+intellifiller_enrichment (00)       |            ████████████████████████████  | 11.662s
+html_generation (03)                |             █                            | 0.004s
+background_text_translation (03)    |              █████                       | 2.208s
+intellifiller_enrichment (03)       |              █████                       | 2.192s
+html_generation (02)                |               █                          | 0.003s
+background_text_translation (02)    |               █                          | 0.003s
+html_generation (01)                |                █                         | 0.003s
+background_text_translation (01)    |                 █████                    | 2.141s
+intellifiller_enrichment (01)       |                 █████                    | 2.125s
+html_generation (00)                |                                        █ | 0.003s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807230100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `intellifiller_enrichment` | 67 | 0.547 | 5.326 | 14.908 |
-| `background_text_translation` | 51 | 0.002 | 3.650 | 10.546 |
-| `lemmatization` | 17 | 2.497 | 3.299 | 12.072 |
-| `translate_text` | 17 | 0.504 | 0.747 | 2.067 |
-| `the_cut` | 17 | 0.009 | 0.011 | 0.016 |
-| `html_generation` | 68 | 0.002 | 0.003 | 0.005 |
+| `intellifiller_enrichment` | 73 | 0.547 | 5.680 | 37.651 |
+| `background_text_translation` | 57 | 0.002 | 3.415 | 10.546 |
+| `lemmatization` | 19 | 2.497 | 3.282 | 12.072 |
+| `translate_text` | 19 | 0.504 | 0.735 | 2.067 |
+| `the_cut` | 19 | 0.009 | 0.012 | 0.016 |
+| `html_generation` | 76 | 0.002 | 0.003 | 0.005 |
 
 ## Phase Glossary
 - **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).

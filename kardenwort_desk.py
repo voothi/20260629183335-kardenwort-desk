@@ -1264,8 +1264,17 @@ def get_role_fields(mapping, headers):
                 break
     role_fields['sentence_index'] = sentence_index_col
     
+    if mapping and 'fields_mapping.sentence' in mapping:
+        for col, role in mapping['fields_mapping.sentence'].items():
+            if role == 'destination_sentence':
+                role_fields['sentence_destination'] = col
+            elif role == 'source_sentence':
+                role_fields['sentence_source'] = col
+                
     if 'sentence_source' not in role_fields and 'SentenceSource' in headers:
         role_fields['sentence_source'] = 'SentenceSource'
+    if 'sentence_destination' not in role_fields and 'SentenceDestination' in headers:
+        role_fields['sentence_destination'] = 'SentenceDestination'
         
     return role_fields
 
@@ -3596,9 +3605,7 @@ html, body {{
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
                 need_dest = len(row) <= col_word_dest or not row[col_word_dest].strip()
-                need_ipa = base_provider == 'intellifiller' and col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                need_morph = base_provider == 'intellifiller' and col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
-                if need_dest or need_ipa or need_morph:
+                if need_dest:
                     has_untranslated_lemmas = True
                     break
     elif col_word_dest != -1:
@@ -3643,9 +3650,7 @@ html, body {{
                 for i, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                         need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                        need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                        need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
-                        if need_dest or need_ipa or need_morph:
+                        if need_dest:
                             selected_rows_to_enrich.append(i)
                             
                 if selected_rows_to_enrich:
@@ -7678,9 +7683,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     for i, row in enumerate(data_rows):
                         if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
                             need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                            need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                            need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
-                            if need_dest or need_ipa or need_morph:
+                            if need_dest:
                                 selected_rows_to_enrich.append(i)
                             
                     if selected_rows_to_enrich:
@@ -7767,7 +7770,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 need_ipa = col_ipa != -1 and not has_ipa
                 need_morph = col_morph != -1 and not has_morph
                 
-                if not (need_dest or need_ipa or need_morph):
+                if not need_dest:
                     continue
                 valid_selected.append(r)
                 
