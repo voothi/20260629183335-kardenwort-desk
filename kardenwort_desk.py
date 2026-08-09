@@ -7616,13 +7616,13 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     else:
         logger.error(f"Failed to atomically move update js file after 10 retries: {update_js_path}")
 
-def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, prefilled_lemmas=None):
+def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
     m = re.match(r'^(\d{14})', tsv_path.name)
     zid = m.group(1) if m else "unknown"
     with TraceTimer("background_text_translation", zid, config, resolved_paths):
-        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, prefilled_lemmas)
+        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid)
 
-def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, prefilled_lemmas=None):
+def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -7717,8 +7717,6 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             for i, row in enumerate(data_rows):
                 if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                     val = row[col_lemma].strip()
-                    if prefilled_lemmas and val in prefilled_lemmas:
-                        continue
                         
                     needs_dest = col_word_dest != -1 and is_field_empty(row, col_word_dest)
                     needs_ipa = False
@@ -7787,7 +7785,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
     return data_rows
 
-def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None, prefilled_lemmas=None):
+def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     try:
         # Fallback: 30 (larger than the reprocess worker's default of 5).
         # Progressive enrichment runs fully in the background without blocking the UI,
@@ -7815,8 +7813,6 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 if source_idx != -1 and len(row) > source_idx:
                     source_val = str(row[source_idx]).strip()
                     if not source_val:
-                        continue
-                    if prefilled_lemmas and source_val in prefilled_lemmas:
                         continue
                 
                 has_dest = col_word_dest != -1 and len(row) > col_word_dest and str(row[col_word_dest]).strip()
@@ -8257,20 +8253,6 @@ def cmd_progressive_worker(args):
         col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
         
         base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
-        
-        prefilled_lemmas = set()
-        if col_lemma != -1:
-            col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers else -1
-            col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
-            
-            for row in data_rows:
-                if len(row) > col_lemma and not is_field_empty(row, col_lemma):
-                    needs_dest = col_word_dest != -1 and is_field_empty(row, col_word_dest)
-                    needs_ipa = base_provider == 'intellifiller' and col_ipa != -1 and is_field_empty(row, col_ipa)
-                    needs_morph = base_provider == 'intellifiller' and col_morph != -1 and is_field_empty(row, col_morph)
-                    
-                    if not (needs_dest or needs_ipa or needs_morph):
-                        prefilled_lemmas.add(row[col_lemma].strip())
 
         if getattr(args, 'text_mode', 'single') == 'multi':
             wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows))
@@ -8285,7 +8267,7 @@ def cmd_progressive_worker(args):
             
             # 1. Base Translation Stage
             if run_base == 'auto' or run_text == 'auto':
-                data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, prefilled_lemmas)
+                data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                 
             try:
                 tsv_path.with_suffix('.base_translation_done').touch()
