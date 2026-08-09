@@ -1502,6 +1502,11 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
             if len(row) > col_lemma and row[col_lemma].strip():
                 if len(row) <= col_word_dest or not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
                     return False
+                if lemma_base_provider == 'intellifiller':
+                    if col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip() or 'skeleton-loader' in row[col_ipa]):
+                        return False
+                    if col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip() or 'skeleton-loader' in row[col_morph]):
+                        return False
     return True
 
 
@@ -8264,7 +8269,11 @@ def cmd_progressive_worker(args):
         finally:
             # 3. Finished Event
             try:
-                tsv_path.with_suffix('.enrichment_done').touch()
+                tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
+            except Exception:
+                pass
+            try:
+                tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
             except Exception:
                 pass
             try:
