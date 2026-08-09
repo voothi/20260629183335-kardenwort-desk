@@ -1171,8 +1171,8 @@ def test_is_base_translation_finished_intellifiller():
     role_fields = {
         "lemma": "WordSource",
         "word_translation": "WordDestination",
-        "word_ipa": "WordSourceIPA",
-        "word_morphology_ai": "WordSourceMorphologyAI",
+        "ipa": "WordSourceIPA",
+        "morphology": "WordSourceMorphologyAI",
     }
 
     # Case A: dest filled, IPA missing → must return False for intellifiller

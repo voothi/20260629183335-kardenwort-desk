@@ -1494,8 +1494,8 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
         return True
     col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
     col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
-    col_ipa = headers.index(role_fields.get('word_ipa', 'WordSourceIPA')) if role_fields and role_fields.get('word_ipa', 'WordSourceIPA') in headers else -1
-    col_morph = headers.index(role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI') in headers else -1
+    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
     
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
@@ -8116,8 +8116,8 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
         
     col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
     col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
-    col_ipa = headers.index(role_fields.get('word_ipa', 'WordSourceIPA')) if role_fields and role_fields.get('word_ipa', 'WordSourceIPA') in headers else -1
-    col_morph = headers.index(role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI') in headers else -1
+    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
     
     if col_lemma == -1:
         return data_rows
@@ -8170,8 +8170,8 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
             
         sib_col_lemma = sib_headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in sib_headers else -1
         sib_col_dest = sib_headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in sib_headers else -1
-        sib_col_ipa = sib_headers.index(role_fields.get('word_ipa', 'WordSourceIPA')) if role_fields and role_fields.get('word_ipa', 'WordSourceIPA') in sib_headers else -1
-        sib_col_morph = sib_headers.index(role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('word_morphology_ai', 'WordSourceMorphologyAI') in sib_headers else -1
+        sib_col_ipa = sib_headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in sib_headers else -1
+        sib_col_morph = sib_headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in sib_headers else -1
 
         if sib_col_lemma == -1: continue
 

@@ -17,8 +17,8 @@ def _make_role_fields():
     return {
         "lemma": "WordSource",
         "word_translation": "WordDestination",
-        "word_ipa": "WordSourceIPA",
-        "word_morphology_ai": "WordSourceMorphologyAI",
+        "ipa": "WordSourceIPA",
+        "morphology": "WordSourceMorphologyAI",
     }
 
 
