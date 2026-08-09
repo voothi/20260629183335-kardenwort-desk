@@ -6014,7 +6014,24 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     
-    if col_lemma != -1 and col_word_dest != -1:
+    # In progressive mode, the background worker handles translation of missing lemmas.
+    # We only run synchronous translation here if we are in monolithic mode.
+    # Note: run_lookup_flow is called AFTER _prepare_lookup_tsv_impl and may be used for cached renders.
+    is_progressive_flow = config.get(SEC_RENDERING, 'display_mode', fallback='progressive') == 'progressive'
+    
+    # Check if progressive worker already finished by looking for .updates directory
+    updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
+    if is_progressive_flow and updates_dir.exists():
+        try:
+            for js_file in updates_dir.glob("*.js"):
+                with open(js_file, 'r', encoding='utf-8') as f:
+                    if '"stage": "finished"' in f.read():
+                        is_progressive_flow = False
+                        break
+        except Exception:
+            pass
+
+    if not is_progressive_flow and col_lemma != -1 and col_word_dest != -1:
         lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
         lemmas_to_translate = []
         for row in data_rows:
