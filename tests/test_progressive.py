@@ -141,7 +141,7 @@ def test_progressive_worker_lifecycle(monkeypatch, tmp_path):
         }
         return config, resolved, None, None
 
-    def mock_translation_stage(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+    def mock_translation_stage(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, prefilled_lemmas=None):
         translation_order.append("translation_called")
         # Simulate: translation fills WordDestination
         for row in data_rows:

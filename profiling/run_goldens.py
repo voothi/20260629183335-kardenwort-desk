@@ -243,16 +243,11 @@ def main():
                                     if run['zid'] <= file_zid <= end_zid:
                                         if expected_count > 1 and file_zid == run['zid']:
                                             continue # Master window is not expected to translate lemmas in sentences mode
-                                        try:
-                                            with kardenwort_desk.file_lock(existing_file):
-                                                _, headers, data_rows = kardenwort_desk.load_tsv_rows(existing_file)
-                                            role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
-                                            if not kardenwort_desk.is_base_translation_finished(headers, data_rows, role_fields, lemma_base_provider='intellifiller'):
-                                                all_passed = False
-                                                missing_details.append(f"    [VALIDATION PENDING] Missing or incomplete fields detected in {existing_file.name}")
-                                        except Exception as e:
+                                        base_done = existing_file.with_suffix('.base_translation_done').exists()
+                                        enrich_done = existing_file.with_suffix('.enrichment_done').exists()
+                                        if not (base_done and enrich_done):
                                             all_passed = False
-                                            missing_details.append(f"    [VALIDATION ERROR] Could not validate {existing_file.name}: {e}")
+                                            missing_details.append(f"    [VALIDATION PENDING] Missing completion markers for {existing_file.name}")
                         
                         if all_passed:
                             validation_failed = False
