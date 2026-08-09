@@ -100,9 +100,9 @@ def main():
                 
             print(f"==================================================")
             if i == 0:
-                print(f"Ready to test {run['lang']}?")
+                print(f"Starting test for {run['lang']}...")
             else:
-                print(f"\nReady to test {run['lang']}?")
+                print(f"\nStarting test for {run['lang']}...")
                 
             close_all_kardenwort_windows()
             
