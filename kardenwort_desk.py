@@ -7667,6 +7667,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         # Advance stage unconditionally to allow JS frontend to clear skeleton loaders properly
         if not translated_text_emitted:
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
+            translated_text_emitted = True
 
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
@@ -7690,24 +7691,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if lemmas_to_translate:
                 provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
                 if provider == 'intellifiller':
-                    selected_rows_to_enrich = []
-                    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
-                    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
-
-                    for i, row in enumerate(data_rows):
-                        if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip() in lemmas_to_translate:
-                            need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
-                            need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-                            need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
-                            if need_dest or need_ipa or need_morph:
-                                selected_rows_to_enrich.append(i)
-                            
-                    if selected_rows_to_enrich:
-                        data_rows = _progressive_worker_stage_enrichment(
-                            tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_enrich
-                        )
-                    else:
-                        write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
                 else:
                     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
@@ -8259,7 +8243,7 @@ def cmd_progressive_worker(args):
                     
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
-            if not skip_intellifiller:
+            if not skip_intellifiller or base_provider == 'intellifiller':
                 if getattr(args, 'text_mode', 'single') == 'multi':
                     wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
                     data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
