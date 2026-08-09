@@ -1493,7 +1493,7 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
             if len(row) > col_lemma and row[col_lemma].strip():
                 if len(row) <= col_word_dest or not row[col_word_dest].strip():
                     return False
-                if lemma_base_provider == 'intellifiller':
+                if lemma_base_provider and lemma_base_provider.lower() == 'intellifiller':
                     if col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip()):
                         return False
                     if col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip()):
@@ -7951,7 +7951,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     my_zid = zid_match.group(1)
     
     max_wait = 15
-    if lemma_base_provider == 'intellifiller':
+    if lemma_base_provider and lemma_base_provider.lower() == 'intellifiller':
         max_wait = 15 + (data_rows_count * 15)
     
     def check_siblings():
