@@ -26,3 +26,7 @@ results/
 *.log
 vendor/
 worker_crash.txt
+find_cut.py
+test_cross.py
+test_pollinate.py
+test_pollinate2.py

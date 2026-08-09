@@ -3336,6 +3336,14 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         results_dir = resolve_results_dir(resolved_paths, kw_config)
         results_dir.mkdir(parents=True, exist_ok=True)
         
+        # Cleanup old markers from previous runs with the same ZID to prevent race conditions
+        for marker in results_dir.glob(f"{zid[:14]}*"):
+            if marker.suffix in ['.base_translation_done', '.enrichment_done', '.the_cut_done']:
+                try:
+                    marker.unlink()
+                except Exception:
+                    pass
+        
         # Write master translation file
         master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
         master_trans_path.write_text(translated_paragraph, encoding='utf-8')
@@ -3427,6 +3435,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         for child_seq, path in paths_to_spawn:
             ahk_args.extend(["--seq-num", str(child_seq), "--restore", str(path)])
         spawn_ahk(ahk_args, resolved_paths['base_dir'])
+        
+        try:
+            master_tsv_path.with_suffix('.the_cut_done').touch(exist_ok=True)
+        except Exception:
+            pass
         
         if parent_mode == 'stub':
             try:
@@ -3747,20 +3760,22 @@ html, body {{
     if not llm_filled:
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt')
         
-        if is_progressive:
+        is_master_window = bool(children_tsv_paths and eff_mode == 'multi')
+        
+        if is_progressive or is_master_window:
             needs_worker = False
             if run_text == 'auto' and not sentence_translated:
                 needs_worker = True
-            if run_base == 'auto' and has_untranslated_lemmas and not children_tsv_paths:
+            if run_base == 'auto' and has_untranslated_lemmas and not is_master_window:
                 needs_worker = True
-            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not children_tsv_paths:
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not is_master_window:
                 needs_worker = True
             # Master window in multi mode: launch worker to receive cross-pollinated data from children.
-            if children_tsv_paths and eff_mode == 'multi':
+            if is_master_window:
                 needs_worker = True
                 
             if needs_worker:
-                skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none')
+                skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none') or is_master_window
                 try:
                     run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, str(has_untranslated_lemmas), skip_intellifiller, eff_mode)
                     worker_launched = True
@@ -8087,6 +8102,10 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
         # Master role auto-detection: if no older siblings exist, wait for younger siblings (children).
         # This ensures cross-pollination happens after all children finish enrichment.
         if not found_older:
+            cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
+            if not cut_done_marker.exists():
+                return False
+                
             for sibling in working_tsv_path.parent.glob("*.tsv"):
                 if sibling == working_tsv_path: continue
                 sib_match = re.match(r'^(\d{14})', sibling.name)
@@ -8119,11 +8138,11 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
     event_cond = threading.Condition()
     class SiblingChangeHandler(FileSystemEventHandler):
         def on_modified(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done'):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done') or event.src_path.endswith('.the_cut_done'):
                 with event_cond:
                     event_cond.notify_all()
         def on_created(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done'):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done') or event.src_path.endswith('.the_cut_done'):
                 with event_cond:
                     event_cond.notify_all()
                     
@@ -8148,9 +8167,6 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
         return data_rows
         
     col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
-    col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
-    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers else -1
-    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
     
     if col_lemma == -1:
         return data_rows
@@ -8165,15 +8181,9 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
         if len(row) > col_lemma:
             lemma = row[col_lemma].strip()
             if not lemma: continue
-            
-            needs_dest = col_word_dest != -1 and (len(row) <= col_word_dest or not row[col_word_dest].strip())
-            needs_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
-            needs_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
-            
-            if needs_dest or needs_ipa or needs_morph:
-                if lemma not in missing_lemmas:
-                    missing_lemmas[lemma] = []
-                missing_lemmas[lemma].append(i)
+            if lemma not in missing_lemmas:
+                missing_lemmas[lemma] = []
+            missing_lemmas[lemma].append(i)
 
     if not missing_lemmas:
         return data_rows
@@ -8202,11 +8212,12 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
             continue
             
         sib_col_lemma = sib_headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in sib_headers else -1
-        sib_col_dest = sib_headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in sib_headers else -1
-        sib_col_ipa = sib_headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in sib_headers else -1
-        sib_col_morph = sib_headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in sib_headers else -1
-
         if sib_col_lemma == -1: continue
+
+        col_map = {}
+        for sib_c, h in enumerate(sib_headers):
+            if h in headers and sib_c != sib_col_lemma:
+                col_map[sib_c] = headers.index(h)
 
         for sib_row in sib_rows:
             if len(sib_row) > sib_col_lemma:
@@ -8215,22 +8226,18 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                     for target_row_idx in missing_lemmas[sib_lemma]:
                         target_row = data_rows[target_row_idx]
                         
-                        max_idx = max(col_word_dest, col_ipa, col_morph)
-                        if len(target_row) <= max_idx:
-                            target_row.extend([''] * (max_idx - len(target_row) + 1))
+                        max_target_col = max(col_map.values()) if col_map else -1
+                        if len(target_row) <= max_target_col:
+                            target_row.extend([''] * (max_target_col - len(target_row) + 1))
                             
-                        target_is_empty = False
-                        if col_word_dest != -1:
-                            target_is_empty = not target_row[col_word_dest].strip() or 'skeleton-loader' in target_row[col_word_dest]
-                        if col_word_dest != -1 and sib_col_dest != -1 and len(sib_row) > sib_col_dest and sib_row[sib_col_dest].strip() and target_is_empty:
-                            target_row[col_word_dest] = sib_row[sib_col_dest]
-                            modified = True
-                        if col_ipa != -1 and sib_col_ipa != -1 and len(sib_row) > sib_col_ipa and sib_row[sib_col_ipa].strip() and not target_row[col_ipa].strip():
-                            target_row[col_ipa] = sib_row[sib_col_ipa]
-                            modified = True
-                        if col_morph != -1 and sib_col_morph != -1 and len(sib_row) > sib_col_morph and sib_row[sib_col_morph].strip() and not target_row[col_morph].strip():
-                            target_row[col_morph] = sib_row[sib_col_morph]
-                            modified = True
+                        for sib_c, target_c in col_map.items():
+                            if len(sib_row) > sib_c:
+                                sib_val = sib_row[sib_c].strip()
+                                if sib_val and 'skeleton-loader' not in sib_val:
+                                    target_val = target_row[target_c].strip()
+                                    if not target_val or 'skeleton-loader' in target_val:
+                                        target_row[target_c] = sib_row[sib_c]
+                                        modified = True
 
     if modified:
         with file_lock(working_tsv_path):
@@ -8297,9 +8304,11 @@ def cmd_progressive_worker(args):
             # even when its own IntelliFiller is disabled (e.g. run_lemma_enrichment=manual).
             if getattr(args, 'text_mode', 'single') == 'multi':
                 wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
-                data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
+                with TraceTimer("cross_pollinate_from_siblings", zid, config, resolved_paths):
+                    data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
             if not skip_intellifiller:
                 data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+
                     
         except SystemExit as se:
             raise se
