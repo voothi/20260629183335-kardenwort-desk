@@ -25,3 +25,4 @@ results/
 *.bak
 *.log
 vendor/
+worker_crash.txt

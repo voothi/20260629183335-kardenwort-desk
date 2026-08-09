@@ -8270,8 +8270,7 @@ def cmd_progressive_worker(args):
         except Exception as e:
             logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
             import traceback
-            with open(Path(__file__).parent / "worker_crash.txt", "a", encoding="utf-8") as f:
-                f.write(f"CRASH: {e}\n{traceback.format_exc()}\n")
+            logger.error(traceback.format_exc())
         finally:
             # 3. Finished Event
             try:
