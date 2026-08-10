@@ -8101,7 +8101,7 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
         
         # Master role auto-detection: if no older siblings exist, wait for younger siblings (children).
         # This ensures cross-pollination happens after all children finish enrichment.
-        if not found_older:
+        if my_zid == master_zid:
             cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
             if not cut_done_marker.exists():
                 return False
@@ -8120,9 +8120,9 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
                         if not marker_file.exists():
                             return False
                 except Exception as e:
-                    logger.warning(f"Error checking child TSV {sibling} for enrichment: {e}")
-        
-        return True
+                    logger.warning(f"Error checking younger sibling TSV {sibling} for enrichment: {e}")
+            
+            return True
 
     if check_siblings():
         return
