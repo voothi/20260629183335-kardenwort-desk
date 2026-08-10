@@ -4034,14 +4034,13 @@ html, body {{
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
         
-        # Skeleton loaders for cells if they are pending in progressive mode:
-        if is_progressive:
-            if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
-                trans_val = '<span class="skeleton-loader" style="width: 60px;"></span>'
-            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
-                ipa_val = '<span class="skeleton-loader" style="width: 50px;"></span>'
-            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
-                morph_val = '<span class="skeleton-loader" style="width: 80px;"></span>'
+        # Skeleton loaders for cells pending when a configured provider is expected to fill them:
+        if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
+            trans_val = '<span class="skeleton-loader" style="width: 60px;"></span>'
+        if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
+            ipa_val = '<span class="skeleton-loader" style="width: 50px;"></span>'
+        if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
+            morph_val = '<span class="skeleton-loader" style="width: 80px;"></span>'
         
         row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
         
