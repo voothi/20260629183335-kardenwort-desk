@@ -12,6 +12,7 @@
 - [[Commit: ef35ad7] 20260810032615](#commit-ef35ad7-20260810032615)
 - [[Commit: c1bb194] 20260810035156](#commit-c1bb194-20260810035156)
 - [[Commit: 3165396] 20260810042138](#commit-3165396-20260810042138)
+- [[Commit: e418fa5] 20260810042316](#commit-e418fa5-20260810042316)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -392,6 +393,28 @@ validation_failed (00)              | █                                       
 
 ```
 
+## [Commit: e418fa5] 20260810042316
+```text
+Run Session: 20260807230100 [Golden EN] (Total Batch E2E Duration: 6.960s)
+---------------------------------------------------------------------------
+translate_text (00)                 | ███                                      | 0.656s
+lemmatization (00)                  | ██████████████                           | 2.591s
+the_cut (00)                        |                  █                       | 0.010s
+html_generation (00)                |                    █                     | 0.004s
+html_generation (03)                |                       █                  | 0.003s
+background_text_translation (03)    |                         ███████          | 1.269s
+intellifiller_enrichment (03)       |                         ███████          | 1.253s
+html_generation (02)                |                           █              | 0.003s
+background_text_translation (00)    |                            ████████████  | 2.157s
+intellifiller_enrichment (00)       |                            ████████████  | 2.141s
+background_text_translation (02)    |                             █            | 0.003s
+html_generation (01)                |                              █           | 0.002s
+background_text_translation (01)    |                                ███████   | 1.339s
+intellifiller_enrichment (01)       |                                ███████   | 1.323s
+cross_pollinate_from_siblings (00)  |                                        █ | 0.004s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807190100 [Golden EN]
@@ -455,6 +478,17 @@ validation_failed (00)              | █                                       
 | `cross_pollinate_from_siblings` | 3 | 0.017 | 0.356 | 1.021 |
 | `the_cut` | 3 | 0.012 | 0.013 | 0.014 |
 | `html_generation` | 13 | 0.003 | 0.004 | 0.010 |
+
+### 20260807230100 [Golden EN]
+| Phase | Cnt | Min (s) | Avg (s) | Max (s) |
+| :--- | :---: | :---: | :---: | :---: |
+| `lemmatization` | 5 | 2.584 | 2.899 | 3.366 |
+| `intellifiller_enrichment` | 14 | 0.969 | 2.289 | 10.530 |
+| `background_text_translation` | 19 | 0.003 | 1.698 | 10.546 |
+| `translate_text` | 5 | 0.520 | 0.673 | 1.075 |
+| `the_cut` | 5 | 0.010 | 0.011 | 0.017 |
+| `cross_pollinate_from_siblings` | 3 | 0.004 | 0.005 | 0.008 |
+| `html_generation` | 20 | 0.002 | 0.003 | 0.005 |
 
 ### 20260807230200 [Golden DE]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
