@@ -4493,11 +4493,9 @@ html, body {{
             applyDeltas: function(data) {
                 if (!data) return;
                 
-                if (data.stage === 'finished' || data.status === 'failed' || data.status === 'partial_persisted') {
+                var isTerminal = (data.stage === 'finished' || data.status === 'failed' || data.status === 'partial_persisted');
+                if (isTerminal) {
                     window.AppState.isFinished = true;
-                    if (window.ahkCall) {
-                        window.ahkCall('finished', '');
-                    }
                 }
                 
                 var updated = false;
@@ -4554,6 +4552,12 @@ html, body {{
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
                     
                     if (window.forceRepaint) window.forceRepaint();
+                }
+
+                // Signal AHK only after all rendering is complete so that "Ready"
+                // in the window title reflects the window being fully populated.
+                if (isTerminal && window.ahkCall) {
+                    window.ahkCall('finished', '');
                 }
             }
         };
