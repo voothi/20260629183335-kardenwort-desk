@@ -8304,6 +8304,7 @@ def cmd_progressive_worker(args):
             # even when its own IntelliFiller is disabled (e.g. run_lemma_enrichment=manual).
             if getattr(args, 'text_mode', 'single') == 'multi':
                 wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
+                zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
                 with TraceTimer("cross_pollinate_from_siblings", zid, config, resolved_paths):
                     data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
             if not skip_intellifiller:
