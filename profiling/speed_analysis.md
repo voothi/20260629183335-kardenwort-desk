@@ -11,6 +11,7 @@
 - [[Commit: fb1c04f] 20260810031306](#commit-fb1c04f-20260810031306)
 - [[Commit: ef35ad7] 20260810032615](#commit-ef35ad7-20260810032615)
 - [[Commit: c1bb194] 20260810035156](#commit-c1bb194-20260810035156)
+- [[Commit: 3165396] 20260810042138](#commit-3165396-20260810042138)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -383,6 +384,14 @@ cross_pollinate_from_siblings (00)  |                                        █
 
 ```
 
+## [Commit: 3165396] 20260810042138
+```text
+Run Session: 20260807230100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 1.000s)
+---------------------------------------------------------------------------
+validation_failed (00)              | █                                        | 0.000s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807190100 [Golden EN]
@@ -446,17 +455,6 @@ cross_pollinate_from_siblings (00)  |                                        █
 | `cross_pollinate_from_siblings` | 3 | 0.017 | 0.356 | 1.021 |
 | `the_cut` | 3 | 0.012 | 0.013 | 0.014 |
 | `html_generation` | 13 | 0.003 | 0.004 | 0.010 |
-
-### 20260807230100 [Golden EN]
-| Phase | Cnt | Min (s) | Avg (s) | Max (s) |
-| :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 4 | 2.584 | 2.976 | 3.366 |
-| `intellifiller_enrichment` | 11 | 0.969 | 2.484 | 10.530 |
-| `background_text_translation` | 15 | 0.003 | 1.833 | 10.546 |
-| `translate_text` | 4 | 0.520 | 0.678 | 1.075 |
-| `the_cut` | 4 | 0.010 | 0.012 | 0.017 |
-| `cross_pollinate_from_siblings` | 2 | 0.004 | 0.006 | 0.008 |
-| `html_generation` | 16 | 0.002 | 0.003 | 0.005 |
 
 ### 20260807230200 [Golden DE]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
