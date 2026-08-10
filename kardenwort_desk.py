@@ -3790,6 +3790,38 @@ html, body {{
                 
     if is_progressive and not worker_launched:
         write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True)
+        try:
+            with file_lock(working_tsv_path):
+                comments, headers_latest, current_rows = load_tsv_rows(working_tsv_path)
+                col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
+                col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
+                col_ipa = headers_latest.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers_latest else -1
+                col_morph = headers_latest.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers_latest else -1
+                
+                modified_sweep = False
+                for row in current_rows:
+                    if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                        for col_idx in (col_word_dest, col_ipa, col_morph):
+                            if col_idx != -1:
+                                if len(row) <= col_idx:
+                                    row.extend([''] * (col_idx - len(row) + 1))
+                                if not row[col_idx].strip() or 'skeleton-loader' in row[col_idx]:
+                                    row[col_idx] = "[FAILED]"
+                                    modified_sweep = True
+                if modified_sweep:
+                    save_tsv_rows_safely(working_tsv_path, comments, headers_latest, current_rows)
+                    data_rows = current_rows
+        except Exception as e:
+            logger.error(f"Error sweeping FAILED in UI thread: {e}")
+
+        try:
+            working_tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
+        except Exception:
+            pass
+        try:
+            working_tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
+        except Exception:
+            pass
 
     token_cfg = RuntimeTokenConfig.from_config(config)
     apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
@@ -8079,6 +8111,19 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
     max_wait = 3600
     
     def check_siblings():
+        zids = []
+        for sibling in working_tsv_path.parent.glob("*.tsv"):
+            sib_match = re.match(r'^(\d{14})', sibling.name)
+            if sib_match:
+                try:
+                    dt_sib = datetime.strptime(sib_match.group(1), '%Y%m%d%H%M%S')
+                    dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+                    if abs((dt_sib - dt_my).total_seconds()) <= 120:
+                        zids.append(sib_match.group(1))
+                except Exception:
+                    pass
+        master_zid = min(zids) if zids else my_zid
+
         found_older = False
         for sibling in working_tsv_path.parent.glob("*.tsv"):
             if sibling == working_tsv_path: continue
@@ -8086,6 +8131,10 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
             if not sib_match: continue
             sib_zid = sib_match.group(1)
             
+            if sib_zid == master_zid and my_zid != master_zid:
+                # Children do not wait for the master window in enrichment.
+                continue
+                
             try:
                 dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
                 dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
@@ -8121,8 +8170,8 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
                             return False
                 except Exception as e:
                     logger.warning(f"Error checking younger sibling TSV {sibling} for enrichment: {e}")
-            
-            return True
+        
+        return True
 
     if check_siblings():
         return

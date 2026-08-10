@@ -8,6 +8,7 @@
 - [[Commit: 9102d2b] 20260810023021](#commit-9102d2b-20260810023021)
 - [[Commit: 4b309b0] 20260810023417](#commit-4b309b0-20260810023417)
 - [[Commit: 0b5b68e] 20260810025229](#commit-0b5b68e-20260810025229)
+- [[Commit: fb1c04f] 20260810031306](#commit-fb1c04f-20260810031306)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
@@ -308,6 +309,24 @@ validation_failed (00)              |                                         �
 
 ```
 
+## [Commit: fb1c04f] 20260810031306
+```text
+Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 25.051s)
+---------------------------------------------------------------------------
+translate_text (00)                 | █████████                                | 5.831s
+lemmatization (00)                  | █████                                    | 3.282s
+the_cut (00)                        |          █                               | 0.012s
+html_generation (00)                |          █                               | 0.004s
+background_text_translation (00)    |           ███████████████████████████    | 17.133s
+html_generation (03)                |           █                              | 0.004s
+background_text_translation (03)    |            ███████████████████████████   | 17.064s
+html_generation (02)                |            █                             | 0.003s
+background_text_translation (02)    |             █████████                    | 5.836s
+html_generation (01)                |              █                           | 0.003s
+cross_pollinate_from_siblings (00)  |                                       █  | 1.021s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807190100 [Golden EN]
@@ -361,6 +380,16 @@ validation_failed (00)              |                                         �
 | `background_text_translation` | 2 | 0.565 | 0.598 | 0.632 |
 | `the_cut` | 1 | 0.036 | 0.036 | 0.036 |
 | `html_generation` | 9 | 0.002 | 0.003 | 0.008 |
+
+### 20260807220100 [Golden EN]
+| Phase | Cnt | Min (s) | Avg (s) | Max (s) |
+| :--- | :---: | :---: | :---: | :---: |
+| `background_text_translation` | 3 | 5.836 | 13.344 | 17.133 |
+| `translate_text` | 1 | 5.831 | 5.831 | 5.831 |
+| `lemmatization` | 1 | 3.282 | 3.282 | 3.282 |
+| `cross_pollinate_from_siblings` | 1 | 1.021 | 1.021 | 1.021 |
+| `the_cut` | 1 | 0.012 | 0.012 | 0.012 |
+| `html_generation` | 5 | 0.003 | 0.005 | 0.010 |
 
 ### 20260807230100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
