@@ -249,3 +249,125 @@ def test_progressive_worker_exception_fallback(monkeypatch, tmp_path):
         ".enrichment_done MUST be created in the finally block even on crash — "
         "child windows will deadlock otherwise"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3: Master window in Sentences Mode streams from children and must
+# emit skeleton loaders in pending translation cells (but NOT for IPA/Morph
+# when run_lemma_enrichment = manual).
+# ---------------------------------------------------------------------------
+
+def test_master_window_sentences_mode_translation_skeleton(monkeypatch, tmp_path):
+    """
+    Reproduces the Sentences Mode master window: it is rendered monolithic
+    (progressive text streaming is incompatible with the multi-window
+    architecture) but still receives lemma data progressively from children.
+
+    Before the fix, skeleton generation was gated solely by `is_progressive`,
+    so the master's empty translation cells never shimmered. After the fix the
+    decision is decoupled from display mode and tied to provider expectation,
+    so a pending translation cell (run_lemma_base_translation = auto) emits a
+    skeleton loader, while IPA/Morphology stay empty (run_lemma_enrichment = manual).
+    """
+    config = configparser.ConfigParser()
+    config.read_string(f"""
+[settings]
+default_target_language=ru
+[rendering]
+display_mode=progressive
+[translation]
+translation_wrap_max_chars=90
+[pipeline]
+progressive_text_translation=true
+progressive_timeout_seconds=15
+lemma_base_provider=google
+lemma_reprocess_provider=intellifiller
+[triggers]
+run_text_translation=auto
+run_lemma_base_translation=auto
+run_lemma_enrichment=manual
+[sentences_mode]
+enabled=true
+parent_mode=table
+[languages]
+de_prompt=
+[fields]
+""")
+
+    mapping_file = tmp_path / "mapping.ini"
+    mapping_file.write_text(
+        "[fields]\n"
+        "WordSource=\nWordDestination=\nWordSourceIPA=\nWordSourceMorphology=\n"
+        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\nWordSourceInflectedForm=\n"
+        "[fields_mapping.word]\n"
+        "WordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n"
+        "WordSourceMorphology=word_morphology\nSentenceSourceIndex=sentence_index\n"
+        "SentenceDestination=sentence_destination\nDeskSelected=selected\n"
+        "WordSourceInflectedForm=inflected\n",
+        encoding="utf-8",
+    )
+
+    resolved_paths = {
+        'results_dir': tmp_path,
+        'kardenwort_core_py': tmp_path / 'dummy.py',
+        'kardenwort_python': tmp_path / 'python',
+        'anki_mapping_file': mapping_file,
+        'kardenwort_workspace': tmp_path,
+        'settings_file': tmp_path / 'settings.ini',
+    }
+
+    headers = [
+        "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphology",
+        "SentenceSourceIndex", "SentenceDestination", "DeskSelected", "WordSourceInflectedForm",
+    ]
+    data_rows = [["Haus", "", "", "", "1", "", "0", ""]]
+
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "word_ipa": "WordSourceIPA",
+        "word_morphology": "WordSourceMorphology",
+        "sentence_index": "SentenceSourceIndex",
+        "sentence_destination": "SentenceDestination",
+        "selected": "DeskSelected",
+        "inflected": "WordSourceInflectedForm",
+    }
+
+    # Master TSV with a 14-digit ZID prefix...
+    master_tsv = tmp_path / "20260810153000-master.en.tsv"
+    master_tsv.write_text("\t".join(headers) + "\n" + "\t".join(data_rows[0]) + "\n", encoding="utf-8")
+    # ...and a child TSV a few seconds later, so the master is detected as a
+    # parent window with active children (forces monolithic display + worker).
+    child_tsv = tmp_path / "20260810153005-child.en.tsv"
+    child_tsv.write_text("", encoding="utf-8")
+
+    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'load_tsv_rows', lambda p: ([""], headers, [list(r) for r in data_rows]))
+    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
+    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
+    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
+    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
+    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'spawn_ahk', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Haus-DE"})
+    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
+
+    html_out = desk.run_render_flow(
+        "Haus ist gut.\nDas Buch ist rot.",
+        "de",
+        "20260810153010",
+        "multi",
+        config,
+        resolved_paths,
+        tsv_path=str(master_tsv),
+    )
+
+    # Translation cell is pending and a provider is expected to fill it -> skeleton.
+    assert "skeleton-loader" in html_out, "Master window translation cell must emit a skeleton loader"
+    assert 'width: 60px' in html_out, "Translation skeleton (width 60px) must be present"
+
+    # IPA / Morphology are manual -> must NOT shimmer.
+    assert 'width: 50px' not in html_out, "IPA skeleton must not appear when run_lemma_enrichment = manual"
+    assert 'width: 80px' not in html_out, "Morphology skeleton must not appear when run_lemma_enrichment = manual"
