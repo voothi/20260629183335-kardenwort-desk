@@ -6747,6 +6747,8 @@ def cmd_lookup(args):
         
         if args.format:
             goldendict['format'] = args.format
+        if getattr(args, 'theme', None):
+            goldendict['theme'] = args.theme
         if args.sections:
             goldendict['sections'] = parse_sections_list(args.sections, ['source', 'translation', 'lemmas'])
         if args.lemma_columns:
@@ -8045,7 +8047,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
                 diff_sec = (dt_my - dt_sib).total_seconds()
                 
                 # Check if it's an OLDER sibling from the SAME batch
-                if 0 < diff_sec <= 120:
+                if abs(diff_sec) <= 120:
                     marker_file = sibling.with_suffix('.base_translation_done')
                     if marker_file.exists():
                         continue
@@ -8144,7 +8146,7 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
                 dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
                 diff_sec = (dt_my - dt_sib).total_seconds()
                 
-                if 0 < diff_sec <= 120:
+                if abs(diff_sec) <= 120:
                     found_older = True
                     marker_file = sibling.with_suffix('.enrichment_done')
                     if not marker_file.exists():
