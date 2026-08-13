@@ -8164,7 +8164,8 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
                 dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
                 diff_sec = (dt_my - dt_sib).total_seconds()
                 
-                if abs(diff_sec) <= 120:
+                # Check if it's an OLDER sibling from the SAME batch
+                if 0 < diff_sec <= 120:
                     found_older = True
                     marker_file = sibling.with_suffix('.enrichment_done')
                     if not marker_file.exists():
