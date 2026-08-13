@@ -113,3 +113,133 @@ def test_cross_pollinate_bounds(tmp_path):
         "cross_pollinate_from_siblings must return data_rows unchanged when "
         "col_lemma == -1 (no WordSource column in child TSV)"
     )
+
+
+# ---------------------------------------------------------------------------
+# Task 2.3: test_cross_pollinate_ignores_failed_markers
+# ---------------------------------------------------------------------------
+
+def test_cross_pollinate_ignores_failed_markers(tmp_path):
+    """
+    Verify that cross_pollinate_from_siblings explicitly ignores [FAILED] and
+    error indicators from sibling TSVs so they are not copied to child rows.
+    """
+    child_name = "20260809190005-child.en.tsv"
+    sibling_name = "20260809190000-sibling.en.tsv"
+
+    headers = _make_headers()
+    role_fields = _make_role_fields()
+
+    child_rows = [
+        ["Haus", "", "", ""],
+    ]
+    child_tsv = tmp_path / child_name
+    child_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(child_rows[0]) + "\n",
+        encoding="utf-8",
+    )
+
+    # Sibling has [FAILED] or error string
+    sibling_rows = [
+        ["Haus", "[FAILED]", "[Error: 429]", "[FAILED]"],
+    ]
+    sibling_tsv = tmp_path / sibling_name
+    sibling_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(sibling_rows[0]) + "\n",
+        encoding="utf-8",
+    )
+
+    result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers, role_fields)
+
+    assert result[0][1] == "", "Failed WordDestination must not be copied to child"
+    assert result[0][2] == "", "Failed WordSourceIPA must not be copied to child"
+    assert result[0][3] == "", "Failed WordSourceMorphologyAI must not be copied to child"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.4: test_cross_pollinate_heals_failed_cells
+# ---------------------------------------------------------------------------
+
+def test_cross_pollinate_heals_failed_cells(tmp_path):
+    """
+    Verify that if a target child TSV has [FAILED] in a cell, and a healthy sibling
+    has a valid translation, cross_pollinate_from_siblings overwrites [FAILED] with
+    the healthy sibling value.
+    """
+    child_name = "20260809190005-child.en.tsv"
+    sibling_name = "20260809190000-sibling.en.tsv"
+
+    headers = _make_headers()
+    role_fields = _make_role_fields()
+
+    child_rows = [
+        ["Haus", "[FAILED]", "", ""],
+    ]
+    child_tsv = tmp_path / child_name
+    child_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(child_rows[0]) + "\n",
+        encoding="utf-8",
+    )
+
+    sibling_rows = [
+        ["Haus", "house", "/haʊs/", "Noun, neuter"],
+    ]
+    sibling_tsv = tmp_path / sibling_name
+    sibling_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(sibling_rows[0]) + "\n",
+        encoding="utf-8",
+    )
+
+    result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers, role_fields)
+
+    assert result[0][1] == "house", "Child [FAILED] cell should be healed by healthy sibling"
+    assert result[0][2] == "/haʊs/", "Child IPA should be populated from healthy sibling"
+
+
+# ---------------------------------------------------------------------------
+# Task 2.5: Fast-path delimiter & fallback tests
+# ---------------------------------------------------------------------------
+
+def test_translate_lemmas_fast_path_newline_delimiter(monkeypatch):
+    """
+    Verify that translate_lemmas_fast_path successfully splits newline-delimited
+    translations if semicolons were converted to newlines by the translation engine.
+    """
+    lemmas = ["Haus", "Buch", "Tisch"]
+    
+    def mock_translate_text(text, source, target, config, resolved_paths, provider):
+        if ";" in text:
+            # Engine returned newlines instead of semicolons
+            return "house\nbook\ntable"
+        return text + "-trans"
+
+    monkeypatch.setattr(desk, 'translate_text', mock_translate_text)
+
+    res = desk.translate_lemmas_fast_path(lemmas, "de", "en", None, None, "google")
+    assert res == {"Haus": "house", "Buch": "book", "Tisch": "table"}
+
+
+def test_translate_lemmas_fast_path_individual_fallback(monkeypatch):
+    """
+    Verify that if fast-path batch translation completely fails alignment,
+    individual calls are made and populate the returned dictionary for each lemma.
+    """
+    lemmas = ["Haus", "Buch"]
+
+    calls = []
+    def mock_translate_text(text, source, target, config, resolved_paths, provider):
+        calls.append(text)
+        if ";" in text:
+            return "malformed single string response"
+        if text == "Haus":
+            return "house"
+        if text == "Buch":
+            return "book"
+        return text
+
+    monkeypatch.setattr(desk, 'translate_text', mock_translate_text)
+
+    res = desk.translate_lemmas_fast_path(lemmas, "de", "en", None, None, "google")
+    assert res == {"Haus": "house", "Buch": "book"}
+    assert "Haus" in calls
+    assert "Buch" in calls

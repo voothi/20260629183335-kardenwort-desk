@@ -371,3 +371,64 @@ de_prompt=
     # IPA / Morphology are manual -> must NOT shimmer.
     assert 'width: 50px' not in html_out, "IPA skeleton must not appear when run_lemma_enrichment = manual"
     assert 'width: 80px' not in html_out, "Morphology skeleton must not appear when run_lemma_enrichment = manual"
+
+
+def test_progressive_worker_child_single_mode_syncs_with_siblings(monkeypatch, tmp_path):
+    """
+    Verify that cmd_progressive_worker in single text-mode synchronizes with older
+    siblings and cross-pollinates translations when sibling batch files exist on disk.
+    """
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        "[settings]\ndefault_language=en\n"
+        "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+        "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+        "[fields]\n",
+        encoding="utf-8",
+    )
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
+        encoding="utf-8",
+    )
+
+    # Older sibling TSV: completed base translation for 'Haus'
+    sibling_tsv = tmp_path / "20260809190000-master.en.tsv"
+    sibling_tsv.write_text("WordSource\tWordDestination\tWordSourceIPA\nHaus\thouse\t/haʊs/\n", encoding="utf-8")
+    sibling_tsv.with_suffix('.base_translation_done').touch()
+
+    # Child TSV: single text-mode with 'Haus' untranslated
+    child_tsv = tmp_path / "20260809190005-child.en.tsv"
+    child_tsv.write_text("WordSource\tWordDestination\tWordSourceIPA\nHaus\t\t\n", encoding="utf-8")
+
+    args = types.SimpleNamespace()
+    args.tsv = str(child_tsv)
+    args.config = str(config_path)
+    args.text_mode = "single"
+    args.skip_intellifiller = True
+
+    def mock_load_config(cfg_path):
+        config = configparser.ConfigParser()
+        config.read_string(
+            "[settings]\ndefault_language=en\n"
+            "[pipeline]\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+            "[fields]\n"
+        )
+        resolved = {
+            "results_dir": tmp_path,
+            "anki_mapping_file": mapping_path,
+            "kardenwort_workspace": tmp_path,
+            "settings_file": tmp_path / "settings.ini",
+        }
+        return config, resolved, None, None
+
+    monkeypatch.setattr(desk, 'load_config', mock_load_config)
+    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
+
+    # Run the progressive worker for child in single mode
+    desk.cmd_progressive_worker(args)
+
+    # Verify that child TSV inherited "house" via cross-pollination without redundant API calls
+    _, headers, rows = desk.load_tsv_rows(child_tsv)
+    assert rows[0][1] == "house", "Child worker in single mode should cross-pollinate WordDestination from sibling"
