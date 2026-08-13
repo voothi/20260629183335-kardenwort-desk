@@ -8017,6 +8017,35 @@ def cmd_retext_worker(args):
             write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
+def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
+    from datetime import datetime
+    zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
+    if not zid_match:
+        return []
+    my_zid = zid_match.group(1)
+    try:
+        dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+    except Exception:
+        return []
+
+    siblings = []
+    for sibling in working_tsv_path.parent.glob("*.tsv"):
+        if sibling == working_tsv_path:
+            continue
+        sib_match = re.match(r'^(\d{14})', sibling.name)
+        if not sib_match:
+            continue
+        sib_zid = sib_match.group(1)
+        try:
+            dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
+            if abs((dt_sib - dt_my).total_seconds()) <= max_delta_seconds:
+                siblings.append((sib_zid, sibling))
+        except Exception:
+            continue
+            
+    siblings.sort(key=lambda x: x[0])
+    return [p for _, p in siblings]
+
 def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0):
     import time
     from datetime import datetime
@@ -8032,29 +8061,26 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     if not zid_match: return
     my_zid = zid_match.group(1)
     
-    max_wait = 3600
+    max_wait = 30.0
     
     def check_siblings():
-        zids = []
-        for sibling in working_tsv_path.parent.glob("*.tsv"):
-            sib_match = re.match(r'^(\d{14})', sibling.name)
-            if sib_match:
-                try:
-                    dt_sib = datetime.strptime(sib_match.group(1), '%Y%m%d%H%M%S')
-                    dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-                    if abs((dt_sib - dt_my).total_seconds()) <= 120:
-                        zids.append(sib_match.group(1))
-                except Exception:
-                    pass
-        master_zid = min(zids) if zids else my_zid
+        sibling_tsvs = get_batch_sibling_tsvs(working_tsv_path)
+        if not sibling_tsvs:
+            return True
+            
+        zids = [re.match(r'^(\d{14})', s.name).group(1) for s in sibling_tsvs if re.match(r'^(\d{14})', s.name)]
+        zids.append(my_zid)
+        master_zid = min(zids)
         
         if my_zid == master_zid:
-            cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
-            if not cut_done_marker.exists():
-                return False
+            has_younger = any(z > my_zid for z in zids)
+            if has_younger:
+                cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
+                if not cut_done_marker.exists():
+                    return False
+            return True
 
-        for sibling in working_tsv_path.parent.glob("*.tsv"):
-            if sibling == working_tsv_path: continue
+        for sibling in sibling_tsvs:
             sib_match = re.match(r'^(\d{14})', sibling.name)
             if not sib_match: continue
             sib_zid = sib_match.group(1)
@@ -8132,25 +8158,19 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
     if not zid_match: return
     my_zid = zid_match.group(1)
     
-    max_wait = 3600
+    max_wait = 30.0
     
     def check_siblings():
-        zids = []
-        for sibling in working_tsv_path.parent.glob("*.tsv"):
-            sib_match = re.match(r'^(\d{14})', sibling.name)
-            if sib_match:
-                try:
-                    dt_sib = datetime.strptime(sib_match.group(1), '%Y%m%d%H%M%S')
-                    dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-                    if abs((dt_sib - dt_my).total_seconds()) <= 120:
-                        zids.append(sib_match.group(1))
-                except Exception:
-                    pass
-        master_zid = min(zids) if zids else my_zid
+        sibling_tsvs = get_batch_sibling_tsvs(working_tsv_path)
+        if not sibling_tsvs:
+            return True
+            
+        zids = [re.match(r'^(\d{14})', s.name).group(1) for s in sibling_tsvs if re.match(r'^(\d{14})', s.name)]
+        zids.append(my_zid)
+        master_zid = min(zids)
 
         found_older = False
-        for sibling in working_tsv_path.parent.glob("*.tsv"):
-            if sibling == working_tsv_path: continue
+        for sibling in sibling_tsvs:
             sib_match = re.match(r'^(\d{14})', sibling.name)
             if not sib_match: continue
             sib_zid = sib_match.group(1)
@@ -8176,25 +8196,26 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
         # Master role auto-detection: if no older siblings exist, wait for younger siblings (children).
         # This ensures cross-pollination happens after all children finish enrichment.
         if my_zid == master_zid:
-            cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
-            if not cut_done_marker.exists():
-                return False
-                
-            for sibling in working_tsv_path.parent.glob("*.tsv"):
-                if sibling == working_tsv_path: continue
-                sib_match = re.match(r'^(\d{14})', sibling.name)
-                if not sib_match: continue
-                sib_zid = sib_match.group(1)
-                try:
-                    dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-                    dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
-                    diff_sec = (dt_sib - dt_my).total_seconds()  # reversed: younger siblings
-                    if 0 < diff_sec <= 120:
-                        marker_file = sibling.with_suffix('.enrichment_done')
-                        if not marker_file.exists():
-                            return False
-                except Exception as e:
-                    logger.warning(f"Error checking younger sibling TSV {sibling} for enrichment: {e}")
+            has_younger = any(z > my_zid for z in zids)
+            if has_younger:
+                cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
+                if not cut_done_marker.exists():
+                    return False
+                    
+                for sibling in sibling_tsvs:
+                    sib_match = re.match(r'^(\d{14})', sibling.name)
+                    if not sib_match: continue
+                    sib_zid = sib_match.group(1)
+                    try:
+                        dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+                        dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
+                        diff_sec = (dt_sib - dt_my).total_seconds()  # reversed: younger siblings
+                        if 0 < diff_sec <= 120:
+                            marker_file = sibling.with_suffix('.enrichment_done')
+                            if not marker_file.exists():
+                                return False
+                    except Exception as e:
+                        logger.warning(f"Error checking younger sibling TSV {sibling} for enrichment: {e}")
         
         return True
 
@@ -8351,7 +8372,8 @@ def cmd_progressive_worker(args):
         write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
             
         base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
-        if getattr(args, 'text_mode', 'single') == 'multi':
+        has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi'
+        if has_siblings:
             wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows))
             data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
             
@@ -8373,10 +8395,10 @@ def cmd_progressive_worker(args):
                     
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
-            # In multi mode, always cross-pollinate from siblings regardless of skip_intellifiller.
+            # In multi mode or when siblings exist, always cross-pollinate from siblings regardless of skip_intellifiller.
             # This allows the master window to receive enriched data from its children
             # even when its own IntelliFiller is disabled (e.g. run_lemma_enrichment=manual).
-            if getattr(args, 'text_mode', 'single') == 'multi':
+            if has_siblings:
                 wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
                 zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
                 with TraceTimer("cross_pollinate_from_siblings", zid, config, resolved_paths):
