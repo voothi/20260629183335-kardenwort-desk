@@ -6115,7 +6115,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
             pass
 
     if not is_progressive_flow and col_lemma != -1 and col_word_dest != -1:
-        lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
+        lemmas_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
         lemmas_to_translate = []
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
