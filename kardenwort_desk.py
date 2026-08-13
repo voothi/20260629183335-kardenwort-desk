@@ -8064,8 +8064,8 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
                 dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
                 diff_sec = (dt_my - dt_sib).total_seconds()
                 
-                # Check if it's a sibling from the SAME batch
-                if abs(diff_sec) <= 120:
+                # Check if it's an OLDER sibling from the SAME batch
+                if 0 < diff_sec <= 120:
                     marker_file = sibling.with_suffix('.base_translation_done')
                     if marker_file.exists():
                         continue
@@ -8093,11 +8093,11 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     event_cond = threading.Condition()
     class SiblingChangeHandler(FileSystemEventHandler):
         def on_modified(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done'):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done') or event.src_path.endswith('.the_cut_done'):
                 with event_cond:
                     event_cond.notify_all()
         def on_created(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done'):
+            if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done') or event.src_path.endswith('.the_cut_done'):
                 with event_cond:
                     event_cond.notify_all()
                     
