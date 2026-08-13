@@ -1692,6 +1692,16 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     try:
         translated_line = translate_text(compact_line, source, target, config, resolved_paths, provider)
         parts = [p.strip() for p in translated_line.split(';')]
+        if len(parts) != len(lemmas):
+            # Check secondary delimiters like newline or period
+            lines = [p.strip() for p in translated_line.splitlines() if p.strip()]
+            if len(lines) == len(lemmas):
+                parts = lines
+            else:
+                periods = [p.strip() for p in translated_line.split('.') if p.strip()]
+                if len(periods) == len(lemmas):
+                    parts = periods
+                    
         if len(parts) == len(lemmas):
             logger.info("Fast-path lemma translation aligned successfully.")
             for i, lemma in enumerate(lemmas):
@@ -1701,7 +1711,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                         val = translate_text(lemma, source, target, config, resolved_paths, provider)
                     except Exception:
                         val = ""
-                translations[lemma] = val
+                translations[lemma] = val.strip() if val else ""
             return translations
         else:
             logger.warning(f"Fast-path alignment failure: expected {len(lemmas)} parts, got {len(parts)}. Falling back to individual calls.")
@@ -1710,7 +1720,8 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         
     for lemma in lemmas:
         try:
-            translations[lemma] = translate_text(lemma, source, target, config, resolved_paths, provider)
+            val = translate_text(lemma, source, target, config, resolved_paths, provider)
+            translations[lemma] = val.strip() if val else ""
         except Exception as e:
             logger.warning(f"Failed to translate lemma '{lemma}': {e}")
             translations[lemma] = ""
@@ -8285,21 +8296,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
 
     modified = False
     
-    for sibling in working_tsv_path.parent.glob("*.tsv"):
-        if sibling == working_tsv_path: continue
-        sib_match = re.match(r'^(\d{14})', sibling.name)
-        if not sib_match: continue
-        sib_zid = sib_match.group(1)
-        
-        try:
-            from datetime import datetime
-            dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-            dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
-            if abs((dt_my - dt_sib).total_seconds()) > 120:
-                continue
-        except Exception:
-            continue
-            
+    for sibling in get_batch_sibling_tsvs(working_tsv_path):
         try:
             with file_lock(sibling):
                 sib_comments, sib_headers, sib_rows = load_tsv_rows(sibling)
@@ -8328,9 +8325,9 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                         for sib_c, target_c in col_map.items():
                             if len(sib_row) > sib_c:
                                 sib_val = sib_row[sib_c].strip()
-                                if sib_val and 'skeleton-loader' not in sib_val:
+                                if sib_val and 'skeleton-loader' not in sib_val and sib_val != '[FAILED]' and not sib_val.startswith('[Error'):
                                     target_val = target_row[target_c].strip()
-                                    if not target_val or 'skeleton-loader' in target_val:
+                                    if not target_val or 'skeleton-loader' in target_val or target_val == '[FAILED]' or target_val.startswith('[Error'):
                                         target_row[target_c] = sib_row[sib_c]
                                         modified = True
 
