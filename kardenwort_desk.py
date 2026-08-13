@@ -8035,6 +8035,24 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     max_wait = 3600
     
     def check_siblings():
+        zids = []
+        for sibling in working_tsv_path.parent.glob("*.tsv"):
+            sib_match = re.match(r'^(\d{14})', sibling.name)
+            if sib_match:
+                try:
+                    dt_sib = datetime.strptime(sib_match.group(1), '%Y%m%d%H%M%S')
+                    dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+                    if abs((dt_sib - dt_my).total_seconds()) <= 120:
+                        zids.append(sib_match.group(1))
+                except Exception:
+                    pass
+        master_zid = min(zids) if zids else my_zid
+        
+        if my_zid == master_zid:
+            cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
+            if not cut_done_marker.exists():
+                return False
+
         for sibling in working_tsv_path.parent.glob("*.tsv"):
             if sibling == working_tsv_path: continue
             sib_match = re.match(r'^(\d{14})', sibling.name)
@@ -8046,7 +8064,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
                 dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
                 diff_sec = (dt_my - dt_sib).total_seconds()
                 
-                # Check if it's an OLDER sibling from the SAME batch
+                # Check if it's a sibling from the SAME batch
                 if abs(diff_sec) <= 120:
                     marker_file = sibling.with_suffix('.base_translation_done')
                     if marker_file.exists():
@@ -8373,6 +8391,30 @@ def cmd_progressive_worker(args):
             import traceback
             logger.error(traceback.format_exc())
         finally:
+            # Final sweep for FAILED to prevent stuck skeleton loaders
+            try:
+                run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
+                if run_base == 'auto':
+                    with file_lock(tsv_path):
+                        comments, headers_latest, current_rows = load_tsv_rows(tsv_path)
+                        col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
+                        col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
+                        
+                        modified_sweep = False
+                        for row in current_rows:
+                            if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                                if col_word_dest != -1:
+                                    if len(row) <= col_word_dest:
+                                        row.extend([''] * (col_word_dest - len(row) + 1))
+                                    if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
+                                        row[col_word_dest] = "[FAILED]"
+                                        modified_sweep = True
+                        if modified_sweep:
+                            save_tsv_rows_safely(tsv_path, comments, headers_latest, current_rows)
+                            data_rows = current_rows
+            except Exception as e:
+                logger.error(f"Error in progressive worker FAILED sweep: {e}")
+
             # 3. Finished Event
             try:
                 tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
