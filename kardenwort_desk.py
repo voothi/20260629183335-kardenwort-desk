@@ -3182,7 +3182,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         # is_progressive_translation_enabled throughout this function to track effective mode.
     
     if will_split:
-        main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
+        main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
         master_slug = generate_slug(text)
         master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
         
@@ -3551,7 +3551,7 @@ html, body {{
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    text_base_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
+    text_base_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
     main_text_provider = text_base_provider
     lemma_base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
     role_fields = get_role_fields(mapping, headers)
@@ -6023,7 +6023,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     ttl_seconds = goldendict['lookup_ttl_seconds']
     run_intellifiller = goldendict['run_intellifiller']
     
-    main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
+    main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
     try:
         sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
     except TranslationAlignmentError as tae:
@@ -7676,7 +7676,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             source_txt_path = tsv_path.with_suffix('.txt')
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
-                main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
+                main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
                 col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 try:
                     def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest):
