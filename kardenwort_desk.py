@@ -3551,7 +3551,9 @@ html, body {{
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
+    text_base_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback=config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
+    main_text_provider = text_base_provider
+    lemma_base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
     role_fields = get_role_fields(mapping, headers)
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
