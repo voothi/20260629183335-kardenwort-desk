@@ -6373,6 +6373,14 @@ INJECTED_JS_TEMPLATE = """
 
     window.kwToggleTag = function(checkboxEl, rowId) {
         var newStatus = checkboxEl.checked;
+        var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : checkboxEl.parentElement.parentElement;
+        if (rowEl) {
+            if (newStatus) {
+                rowEl.classList.add('kw-row-selected');
+            } else {
+                rowEl.classList.remove('kw-row-selected');
+            }
+        }
         setStatusMessage('Saving...', false);
 
         var payload = {
@@ -6403,6 +6411,10 @@ INJECTED_JS_TEMPLATE = """
                     } else {
                         setStatusMessage('Conflict: ' + (data.message || 'Stale data'), true);
                         checkboxEl.checked = !newStatus;
+                        if (rowEl) {
+                            if (!newStatus) rowEl.classList.add('kw-row-selected');
+                            else rowEl.classList.remove('kw-row-selected');
+                        }
                     }
                 });
             }
@@ -6410,6 +6422,10 @@ INJECTED_JS_TEMPLATE = """
                 return res.json().then(function(data) {
                     setStatusMessage(data.message || 'Error updating tag', true);
                     checkboxEl.checked = !newStatus;
+                    if (rowEl) {
+                        if (!newStatus) rowEl.classList.add('kw-row-selected');
+                        else rowEl.classList.remove('kw-row-selected');
+                    }
                 });
             }
             return res.json().then(function(data) {
@@ -6424,6 +6440,10 @@ INJECTED_JS_TEMPLATE = """
             IS_OFFLINE = true;
             setStatusMessage('Offline (tag failed)', true);
             checkboxEl.checked = !newStatus;
+            if (rowEl) {
+                if (!newStatus) rowEl.classList.add('kw-row-selected');
+                else rowEl.classList.remove('kw-row-selected');
+            }
         });
     };
 
@@ -6533,10 +6553,12 @@ def render_section(token, ctx):
             col_indices[t] = headers.index(field) if field in headers else -1
 
         for row_id, row in enumerate(data_rows):
-            html_output += '<tr>'
+            sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
+            is_checked_bool = str(sel_val).strip() in ("1", "true", "True")
+            row_cls = ' class="kw-row-selected"' if is_checked_bool else ''
+            html_output += f'<tr{row_cls}>'
             if server_enabled:
-                sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
-                is_checked = "checked" if str(sel_val).strip() in ("1", "true", "True") else ""
+                is_checked = "checked" if is_checked_bool else ""
                 html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" {is_checked} onchange="kwToggleTag(this, {row_id})"></td>'
             for t in valid_tokens:
                 idx = col_indices[t]
@@ -6641,8 +6663,8 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         .kw-lemmas-table td {
             padding: 2px 4px;
         }
-        .kw-lemmas-table tr {
-            border-bottom: 1px solid var(--table-border);
+        .kw-lemmas-table tr.kw-row-selected {
+            background-color: rgba(255, 225, 105, 0.4) !important;
         }
         .kw-tag-header {
             width: 32px;
@@ -6728,6 +6750,9 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         }
         .kw-lemmas-table tr {
             border-bottom: 1px solid var(--table-border);
+        }
+        .kw-lemmas-table tr.kw-row-selected {
+            background-color: rgba(255, 204, 0, 0.25) !important;
         }
         .kw-tag-header {
             width: 32px;
@@ -7198,7 +7223,14 @@ def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, te
         working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
 
     session_zid = extract_zid(working_tsv_path) or working_tsv_path.stem
-    fingerprint = compute_content_fingerprint(data_rows)
+    if working_tsv_path and Path(working_tsv_path).exists():
+        try:
+            _, _, disk_rows = load_tsv_rows(working_tsv_path)
+            fingerprint = compute_content_fingerprint(disk_rows)
+        except Exception:
+            fingerprint = compute_content_fingerprint(data_rows)
+    else:
+        fingerprint = compute_content_fingerprint(data_rows)
     server_enabled = goldendict.get('server_enabled', False)
     api_token = goldendict.get('server_api_key', '')
 
