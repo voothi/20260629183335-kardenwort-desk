@@ -261,19 +261,16 @@ def emit_payload(data, raw=False):
                 pass
 
 def print_structured_error(error_code, message, details=None):
-    # Validate that the error_code belongs to the shared error catalog.
-    # Unknown codes are emitted with a warning prefix to prevent silent leakage
-    # of arbitrary or misspelled error tokens across the IPC boundary while
-    # preserving process stability (no hard crash in error-reporting paths).
-    if error_code not in _VALID_ERROR_CODES:
+    code_str = error_code.value if hasattr(error_code, 'value') else str(error_code)
+    if code_str not in _VALID_ERROR_CODES:
         import warnings
         warnings.warn(
-            f"print_structured_error: unrecognized error code {error_code!r} is not "
+            f"print_structured_error: unrecognized error code {code_str!r} is not "
             f"in the shared error catalog. Permitted codes: {sorted(_VALID_ERROR_CODES)}",
             stacklevel=2,
         )
     error_payload = {
-        "error_code": error_code,
+        "error_code": code_str,
         "message": message,
     }
     if details:
@@ -1597,9 +1594,21 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
 
 
 def find_working_tsv(results_dir, zid, language):
+    if not zid:
+        return None
+    p = Path(zid)
+    if p.exists() and p.is_file():
+        return p
+    if (results_dir / zid).exists() and (results_dir / zid).is_file():
+        return results_dir / zid
+    if not str(zid).endswith('.tsv') and (results_dir / f"{zid}.tsv").exists():
+        return results_dir / f"{zid}.tsv"
+
     files = list(results_dir.glob(f"{zid}-*.{language}.tsv"))
     if not files:
         files = list(results_dir.glob(f"{zid}-*.tsv"))
+    if not files:
+        files = list(results_dir.glob(f"*{zid}*.tsv"))
     if files:
         return files[0]
     return None
@@ -7166,8 +7175,8 @@ def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, te
         wordfill_cfg=wordfill_cfg
     )
 
-    session_zid = extract_zid(working_tsv_path)
-    fingerprint = compute_content_fingerprint(data_rows, sentence_translation)
+    session_zid = extract_zid(working_tsv_path) or working_tsv_path.stem
+    fingerprint = compute_content_fingerprint(data_rows)
     server_enabled = goldendict.get('server_enabled', False)
     api_token = goldendict.get('server_api_key', '')
 
@@ -9962,7 +9971,10 @@ def main():
     try:
         commands[args.command](args)
     except Exception as e:
-        print_structured_error("DESK_FAILED", str(e))
+        if hasattr(e, 'error_code') and hasattr(e, 'message'):
+            print_structured_error(e.error_code, e.message, details=getattr(e, 'details', None))
+        else:
+            print_structured_error("DESK_FAILED", str(e))
         sys.exit(1)
 
 if __name__ == "__main__":

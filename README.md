@@ -411,6 +411,17 @@ python "U:/voothi/20260629183335-kardenwort-desk/kardenwort_desk.py" lookup --te
 ### Cache and Latency
 The `lookup-<lang>-<hash>.tsv` cache files are stored in your `generated_results_dir`. They skip the extraction and provider lookup phases completely if the requested text hits the cache (TTL expires after `lookup_ttl_seconds`). You can clear the cache by deleting these files. Setting `run_intellifiller = true` will synchronously block the lookup until IntelliFiller completes, which can add a few seconds of latency; consider keeping it `false` for instant lookups if IPA/morphology are not strictly needed.
 
+### HTTP Server & Interactive GoldenDict Interactivity
+When `enabled = true` under `[server]` in `config.ini`, Kardenwort Desk runs a background HTTP server on `http://127.0.0.1:18335`.
+
+GoldenDict delivers lookups in two dual modes:
+1. **Websites-tab (Interactive mode)**: Configure GoldenDict (Edit > Dictionaries > Websites) with:
+   `http://127.0.0.1:18335/lookup?text=%GDWORD%&language=en`
+   This mode injects interactive controls directly into GoldenDict's WebKit view, enabling one-click card tagging (`/api/v1/tag`) and instant Anki exporting (`/api/v1/export`).
+2. **Program-dictionaries (Stdout CLI fallback)**: Configure GoldenDict (Edit > Dictionaries > Programs) with:
+   `python "kardenwort_desk.py" lookup --text "%GDWORD%" --language en`
+   When `[server] enabled = false`, lookup output is byte-for-byte static HTML without JavaScript or API tokens.
+
 ### Migration Note
 If you encounter issues with the new `lookup` command, the revert path is to swap the GoldenDict Program commands back to their previous raw scripts (`En kW`, `dT-g En-Ru`, or German scripts). The desk change is strictly additive and doesn't break or replace the underlying standalone extraction scripts.
 
