@@ -6345,6 +6345,7 @@ def normalize_blank_lines(text):
 INJECTED_JS_TEMPLATE = """
 <script>
 (function() {
+    var SERVER_URL = "__SERVER_URL__";
     var SESSION_ZID = "__SESSION_ZID__";
     var API_TOKEN = "__API_TOKEN__";
     var LANGUAGE = "__LANGUAGE__";
@@ -6391,7 +6392,7 @@ INJECTED_JS_TEMPLATE = """
             fingerprint: FINGERPRINT
         };
 
-        fetch('/api/v1/tag', {
+        fetch(SERVER_URL + '/api/v1/tag', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -6460,7 +6461,7 @@ INJECTED_JS_TEMPLATE = """
             fingerprint: FINGERPRINT
         };
 
-        fetch('/api/v1/export', {
+        fetch(SERVER_URL + '/api/v1/export', {
             method: 'POST',
             headers: {
                 'Content-Type': 'application/json',
@@ -6827,8 +6828,12 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
 </html>"""
 
     if effective_server_enabled and session_zid:
+        server_host = goldendict.get('server_host', '127.0.0.1')
+        server_port = goldendict.get('server_port', 18335)
+        server_url = f"http://{server_host}:{server_port}"
         injected_script = (
             INJECTED_JS_TEMPLATE
+            .replace("__SERVER_URL__", server_url)
             .replace("__SESSION_ZID__", session_zid or "")
             .replace("__API_TOKEN__", effective_api_token or "")
             .replace("__LANGUAGE__", language or "")
