@@ -347,7 +347,7 @@ SEC_AUDIO = "audio"
 SEC_GOLDENDICT = "goldendict"
 SEC_WORDFILL = "wordfill"
 SEC_SERVER = "server"
-SINGLE_WORD_DELIMITERS = ('-', '.')
+SINGLE_WORD_DELIMITERS = ('-', '.', '_')
 
 
 @dataclass(frozen=True)
@@ -3528,11 +3528,24 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         matches_sentence = False
                         row_inf = row[col_inflected].strip() if col_inflected != -1 and len(row) > col_inflected else ""
                         row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
-                        forms_to_check = [f.strip() for f in row_inf.split(',')] if row_inf else ([row_lem] if row_lem else [])
+                        forms = [f.strip() for f in row_inf.split(',')] if row_inf else []
+                        clean_lemma = row_lem.strip() if row_lem else ""
+                        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
+                        if clean_lemma and (any(ch in clean_lemma for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1):
+                            has_compound = True
+                        if has_compound or not forms:
+                            forms_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
+                        else:
+                            forms_to_check = forms
+
                         for f in forms_to_check:
                             if not f: continue
-                            clean_f = "".join(ch for ch in f.lower() if ch.isalnum() or ch in apo_set)
+                            clean_f = tok.utf8_to_lower("".join(ch for ch in f if ch.isalnum() or ch in apo_set))
                             if clean_f in sub_words:
+                                matches_sentence = True
+                                break
+                            subtokens = tok.decompose_identifier(f)
+                            if any(tok.utf8_to_lower("".join(ch for ch in s if ch.isalnum() or ch in apo_set)) in sub_words for s in subtokens):
                                 matches_sentence = True
                                 break
                             parts = re.findall(apo_regex, f.lower())
@@ -3974,16 +3987,33 @@ html, body {{
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
         
         candidates = set()
-        vals_to_check = [f.strip() for f in inflected_val.split(',')] if inflected_val else [lemma_val]
+        forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
+        clean_lemma = lemma_val.strip() if lemma_val else ""
+        
+        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
+        if clean_lemma:
+            if any(ch in clean_lemma for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1:
+                has_compound = True
+                
+        if has_compound or not forms:
+            vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
+        else:
+            vals_to_check = forms
+
         for val in vals_to_check:
             if val:
-                clean_val = "".join(ch for ch in val.lower() if ch.isalnum() or ch in apo_set)
+                clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
                 if clean_val:
                     candidates.add(clean_val)
+                subtokens = tok.decompose_identifier(val)
+                for sub in subtokens:
+                    clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
+                    if clean_sub:
+                        candidates.add(clean_sub)
                 parts = re.findall(apo_regex, val.lower())
                 if len(parts) > 1:
                     for part in parts:
-                        clean_part = "".join(ch for ch in part if ch.isalnum() or ch in apo_set)
+                        clean_part = tok.utf8_to_lower("".join(ch for ch in part if ch.isalnum() or ch in apo_set))
                         if clean_part:
                             candidates.add(clean_part)
         row_candidates[row_id] = candidates

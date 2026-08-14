@@ -2540,4 +2540,91 @@ SentenceSourceIndex = SentenceSourceIndex
     assert captured_cmd[scope_idx + 1] == "sentence"
 
 
+def test_candidate_indexing_compound_subtokens():
+    import re
+    import kardenwort_desk as desk
+    import text_tokenizer as tok
+
+    data_rows = [
+        ["prepare_lookup_tsv", "lookup"],
+        ["per-window", "window"],
+        ["", "ExecutionContext.from_config"],
+        ["", "OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP"],
+        ["", "run"]
+    ]
+    col_inflected = 0
+    col_lemma = 1
+    apo_set = set("', ’, ‘, `, ´, ʼ".split(','))
+    apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
+
+    token_to_rows = {}
+    row_candidates = {}
+    for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        
+        candidates = set()
+        forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
+        clean_lemma = lemma_val.strip() if lemma_val else ""
+        
+        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
+        if clean_lemma:
+            if any(ch in clean_lemma for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1:
+                has_compound = True
+                
+        if has_compound or not forms:
+            vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
+        else:
+            vals_to_check = forms
+
+        for val in vals_to_check:
+            if val:
+                clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
+                if clean_val:
+                    candidates.add(clean_val)
+                subtokens = tok.decompose_identifier(val)
+                for sub in subtokens:
+                    clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
+                    if clean_sub:
+                        candidates.add(clean_sub)
+                parts = re.findall(apo_regex, val.lower())
+                if len(parts) > 1:
+                    for part in parts:
+                        clean_part = tok.utf8_to_lower("".join(ch for ch in part if ch.isalnum() or ch in apo_set))
+                        if clean_part:
+                            candidates.add(clean_part)
+        row_candidates[row_id] = candidates
+        for cand in candidates:
+            if cand not in token_to_rows:
+                token_to_rows[cand] = []
+            token_to_rows[cand].append(row_id)
+
+    # Row 0: prepare_lookup_tsv + lookup -> indexes prepare, lookup, tsv
+    assert "prepare" in row_candidates[0]
+    assert "lookup" in row_candidates[0]
+    assert "tsv" in row_candidates[0]
+    assert 0 in token_to_rows["lookup"]
+    assert 0 in token_to_rows["prepare"]
+
+    # Row 1: per-window + window -> indexes per, window
+    assert "per" in row_candidates[1]
+    assert "window" in row_candidates[1]
+
+    # Row 2: ExecutionContext.from_config -> indexes execution, context, from, config
+    assert "execution" in row_candidates[2]
+    assert "context" in row_candidates[2]
+    assert "from" in row_candidates[2]
+    assert "config" in row_candidates[2]
+
+    # Row 3: OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP -> indexes multi, sentence, local, dedup
+    assert "multi" in row_candidates[3]
+    assert "sentence" in row_candidates[3]
+    assert "local" in row_candidates[3]
+    assert "dedup" in row_candidates[3]
+
+    # Row 4: run -> indexes run only
+    assert row_candidates[4] == {"run"}
+
+
+
 

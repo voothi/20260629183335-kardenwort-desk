@@ -73,3 +73,41 @@ def test_build_word_list_internal_typographic_contractions():
     assert len(word_tokens) == 2
     assert word_tokens[0]["text"] == "Let’s"
     assert word_tokens[0]["lower_clean"] == "let’s"
+
+def test_split_camel_case():
+    assert tok.split_camel_case("") == []
+    assert tok.split_camel_case(None) == []
+    assert tok.split_camel_case("simple") == ["simple"]
+    assert tok.split_camel_case("camelCase") == ["camel", "Case"]
+    assert tok.split_camel_case("PascalCase") == ["Pascal", "Case"]
+    assert tok.split_camel_case("HTMLParser") == ["HTML", "Parser"]
+    assert tok.split_camel_case("getHTTPResponse") == ["get", "HTTP", "Response"]
+    assert tok.split_camel_case("MULTI") == ["MULTI"]
+
+def test_decompose_identifier():
+    assert tok.decompose_identifier("") == []
+    assert tok.decompose_identifier(None) == []
+    assert tok.decompose_identifier("_") == []
+    assert tok.decompose_identifier("__init__") == ["init"]
+    assert tok.decompose_identifier("simple") == ["simple"]
+    
+    # snake_case
+    assert tok.decompose_identifier("prepare_lookup_tsv") == ["prepare", "lookup", "tsv"]
+    
+    # kebab-case
+    assert tok.decompose_identifier("per-window") == ["per", "window"]
+    assert tok.decompose_identifier("open-sourced") == ["open", "sourced"]
+    
+    # dotted and compound identifiers
+    assert tok.decompose_identifier("ExecutionContext.from_config") == [
+        "ExecutionContext", "Execution", "Context", "from", "config"
+    ]
+    assert tok.decompose_identifier("OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP") == [
+        "OperationalMode", "Operational", "Mode", "MULTI", "SENTENCE", "LOCAL", "DEDUP"
+    ]
+    
+    # Mixed cases & abbreviations
+    assert tok.decompose_identifier("Hunde-Haus") == ["Hunde", "Haus"]
+    assert tok.decompose_identifier("e.g.") == ["e", "g"]
+    assert tok.decompose_identifier("word1_word2-word3.word4") == ["word1", "word2", "word3", "word4"]
+

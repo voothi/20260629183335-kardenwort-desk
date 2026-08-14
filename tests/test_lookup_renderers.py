@@ -538,3 +538,201 @@ def test_orthogonal_tsv_column_mapping(tmp_path, monkeypatch):
     # Assert editable classes are properly resolved
     assert 'class="editable" data-col="MyCustomLemma"' in html_out
     assert 'class="editable" data-col="MyCustomInflection"' in html_out
+
+
+def test_render_flow_compound_identifier_snake_case(tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    # 1. Full inflected compound matches constituent sub-tokens
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordSourceInflectedForm\tWordDestination\nlookup\tprepare_lookup_tsv\tprepare lookup table\n", encoding='utf-8')
+
+    html = run_render_flow(
+        text="call prepare_lookup_tsv now",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    # Constituent sub-tokens should receive highlight-orange class
+    assert 'class="word highlight-orange" data-word-idx="3" data-line-idx="0" data-lower-clean="prepare">prepare</span>' in html
+    assert 'class="word highlight-orange" data-word-idx="5" data-line-idx="0" data-lower-clean="lookup">lookup</span>' in html
+    assert 'class="word highlight-orange" data-word-idx="7" data-line-idx="0" data-lower-clean="tsv">tsv</span>' in html
+    # Unmatched tokens stay not-connected
+    assert 'class="word not-connected" data-word-idx="1" data-line-idx="0" data-lower-clean="call">call</span>' in html
+    assert 'class="word not-connected" data-word-idx="9" data-line-idx="0" data-lower-clean="now">now</span>' in html
+
+
+def test_render_flow_compound_identifier_lemma_fallback(tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    # 2. Blank inflected form with lemma 'lookup' matches sub-token 'lookup' inside prepare_lookup_tsv
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordSourceInflectedForm\tWordDestination\nlookup\t\tsearch\n", encoding='utf-8')
+
+    html = run_render_flow(
+        text="call prepare_lookup_tsv now",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    # 'lookup' inside the function name matches and is highlighted orange
+    assert 'class="word highlight-orange" data-word-idx="5" data-line-idx="0" data-lower-clean="lookup">lookup</span>' in html
+    # 'prepare' and 'tsv' were not in TSV, so they remain not-connected
+    assert 'class="word not-connected" data-word-idx="3" data-line-idx="0" data-lower-clean="prepare">prepare</span>' in html
+    assert 'class="word not-connected" data-word-idx="7" data-line-idx="0" data-lower-clean="tsv">tsv</span>' in html
+
+
+def test_render_flow_hyphenated_kebab_case(tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordSourceInflectedForm\tWordDestination\nwindow\tper-window\teach window\n", encoding='utf-8')
+
+    html = run_render_flow(
+        text="A per-window setting.",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    # Sub-tokens 'per' and 'window' are highlighted orange
+    assert 'class="word highlight-orange" data-word-idx="3" data-line-idx="0" data-lower-clean="per">per</span>' in html
+    assert 'class="word highlight-orange" data-word-idx="5" data-line-idx="0" data-lower-clean="window">window</span>' in html
+

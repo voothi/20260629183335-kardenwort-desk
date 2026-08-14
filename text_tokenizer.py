@@ -103,3 +103,31 @@ def build_word_list(text: str) -> list:
     """Returns list of plain word strings extracted from text."""
     tokens = build_word_list_internal(text, False)
     return [t["text"] for t in tokens if t["is_word"]]
+
+def split_camel_case(s: str) -> list:
+    """Split camelCase, PascalCase, or uppercase acronym boundaries into constituent words."""
+    if not s:
+        return []
+    parts = re.findall(r'[A-ZА-ЯÄÖÜ]+(?=[A-ZА-ЯÄÖÜ][a-zа-яäöüß0-9\']|\b)|[A-ZА-ЯÄÖÜ]?[a-zа-яäöüß0-9\']+|[A-ZА-ЯÄÖÜ]+', s)
+    return [p for p in parts if p]
+
+def decompose_identifier(s: str) -> list:
+    """
+    Decompose composite identifiers across snake_case (_), kebab-case (-), dot (.),
+    slashes/symbols, and camelCase boundaries.
+    """
+    if not s:
+        return []
+    raw_parts = re.split(r'[_.\-/:#@]+', s)
+    result = []
+    for raw in raw_parts:
+        if not raw:
+            continue
+        camel_parts = split_camel_case(raw)
+        if len(camel_parts) > 1:
+            result.append(raw)
+            result.extend(camel_parts)
+        else:
+            result.append(raw)
+    return result
+
