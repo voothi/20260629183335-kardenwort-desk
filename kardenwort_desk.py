@@ -47,10 +47,82 @@ class ErrorCode(str, Enum):
     DEPENDENCY_MISSING = "DEPENDENCY_MISSING"
     INVALID_STATE = "INVALID_STATE"
     CONFIGURATION_ERROR = "CONFIGURATION_ERROR"
+    # HTTP Server & API diagnostic error codes
+    INVALID_PAYLOAD = "INVALID_PAYLOAD"
+    MISSING_FIELD = "MISSING_FIELD"
+    UNAUTHORIZED = "UNAUTHORIZED"
+    TOKEN_NOT_CONFIGURED = "TOKEN_NOT_CONFIGURED"
+    NOT_FOUND = "NOT_FOUND"
+    METHOD_NOT_ALLOWED = "METHOD_NOT_ALLOWED"
+    ROW_STALE = "ROW_STALE"
+    ROW_BUSY = "ROW_BUSY"
+    SERVER_ERROR = "SERVER_ERROR"
 
 
 # Frozen set of all valid catalog codes for O(1) membership checks.
 _VALID_ERROR_CODES: FrozenSet[str] = frozenset(member.value for member in ErrorCode)
+
+
+class StructuredError(Exception):
+    """
+    Authoritative exception class for structured errors across CLI and HTTP layers.
+    Contains error_code, message, and optional details dictionary.
+    """
+    def __init__(self, error_code: Union[ErrorCode, str], message: str, details: Optional[dict] = None):
+        super().__init__(message)
+        self.error_code = error_code.value if isinstance(error_code, ErrorCode) else error_code
+        self.message = message
+        self.details = details or {}
+
+
+def compute_content_fingerprint(data_rows: List[Any], sentence_translation: str = "") -> str:
+    """
+    Computes a SHA1 content hash of the rendered data rows and sentence translation.
+    Used for optimistic locking (detecting row content mutations/deletions).
+    """
+    import hashlib
+    h = hashlib.sha1()
+    for row in data_rows:
+        if row is None:
+            continue
+        row_str = "\x1f".join(str(cell) for cell in row)
+        h.update(row_str.encode('utf-8'))
+        h.update(b"\x1e")
+    h.update(sentence_translation.encode('utf-8'))
+    return h.hexdigest()
+
+
+def check_coordination_busy(tsv_path: Path) -> bool:
+    """
+    Checks if background IntelliFiller or progressive worker sentinel lock files are held.
+    Returns True if busy (held by background process), False if free.
+    """
+    sentinels = [
+        Path(str(tsv_path) + ".intellifiller.lock"),
+        Path(str(tsv_path) + ".worker.lock")
+    ]
+    for lock_path in sentinels:
+        if not lock_path.exists():
+            continue
+        try:
+            with open(lock_path, 'a') as f:
+                if sys.platform == 'win32':
+                    import msvcrt
+                    try:
+                        msvcrt.locking(f.fileno(), msvcrt.LK_NBLCK, 1)
+                        msvcrt.locking(f.fileno(), msvcrt.LK_UNLCK, 1)
+                    except OSError:
+                        return True
+                else:
+                    import fcntl
+                    try:
+                        fcntl.flock(f.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        fcntl.flock(f.fileno(), fcntl.LOCK_UN)
+                    except OSError:
+                        return True
+        except Exception:
+            pass
+    return False
 
 
 # ---------------------------------------------------------------------------
@@ -2453,7 +2525,9 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
         return _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows, reprocess)
 
 def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False):
-    python_exe = resolved_paths['kardenwort_python']
+    lock_target = Path(str(tsv_path) + ".intellifiller")
+    with file_lock(lock_target):
+        python_exe = resolved_paths['kardenwort_python']
     headless_script = resolved_paths['intellifiller_headless']
     
     cmd = [
@@ -6071,18 +6145,20 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         
     cached = False
     import re
-    if ttl_seconds > 0:
-        for cached_file in results_dir.glob(f"*-{slug}.{language}.tsv"):
-            if cached_file.is_file():
-                if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
-                    working_tsv_path = cached_file
-                    cached = True
-                    break
+    with file_lock(working_tsv_path):
+        if ttl_seconds > 0:
+            for cached_file in results_dir.glob(f"*-{slug}.{language}.tsv"):
+                if cached_file.is_file():
+                    if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
+                        working_tsv_path = cached_file
+                        cached = True
+                        break
             
-    if not cached:
-        working_tsv_path = prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode=text_mode)
+        if not cached:
+            working_tsv_path = prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode=text_mode)
         
-    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+        comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
@@ -6209,7 +6285,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                         if lemma_val not in filled_lemmas:
                             row[col_idx] = ""
 
-    return comments, headers, data_rows, sentence_translation
+    return comments, headers, data_rows, sentence_translation, working_tsv_path
 
 def normalize_blank_lines(text):
     if not text:
@@ -6300,11 +6376,11 @@ def render_section(token, ctx):
         
     return html_output
 
-def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
     with TraceTimer("html_generation", zid, config, resolved_paths):
-        return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+        return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
 
-def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
+def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
     sections = goldendict['sections']
     column_tokens = goldendict['lemma_columns']
     
@@ -6776,89 +6852,122 @@ def cmd_wordfill(args):
     sys.exit(0)
 
 
-def cmd_lookup(args):
-    import datetime, sys, subprocess, configparser
-    zid = generate_unique_zid()
-    logger.info("Lookup subcommand invoked", extra={"zid": zid})
-    
-    try:
-        config, resolved_paths, goldendict, wordfill_cfg = load_config(args.config)
-        
-        if args.format:
-            goldendict['format'] = args.format
-        if getattr(args, 'theme', None):
-            goldendict['theme'] = args.theme
-        if args.sections:
-            goldendict['sections'] = parse_sections_list(args.sections, ['source', 'translation', 'lemmas'])
-        if args.lemma_columns:
-            goldendict['lemma_columns'] = parse_columns_list(args.lemma_columns, ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
-        if args.no_headings:
-            goldendict['heading_source'] = ""
-            goldendict['heading_translation'] = ""
-            goldendict['heading_lemmas'] = ""
-            
-        if args.disable_css:
-            goldendict['disable_css'] = True
-            
-        target_lang = args.target_lang if args.target_lang else config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
-        
-        if f"{args.language}_prompt" not in config[SEC_LANGUAGES]:
-            raise KeyError(f"Missing {args.language}_prompt in [languages]")
-            
+def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, text_mode='single', sections=None, lemma_columns=None, theme=None, no_headings=False, disable_css=False, zid=None, wordfill_cfg=None, config=None, resolved_paths=None, goldendict=None):
+    if zid is None:
+        zid = generate_unique_zid()
 
-        text_mode = getattr(args, 'text_mode', 'single')
-        if text_mode == 'single' and '\n' in args.text.strip():
-            text_mode = 'multi'
-            
-        if text_mode == 'multi':
-            remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
-            clean_spaces = config.getboolean(SEC_SETTINGS, 'multi_mode_clean_spaces', fallback=True)
-            if remove_empty or clean_spaces:
-                import re
-                new_lines = []
-                for line in args.text.splitlines():
-                    if clean_spaces:
-                        line = re.sub(r'[ \t]+', ' ', line).strip()
-                    if remove_empty and not line.strip():
-                        continue
-                    new_lines.append(line)
-                args.text = "\n".join(new_lines)
-            
-        comments, headers, data_rows, sentence_translation = run_lookup_flow(
-            args.text, args.language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode,
-            wordfill_cfg=wordfill_cfg
+    if config is None or resolved_paths is None or goldendict is None:
+        c_tuple = load_config(config_path)
+        config, resolved_paths, goldendict = c_tuple[0], c_tuple[1], c_tuple[2]
+        if wordfill_cfg is None:
+            wordfill_cfg = c_tuple[3]
+
+    goldendict = dict(goldendict)
+
+    if fmt:
+        goldendict['format'] = fmt
+    if theme:
+        goldendict['theme'] = theme
+    if sections:
+        goldendict['sections'] = parse_sections_list(sections, ['source', 'translation', 'lemmas']) if isinstance(sections, str) else sections
+    if lemma_columns:
+        goldendict['lemma_columns'] = parse_columns_list(lemma_columns, ['inflected', 'lemma', 'ipa', 'morphology', 'translation']) if isinstance(lemma_columns, str) else lemma_columns
+    if no_headings:
+        goldendict['heading_source'] = ""
+        goldendict['heading_translation'] = ""
+        goldendict['heading_lemmas'] = ""
+    if disable_css:
+        goldendict['disable_css'] = True
+
+    if not target_lang:
+        target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
+
+    if f"{language}_prompt" not in config[SEC_LANGUAGES]:
+        raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"Missing {language}_prompt in [languages]")
+
+    if text_mode == 'single' and '\n' in text.strip():
+        text_mode = 'multi'
+
+    if text_mode == 'multi':
+        remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
+        clean_spaces = config.getboolean(SEC_SETTINGS, 'multi_mode_clean_spaces', fallback=True)
+        if remove_empty or clean_spaces:
+            import re
+            new_lines = []
+            for line in text.splitlines():
+                if clean_spaces:
+                    line = re.sub(r'[ \t]+', ' ', line).strip()
+                if remove_empty and not line.strip():
+                    continue
+                new_lines.append(line)
+            text = "\n".join(new_lines)
+
+    comments, headers, data_rows, sentence_translation, working_tsv_path = run_lookup_flow(
+        text, language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode,
+        wordfill_cfg=wordfill_cfg
+    )
+
+    session_zid = extract_zid(working_tsv_path)
+    fingerprint = compute_content_fingerprint(data_rows, sentence_translation)
+    server_enabled = goldendict.get('server_enabled', False)
+    api_token = goldendict.get('server_api_key', '')
+
+    current_fmt = goldendict['format']
+    if current_fmt == 'html':
+        out = render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
+    elif current_fmt == 'text':
+        out = render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+    else:
+        out = render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
+
+    return {
+        "html": out,
+        "session_zid": session_zid,
+        "language": language,
+        "tsv_path": str(working_tsv_path),
+        "comments": comments,
+        "headers": headers,
+        "data_rows": data_rows,
+        "sentence_translation": sentence_translation,
+        "fingerprint": fingerprint
+    }
+
+
+def cmd_lookup(args):
+    zid = getattr(args, 'zid', None) or generate_unique_zid()
+    logger.info("Lookup subcommand invoked", extra={"zid": zid})
+    try:
+        res = core_lookup(
+            text=args.text,
+            language=args.language,
+            target_lang=getattr(args, 'target_lang', None),
+            config_path=getattr(args, 'config', None),
+            fmt=getattr(args, 'format', None),
+            text_mode=getattr(args, 'text_mode', 'single'),
+            sections=getattr(args, 'sections', None),
+            lemma_columns=getattr(args, 'lemma_columns', None),
+            theme=getattr(args, 'theme', None),
+            no_headings=getattr(args, 'no_headings', False),
+            disable_css=getattr(args, 'disable_css', False),
+            zid=zid,
         )
-        
-        fmt = goldendict['format']
-        if fmt == 'html':
-            out = render_lookup_html(args.text, args.language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
-        elif fmt == 'text':
-            out = render_lookup_text(args.text, args.language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
-        else:
-            out = render_lookup_combined(args.text, args.language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
-            
-        emit_payload(out, raw=True)
+        emit_payload(res["html"], raw=True)
         sys.exit(0)
-    except (configparser.Error, KeyError, subprocess.CalledProcessError, subprocess.TimeoutExpired) as e:
-        if isinstance(e, subprocess.CalledProcessError):
-            print_structured_error("DESK_FAILED", f"Lookup failed with exit code {e.returncode}", {"stderr": getattr(e, 'stderr', str(e))})
-        elif isinstance(e, subprocess.TimeoutExpired):
-            print_structured_error("TIMEOUT", f"Lookup timed out after {e.timeout} seconds")
-        else:
-            print_structured_error("CONFIGURATION_ERROR", f"Configuration error: {str(e)}")
-            
+    except StructuredError as se:
+        print_structured_error(se.error_code, se.message, se.details)
         fmt = getattr(args, 'format', 'html')
-        try:
-            if 'goldendict' in locals() and 'format' in goldendict:
-                fmt = goldendict['format']
-        except Exception:
-            pass
-            
-        err_msg = str(e)
         if fmt == 'text':
-            emit_payload(f"Error: {err_msg}", raw=True)
+            emit_payload(f"Error: {se.message}", raw=True)
         else:
-            emit_payload(f'<div style="color: red; padding: 10px; font-family: sans-serif;">Error: {err_msg}</div>', raw=True)
+            emit_payload(f'<div style="color: red; padding: 10px; font-family: sans-serif;">Error: {se.message}</div>', raw=True)
+        sys.exit(1)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Lookup failed: {str(e)}")
+        fmt = getattr(args, 'format', 'html')
+        if fmt == 'text':
+            emit_payload(f"Error: {str(e)}", raw=True)
+        else:
+            emit_payload(f'<div style="color: red; padding: 10px; font-family: sans-serif;">Error: {str(e)}</div>', raw=True)
         sys.exit(1)
 
 def cmd_render(args):
@@ -6902,70 +7011,104 @@ def cmd_render(args):
         print_structured_error("DESK_FAILED", f"Render failed: {str(e)}")
         sys.exit(1)
 
+def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, fingerprint=None, zid=None, language=None):
+    if zid is None:
+        zid = generate_unique_zid()
+
+    if isinstance(tsv_path_or_session, Path):
+        tsv_path = tsv_path_or_session
+    elif isinstance(tsv_path_or_session, str) and (Path(tsv_path_or_session).exists() or '\\' in tsv_path_or_session or '/' in tsv_path_or_session):
+        tsv_path = Path(tsv_path_or_session)
+    else:
+        kardenwort_workspace = resolved_paths['kardenwort_workspace']
+        kw_config = load_kardenwort_config(kardenwort_workspace)
+        results_dir = resolve_results_dir(resolved_paths, kw_config)
+        lang = language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        tsv_path = find_working_tsv(results_dir, str(tsv_path_or_session), lang)
+
+    if not tsv_path or not tsv_path.exists():
+        raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found: {tsv_path}")
+
+    if check_coordination_busy(tsv_path):
+        raise StructuredError(ErrorCode.ROW_BUSY, f"Working TSV file is locked by a background worker: {tsv_path.name}")
+
+    try:
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+    except Exception as e:
+        raise StructuredError(ErrorCode.DESK_FAILED, f"Failed to read working TSV: {e}")
+
+    if fingerprint:
+        current_fp = compute_content_fingerprint(data_rows)
+        if fingerprint != current_fp:
+            raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
+
+    export_selection_mode = config.get(SEC_SETTINGS, 'export_selection_mode', fallback='selected').lower()
+    if export_selection_mode == 'all':
+        actual_export_rows = list(range(len(data_rows)))
+    elif export_selection_mode == 'unselected':
+        actual_export_rows = [i for i in range(len(data_rows)) if i not in selected_row_ids]
+    else:
+        actual_export_rows = selected_row_ids
+
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    kw_config = load_kardenwort_config(kardenwort_workspace)
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
+    lang = language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
+
+    res = execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui=False, data_rows=data_rows, headers=headers, comments=comments)
+    if not isinstance(res, dict):
+        res = {"status": "success", "import_started": False, "tsv": str(tsv_path), "zid": zid}
+    else:
+        res["status"] = res.get("status", "success")
+        res["zid"] = zid
+    return res
+
+
 def cmd_export(args):
     logger.info("Export subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
-    kardenwort_workspace = resolved_paths['kardenwort_workspace']
-    kw_config = load_kardenwort_config(kardenwort_workspace)
-    
-    results_dir = resolve_results_dir(resolved_paths, kw_config)
-    
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
         print_structured_error("INVALID_STATE", f"Selection manifest not found: {manifest_path}")
         sys.exit(1)
-        
+
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as f:
             manifest = json.load(f)
     except Exception as e:
         print_structured_error("INVALID_STATE", f"Failed to parse selection manifest: {e}")
         sys.exit(1)
-        
+
     selected_rows = manifest.get("selected_row_ids", [])
     zid = manifest.get("zid")
     if not zid:
         print_structured_error("INVALID_STATE", "Selection manifest must contain 'zid'")
         sys.exit(1)
-        
-    lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
-    
+
     tsv_path_str = manifest.get("tsv_path")
-    if tsv_path_str:
-        tsv_path = Path(tsv_path_str)
-    else:
-        tsv_path = find_working_tsv(results_dir, zid, lang)
-        
-    if not tsv_path or not tsv_path.exists():
-        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
-        sys.exit(1)
-        
+    tsv_param = Path(tsv_path_str) if tsv_path_str else zid
+
     try:
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
-    except Exception as e:
-        print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
+        payload = core_export(tsv_param, selected_rows, config, resolved_paths, zid=zid, language=args.language)
+        emit_payload(payload)
+    except StructuredError as se:
+        print_structured_error(se.error_code, se.message, se.details)
         sys.exit(1)
-        
-    export_selection_mode = config.get(SEC_SETTINGS, 'export_selection_mode', fallback='selected').lower()
-    if export_selection_mode == 'all':
-        actual_export_rows = list(range(len(data_rows)))
-    elif export_selection_mode == 'unselected':
-        actual_export_rows = [i for i in range(len(data_rows)) if i not in selected_rows]
-    else:
-        actual_export_rows = selected_rows
-        
-    execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui=True, data_rows=data_rows, headers=headers, comments=comments)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Export failed: {e}")
+        sys.exit(1)
+
 
 def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui, data_rows, headers, comments, save_to_favorites_override=None, send_to_anki_override=None):
     if not actual_export_rows:
         logger.warning("No rows to export based on selection mode.")
+        skipped_payload: ExportSkippedPayload = {
+            "status": "skipped",
+            "message": "Warning: No rows to export based on selection mode. Export skipped.",
+        }
         if is_from_ui:
-            skipped_payload: ExportSkippedPayload = {
-                "status": "skipped",
-                "message": "Warning: No rows to export based on selection mode. Export skipped.",
-            }
             emit_payload(skipped_payload)
-        return
+        return skipped_payload
         
     exported_rows = []
     for row_id in actual_export_rows:
@@ -6975,13 +7118,13 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
             logger.warning(f"Export row index {row_id} is out of bounds (total rows: {len(data_rows)})")
 
     if not exported_rows:
+        skipped_payload: ExportSkippedPayload = {
+            "status": "skipped",
+            "message": "Warning: None of the selected row indices were valid.",
+        }
         if is_from_ui:
-            skipped_payload: ExportSkippedPayload = {
-                "status": "skipped",
-                "message": "Warning: None of the selected row indices were valid.",
-            }
             emit_payload(skipped_payload)
-        return
+        return skipped_payload
 
     # Resolve the selected column name from mapping config.
     selected_col_name = 'DeskSelected'
@@ -7058,49 +7201,61 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
             if detach:
                 show_window = False
                 pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
+                response: ExportImportStartedPayload = {
+                    "import_started": True,
+                    "show_window": show_window,
+                    "pid": pid,
+                    "log": log_path,
+                    "tsv": str(import_path),
+                    "note": "safe to close the window",
+                }
                 if is_from_ui:
-                    response: ExportImportStartedPayload = {
-                        "import_started": True,
-                        "show_window": show_window,
-                        "pid": pid,
-                        "log": log_path,
-                        "tsv": str(import_path),
-                        "note": "safe to close the window",
-                    }
                     emit_payload(response)
+                return response
             else:
                 success, output = run_synchronous_import(import_path, config, resolved_paths)
-                if is_from_ui:
-                    if success:
-                        import_complete_payload: ExportImportCompletePayload = {
-                            "import_complete": True,
-                            "show_window": show_window,
-                            "output": output,
-                        }
-                        emit_payload(import_complete_payload)
-                    else:
-                        print_structured_error("DESK_FAILED", "Anki import failed synchronously", {"details": output})
-                        sys.exit(1)
-                else:
-                    if not success:
-                        logger.error(f"Anki import failed synchronously: {output}")
-        else:
-            if save_to_favorites:
-                show_window = config.getboolean(SEC_SETTINGS, 'show_import_window', fallback=False)
-                if is_from_ui:
+                if success:
                     import_complete_payload: ExportImportCompletePayload = {
                         "import_complete": True,
                         "show_window": show_window,
-                        "output": f"SUCCESS: Exported to {import_path}",
+                        "output": output,
                     }
-                    emit_payload(import_complete_payload)
-            else:
+                    if is_from_ui:
+                        emit_payload(import_complete_payload)
+                    return import_complete_payload
+                else:
+                    if is_from_ui:
+                        print_structured_error("DESK_FAILED", "Anki import failed synchronously", {"details": output})
+                        sys.exit(1)
+                    else:
+                        raise StructuredError(ErrorCode.DESK_FAILED, "Anki import failed synchronously", {"details": output})
+        else:
+            if save_to_favorites:
+                show_window = config.getboolean(SEC_SETTINGS, 'show_import_window', fallback=False)
+                import_complete_payload: ExportImportCompletePayload = {
+                    "import_complete": True,
+                    "show_window": show_window,
+                    "output": f"SUCCESS: Exported to {import_path}",
+                }
                 if is_from_ui:
-                    success_payload: ExportSuccessPayload = {
-                        "status": "success",
-                        "message": "SUCCESS: Ready for Anki (no favorites file created)",
-                    }
+                    emit_payload(import_complete_payload)
+                return import_complete_payload
+            else:
+                success_payload: ExportSuccessPayload = {
+                    "status": "success",
+                    "message": "SUCCESS: Ready for Anki (no favorites file created)",
+                }
+                if is_from_ui:
                     emit_payload(success_payload)
+                return success_payload
+    except SystemExit:
+        raise
+    except Exception as e:
+        if is_from_ui:
+            print_structured_error("DESK_FAILED", f"Failed to execute export: {e}")
+            sys.exit(1)
+        else:
+            raise StructuredError(ErrorCode.DESK_FAILED, f"Failed to execute export: {e}")
     except Exception as e:
         if is_from_ui:
             print_structured_error("DESK_FAILED", f"Failed to save exported favorites: {e}")
@@ -8368,7 +8523,9 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
 
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
-    log_path = tsv_path.with_suffix('.log')
+    lock_target = Path(str(tsv_path) + ".worker")
+    with file_lock(lock_target):
+        log_path = tsv_path.with_suffix('.log')
     file_handler = None
     try:
         try:
@@ -8486,90 +8643,108 @@ def cmd_progressive_worker(args):
 
 
 
-def cmd_edit_save(args):
-    logger.info("Edit-save subcommand invoked", extra={"zid": args.zid})
-    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
-    kardenwort_workspace = resolved_paths['kardenwort_workspace']
-    kw_config = load_kardenwort_config(kardenwort_workspace)
-    
+def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerprint=None, zid=None, language=None):
+    if zid is None:
+        zid = generate_unique_zid()
+
+    if isinstance(tsv_path_or_session, Path):
+        tsv_path = tsv_path_or_session
+    elif isinstance(tsv_path_or_session, str) and (Path(tsv_path_or_session).exists() or '\\' in tsv_path_or_session or '/' in tsv_path_or_session):
+        tsv_path = Path(tsv_path_or_session)
+    else:
+        kardenwort_workspace = resolved_paths['kardenwort_workspace']
+        kw_config = load_kardenwort_config(kardenwort_workspace)
+        results_dir = resolve_results_dir(resolved_paths, kw_config)
+        lang = language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        tsv_path = find_working_tsv(results_dir, str(tsv_path_or_session), lang)
+
+    if not tsv_path or not tsv_path.exists():
+        raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found: {tsv_path}")
+
+    if check_coordination_busy(tsv_path):
+        raise StructuredError(ErrorCode.ROW_BUSY, f"Working TSV file is locked by a background worker: {tsv_path.name}")
+
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
-    
+
+    with file_lock(tsv_path):
+        try:
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        except Exception as e:
+            raise StructuredError(ErrorCode.DESK_FAILED, f"Failed to load working TSV: {e}")
+
+        if fingerprint:
+            current_fp = compute_content_fingerprint(data_rows)
+            if fingerprint != current_fp:
+                raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
+
+        role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
+        selected_col_name = role_fields.get('selected', 'DeskSelected')
+        if selected_col_name not in editable_cols:
+            editable_cols.append(selected_col_name)
+
+        for delta in deltas:
+            row_id = delta.get("row_id")
+            col_name = delta.get("column")
+            val = delta.get("value")
+
+            if row_id is None or col_name is None or val is None:
+                raise StructuredError(ErrorCode.INVALID_STATE, "Each delta must have 'row_id', 'column', and 'value'")
+
+            if col_name == "_delete":
+                if 0 <= row_id < len(data_rows):
+                    data_rows[row_id] = None
+                continue
+
+            if col_name not in editable_cols:
+                raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' is not inline-editable.")
+
+            if col_name not in headers:
+                raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' not found in TSV headers.")
+
+            col_idx = headers.index(col_name)
+            if 0 <= row_id < len(data_rows):
+                if data_rows[row_id] is not None:
+                    data_rows[row_id][col_idx] = val
+            else:
+                raise StructuredError(ErrorCode.DESK_FAILED, f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
+
+        data_rows = [r for r in data_rows if r is not None]
+        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        new_fingerprint = compute_content_fingerprint(data_rows)
+        session_zid = extract_zid(tsv_path)
+
+    return {
+        "status": "success",
+        "fingerprint": new_fingerprint,
+        "session_zid": session_zid,
+        "zid": zid
+    }
+
+
+def cmd_edit_save(args):
+    logger.info("Edit-save subcommand invoked", extra={"zid": getattr(args, 'zid', None)})
+    config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     deltas_path = Path(args.deltas).resolve()
     if not deltas_path.exists():
         print_structured_error("INVALID_STATE", f"Deltas file not found: {deltas_path}")
         sys.exit(1)
-        
+
     try:
         with open(deltas_path, 'r', encoding='utf-8-sig') as f:
             deltas = json.load(f)
     except Exception as e:
         print_structured_error("INVALID_STATE", f"Failed to parse deltas: {e}")
         sys.exit(1)
-        
-    results_dir = resolve_results_dir(resolved_paths, kw_config)
-    
-    lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
-    
-    if hasattr(args, 'tsv') and args.tsv:
-        tsv_path = Path(args.tsv)
-    else:
-        tsv_path = find_working_tsv(results_dir, args.zid, lang)
-        
-    if not tsv_path or not tsv_path.exists():
-        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {args.zid}")
-        sys.exit(1)
-        
+
+    tsv_param = getattr(args, 'tsv', None) or getattr(args, 'zid', None)
     try:
-        with file_lock(tsv_path):
-            try:
-                comments, headers, data_rows = load_tsv_rows(tsv_path)
-            except Exception as e:
-                print_structured_error("DESK_FAILED", f"Failed to load working TSV: {e}")
-                sys.exit(1)
-                
-            role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
-            selected_col_name = role_fields.get('selected', 'DeskSelected')
-            if selected_col_name not in editable_cols:
-                editable_cols.append(selected_col_name)
-                
-            for delta in deltas:
-                row_id = delta.get("row_id")
-                col_name = delta.get("column")
-                val = delta.get("value")
-                
-                if row_id is None or col_name is None or val is None:
-                    print_structured_error("INVALID_STATE", "Each delta must have 'row_id', 'column', and 'value'")
-                    sys.exit(1)
-                    
-                if col_name == "_delete":
-                    if 0 <= row_id < len(data_rows):
-                        data_rows[row_id] = None
-                    continue
-                    
-                if col_name not in editable_cols:
-                    print_structured_error("DESK_FAILED", f"Column '{col_name}' is not inline-editable.")
-                    sys.exit(1)
-                    
-                if col_name not in headers:
-                    print_structured_error("DESK_FAILED", f"Column '{col_name}' not found in TSV headers.")
-                    sys.exit(1)
-                    
-                col_idx = headers.index(col_name)
-                if 0 <= row_id < len(data_rows):
-                    if data_rows[row_id] is not None:
-                        data_rows[row_id][col_idx] = val
-                else:
-                    print_structured_error("DESK_FAILED", f"Row index {row_id} is out of bounds (total rows: {len(data_rows)})")
-                    sys.exit(1)
-                    
-            data_rows = [r for r in data_rows if r is not None]
-            
-            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        res = core_edit_save(tsv_param, deltas, config, resolved_paths, zid=getattr(args, 'zid', None), language=getattr(args, 'language', None))
         edit_save_payload: EditSaveSuccessPayload = {"status": "success"}
         emit_payload(edit_save_payload)
-    except SystemExit:
-        raise
+    except StructuredError as se:
+        print_structured_error(se.error_code, se.message, se.details)
+        sys.exit(1)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to process and save working TSV: {e}")
         sys.exit(1)

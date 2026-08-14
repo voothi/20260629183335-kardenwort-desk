@@ -102,6 +102,60 @@
       "category": "configuration",
       "description": "A configuration file is missing, malformed, or contains invalid values that prevent the operation from proceeding.",
       "resolution": "Validate config.ini and related configuration files against documented schemas. Correct identified issues and retry."
+    },
+    {
+      "code": "INVALID_PAYLOAD",
+      "category": "input",
+      "description": "The HTTP request payload is malformed or invalid JSON.",
+      "resolution": "Check the request body formatting and Content-Type."
+    },
+    {
+      "code": "MISSING_FIELD",
+      "category": "input",
+      "description": "A required JSON field is missing in the request payload.",
+      "resolution": "Ensure all required payload fields (e.g. fingerprint, session_zid) are included."
+    },
+    {
+      "code": "UNAUTHORIZED",
+      "category": "system",
+      "description": "Authentication token missing or invalid.",
+      "resolution": "Provide the correct X-API-Token header or token payload field."
+    },
+    {
+      "code": "TOKEN_NOT_CONFIGURED",
+      "category": "configuration",
+      "description": "Server api_key is empty in configuration.",
+      "resolution": "Set a valid api_key in config.ini under [server]."
+    },
+    {
+      "code": "NOT_FOUND",
+      "category": "runtime",
+      "description": "Requested API route or session TSV resource was not found.",
+      "resolution": "Verify the request URL or session ZID."
+    },
+    {
+      "code": "METHOD_NOT_ALLOWED",
+      "category": "input",
+      "description": "HTTP method not permitted for the requested route.",
+      "resolution": "Use the allowed HTTP method for this endpoint."
+    },
+    {
+      "code": "ROW_STALE",
+      "category": "runtime",
+      "description": "The TSV row content hash fingerprint has changed since rendering.",
+      "resolution": "Re-render the lookup before retrying state mutations."
+    },
+    {
+      "code": "ROW_BUSY",
+      "category": "runtime",
+      "description": "The session TSV is currently locked by a background worker or IntelliFiller process.",
+      "resolution": "Retry the request after a short delay."
+    },
+    {
+      "code": "SERVER_ERROR",
+      "category": "system",
+      "description": "Unhandled server-side exception.",
+      "resolution": "Inspect server logs for details."
     }
   ]
 }
