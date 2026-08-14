@@ -2480,3 +2480,64 @@ apostrophe_chars = "', ’, ‘, `, ´, ʼ"
         assert inf_words[0] == form.lower()
 
 
+def test_prepare_lookup_tsv_will_split_sentence_dedup(monkeypatch, tmp_path):
+    """
+    Verify that when will_split=True and deduplication_scope='sentence',
+    kardenwort.py receives --deduplication-scope sentence rather than global.
+    """
+    import kardenwort_desk as desk
+    import configparser
+
+    captured_cmd = None
+
+    def mock_run(cmd, *args, **kwargs):
+        nonlocal captured_cmd
+        captured_cmd = cmd
+        output_file = Path(cmd[cmd.index("--output-file") + 1])
+        output_file.write_text("SentenceSourceIndex\tWordSource\tWordSourceInflectedForm\n", encoding="utf-8")
+        return type("MockProcess", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.add_section("sentences_mode")
+    config.add_section("languages")
+    config.add_section("pipeline")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "deduplication_scope", "sentence")
+    config.set("languages", "en_lemma_index", "data/en_lemma_index.json")
+    config.set("languages", "en_lemma_override", "data/en_lemma_override.json")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "kardenwort_python": "python",
+        "anki_mapping_file": tmp_path / "anki_mapping.ini",
+    }
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "data" / "en_lemma_index.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "data" / "en_lemma_override.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "anki_mapping.ini").write_text("""[fields]
+WordSource =
+SentenceSourceIndex =
+
+[fields_mapping.word]
+WordSource = WordSource
+SentenceSourceIndex = SentenceSourceIndex
+
+[desk_columns]
+""", encoding="utf-8")
+
+    desk.prepare_lookup_tsv(
+        "First sentence. Second sentence.", "en", "ru",
+        config, resolved_paths, "20260815004608",
+        ttl_seconds=0, cache_key="test.tsv", text_mode="single", will_split=True
+    )
+
+    assert captured_cmd is not None
+    assert "--deduplication-scope" in captured_cmd
+    scope_idx = captured_cmd.index("--deduplication-scope")
+    assert captured_cmd[scope_idx + 1] == "sentence"
+
+
+

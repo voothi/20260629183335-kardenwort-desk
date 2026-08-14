@@ -996,3 +996,38 @@ def test_progressive_guard_full_mode_matrix(
             f"(sentences_enabled={sentences_enabled}, children=True, "
             f"display_mode={display_mode}, prog_text={prog_text})"
         )
+
+
+@pytest.mark.parametrize("will_split", [True, False])
+@pytest.mark.parametrize("dedup_scope", ["sentence", "global"])
+@pytest.mark.parametrize("sentences_enabled", [True, False])
+def test_execution_context_will_split_resolution(will_split, dedup_scope, sentences_enabled):
+    """
+    Verify that when will_split is True and sentences_enabled is True,
+    ExecutionContext routes to MULTI_SENTENCE_LOCAL_DEDUP or MULTI_GLOBAL_COMBINED
+    regardless of whether text_mode is 'single' or 'multi'.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_SENTENCES_MODE)
+
+    cp.set(SEC_SETTINGS, "combine_source_words", "true")
+    cp.set(SEC_SENTENCES_MODE, "enabled", str(sentences_enabled).lower())
+    cp.set(SEC_SENTENCES_MODE, "deduplication_scope", dedup_scope)
+
+    ctx = ExecutionContext.from_config("single", cp, will_split=will_split)
+    workflow_res = ModeDispatcher.dispatch(ctx)
+
+    if will_split and sentences_enabled:
+        if dedup_scope == "sentence":
+            assert ctx.mode == OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
+            assert workflow_res.dedup_scope == "sentence"
+            assert workflow_res.combine_source_words is False
+        else:
+            assert ctx.mode == OperationalMode.MULTI_GLOBAL_COMBINED
+            assert workflow_res.dedup_scope == "global"
+            assert workflow_res.combine_source_words is True
+    else:
+        assert ctx.mode == OperationalMode.MONOLITHIC_LIVE
+        assert workflow_res.dedup_scope == "global"
+

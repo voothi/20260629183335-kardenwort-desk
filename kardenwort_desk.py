@@ -789,7 +789,7 @@ class ExecutionContext:
     token_cfg: Optional[RuntimeTokenConfig] = None
 
     @classmethod
-    def from_config(cls, text_mode: str, config: Any, token_cfg: Optional[RuntimeTokenConfig] = None) -> "ExecutionContext":
+    def from_config(cls, text_mode: str, config: Any, token_cfg: Optional[RuntimeTokenConfig] = None, will_split: bool = False) -> "ExecutionContext":
         if isinstance(config, cls):
             return config
 
@@ -801,7 +801,9 @@ class ExecutionContext:
         sentences_enabled = smc.enabled
         dedup_scope = smc.deduplication_scope
 
-        if text_mode == 'multi' and sentences_enabled:
+        is_multi_sentence = (text_mode == 'multi' and sentences_enabled) or (will_split and sentences_enabled)
+
+        if is_multi_sentence:
             if dedup_scope == 'sentence':
                 mode = OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
                 combine_source_words = False
@@ -2734,11 +2736,11 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
     except subprocess.CalledProcessError as e:
         return False, e.stderr
 
-def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single'):
+def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single', will_split=False):
     with TraceTimer("lemmatization", zid, config, resolved_paths):
-        return _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=ttl_seconds, cache_key=cache_key, text_mode=text_mode)
+        return _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=ttl_seconds, cache_key=cache_key, text_mode=text_mode, will_split=will_split)
 
-def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single'):
+def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single', will_split=False):
     eff_mode = _effective_text_mode(text, text_mode)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
@@ -2820,7 +2822,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     try:
         sbc = SentenceBoundaryConfig.from_config(config)
         token_cfg = RuntimeTokenConfig.from_config(config)
-        exec_ctx = ExecutionContext.from_config(eff_mode, config, token_cfg)
+        exec_ctx = ExecutionContext.from_config(eff_mode, config, token_cfg, will_split=will_split)
         workflow_res = ModeDispatcher.dispatch(exec_ctx)
         dedup_scope = workflow_res.dedup_scope
         combine_source_words = workflow_res.combine_source_words
@@ -3337,7 +3339,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             logger.info(f"[{zid}] [Core Worker] Starting background TSV generation")
             return prepare_lookup_tsv(
                 text, language, target_lang, config, resolved_paths, zid,
-                ttl_seconds=0, cache_key=master_cache_key, text_mode=text_mode
+                ttl_seconds=0, cache_key=master_cache_key, text_mode=text_mode,
+                will_split=will_split
             )
             
         if parallelize:
