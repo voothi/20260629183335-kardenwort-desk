@@ -305,7 +305,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             body = self._read_json_body()
-            self._authenticate_token(body)
+            if getattr(self.server, 'api_key', ''):
+                self._authenticate_token(body)
 
             req_zid = generate_server_zid(self.server)
             self._send_json(200, {"zid": req_zid})

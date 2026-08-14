@@ -16,12 +16,26 @@ TEST_TOKEN = "test-secret-token-12345"
 class TestHTTPServer(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.config_path = DESK_DIR / "config.ini"
+        cls.disabled_config = DESK_DIR / ".test_disabled_config.ini"
+        with open(DESK_DIR / "config.ini", "r", encoding="utf-8") as f:
+            base_cfg = f.read()
+        import re
+        disabled_content = re.sub(r'enabled\s*=\s*true', 'enabled = false', base_cfg, flags=re.IGNORECASE)
+        with open(cls.disabled_config, "w", encoding="utf-8") as f:
+            f.write(disabled_content)
+
+    @classmethod
+    def tearDownClass(cls):
+        if cls.disabled_config.exists():
+            try:
+                os.remove(cls.disabled_config)
+            except OSError:
+                pass
 
     def test_01_server_disabled_exit(self):
         """Verify server subcommand exits with non-zero code when enabled = false."""
         proc = subprocess.run(
-            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "server"],
+            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "--config", str(self.disabled_config), "server"],
             cwd=str(DESK_DIR),
             capture_output=True,
             text=True
@@ -44,28 +58,34 @@ class TestHTTPServer(unittest.TestCase):
 class TestHTTPServerRunning(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        cls.config_path = DESK_DIR / "config.ini"
-        with open(cls.config_path, "r", encoding="utf-8") as f:
-            cls.original_config = f.read()
-
-        with open(cls.config_path, "w", encoding="utf-8") as f:
-            f.write(cls.original_config.replace("enabled = false", "enabled = true").replace("api_key =", f"api_key = {TEST_TOKEN}"))
+        cls.running_config = DESK_DIR / ".test_running_config.ini"
+        with open(DESK_DIR / "config.ini", "r", encoding="utf-8") as f:
+            base_cfg = f.read()
+        import re
+        running_content = re.sub(r'enabled\s*=\s*false', 'enabled = true', base_cfg, flags=re.IGNORECASE)
+        running_content = re.sub(r'api_key\s*=.*', f'api_key = {TEST_TOKEN}', running_content)
+        running_content = re.sub(r'port\s*=.*', f'port = {TEST_PORT}', running_content)
+        with open(cls.running_config, "w", encoding="utf-8") as f:
+            f.write(running_content)
 
         cls.server_proc = subprocess.Popen(
-            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "server", "--port", str(TEST_PORT)],
+            [PYTHON_EXE, str(DESK_DIR / "kardenwort_desk.py"), "--config", str(cls.running_config), "server", "--port", str(TEST_PORT)],
             cwd=str(DESK_DIR)
         )
-        time.sleep(1.0)
+        time.sleep(1.2)
 
     @classmethod
     def tearDownClass(cls):
-        with open(cls.config_path, "w", encoding="utf-8") as f:
-            f.write(cls.original_config)
         try:
             cls.server_proc.terminate()
             cls.server_proc.wait(timeout=2)
         except Exception:
             pass
+        if cls.running_config.exists():
+            try:
+                os.remove(cls.running_config)
+            except OSError:
+                pass
 
     def test_03_health_endpoint(self):
         url = f"http://127.0.0.1:{TEST_PORT}/api/v1/health"
