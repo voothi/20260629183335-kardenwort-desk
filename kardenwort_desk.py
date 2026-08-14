@@ -6695,6 +6695,12 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         }"""
     else:
         css = """
+        html, body {
+            background-color: #0d0f12;
+            color: #e3e6eb;
+            margin: 0;
+            padding: 0;
+        }
         .kw-lookup-container {
             --bg-color: #0d0f12;
             --text-color: #e3e6eb;
