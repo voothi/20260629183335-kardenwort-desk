@@ -6318,6 +6318,134 @@ def normalize_blank_lines(text):
         normalized.pop()
     return "\n".join(normalized)
 
+INJECTED_JS_TEMPLATE = """
+<script>
+(function() {
+    var SESSION_ZID = "__SESSION_ZID__";
+    var API_TOKEN = "__API_TOKEN__";
+    var LANGUAGE = "__LANGUAGE__";
+    var FINGERPRINT = "__FINGERPRINT__";
+    var IS_OFFLINE = false;
+
+    function getSelectedRowIds() {
+        var checkboxes = document.querySelectorAll('.kw-tag-checkbox');
+        var selected = [];
+        checkboxes.forEach(function(cb) {
+            if (cb.checked) {
+                selected.push(parseInt(cb.getAttribute('data-row-id'), 10));
+            }
+        });
+        return selected;
+    }
+
+    function setStatusMessage(msg, isError) {
+        var statusEl = document.getElementById('kw-interactive-status');
+        if (statusEl) {
+            statusEl.textContent = msg;
+            statusEl.style.color = isError ? '#f85149' : '#3fb950';
+            statusEl.style.display = msg ? 'inline-block' : 'none';
+        }
+    }
+
+    window.kwToggleTag = function(checkboxEl, rowId) {
+        var newStatus = checkboxEl.checked;
+        setStatusMessage('Saving...', false);
+
+        var payload = {
+            session_zid: SESSION_ZID,
+            language: LANGUAGE,
+            row_id: rowId,
+            status: newStatus,
+            fingerprint: FINGERPRINT
+        };
+
+        fetch('/api/v1/tag', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Token': API_TOKEN
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(function(res) {
+            if (res.status === 409) {
+                return res.json().then(function(data) {
+                    if (data.error_code === 'ROW_STALE') {
+                        setStatusMessage('Rows changed, reloading...', true);
+                        setTimeout(function() { window.location.reload(); }, 1200);
+                    } else if (data.error_code === 'ROW_BUSY') {
+                        setStatusMessage('Updating, retrying...', false);
+                        setTimeout(function() { kwToggleTag(checkboxEl, rowId); }, 1000);
+                    } else {
+                        setStatusMessage('Conflict: ' + (data.message || 'Stale data'), true);
+                        checkboxEl.checked = !newStatus;
+                    }
+                });
+            }
+            if (!res.ok) {
+                return res.json().then(function(data) {
+                    setStatusMessage(data.message || 'Error updating tag', true);
+                    checkboxEl.checked = !newStatus;
+                });
+            }
+            return res.json().then(function(data) {
+                if (data.data && data.data.fingerprint) {
+                    FINGERPRINT = data.data.fingerprint;
+                }
+                setStatusMessage('Saved', false);
+                setTimeout(function() { setStatusMessage('', false); }, 1500);
+            });
+        })
+        .catch(function(err) {
+            IS_OFFLINE = true;
+            setStatusMessage('Offline (tag failed)', true);
+            checkboxEl.checked = !newStatus;
+        });
+    };
+
+    window.kwExportSelected = function() {
+        var selectedIds = getSelectedRowIds();
+        var btn = document.getElementById('kw-export-btn');
+        if (btn) btn.disabled = true;
+        setStatusMessage('Exporting...', false);
+
+        var payload = {
+            session_zid: SESSION_ZID,
+            language: LANGUAGE,
+            selected_row_ids: selectedIds,
+            fingerprint: FINGERPRINT
+        };
+
+        fetch('/api/v1/export', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                'X-API-Token': API_TOKEN
+            },
+            body: JSON.stringify(payload)
+        })
+        .then(function(res) {
+            if (btn) btn.disabled = false;
+            if (!res.ok) {
+                return res.json().then(function(data) {
+                    setStatusMessage('Export failed: ' + (data.message || res.statusText), true);
+                });
+            }
+            return res.json().then(function(data) {
+                setStatusMessage('Export started!', false);
+                setTimeout(function() { setStatusMessage('', false); }, 2500);
+            });
+        })
+        .catch(function(err) {
+            if (btn) btn.disabled = false;
+            setStatusMessage('Offline (export failed)', true);
+        });
+    };
+})();
+</script>
+"""
+
+
 def render_section(token, ctx):
     import re
     html_output = ""
@@ -6354,11 +6482,19 @@ def render_section(token, ctx):
             'morphology': role_fields.get('morphology') or ('WordSourceMorphologyAI' if 'WordSourceMorphologyAI' in ctx.get('headers', []) else None),
             'translation': role_fields.get('word_translation') or ('WordDestination' if 'WordDestination' in ctx.get('headers', []) else None)
         }
-        # Exclude tokens with no resolvable column
         COLUMN_TOKEN_MAP = {k: v for k, v in COLUMN_TOKEN_MAP.items() if v}
-        
+
+        server_enabled = ctx.get('server_enabled', False)
+        headers = ctx['headers']
+        data_rows = ctx['data_rows']
+
+        selected_col_name = role_fields.get('selected', 'DeskSelected')
+        selected_col_idx = headers.index(selected_col_name) if selected_col_name in headers else -1
+
         valid_tokens = []
         html_output += '<thead><tr>'
+        if server_enabled:
+            html_output += '<th class="kw-tag-header">★</th>'
         for col_token in ctx.get('column_tokens', []):
             if col_token not in COLUMN_TOKEN_MAP:
                 logger.warning(f"Unknown lemma_columns token: {col_token}")
@@ -6366,17 +6502,18 @@ def render_section(token, ctx):
             valid_tokens.append(col_token)
             html_output += f'<th>{col_token.capitalize()}</th>'
         html_output += '</tr></thead>\n<tbody>\n'
-        
-        headers = ctx['headers']
-        data_rows = ctx['data_rows']
-        
+
         col_indices = {}
         for t in valid_tokens:
             field = COLUMN_TOKEN_MAP[t]
             col_indices[t] = headers.index(field) if field in headers else -1
-            
-        for row in data_rows:
+
+        for row_id, row in enumerate(data_rows):
             html_output += '<tr>'
+            if server_enabled:
+                sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
+                is_checked = "checked" if str(sel_val).strip() in ("1", "true", "True") else ""
+                html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" {is_checked} onchange="kwToggleTag(this, {row_id})"></td>'
             for t in valid_tokens:
                 idx = col_indices[t]
                 val = row[idx] if idx != -1 and len(row) > idx else ""
@@ -6384,8 +6521,11 @@ def render_section(token, ctx):
                     val = val.replace('\r', '')
                 html_output += f'<td>{val}</td>'
             html_output += '</tr>\n'
-            
+
         html_output += '</tbody></table>\n'
+
+        if server_enabled:
+            html_output += '<div class="kw-actions-bar"><button id="kw-export-btn" class="kw-export-btn" onclick="kwExportSelected()">Export to Anki</button><span id="kw-interactive-status" class="kw-interactive-status"></span></div>\n'
         
     return html_output
 
@@ -6407,6 +6547,9 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
+
+    effective_server_enabled = server_enabled or goldendict.get('server_enabled', False)
+    effective_api_token = api_token or goldendict.get('server_api_key', '')
     
     ctx = {
         'text': text,
@@ -6418,7 +6561,11 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         'run_intellifiller': goldendict['run_intellifiller'],
         'column_tokens': column_tokens,
         'headings': headings,
-        'role_fields': role_fields
+        'role_fields': role_fields,
+        'server_enabled': effective_server_enabled,
+        'session_zid': session_zid,
+        'api_token': effective_api_token,
+        'fingerprint': fingerprint,
     }
     
     html_output = '<div class="kw-lookup-container">\n'
@@ -6472,6 +6619,50 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         }
         .kw-lemmas-table tr {
             border-bottom: 1px solid var(--table-border);
+        }
+        .kw-tag-header {
+            width: 32px;
+            text-align: center;
+        }
+        .kw-tag-control {
+            text-align: center;
+            width: 32px;
+        }
+        .kw-tag-checkbox {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+            accent-color: #0969da;
+        }
+        .kw-actions-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+        .kw-export-btn {
+            background-color: #2da44e;
+            color: #ffffff;
+            border: 1px solid rgba(27, 31, 36, 0.15);
+            border-radius: 6px;
+            padding: 3px 10px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .kw-export-btn:hover {
+            background-color: #2c974b;
+        }
+        .kw-export-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .kw-interactive-status {
+            font-size: 12px;
+            font-weight: 500;
+            margin-left: 8px;
+            display: none;
         }"""
     else:
         css = """
@@ -6513,6 +6704,50 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         }
         .kw-lemmas-table tr {
             border-bottom: 1px solid var(--table-border);
+        }
+        .kw-tag-header {
+            width: 32px;
+            text-align: center;
+        }
+        .kw-tag-control {
+            text-align: center;
+            width: 32px;
+        }
+        .kw-tag-checkbox {
+            cursor: pointer;
+            width: 16px;
+            height: 16px;
+            accent-color: #0969da;
+        }
+        .kw-actions-bar {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+            margin-top: 8px;
+            margin-bottom: 8px;
+        }
+        .kw-export-btn {
+            background-color: #2da44e;
+            color: #ffffff;
+            border: 1px solid rgba(27, 31, 36, 0.15);
+            border-radius: 6px;
+            padding: 4px 12px;
+            font-size: 12px;
+            font-weight: 500;
+            cursor: pointer;
+        }
+        .kw-export-btn:hover {
+            background-color: #2c974b;
+        }
+        .kw-export-btn:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+        }
+        .kw-interactive-status {
+            font-size: 12px;
+            font-weight: 500;
+            margin-left: 8px;
+            display: none;
         }"""
         if theme == 'light':
             css = css.replace('#0d0f12', '#f6f8fa').replace('#e3e6eb', '#24292f').replace('rgba(255, 255, 255, 0.03)', 'rgba(0, 0, 0, 0.03)').replace('rgba(255, 255, 255, 0.1)', 'rgba(0, 0, 0, 0.1)').replace('rgba(255, 255, 255, 0.05)', 'rgba(0, 0, 0, 0.05)')
@@ -6541,6 +6776,17 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
 {html_output}
 </body>
 </html>"""
+
+    if effective_server_enabled and session_zid:
+        injected_script = (
+            INJECTED_JS_TEMPLATE
+            .replace("__SESSION_ZID__", session_zid or "")
+            .replace("__API_TOKEN__", effective_api_token or "")
+            .replace("__LANGUAGE__", language or "")
+            .replace("__FINGERPRINT__", fingerprint or "")
+        )
+        base_html = base_html.replace("</body>", f"{injected_script}\n</body>")
+
     return base_html
 
 def render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
