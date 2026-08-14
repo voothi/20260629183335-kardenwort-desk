@@ -3117,7 +3117,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     progressive_timeout_seconds = config.getint(SEC_PIPELINE, 'progressive_timeout_seconds', fallback=15)
     children_tsv_paths = []
     
-    if tsv_path and text_mode == 'multi':
+    if tsv_path:
         try:
             p_tsv = Path(tsv_path)
             if p_tsv.exists():
@@ -3771,7 +3771,7 @@ html, body {{
     if not llm_filled:
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt')
         
-        is_master_window = bool(children_tsv_paths and eff_mode == 'multi')
+        is_master_window = bool(children_tsv_paths)
         
         if is_progressive or is_master_window:
             needs_worker = False
@@ -3781,7 +3781,7 @@ html, body {{
                 needs_worker = True
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not is_master_window:
                 needs_worker = True
-            # Master window in multi mode: launch worker to receive cross-pollinated data from children.
+            # Master window: launch worker to receive cross-pollinated data from children.
             if is_master_window:
                 needs_worker = True
                 

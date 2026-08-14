@@ -432,3 +432,101 @@ def test_progressive_worker_child_single_mode_syncs_with_siblings(monkeypatch, t
     # Verify that child TSV inherited "house" via cross-pollination without redundant API calls
     _, headers, rows = desk.load_tsv_rows(child_tsv)
     assert rows[0][1] == "house", "Child worker in single mode should cross-pollinate WordDestination from sibling"
+
+
+def test_single_mode_master_window_launches_progressive_worker(monkeypatch, tmp_path):
+    """
+    Verify that when text_mode is 'single' and children TSVs exist on disk,
+    run_render_flow recognizes the master window and launches run_progressive_worker_async.
+    """
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+default_target_language=ru
+[rendering]
+display_mode=progressive
+[pipeline]
+progressive_text_translation=true
+progressive_timeout_seconds=15
+lemma_base_provider=google
+lemma_reprocess_provider=intellifiller
+[triggers]
+run_text_translation=auto
+run_lemma_base_translation=auto
+run_lemma_enrichment=manual
+[sentences_mode]
+enabled=true
+parent_mode=table
+[languages]
+de_prompt=
+[fields]
+""")
+
+    mapping_file = tmp_path / "mapping.ini"
+    mapping_file.write_text(
+        "[fields]\n"
+        "WordSource=\nWordDestination=\n"
+        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
+        "[fields_mapping.word]\n"
+        "WordSource=lemma\nWordDestination=word_translation\n"
+        "SentenceSourceIndex=sentence_index\n"
+        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
+        encoding="utf-8",
+    )
+
+    resolved_paths = {
+        'results_dir': tmp_path,
+        'kardenwort_core_py': tmp_path / 'dummy.py',
+        'kardenwort_python': tmp_path / 'python',
+        'anki_mapping_file': mapping_file,
+        'kardenwort_workspace': tmp_path,
+        'settings_file': tmp_path / 'settings.ini',
+    }
+
+    headers = [
+        "WordSource", "WordDestination",
+        "SentenceSourceIndex", "SentenceDestination", "DeskSelected",
+    ]
+    data_rows = [["Haus", "", "1", "", "0"]]
+
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "sentence_index": "SentenceSourceIndex",
+        "sentence_destination": "SentenceDestination",
+        "selected": "DeskSelected",
+    }
+
+    master_tsv = tmp_path / "20260814120000-master.de.tsv"
+    master_tsv.write_text("\t".join(headers) + "\n" + "\t".join(data_rows[0]) + "\n", encoding="utf-8")
+    child_tsv = tmp_path / "20260814120005-child.de.tsv"
+    child_tsv.write_text("", encoding="utf-8")
+
+    worker_calls = []
+
+    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'load_tsv_rows', lambda p: ([""], headers, [list(r) for r in data_rows]))
+    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
+    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
+    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
+    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
+    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: worker_calls.append((a, kw)))
+    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'spawn_ahk', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Haus-DE"})
+    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
+
+    html_out = desk.run_render_flow(
+        "Haus ist gut. Das Buch ist rot.",
+        "de",
+        "20260814120000",
+        "single",
+        config,
+        resolved_paths,
+        tsv_path=str(master_tsv),
+    )
+
+    assert len(worker_calls) == 1, "run_progressive_worker_async must be called for master window in single mode"
+    assert "skeleton-loader" in html_out, "Master window in single mode must render skeleton loader for pending lemmas"
+
