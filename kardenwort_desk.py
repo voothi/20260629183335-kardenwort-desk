@@ -3129,15 +3129,14 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     my_zid = my_zid_match.group(1)
                     try:
                         my_dt = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-                        # Children are spawned 1..N seconds after the master ZID.
-                        # Glob two or three minute-prefixes to survive minute-boundary rollovers
-                        # (e.g. master at :43 → child #17 lands at the next minute's :00).
-                        # Supports up to 120 child sentences (well above typical use).
-                        minute_prefixes = {
-                            (my_dt + timedelta(seconds=s)).strftime('%Y%m%d%H%M')
+                        # Check if any older sibling exists in the batch (0 < delta <= 120s).
+                        # If an older sibling exists, this window is a CHILD window, NOT a master.
+                        has_older_sibling = False
+                        older_prefixes = {
+                            (my_dt - timedelta(seconds=s)).strftime('%Y%m%d%H%M')
                             for s in range(0, 121, 60)
                         }
-                        for prefix in sorted(minute_prefixes):
+                        for prefix in older_prefixes:
                             for sibling in p_tsv.parent.glob(f"{prefix}*.tsv"):
                                 if sibling == p_tsv:
                                     continue
@@ -3146,14 +3145,41 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                                     continue
                                 try:
                                     sib_dt = datetime.strptime(sib_match.group(1), '%Y%m%d%H%M%S')
-                                    delta = (sib_dt - my_dt).total_seconds()
+                                    delta = (my_dt - sib_dt).total_seconds()
                                     if 0 < delta <= 120:
-                                        children_tsv_paths.append(sibling)
+                                        has_older_sibling = True
+                                        break
                                 except (ValueError, TypeError):
                                     continue
+                            if has_older_sibling:
+                                break
+                                
+                        if not has_older_sibling:
+                            # Children are spawned 1..N seconds after the master ZID.
+                            # Glob two or three minute-prefixes to survive minute-boundary rollovers
+                            # (e.g. master at :43 → child #17 lands at the next minute's :00).
+                            # Supports up to 120 child sentences (well above typical use).
+                            minute_prefixes = {
+                                (my_dt + timedelta(seconds=s)).strftime('%Y%m%d%H%M')
+                                for s in range(0, 121, 60)
+                            }
+                            for prefix in sorted(minute_prefixes):
+                                for sibling in p_tsv.parent.glob(f"{prefix}*.tsv"):
+                                    if sibling == p_tsv:
+                                        continue
+                                    sib_match = re.match(r'^(\d{14})', sibling.name)
+                                    if not sib_match:
+                                        continue
+                                    try:
+                                        sib_dt = datetime.strptime(sib_match.group(1), '%Y%m%d%H%M%S')
+                                        delta = (sib_dt - my_dt).total_seconds()
+                                        if 0 < delta <= 120:
+                                            children_tsv_paths.append(sibling)
+                                    except (ValueError, TypeError):
+                                        continue
+                            children_tsv_paths.sort(key=lambda p: p.name)
                     except (ValueError, TypeError):
                         pass
-                    children_tsv_paths.sort(key=lambda p: p.name)
         except Exception:
             pass
             
@@ -3396,8 +3422,10 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         except ValueError:
                             pass
                     
-                    matches_sentence = (row_sent_idx == i)
-                    if not matches_sentence:
+                    if row_sent_idx != -1:
+                        matches_sentence = (row_sent_idx == i)
+                    else:
+                        matches_sentence = False
                         row_inf = row[col_inflected].strip() if col_inflected != -1 and len(row) > col_inflected else ""
                         row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
                         forms_to_check = [f.strip() for f in row_inf.split(',')] if row_inf else ([row_lem] if row_lem else [])
@@ -3408,7 +3436,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                                 matches_sentence = True
                                 break
                             parts = re.findall(apo_regex, f.lower())
-                            if any("".join(ch for ch in p if ch.isalnum() or ch in apo_set) in sub_words for p in parts if p):
+                            if any("".join(ch for ch in p if ch.isalnum() or ch in apo_set) in sub_words for p in parts if len(p) > 1 and p in sub_words):
                                 matches_sentence = True
                                 break
                                 

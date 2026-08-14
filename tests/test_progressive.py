@@ -529,4 +529,215 @@ de_prompt=
 
     assert len(worker_calls) == 1, "run_progressive_worker_async must be called for master window in single mode"
     assert "skeleton-loader" in html_out, "Master window in single mode must render skeleton loader for pending lemmas"
+    assert 'id="kardenwort-children"' in html_out, "Master window must contain children div for AHK hierarchy tracking"
+
+
+def test_child_window_does_not_claim_younger_siblings_as_children(monkeypatch, tmp_path):
+    """
+    Verify that a child window (which has older siblings in the temporal cluster)
+    does NOT claim younger siblings as its children, does NOT set is_master_window=True,
+    and does NOT inject <div id='kardenwort-children'>.
+    """
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+default_target_language=ru
+[rendering]
+display_mode=progressive
+[pipeline]
+progressive_text_translation=true
+progressive_timeout_seconds=15
+lemma_base_provider=google
+lemma_reprocess_provider=intellifiller
+[triggers]
+run_text_translation=auto
+run_lemma_base_translation=auto
+run_lemma_enrichment=manual
+[sentences_mode]
+enabled=true
+parent_mode=table
+[languages]
+de_prompt=
+[fields]
+""")
+
+    mapping_file = tmp_path / "mapping.ini"
+    mapping_file.write_text(
+        "[fields]\n"
+        "WordSource=\nWordDestination=\n"
+        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
+        "[fields_mapping.word]\n"
+        "WordSource=lemma\nWordDestination=word_translation\n"
+        "SentenceSourceIndex=sentence_index\n"
+        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
+        encoding="utf-8",
+    )
+
+    resolved_paths = {
+        'results_dir': tmp_path,
+        'kardenwort_core_py': tmp_path / 'dummy.py',
+        'kardenwort_python': tmp_path / 'python',
+        'anki_mapping_file': mapping_file,
+        'kardenwort_workspace': tmp_path,
+        'settings_file': tmp_path / 'settings.ini',
+    }
+
+    headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceDestination", "DeskSelected"]
+    data_rows = [["Haus", "", "1", "", "0"]]
+
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "sentence_index": "SentenceSourceIndex",
+        "sentence_destination": "SentenceDestination",
+        "selected": "DeskSelected",
+    }
+
+    # Sibling files in the same batch
+    master_tsv = tmp_path / "20260814120000-master.de.tsv"
+    master_tsv.write_text("\t".join(headers) + "\n", encoding="utf-8")
+    child1_tsv = tmp_path / "20260814120001-child1.de.tsv"
+    child1_tsv.write_text("\t".join(headers) + "\n" + "\t".join(data_rows[0]) + "\n", encoding="utf-8")
+    child2_tsv = tmp_path / "20260814120002-child2.de.tsv"
+    child2_tsv.write_text("\t".join(headers) + "\n", encoding="utf-8")
+
+    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'load_tsv_rows', lambda p: ([""], headers, [list(r) for r in data_rows]))
+    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
+    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
+    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
+    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'spawn_ahk', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Haus-DE"})
+    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
+
+    # Render child1
+    html_out = desk.run_render_flow(
+        "Haus ist gut.",
+        "de",
+        "20260814120001",
+        "single",
+        config,
+        resolved_paths,
+        tsv_path=str(child1_tsv),
+    )
+
+    # Child 1 must NOT have kardenwort-children div containing child 2
+    assert 'id="kardenwort-children"' not in html_out, "Child window must NOT contain kardenwort-children div"
+
+
+def test_the_cut_respects_sentence_source_index_no_word_bleeding(monkeypatch, tmp_path):
+    """
+    Verify that during 'the cut' in Sentences Mode, rows with an explicit SentenceSourceIndex
+    are assigned strictly to their matching sentence index and not leaked into other sentences
+    via fallback substring matching.
+    """
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+default_target_language=ru
+[rendering]
+display_mode=progressive
+[pipeline]
+progressive_text_translation=true
+progressive_timeout_seconds=15
+lemma_base_provider=google
+lemma_reprocess_provider=intellifiller
+[triggers]
+run_text_translation=auto
+run_lemma_base_translation=auto
+run_lemma_enrichment=manual
+[sentences_mode]
+enabled=true
+parent_mode=table
+[languages]
+en_prompt=
+[fields]
+""")
+
+    mapping_file = tmp_path / "mapping.ini"
+    mapping_file.write_text(
+        "[fields]\n"
+        "WordSource=\nWordDestination=\nWordSourceInflectedForm=\n"
+        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
+        "[fields_mapping.word]\n"
+        "WordSource=lemma\nWordDestination=word_translation\n"
+        "WordSourceInflectedForm=inflected\n"
+        "SentenceSourceIndex=sentence_index\n"
+        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
+        encoding="utf-8",
+    )
+
+    resolved_paths = {
+        'results_dir': tmp_path,
+        'kardenwort_core_py': tmp_path / 'dummy.py',
+        'kardenwort_python': tmp_path / 'python',
+        'anki_mapping_file': mapping_file,
+        'kardenwort_workspace': tmp_path,
+        'settings_file': tmp_path / 'settings.ini',
+        'base_dir': tmp_path,
+    }
+
+    headers = [
+        "WordSource", "WordDestination", "WordSourceInflectedForm",
+        "SentenceSourceIndex", "SentenceDestination", "DeskSelected"
+    ]
+    # Row 1 belongs to Sentence 1 (SentenceSourceIndex=1)
+    # Row 2 belongs to Sentence 2 (SentenceSourceIndex=2), with inflected="e.g."
+    # Sentence 1 starts with "E." (so 'e' might match 'e.g.' in buggy fuzzy matching)
+    data_rows = [
+        ["scalability", "", "Scalability", "1", "", "0"],
+        ["for", "", "e.g.", "2", "", "0"],
+    ]
+
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "inflected": "WordSourceInflectedForm",
+        "sentence_index": "SentenceSourceIndex",
+        "sentence_destination": "SentenceDestination",
+        "selected": "DeskSelected",
+    }
+
+    master_tsv = tmp_path / "20260814120000-master.en.tsv"
+    master_tsv.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in data_rows) + "\n", encoding="utf-8")
+
+    spawned_children = []
+
+    def mock_spawn_ahk(args, base_dir):
+        spawned_children.extend(args)
+
+    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
+    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
+    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
+    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
+    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'spawn_ahk', mock_spawn_ahk)
+    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {0: "Масштабируемость", 1: "Например"})
+    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
+
+    desk.run_render_flow(
+        "E. Scalability & Edge Cases.\nSecond sentence e.g. for something.",
+        "en",
+        "20260814120000",
+        "multi",
+        config,
+        resolved_paths,
+        tsv_path=None,
+    )
+
+    # Check child 1 TSV generated on disk
+    child1_tsv = tmp_path / "20260814120001-e-scalability-edge-cases.en.tsv"
+    assert child1_tsv.exists(), "Child 1 TSV must be created on disk"
+    _, _, child1_rows = desk.load_tsv_rows(child1_tsv)
+
+    child1_lemmas = [r[0] for r in child1_rows]
+    assert "scalability" in child1_lemmas, "Child 1 should contain scalability"
+    assert "for" not in child1_lemmas, "Child 1 must NOT contain 'for' from sentence 2"
+
 
