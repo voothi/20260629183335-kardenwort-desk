@@ -110,4 +110,10 @@ def test_decompose_identifier():
     assert tok.decompose_identifier("Hunde-Haus") == ["Hunde", "Haus"]
     assert tok.decompose_identifier("e.g.") == ["e", "g"]
     assert tok.decompose_identifier("word1_word2-word3.word4") == ["word1", "word2", "word3", "word4"]
+    assert tok.decompose_identifier("UTF8String") == ["UTF8String", "UTF8", "String"]
+    assert tok.decompose_identifier("HTML5Parser") == ["HTML5Parser", "HTML5", "Parser"]
+    assert tok.decompose_identifier("SHA256_Hash") == ["SHA256", "Hash"]
+    assert tok.decompose_identifier("БыстрыйПоиск") == ["БыстрыйПоиск", "Быстрый", "Поиск"]
+    assert tok.decompose_identifier("Mädchen_Schule") == ["Mädchen", "Schule"]
+
 

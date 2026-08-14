@@ -108,7 +108,7 @@ def split_camel_case(s: str) -> list:
     """Split camelCase, PascalCase, or uppercase acronym boundaries into constituent words."""
     if not s:
         return []
-    parts = re.findall(r'[A-ZА-ЯÄÖÜ]+(?=[A-ZА-ЯÄÖÜ][a-zа-яäöüß0-9\']|\b)|[A-ZА-ЯÄÖÜ]?[a-zа-яäöüß0-9\']+|[A-ZА-ЯÄÖÜ]+', s)
+    parts = re.findall(r'[A-ZА-ЯÄÖÜ0-9]+(?=[A-ZА-ЯÄÖÜ][a-zа-яäöüß])|[A-ZА-ЯÄÖÜ]?[a-zа-яäöüß\']+[0-9]*|[A-ZА-ЯÄÖÜ0-9]+', s)
     return [p for p in parts if p]
 
 def decompose_identifier(s: str) -> list:
