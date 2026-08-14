@@ -1954,15 +1954,14 @@ class TestErrorCatalogConformance:
         )
 
     def test_all_nine_catalog_codes_present(self):
-        """The catalog must define exactly all 9 documented error codes."""
-        expected = {
-            "UNHANDLED_EXCEPTION", "INTERRUPTED", "TIMEOUT",
-            "DESK_FAILED", "KARDENWORT_FAILED", "UNRAISABLE_EXCEPTION",
-            "DEPENDENCY_MISSING", "INVALID_STATE", "CONFIGURATION_ERROR",
-        }
+        """The catalog must define all documented error codes from error_catalog.json."""
+        catalog_path = Path(__file__).resolve().parent.parent / "schemas" / "error_catalog.json"
+        with open(catalog_path, "r", encoding="utf-8") as f:
+            catalog_data = json.load(f)
+        expected = {entry["code"] for entry in catalog_data.get("error_codes", [])}
         actual = {member.value for member in ErrorCode}
         assert actual == expected, (
-            f"ErrorCode enum does not match the expected 9 catalog codes.\n"
+            f"ErrorCode enum does not match the documented catalog codes.\n"
             f"Missing: {expected - actual}\n"
             f"Extra:   {actual - expected}"
         )

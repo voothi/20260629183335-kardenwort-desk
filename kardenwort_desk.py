@@ -1459,6 +1459,7 @@ def get_deepl_key(config, base_dir):
 @contextlib.contextmanager
 def file_lock(file_path):
     lock_file_path = file_path.with_suffix('.lock')
+    lock_file_path.parent.mkdir(parents=True, exist_ok=True)
     lock_file = open(lock_file_path, 'w')
     try:
         if sys.platform == 'win32':
@@ -6141,6 +6142,20 @@ setTimeout(function() {{
     _html_gen_timer.__exit__(None, None, None)
     return html_page
 
+class LookupResultTuple(tuple):
+    """
+    Backwards-compatible 4-tuple with working_tsv_path attribute.
+    Allows both 4-item unpacking (comments, headers, data_rows, sentence_translation)
+    and accessing res.working_tsv_path directly.
+    """
+    working_tsv_path = None
+
+    def __new__(cls, comments, headers, data_rows, sentence_translation, working_tsv_path=None):
+        inst = super().__new__(cls, (comments, headers, data_rows, sentence_translation))
+        inst.working_tsv_path = working_tsv_path
+        return inst
+
+
 def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid, text_mode='single', wordfill_cfg=None):
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     import hashlib
@@ -6307,7 +6322,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                         if lemma_val not in filled_lemmas:
                             row[col_idx] = ""
 
-    return comments, headers, data_rows, sentence_translation, working_tsv_path
+    return LookupResultTuple(comments, headers, data_rows, sentence_translation, working_tsv_path)
 
 def normalize_blank_lines(text):
     if not text:
@@ -7170,10 +7185,17 @@ def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, te
                 new_lines.append(line)
             text = "\n".join(new_lines)
 
-    comments, headers, data_rows, sentence_translation, working_tsv_path = run_lookup_flow(
+    lookup_res = run_lookup_flow(
         text, language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode,
         wordfill_cfg=wordfill_cfg
     )
+    comments, headers, data_rows, sentence_translation = lookup_res[:4]
+    working_tsv_path = getattr(lookup_res, 'working_tsv_path', None) or (lookup_res[4] if len(lookup_res) > 4 else None)
+    if working_tsv_path is None:
+        kw_config = load_kardenwort_config(resolved_paths['kardenwort_workspace'])
+        results_dir = resolve_results_dir(resolved_paths, kw_config)
+        slug = generate_slug(text)
+        working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
 
     session_zid = extract_zid(working_tsv_path) or working_tsv_path.stem
     fingerprint = compute_content_fingerprint(data_rows)
