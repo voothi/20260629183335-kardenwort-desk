@@ -6715,14 +6715,18 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         }
         .kw-source-text {
             white-space: pre-wrap;
-            font-family: monospace;
-            padding: 10px;
-            background: var(--section-bg);
-            border-radius: 5px;
+            padding: 4px 0;
+            margin-bottom: 0.8em;
+            font-family: inherit;
+            font-style: normal;
+            font-weight: normal;
         }
         .kw-translation {
-            padding: 10px;
-            font-weight: bold;
+            padding: 4px 0;
+            margin-bottom: 0.8em;
+            font-family: inherit;
+            font-style: normal;
+            font-weight: normal;
         }
         .kw-lemmas-table {
             width: 100%;
