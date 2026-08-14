@@ -349,6 +349,7 @@ SEC_PROJECT_STRUCTURE = "project_structure"
 SEC_AUDIO = "audio"
 SEC_GOLDENDICT = "goldendict"
 SEC_WORDFILL = "wordfill"
+SEC_SERVER = "server"
 SINGLE_WORD_DELIMITERS = ('-', '.')
 
 
@@ -1247,6 +1248,18 @@ def load_config(config_path=None):
         goldendict['heading_translation'] = ''
         goldendict['heading_lemmas'] = ''
         goldendict['lemma_columns'] = ['inflected', 'lemma', 'translation']
+
+    if SEC_SERVER in config:
+        srv = config[SEC_SERVER]
+        goldendict['server_enabled'] = srv.getboolean('enabled', fallback=False)
+        goldendict['server_host'] = srv.get('host', '127.0.0.1').strip()
+        goldendict['server_port'] = srv.getint('port', fallback=18335)
+        goldendict['server_api_key'] = srv.get('api_key', '').strip()
+    else:
+        goldendict['server_enabled'] = False
+        goldendict['server_host'] = '127.0.0.1'
+        goldendict['server_port'] = 18335
+        goldendict['server_api_key'] = ''
 
     wordfill = {}
     if SEC_WORDFILL in config:
@@ -9662,6 +9675,11 @@ def main():
     p_wordfill.add_argument("--word", required=True, help="Word to look up (lemma or inflected form)")
     p_wordfill.add_argument("--language", required=True, help="Source language code (e.g. en, de)")
 
+    # server
+    p_server = subparsers.add_parser("server")
+    p_server.add_argument("--host", default=None, help="Host address to bind to (overrides config)")
+    p_server.add_argument("--port", type=int, default=None, help="Port number to bind to (overrides config)")
+
     try:
         args = parser.parse_args()
         
@@ -9692,6 +9710,7 @@ def main():
         "restore": cmd_restore,
         "desk": cmd_desk,
         "wordfill": cmd_wordfill,
+        "server": lambda args: __import__('http_server').cmd_server(args),
     }
 
     try:

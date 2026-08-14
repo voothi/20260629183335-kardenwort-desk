@@ -1,0 +1,64 @@
+[environment]
+; Path to the Python interpreter for kardenwort (spacy-env venv)
+kardenwort_python = ../20250825231214-spacy-env/Scripts/python.exe
+
+; Path to the Kardenwort project workspace (containing data directories and scripts)
+kardenwort_workspace = ../20241223170748-kardenwort
+
+; Path to the python interpreter and translation scripts for deep-translator
+deep_translator_python = ../20241122093311-deep-translator/venv/Scripts/python.exe
+translate_google_script = ../20241122093311-deep-translator/translate_google.py
+translate_deepl_script = ../20241122093311-deep-translator/translate_deepl.py
+argotranslate_python = ../20241121100211-argotranslate/venv/Scripts/python.exe
+argotranslate_script = ../20241121100211-argotranslate/venv/Scripts/argos-translate
+
+; Path to the settings file containing DeepL API keys and salt
+deepl_settings_file = ../20240411110510-autohotkey/translate-selection/settings.ini
+
+; Path to the IntelliFiller headless entrypoint script
+intellifiller_headless = ../20251206123938-intellifiller-ai-addon-for-anki/IntelliFiller/headless_entrypoint.py
+
+; Path to the anki-tts-cli script
+anki_tts_cli = ../20260119103526-anki-tts-cli/anki-tts-cli.py
+
+[pipeline]
+parallelize_core_and_translation = true
+progressive_text_translation = false
+progressive_timeout_seconds = 15
+use_local_fork = true
+auto_offline_fallback = false
+fast_connectivity_check_ips = 
+text_base_provider = deepl
+text_reprocess_provider = google
+lemma_base_provider = google
+
+[settings]
+default_language = en
+default_target_language = ru
+favorites_output_dir = ./favorites
+anki_mapping_file = ./anki-mapping.ini
+save_to_favorites_on_export = true
+send_to_anki_after_export = false
+
+[goldendict]
+format = html
+target_language = ru
+run_intellifiller = false
+lookup_ttl_seconds = 300
+theme = dark
+emit_meta_comment = true
+disable_css = false
+sections = translation,lemmas
+lemma_columns = inflected,lemma,translation
+
+[server]
+; Background HTTP server configuration for GoldenDict interactivity and REST API
+; Default host binds strictly to loopback (127.0.0.1) for local IPC security.
+host = 127.0.0.1
+port = 18335
+enabled = false
+
+; API Security Token (X-API-Token header or 'token' JSON body field).
+; Generate a key via: python -c "import secrets; print(secrets.token_urlsafe(32))"
+; Note: Binding to 127.0.0.1 + token authentication acts as a strong local deterrent, but is not a hardened network secret.
+api_key =
