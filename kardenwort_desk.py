@@ -3191,6 +3191,8 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
 def is_complex_inflected_form(form, apostrophe_chars):
     if any(c in form for c in apostrophe_chars) or '-' in form or ' ' in form:
         return True
+    if len(form) >= 2 and form.isupper():
+        return True
     return any(not c.isalnum() for c in form)
 
 def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first', prefer_lowercase=True):

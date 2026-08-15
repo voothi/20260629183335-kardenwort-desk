@@ -1626,6 +1626,45 @@ def test_deduplicate_rows_window_filtering_abbreviations_de():
     assert deduped[1][0] == "z. B., Beispiel"
 
 
+def test_sort_inflected_forms_acronym_priority():
+    import kardenwort_desk as desk
+
+    apo_chars = ("'", "’")
+    assert desk.sort_inflected_forms(["user", "UI"], apostrophe_chars=apo_chars, order='contractions_first') == ["UI", "user"]
+    assert desk.sort_inflected_forms(["interface", "UI"], apostrophe_chars=apo_chars, order='contractions_first') == ["UI", "interface"]
+    assert desk.sort_inflected_forms(["experience", "UX"], apostrophe_chars=apo_chars, order='contractions_first') == ["UX", "experience"]
+    assert desk.sort_inflected_forms(["request", "pull", "PR"], apostrophe_chars=apo_chars, order='contractions_first') == ["PR", "request", "pull"]
+
+
+def test_deduplicate_rows_window_filtering_acronyms():
+    import kardenwort_desk as desk
+    import configparser
+    from pathlib import Path
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'true')
+    config.set(SEC_SETTINGS, 'combine_source_words_order', 'contractions_first')
+
+    resolved_paths = {
+        'kardenwort_workspace': Path("U:/voothi/20241223170748-kardenwort").resolve()
+    }
+
+    data_rows = [
+        ["user, UI", "user", "1"],
+        ["interface, UI", "interface", "1"],
+    ]
+
+    window_text = "The UI sidebar, the tool use capabilities."
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=-1, col_inflected=0,
+        config=config, window_text=window_text, language='en', resolved_paths=resolved_paths
+    )
+
+    assert deduped[0][0] == "UI, user"
+    assert deduped[1][0] == "UI, interface"
+
+
 
 def test_deduplicate_rows_combine_source_words_false():
     import kardenwort_desk as desk
