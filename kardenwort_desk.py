@@ -4989,7 +4989,7 @@ html, body {{
         function isCompoundDelimiterNode(node) {
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
-                var txt = node.nodeValue || node.textContent || "";
+                var txt = node._origVal !== undefined ? node._origVal : (node.nodeValue || node.textContent || "");
                 return txt.length > 0 && /^[-_–—]+$/.test(txt);
             }
             return false;
@@ -5241,16 +5241,50 @@ html, body {{
                 if (!s.getAttribute('data-original-text')) {
                     s.setAttribute('data-original-text', s.textContent || s.innerText || "");
                 }
+                var clean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || "").trim();
+                var isNumericToken = /^[0-9]+$/.test(clean);
                 var isFlipped = s.classList.contains('flipped');
-                if (toTranslation && !isFlipped) {
-                    var trans = getSpanSpecificTranslation(s, group);
-                    if (trans !== undefined && trans !== null) {
-                        s.classList.add('flipped');
-                        s.textContent = trans;
+
+                if (toTranslation) {
+                    if (!isFlipped) {
+                        var trans = isNumericToken ? "" : getSpanSpecificTranslation(s, group);
+                        if (trans !== undefined && trans !== null) {
+                            s.classList.add('flipped');
+                            s.textContent = trans;
+                        }
                     }
-                } else if (!toTranslation && isFlipped) {
-                    s.classList.remove('flipped');
-                    s.textContent = s.getAttribute('data-original-text');
+                    if (!s.textContent || isNumericToken) {
+                        s.style.display = 'none';
+                    }
+                } else {
+                    if (isFlipped) {
+                        s.classList.remove('flipped');
+                        s.textContent = s.getAttribute('data-original-text');
+                    }
+                    s.style.display = '';
+                }
+            }
+
+            // Manage delimiters between sibling spans in the compound group
+            for (var j = 0; j < group.length - 1; j++) {
+                var currSpan = group[j];
+                var nextSpan = group[j + 1];
+                var delimNode = currSpan.nextSibling;
+                if (delimNode && isCompoundDelimiterNode(delimNode)) {
+                    if (delimNode._origVal === undefined) {
+                        delimNode._origVal = delimNode.nodeValue || "";
+                    }
+                    if (toTranslation) {
+                        var currVisible = Boolean(currSpan.textContent) && currSpan.style.display !== 'none';
+                        var nextVisible = Boolean(nextSpan.textContent) && nextSpan.style.display !== 'none';
+                        if (!currVisible || !nextVisible) {
+                            delimNode.nodeValue = "";
+                        } else {
+                            delimNode.nodeValue = delimNode._origVal;
+                        }
+                    } else {
+                        delimNode.nodeValue = delimNode._origVal;
+                    }
                 }
             }
         }

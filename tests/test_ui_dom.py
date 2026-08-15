@@ -196,4 +196,53 @@ def test_bracket_spacing_normalized_in_rendered_html(page, tmp_path):
     assert "spec.md )" not in trans_inner_text
 
 
+def test_rmb_flip_compound_with_leading_zid_hides_zid_and_removes_leading_hyphen(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Change: 20260815131120-token-mapping-inflected-expansion Schema:"
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordDestination\n"
+        "token\tжетон\n"
+        "mapping\tсопоставление\n"
+        "inflected\tизменять\n"
+        "expansion\tрасширение\n"
+    )
+    tsv_file = tmp_path / "20260815190000-zid-flip.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260815190000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # Find the token span and RMB click it to flip the compound
+    token_span = page.locator("span.word[data-lower-clean='token']").first
+    assert token_span.is_visible()
+
+    # Dispatch RMB click (button 2)
+    token_span.click(button="right")
+
+    source_container = page.locator("#source-container")
+    flipped_text = source_container.inner_text()
+
+    # The flipped text should not have a leading hyphen before жетон, nor should the ZID be visible
+    assert "Change: жетон" in flipped_text or "Change:жетон" in flipped_text
+    assert "Change: - жетон" not in flipped_text
+    assert "Change: -жетон" not in flipped_text
+    assert "20260815131120" not in flipped_text
+
+    # RMB click again to un-flip
+    token_span.click(button="right")
+    unflipped_text = source_container.inner_text()
+    assert "20260815131120-token-mapping-inflected-expansion" in unflipped_text
+
+
+
 
