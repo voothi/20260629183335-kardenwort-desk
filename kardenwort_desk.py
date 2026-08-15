@@ -5020,6 +5020,21 @@ html, body {{
             return translations;
         }
 
+        function isMatchingSubTokenLemma(lemma, spanClean) {
+            if (!lemma || !spanClean) return false;
+            var l = lemma.toLowerCase().trim();
+            var s = spanClean.toLowerCase().trim();
+            if (l === s) return true;
+            if (l.indexOf(s) !== -1 || s.indexOf(l) !== -1) return true;
+            if (l.length >= 4 && s.length >= 4) {
+                var stemLen = Math.min(l.length, s.length, 5);
+                if (l.substring(0, stemLen) === s.substring(0, stemLen)) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
         function getSpanSpecificTranslation(span, group) {
             if (!group) group = findCompoundSiblingSpans(span);
             var tokenData = findTokenData(span);
@@ -5029,7 +5044,19 @@ html, body {{
             
             var spanClean = (span.getAttribute('data-lower-clean') || span.getAttribute('data-original-text') || span.textContent || "").trim().toLowerCase();
             
-            // 1. Try to find a row matching this sub-token's lemma directly
+            var otherSpansClean = [];
+            if (group && group.length > 1) {
+                for (var i = 0; i < group.length; i++) {
+                    if (group[i] !== span) {
+                        var otherClean = (group[i].getAttribute('data-lower-clean') || group[i].getAttribute('data-original-text') || group[i].textContent || "").trim().toLowerCase();
+                        if (otherClean) otherSpansClean.push(otherClean);
+                    }
+                }
+            }
+
+            var specificTranslations = [];
+            var compoundTranslations = [];
+
             for (var j = 0; j < tokenData.row_ids.length; j++) {
                 var rowId = tokenData.row_ids[j];
                 var tr = null;
@@ -5039,24 +5066,66 @@ html, body {{
                         break;
                     }
                 }
-                if (tr) {
-                    var tds = tr.getElementsByTagName('td');
-                    var lemma = "";
-                    var trans = "";
-                    for (var m = 0; m < tds.length; m++) {
-                        var col = tds[m].getAttribute('data-col');
-                        if (col === '{lemma_col_name}') {
-                            lemma = (tds[m].textContent || tds[m].innerText || "").trim().toLowerCase();
-                        } else if (col === 'WordDestination') {
-                            trans = (tds[m].textContent || tds[m].innerText || "").trim();
+                if (!tr) continue;
+
+                var tds = tr.getElementsByTagName('td');
+                var lemma = "";
+                var trans = "";
+                for (var m = 0; m < tds.length; m++) {
+                    var col = tds[m].getAttribute('data-col');
+                    if (col === '{lemma_col_name}') {
+                        lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                    } else if (col === 'WordDestination') {
+                        trans = (tds[m].textContent || tds[m].innerText || "").trim();
+                    }
+                }
+
+                if (!trans) continue;
+
+                var lemmaClean = lemma.toLowerCase();
+                var isFullCompoundLemma = (lemmaClean.indexOf('-') !== -1 || lemmaClean.indexOf('_') !== -1 || lemmaClean.indexOf(' ') !== -1 || lemmaClean.indexOf('/') !== -1 || lemmaClean.indexOf('.') !== -1 || lemmaClean.indexOf(':') !== -1);
+
+                if (isFullCompoundLemma) {
+                    if (compoundTranslations.indexOf(trans) === -1) {
+                        compoundTranslations.push(trans);
+                    }
+                } else {
+                    var matchesThis = isMatchingSubTokenLemma(lemmaClean, spanClean);
+                    var matchesOther = false;
+                    if (group && group.length > 1) {
+                        for (var o = 0; o < otherSpansClean.length; o++) {
+                            if (isMatchingSubTokenLemma(lemmaClean, otherSpansClean[o])) {
+                                matchesOther = true;
+                                break;
+                            }
                         }
                     }
-                    if (lemma && spanClean && (lemma === spanClean || lemma.indexOf(spanClean) !== -1 || spanClean.indexOf(lemma) !== -1)) {
-                        if (trans) return trans;
+
+                    if (matchesThis && !matchesOther) {
+                        if (specificTranslations.indexOf(trans) === -1) {
+                            specificTranslations.push(trans);
+                        }
                     }
                 }
             }
-            
+
+            if (specificTranslations.length > 0) {
+                if (compoundTranslations.length > 0 && group && group.length > 1 && group[group.length - 1] === span) {
+                    var combined = specificTranslations.slice();
+                    for (var c = 0; c < compoundTranslations.length; c++) {
+                        if (combined.indexOf(compoundTranslations[c]) === -1) {
+                            combined.push(compoundTranslations[c]);
+                        }
+                    }
+                    return combined.join(', ');
+                }
+                return specificTranslations.join(', ');
+            }
+
+            if (compoundTranslations.length > 0 && group && group.length > 1 && group[group.length - 1] === span) {
+                return compoundTranslations.join(', ');
+            }
+
             // 2. If compound is a group and there is a shared multi-part translation
             if (group.length > 1) {
                 var spanIdx = -1;

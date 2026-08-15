@@ -989,3 +989,76 @@ def test_shared_multi_row_compound_audio_no_duplication(page):
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
 
+
+def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="viel">viel</span>'
+        '-'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="zu">zu</span>'
+        '-'
+        '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="beschäftigte">beschäftigte</span>'
+    )
+    manifest = [
+        {"text": "viel", "is_word": True, "visual_idx": 0, "lower_clean": "viel", "row_ids": [0, 1, 2, 3]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "zu", "is_word": True, "visual_idx": 2, "lower_clean": "zu", "row_ids": [0, 1, 2, 3]},
+        {"text": "-", "is_word": False, "visual_idx": 3},
+        {"text": "beschäftigte", "is_word": True, "visual_idx": 4, "lower_clean": "beschäftigte", "row_ids": [0, 1, 2, 3]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">zu</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">viel-zu-beschäftigte</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">к</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">viel</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">viel-zu-beschäftigte</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">много</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">beschäftigen</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">viel-zu-beschäftigte</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">занимать</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">viel-zu-beschäftigen</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">viel-zu-beschäftigte</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">слишком занят</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+    
+    span_viel = page.locator("span[data-lower-clean='viel']")
+    span_zu = page.locator("span[data-lower-clean='zu']")
+    span_besch = page.locator("span[data-lower-clean='beschäftigte']")
+    
+    # Right click on the compound word to flip all constituent parts
+    span_besch.click(button="right")
+    
+    assert span_viel.inner_text() == "много"
+    assert span_zu.inner_text() == "к"
+    assert span_besch.inner_text() == "занимать, слишком занят"
+    
+    source_container = page.locator("#source-container")
+    assert "много-к-занимать, слишком занят" in source_container.inner_text()
+
+
