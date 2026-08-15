@@ -127,6 +127,16 @@ def test_generate_slug():
     assert desk.generate_slug("The Quick Brown Fox!") == "the-quick-brown-fox"
     assert desk.generate_slug("Hello {\\an8} World") == "hello-world"
     assert desk.generate_slug("!!!") == "untitled"
+    assert desk.generate_slug("") == "untitled"
+    assert desk.generate_slug(None) == "untitled"
+    assert desk.generate_slug("20260815172843") == "untitled"
+    assert desk.generate_slug("12345 67890") == "untitled"
+    assert desk.generate_slug("archive complete change 20260815131120-token-mapping-inflected-expansion") == "archive-complete-change-token"
+    assert desk.generate_slug("20260815131120-token-mapping-inflected-expansion") == "token-mapping-inflected-expansion"
+    assert desk.generate_slug("openspec/changes/archive/20260815131120-token-mapping/specs/spec.md") == "openspec-changes-archive-token"
+    assert desk.generate_slug("SHA256_Hash generator") == "sha256-hash-generator"
+    assert desk.generate_slug("Mädchen in der Schule") == "mädchen-in-der-schule"
+    assert desk.generate_slug("БыстрыйПоиск (тест)") == "быстрый-поиск-тест"
 
 def test_load_tsv_rows():
     with tempfile.NamedTemporaryFile(mode='w', suffix='.tsv', delete=False, encoding='utf-8') as f:

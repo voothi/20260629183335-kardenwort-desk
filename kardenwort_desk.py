@@ -1493,13 +1493,28 @@ def extract_zid(path):
     return match.group(1) if match else "00000000000000"
 
 def generate_slug(text, max_words=4):
-    cleaned = re.sub(r'\{[^}]*\}', '', text)
-    cleaned = re.sub(r'[^\w\s]', '', cleaned.lower())
-    
-    # Strip ZID from the start if the user highlighted text that begins with one
-    cleaned = re.sub(r'^\s*\d{14}\s+', '', cleaned)
-    
-    words = cleaned.split()[:max_words]
+    if not text:
+        return "untitled"
+    # Remove ASS and HTML tags
+    cleaned = re.sub(r'\{[^}]*\}', ' ', text)
+    cleaned = re.sub(r'<[^>]*>', ' ', cleaned)
+
+    tokens = tok.build_word_list_internal(cleaned, keep_spaces=False)
+    words = []
+    for t in tokens:
+        if not t.get("is_word"):
+            continue
+        raw_text = t.get("text", "")
+        sub_parts = tok.split_camel_case(raw_text) or [raw_text]
+        for p in sub_parts:
+            clean_p = tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum()))
+            if clean_p and not clean_p.isdigit():
+                words.append(clean_p)
+                if len(words) >= max_words:
+                    break
+        if len(words) >= max_words:
+            break
+
     slug = '-'.join(words)
     return slug if slug else "untitled"
 
