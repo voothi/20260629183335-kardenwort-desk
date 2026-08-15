@@ -2884,6 +2884,10 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         if de_force_noun_capitalization:
             cmd.append("--de-force-noun-capitalization")
             
+        preserve_composite_tokens = config.getboolean(SEC_SETTINGS, 'preserve_composite_tokens', fallback=False)
+        if preserve_composite_tokens:
+            cmd.append("--preserve-composite-tokens")
+            
         strip_garbage_characters = config.get(SEC_SETTINGS, 'strip_garbage_characters', fallback=None)
         if strip_garbage_characters is not None:
             cmd.extend(["--strip-garbage-characters", strip_garbage_characters])

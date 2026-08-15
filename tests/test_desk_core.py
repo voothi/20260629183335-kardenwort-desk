@@ -436,6 +436,54 @@ Destination-uk-UA=tts_dest_uk
         mapping_dict = json.loads(mapping_json)
         assert mapping_dict['Destination-uk-UA'] == 'tts_dest_uk'
 
+
+def test_cmd_preserve_composite_tokens_forwarding(monkeypatch, tmp_path):
+    import subprocess
+    from unittest.mock import MagicMock
+    mock_cmd = []
+    def mock_run(cmd, *args, **kwargs):
+        nonlocal mock_cmd
+        mock_cmd = cmd
+        res = MagicMock()
+        res.returncode = 0
+        return res
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(desk, "render_lookup_html", lambda *a, **kw: "<html></html>")
+    
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "idx.txt").write_text("")
+    (workspace / "override.txt").write_text("")
+    
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+preserve_composite_tokens=true
+save_source_text=false
+[languages]
+en_lemma_index=idx.txt
+en_lemma_override=override.txt
+""")
+    mapping_file = tmp_path / "mapping.ini"
+    mapping_file.write_text("""
+[fields]
+WordSource=
+[fields_mapping.word]
+WordSource=lemma
+""")
+    resolved_paths = {
+        'kardenwort_workspace': workspace,
+        'anki_mapping_file': mapping_file,
+        'kardenwort_python': Path(sys.executable),
+    }
+    try:
+        desk.run_render_flow("test text", "en", "1234", "single", config, resolved_paths)
+    except Exception:
+        pass
+        
+    assert "--preserve-composite-tokens" in mock_cmd
+
+
 def test_cmd_export_selection_modes_and_favorites(monkeypatch, tmp_path):
     import json
     
