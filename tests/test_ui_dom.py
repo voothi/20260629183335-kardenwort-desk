@@ -325,6 +325,53 @@ def test_apostrophe_possessive_token_mapping_and_inflected_preservation(page, tm
     assert inflected_cell.inner_text() == "pytest"
 
 
+def test_contractions_and_abbreviations_compatibility(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "It's true that we didn't check e.g. spec in config."
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "it\tit\tоно\n"
+        "do\tdid\tделать\n"
+        "not\tnot\tне\n"
+        "spec\tspec\tспецификация\n"
+        "config\tconfig\tконфигурация\n"
+    )
+    tsv_file = tmp_path / "20260815195400-compat.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260815195400",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # 1. Contraction It's is highlighted and connected
+    its_span = page.locator("span.word[data-lower-clean=\"it's\"]")
+    assert its_span.is_visible()
+    assert "highlight-orange" in its_span.get_attribute("class")
+
+    # 2. Contraction didn't is highlighted and connected
+    didnt_span = page.locator("span.word[data-lower-clean=\"didn't\"]")
+    assert didnt_span.is_visible()
+    assert "highlight-orange" in didnt_span.get_attribute("class")
+
+    # 3. All inflected fields in the table remain preserved (not stripped by window filter)
+    rows = page.locator("tr[data-row-id]")
+    count = rows.count()
+    assert count == 5
+    for i in range(count):
+        cell_text = page.locator(f'tr[data-row-id="{i}"] td[data-col="WordSourceInflectedForm"] .scrollable-cell').inner_text()
+        assert cell_text != ""
+
+
+
 
 
 
