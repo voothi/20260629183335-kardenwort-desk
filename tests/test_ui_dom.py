@@ -280,6 +280,17 @@ def test_rmb_flip_compound_with_leading_zid_hides_zid_and_removes_leading_hyphen
     unflipped_text = source_container.inner_text()
     assert "20260815131120-token-mapping-inflected-expansion" in unflipped_text
 
+    # 3rd RMB click: flip back to Russian
+    token_span.click(button="right")
+    flipped_text_2 = source_container.inner_text()
+    assert "Change: жетон" in flipped_text_2 or "Change:жетон" in flipped_text_2
+    assert "20260815131120" not in flipped_text_2
+
+    # 4th RMB click: un-flip back to English
+    token_span.click(button="right")
+    unflipped_text_2 = source_container.inner_text()
+    assert "20260815131120-token-mapping-inflected-expansion" in unflipped_text_2
+
 
 
 
