@@ -1342,5 +1342,68 @@ def test_path_level_slashes_delimit_compound_groups_in_audio(page):
     assert play_calls[0]["arg"].endswith("en\\ntoken mapping")
 
 
+def test_single_span_with_multiple_compound_tsv_rows_plays_only_direct_match(page):
+    source_html = '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="archive">archive</span>'
+    manifest = [
+        {"text": "archive", "is_word": True, "visual_idx": 0, "lower_clean": "archive", "row_ids": [0, 1, 2]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">archive</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Archived, Archive</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">архив</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">archive/20260815131120</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">archive/20260815131120-token-mapping/</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">архив/20260815131120</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">archive/20260815131120-token-mapping/</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">archive/20260815131120-token-mapping/</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">расширение/</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. Clicking on 'archive' span: only plays "archive" (direct match), never concatenating compound rows or ZIDs
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_archive = page.locator("span[data-lower-clean='archive']")
+    span_archive.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\narchive")
+
+    # 2. Clicking directly on table row with ZID in lemma: plays only natural word "archive", stripping ZID
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    row_zid = page.locator("tr[data-row-id='1']")
+    row_zid.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\narchive")
+
+
+
 
 

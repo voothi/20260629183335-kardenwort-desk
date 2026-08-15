@@ -5232,12 +5232,24 @@ html, body {{
         var audioAnkiTtsCli = "{audio_anki_tts_cli}";
         var audioPythonExe = "{audio_python_exe}";
 
+        function sanitizeSpokenText(text) {
+            if (!text) return "";
+            var s = String(text);
+            // Strip 14-digit ZIDs
+            s = s.replace(/(^|[^0-9])[0-9]{14}(?![0-9])/g, '$1 ');
+            // Replace path separators, colons, and underscore delimiters with spaces
+            s = s.replace(/[/\\_:]/g, ' ');
+            // Strip standalone numeric tokens
+            s = s.replace(/(^|[ \t\r\n])[0-9]+(?=[ \t\r\n]|$)/g, ' ');
+            return s.replace(/[ \t\r\n]+/g, ' ').trim();
+        }
+
         function playAudio(text, lang) {
             if (!text || !lang) return;
-            var clean = text.trim();
-            if (!clean || /^[0-9]+$/.test(clean)) return;
+            var clean = sanitizeSpokenText(text);
+            if (!clean) return;
             if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
-                var sanitizedText = text.replace(/\\r?\\n|\\r/g, ' ');
+                var sanitizedText = clean.replace(/\\r?\\n|\\r/g, ' ');
                 var escapedText = sanitizedText.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
                 window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
             }
@@ -5298,8 +5310,9 @@ html, body {{
 
                 var lemmaClean = lemma.toLowerCase();
                 var inflectedClean = inflected.toLowerCase();
+                var inflectedParts = inflectedClean.split(',').map(function(f) { return f.trim(); });
 
-                if (lemmaClean === spanClean || inflectedClean === spanClean) {
+                if (lemmaClean === spanClean || inflectedClean === spanClean || inflectedParts.indexOf(spanClean) !== -1) {
                     bestRowLemma = lemma;
                     bestRowInflected = inflected;
                     exactMatchFound = true;
@@ -5323,21 +5336,21 @@ html, body {{
 
             if (sourceMode === 'inflection') {
                 if (bestRowInflected) {
-                    if (group && group.length > 1 && bestRowInflected.toLowerCase() !== spanClean && (bestRowInflected.indexOf('-') !== -1 || bestRowInflected.indexOf('_') !== -1 || bestRowInflected.indexOf(' ') !== -1 || bestRowInflected.indexOf('/') !== -1)) {
+                    if (bestRowInflected.toLowerCase() !== spanClean && (bestRowInflected.indexOf('-') !== -1 || bestRowInflected.indexOf('_') !== -1 || bestRowInflected.indexOf(' ') !== -1 || bestRowInflected.indexOf('/') !== -1 || bestRowInflected.indexOf('\\') !== -1)) {
                         return spanText;
                     }
                     var cleanInf = getCleanConstituentInflection(bestRowInflected, spanClean);
-                    if (group && group.length > 1 && cleanInf.toLowerCase() !== spanClean && !exactMatchFound) {
+                    if (cleanInf.toLowerCase() !== spanClean && !exactMatchFound) {
                         return spanText;
                     }
                     return cleanInf || bestRowLemma || spanText;
                 }
                 return spanText;
             } else {
-                if (group && group.length > 1 && bestRowLemma.toLowerCase() !== spanClean && !exactMatchFound) {
+                if (bestRowLemma.toLowerCase() !== spanClean && !exactMatchFound) {
                     return spanText;
                 }
-                if (group && group.length > 1 && (bestRowLemma.indexOf('-') !== -1 || bestRowLemma.indexOf('_') !== -1 || bestRowLemma.indexOf('/') !== -1 || bestRowLemma.indexOf(' ') !== -1)) {
+                if (bestRowLemma.toLowerCase() !== spanClean && (bestRowLemma.indexOf('-') !== -1 || bestRowLemma.indexOf('_') !== -1 || bestRowLemma.indexOf('/') !== -1 || bestRowLemma.indexOf('\\') !== -1 || bestRowLemma.indexOf(' ') !== -1)) {
                     return spanText;
                 }
                 return bestRowLemma || spanText;
@@ -5355,7 +5368,8 @@ html, body {{
                 for (var i = 0; i < group.length; i++) {
                     var s = group[i];
                     var term = getSpanSpecificSpokenWord(s, sourceMode, group);
-                    if (term && !/^[0-9]+$/.test(term.trim())) {
+                    term = sanitizeSpokenText(term);
+                    if (term) {
                         words.push(term);
                     }
                 }
@@ -5366,11 +5380,11 @@ html, body {{
                 var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
                 
                 if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
-                    if (spanText && !/^[0-9]+$/.test(spanText.trim())) words.push(spanText);
-                } else if (tokenData.row_ids.length === 1) {
-                    var term = getSpanSpecificSpokenWord(s, sourceMode, group);
-                    if (term && !/^[0-9]+$/.test(term.trim())) words.push(term);
+                    var sanitized = sanitizeSpokenText(spanText);
+                    if (sanitized) words.push(sanitized);
                 } else {
+                    // Check for direct-match rows (e.g. contractions like "isn't" -> [be, not])
+                    var directMatchRows = [];
                     for (var j = 0; j < tokenData.row_ids.length; j++) {
                         var rowId = tokenData.row_ids[j];
                         var tr = null;
@@ -5394,18 +5408,35 @@ html, body {{
                             }
                         }
                         
-                        if (sourceMode === 'inflection') {
-                            var cleanInflection = getCleanConstituentInflection(inflected, spanClean);
-                            var term = cleanInflection || lemma || spanText;
-                            if (term && !/^[0-9]+$/.test(term.trim()) && (words.length === 0 || words[words.length - 1] !== term)) {
-                                words.push(term);
-                            }
-                        } else {
-                            var term = lemma || spanText;
-                            if (term && !/^[0-9]+$/.test(term.trim()) && (words.length === 0 || words[words.length - 1] !== term)) {
-                                words.push(term);
+                        var lemmaClean = lemma.toLowerCase();
+                        var inflectedClean = inflected.toLowerCase();
+                        var inflectedParts = inflectedClean.split(',').map(function(f) { return f.trim(); });
+                        
+                        if (lemmaClean === spanClean || inflectedClean === spanClean || inflectedParts.indexOf(spanClean) !== -1) {
+                            directMatchRows.push({ rowId: rowId, lemma: lemma, inflected: inflected });
+                        }
+                    }
+                    
+                    if (directMatchRows.length > 0) {
+                        for (var d = 0; d < directMatchRows.length; d++) {
+                            var rowObj = directMatchRows[d];
+                            if (sourceMode === 'inflection') {
+                                var cleanInflection = getCleanConstituentInflection(rowObj.inflected, spanClean);
+                                var term = sanitizeSpokenText(cleanInflection || rowObj.lemma || spanText);
+                                if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                                    words.push(term);
+                                }
+                            } else {
+                                var term = sanitizeSpokenText(rowObj.lemma || spanText);
+                                if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                                    words.push(term);
+                                }
                             }
                         }
+                    } else {
+                        var term = getSpanSpecificSpokenWord(s, sourceMode, group);
+                        term = sanitizeSpokenText(term);
+                        if (term) words.push(term);
                     }
                 }
             }
