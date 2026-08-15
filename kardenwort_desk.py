@@ -3241,9 +3241,11 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             _ACTIVE_ZIDS.discard(zid)
 
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
+    normalize_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
     if text:
         text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
-        text = normalize_bracket_spacing(text)
+        if normalize_brackets:
+            text = normalize_bracket_spacing(text)
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     
     display_mode_val = config.get(SEC_RENDERING, 'display_mode', fallback='progressive')
@@ -4197,7 +4199,7 @@ html, body {{
         for idx in range(max_non_empty_idx + 1):
             trans = sentence_translations.get(idx)
             if trans:
-                safe_trans = html.escape(normalize_bracket_spacing(trans))
+                safe_trans = html.escape(normalize_bracket_spacing(trans) if normalize_brackets else trans)
                 sentence_htmls.append(f"<div>{safe_trans}</div>")
             else:
                 sentence_htmls.append("<div>&nbsp;</div>")
@@ -8605,7 +8607,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                             if f.stem != source_stem_full:
                                 txt_content = f.read_text(encoding='utf-8').strip()
                                 if txt_content:
-                                    lines = [html.escape(normalize_bracket_spacing(line.strip())) for line in txt_content.splitlines()]
+                                    norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
+                                    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in txt_content.splitlines()]
                                     is_single = True
                                     source_txt_path = tsv_path.with_suffix('.txt')
                                     if source_txt_path.exists():
@@ -8642,7 +8645,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                     idx_to_sentence[idx_val] = s
                     
                     sorted_keys = sorted(idx_to_sentence.keys())
-                    sentences = [html.escape(normalize_bracket_spacing(idx_to_sentence[k])) for k in sorted_keys]
+                    norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
+                    sentences = [html.escape(normalize_bracket_spacing(idx_to_sentence[k]) if norm_brackets else idx_to_sentence[k]) for k in sorted_keys]
                     
                     is_single = True
                     if source_text:

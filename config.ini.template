@@ -144,6 +144,9 @@ multi_mode_remove_empty_lines = true
 ; If true, excessive whitespace and tabs are collapsed into a single space in multi mode
 multi_mode_clean_spaces = true
 
+; If true, normalize spacing around brackets: remove inner whitespace in (...), [...], {...}
+normalize_bracket_spacing = true
+
 ; Define when sentence context padding is applied ('single', 'multi', 'both')
 anki_context_mode = single
 

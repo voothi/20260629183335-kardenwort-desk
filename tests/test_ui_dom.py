@@ -196,6 +196,43 @@ def test_bracket_spacing_normalized_in_rendered_html(page, tmp_path):
     assert "spec.md )" not in trans_inner_text
 
 
+def test_bracket_spacing_disabled_via_config(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    config.set(kardenwort_desk.SEC_SETTINGS, 'normalize_bracket_spacing', 'false')
+    source_text = "main spec ( openspec/specs/word-extraction/spec.md ) All artifacts"
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordDestination\tSentenceDestination\n"
+        "spec\tспецификация\tосновной спецификацией ( openspec/specs/word-extraction/spec.md ) Все\n"
+    )
+    tsv_file = tmp_path / "20260815185601-spec.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260815185601",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # When normalize_bracket_spacing = false, inner spaces are preserved
+    source_container = page.locator("#source-container")
+    source_inner_text = source_container.inner_text()
+    assert "( openspec" in source_inner_text
+    assert "spec.md )" in source_inner_text
+
+    trans_container = page.locator("#translation-container")
+    trans_inner_text = trans_container.inner_text()
+    assert "( openspec" in trans_inner_text
+    assert "spec.md )" in trans_inner_text
+
+
+
 def test_rmb_flip_compound_with_leading_zid_hides_zid_and_removes_leading_hyphen(page, tmp_path):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     source_text = "Change: 20260815131120-token-mapping-inflected-expansion Schema:"
