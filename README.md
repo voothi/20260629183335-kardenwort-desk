@@ -422,6 +422,23 @@ GoldenDict delivers lookups in two dual modes:
    `python "kardenwort_desk.py" lookup --text "%GDWORD%" --language en`
    When `[server] enabled = false`, lookup output is byte-for-byte static HTML without JavaScript or API tokens.
 
+### Language Verification & Results Protection
+To safeguard the `results/` folder (which serves as the knowledge base for translations and flashcards) from wrong-language lemmatization and translation artifacts, Kardenwort Desk provides pre-flight natural language verification powered by `lingua-py`.
+
+#### Configuration
+The `[language_check]` section in `config.ini` controls verification:
+- `enabled = true`: Enables pre-flight language verification. When `false`, language checking is completely bypassed with zero runtime latency.
+- `languages = en, de`: Restricts detection to the specified workspace languages, maximizing detection accuracy on short phrases.
+- `min_char_length = 4`: Minimum text character length required for language detection. Shorter texts pass without blocking.
+- `confidence_threshold = 0.60`: Minimum confidence required to declare a mismatch. Low-confidence/ambiguous tokens pass safely.
+- `action_on_mismatch = prompt`: Behavior on detected mismatch (`prompt`, `block`, or `warn`).
+
+#### CLI Bypass
+Any command or HTTP request can bypass language verification explicitly using `--bypass-lang-check` (or `--force-language`):
+```bash
+python kardenwort_desk.py lookup --text "Das ist ein Test" --language en --bypass-lang-check
+```
+
 ### Migration Note
 If you encounter issues with the new `lookup` command, the revert path is to swap the GoldenDict Program commands back to their previous raw scripts (`En kW`, `dT-g En-Ru`, or German scripts). The desk change is strictly additive and doesn't break or replace the underlying standalone extraction scripts.
 

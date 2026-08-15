@@ -16,6 +16,8 @@ idna==3.18
     # via requests
 iniconfig==2.3.0
     # via pytest
+lingua-language-detector==2.2.0
+    # via -r requirements.in
 packaging==26.2
     # via pytest
 playwright==1.61.0

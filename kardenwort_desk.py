@@ -20,7 +20,7 @@ import traceback
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from typing import Optional, Any, Union, List, FrozenSet, TypedDict
+from typing import Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict
 from enum import Enum, auto
 
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
@@ -57,6 +57,7 @@ class ErrorCode(str, Enum):
     ROW_STALE = "ROW_STALE"
     ROW_BUSY = "ROW_BUSY"
     SERVER_ERROR = "SERVER_ERROR"
+    LANGUAGE_MISMATCH = "LANGUAGE_MISMATCH"
 
 
 # Frozen set of all valid catalog codes for O(1) membership checks.
@@ -347,7 +348,178 @@ SEC_AUDIO = "audio"
 SEC_GOLDENDICT = "goldendict"
 SEC_WORDFILL = "wordfill"
 SEC_SERVER = "server"
+SEC_LANGUAGE_CHECK = "language_check"
 SINGLE_WORD_DELIMITERS = ('-', '.', '_')
+
+
+@dataclass(frozen=True)
+class LanguageCheckConfig:
+    enabled: bool = True
+    languages: Tuple[str, ...] = ("en", "de")
+    min_char_length: int = 4
+    confidence_threshold: float = 0.60
+    action_on_mismatch: str = "prompt"  # "prompt", "block", "warn"
+
+    @classmethod
+    def from_config(cls, config: Any) -> "LanguageCheckConfig":
+        if isinstance(config, cls):
+            return config
+        enabled = True
+        languages = ("en", "de")
+        min_char_length = 4
+        confidence_threshold = 0.60
+        action_on_mismatch = "prompt"
+
+        if config and hasattr(config, "has_section") and config.has_section(SEC_LANGUAGE_CHECK):
+            if hasattr(config, "getboolean"):
+                enabled = config.getboolean(SEC_LANGUAGE_CHECK, "enabled", fallback=True)
+            if hasattr(config, "get"):
+                raw_langs = config.get(SEC_LANGUAGE_CHECK, "languages", fallback="en, de")
+                if raw_langs:
+                    parsed_langs = [l.strip().lower() for l in raw_langs.split(",") if l.strip()]
+                    if parsed_langs:
+                        languages = tuple(parsed_langs)
+                action_on_mismatch = config.get(SEC_LANGUAGE_CHECK, "action_on_mismatch", fallback="prompt").strip().lower()
+                if action_on_mismatch not in ("prompt", "block", "warn"):
+                    action_on_mismatch = "prompt"
+            if hasattr(config, "getint"):
+                min_char_length = config.getint(SEC_LANGUAGE_CHECK, "min_char_length", fallback=4)
+            if hasattr(config, "getfloat"):
+                confidence_threshold = config.getfloat(SEC_LANGUAGE_CHECK, "confidence_threshold", fallback=0.60)
+        elif config and hasattr(config, "has_section") and config.has_section(SEC_LANGUAGES):
+            found_langs = []
+            for k in config[SEC_LANGUAGES].keys():
+                if "_" in k:
+                    lang_prefix = k.split("_")[0].lower()
+                    if lang_prefix not in found_langs:
+                        found_langs.append(lang_prefix)
+            if found_langs:
+                languages = tuple(found_langs)
+
+        return cls(
+            enabled=enabled,
+            languages=languages,
+            min_char_length=min_char_length,
+            confidence_threshold=confidence_threshold,
+            action_on_mismatch=action_on_mismatch,
+        )
+
+
+@dataclass(frozen=True)
+class LanguageVerificationResult:
+    is_match: bool
+    expected_lang: str
+    detected_lang: Optional[str]
+    confidence: float
+    action: str  # "proceed", "prompt", "block", "warn"
+    message: str = ""
+
+
+_LINGUA_DETECTOR_CACHE: Dict[Tuple[str, ...], Any] = {}
+_LINGUA_DETECTOR_LOCK = threading.Lock()
+
+
+def verify_language(text: str, expected_lang: str, config: Any, bypass: bool = False) -> LanguageVerificationResult:
+    """
+    Pre-flight language verification using lingua-py.
+    When enabled=False or bypass=True, returns immediately with 0 overhead and no lingua imports.
+    """
+    lang_cfg = LanguageCheckConfig.from_config(config)
+    expected_code = expected_lang.strip().lower() if expected_lang else "en"
+
+    if not lang_cfg.enabled or bypass:
+        return LanguageVerificationResult(
+            is_match=True,
+            expected_lang=expected_code,
+            detected_lang=None,
+            confidence=1.0,
+            action="proceed",
+            message="Language verification disabled or bypassed."
+        )
+
+    clean_text = text.strip() if text else ""
+    if len(clean_text) < lang_cfg.min_char_length:
+        return LanguageVerificationResult(
+            is_match=True,
+            expected_lang=expected_code,
+            detected_lang=None,
+            confidence=1.0,
+            action="proceed",
+            message=f"Text length ({len(clean_text)}) below minimum threshold ({lang_cfg.min_char_length})."
+        )
+
+    try:
+        from lingua import LanguageDetectorBuilder, IsoCode639_1
+    except ImportError as e:
+        logger.warning(f"lingua-py library not available for language verification: {e}")
+        return LanguageVerificationResult(
+            is_match=True,
+            expected_lang=expected_code,
+            detected_lang=None,
+            confidence=1.0,
+            action="proceed",
+            message="lingua library unavailable, verification skipped."
+        )
+
+    cache_key = tuple(sorted(lang_cfg.languages))
+    with _LINGUA_DETECTOR_LOCK:
+        if cache_key not in _LINGUA_DETECTOR_CACHE:
+            iso_codes = []
+            for l in lang_cfg.languages:
+                l_upper = l.strip().upper()
+                if hasattr(IsoCode639_1, l_upper):
+                    iso_codes.append(getattr(IsoCode639_1, l_upper))
+            if iso_codes:
+                _LINGUA_DETECTOR_CACHE[cache_key] = LanguageDetectorBuilder.from_iso_codes_639_1(*iso_codes).build()
+            else:
+                _LINGUA_DETECTOR_CACHE[cache_key] = LanguageDetectorBuilder.from_all_languages().build()
+        detector = _LINGUA_DETECTOR_CACHE[cache_key]
+
+    confidence_values = detector.compute_language_confidence_values(clean_text)
+    if not confidence_values:
+        return LanguageVerificationResult(
+            is_match=True,
+            expected_lang=expected_code,
+            detected_lang=None,
+            confidence=0.0,
+            action="proceed",
+            message="No language detected with confidence."
+        )
+
+    top_result = confidence_values[0]
+    detected_code = top_result.language.iso_code_639_1.name.lower()
+    confidence = top_result.value
+
+    if confidence < lang_cfg.confidence_threshold:
+        return LanguageVerificationResult(
+            is_match=True,
+            expected_lang=expected_code,
+            detected_lang=detected_code,
+            confidence=confidence,
+            action="proceed",
+            message=f"Confidence ({confidence:.2f}) below threshold ({lang_cfg.confidence_threshold:.2f})."
+        )
+
+    if detected_code == expected_code:
+        return LanguageVerificationResult(
+            is_match=True,
+            expected_lang=expected_code,
+            detected_lang=detected_code,
+            confidence=confidence,
+            action="proceed",
+            message=f"Language matched: {detected_code} (confidence: {confidence:.2f})."
+        )
+
+    action = lang_cfg.action_on_mismatch
+    msg = f"Language mismatch detected: input text appears to be '{detected_code}' (confidence {confidence:.2f}), but expected language is '{expected_code}'."
+    return LanguageVerificationResult(
+        is_match=False,
+        expected_lang=expected_code,
+        detected_lang=detected_code,
+        confidence=confidence,
+        action=action,
+        message=msg
+    )
 
 
 @dataclass(frozen=True)
@@ -7726,7 +7898,7 @@ def cmd_wordfill(args):
     sys.exit(0)
 
 
-def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, text_mode='single', sections=None, lemma_columns=None, theme=None, no_headings=False, disable_css=False, zid=None, wordfill_cfg=None, config=None, resolved_paths=None, goldendict=None):
+def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, text_mode='single', sections=None, lemma_columns=None, theme=None, no_headings=False, disable_css=False, zid=None, wordfill_cfg=None, config=None, resolved_paths=None, goldendict=None, bypass_lang_check=False):
     if zid is None:
         zid = generate_unique_zid()
 
@@ -7735,6 +7907,23 @@ def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, te
         config, resolved_paths, goldendict = c_tuple[0], c_tuple[1], c_tuple[2]
         if wordfill_cfg is None:
             wordfill_cfg = c_tuple[3]
+
+    if not bypass_lang_check:
+        lang_res = verify_language(text, language, config, bypass=False)
+        if not lang_res.is_match:
+            if lang_res.action in ("block", "prompt"):
+                raise StructuredError(
+                    ErrorCode.LANGUAGE_MISMATCH,
+                    lang_res.message,
+                    details={
+                        "detected_language": lang_res.detected_lang,
+                        "expected_language": lang_res.expected_lang,
+                        "confidence": lang_res.confidence,
+                        "action": lang_res.action,
+                    }
+                )
+            elif lang_res.action == "warn":
+                logger.warning(lang_res.message)
 
     goldendict = dict(goldendict)
 
@@ -7838,6 +8027,7 @@ def cmd_lookup(args):
             no_headings=getattr(args, 'no_headings', False),
             disable_css=getattr(args, 'disable_css', False),
             zid=zid,
+            bypass_lang_check=getattr(args, 'bypass_lang_check', False),
         )
         emit_payload(res["html"], raw=True)
         sys.exit(0)
@@ -7889,6 +8079,25 @@ def cmd_render(args):
                 new_lines.append(line)
             text = "\n".join(new_lines)
         
+    bypass_lang = getattr(args, 'bypass_lang_check', False)
+    if not bypass_lang:
+        lang_res = verify_language(text, args.language, config, bypass=False)
+        if not lang_res.is_match:
+            if lang_res.action in ("block", "prompt"):
+                print_structured_error(
+                    ErrorCode.LANGUAGE_MISMATCH,
+                    lang_res.message,
+                    details={
+                        "detected_language": lang_res.detected_lang,
+                        "expected_language": lang_res.expected_lang,
+                        "confidence": lang_res.confidence,
+                        "action": lang_res.action,
+                    }
+                )
+                sys.exit(1)
+            elif lang_res.action == "warn":
+                logger.warning(lang_res.message)
+
     try:
         zoom_val = args.zoom if args.zoom else config.get(SEC_RENDERING, 'default_zoom', fallback=config.get(SEC_SETTINGS, 'default_zoom', fallback='100'))
         split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60)
@@ -10432,6 +10641,25 @@ def cmd_desk(args):
             
     timestamp_id = generate_unique_zid()
     
+    bypass_lang = getattr(args, 'bypass_lang_check', False)
+    if not bypass_lang:
+        lang_res = verify_language(text, lang, config, bypass=False)
+        if not lang_res.is_match:
+            if lang_res.action in ("block", "prompt"):
+                print_structured_error(
+                    ErrorCode.LANGUAGE_MISMATCH,
+                    lang_res.message,
+                    details={
+                        "detected_language": lang_res.detected_lang,
+                        "expected_language": lang_res.expected_lang,
+                        "confidence": lang_res.confidence,
+                        "action": lang_res.action,
+                    }
+                )
+                sys.exit(1)
+            elif lang_res.action == "warn":
+                logger.warning(lang_res.message)
+
     try:
         theme_val = args.theme if hasattr(args, 'theme') else "dark"
         split_gap = config.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60)
@@ -10445,6 +10673,7 @@ def cmd_desk(args):
 def main():
     parser = argparse.ArgumentParser(description="Kardenwort Desk Orchestration Core")
     parser.add_argument("--config", default=None, help="Path to config.ini")
+    parser.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     parser.add_argument("--debug", action="store_true", help="Debug logging")
 
@@ -10462,6 +10691,7 @@ def main():
     p_lookup.add_argument("--no-headings", action="store_true", help="Disable headings")
     p_lookup.add_argument("--disable-css", action="store_true", help="Disable outputting CSS styles in HTML")
     p_lookup.add_argument("--theme", choices=["dark", "light", "compact"], help="Theme (html format)")
+    p_lookup.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
 
     # render
     p_render = subparsers.add_parser("render")
@@ -10474,6 +10704,7 @@ def main():
     p_render.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
     p_render.add_argument("--split-gap-limit", type=int, default=None, help="Maximum source-word index distance allowed between parts of a split/separable verb construct")
     p_render.add_argument("--seq-num", type=int, default=None, help="Parent window sequence number")
+    p_render.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
 
     # export
     p_export = subparsers.add_parser("export")
@@ -10552,6 +10783,7 @@ def main():
     p_desk.add_argument("--language", help="Language code")
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
     p_desk.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
+    p_desk.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
 
     # wordfill
     p_wordfill = subparsers.add_parser("wordfill")

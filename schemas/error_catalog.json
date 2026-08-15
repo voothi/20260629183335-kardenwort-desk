@@ -156,6 +156,12 @@
       "category": "system",
       "description": "Unhandled server-side exception.",
       "resolution": "Inspect server logs for details."
+    },
+    {
+      "code": "LANGUAGE_MISMATCH",
+      "category": "input",
+      "description": "Detected natural language of the input text does not match the configured or expected source language.",
+      "resolution": "Switch the active language to the detected language, or supply the bypass flag to proceed."
     }
   ]
 }

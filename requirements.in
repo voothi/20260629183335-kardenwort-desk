@@ -1,3 +1,4 @@
 watchdog==6.0.0
 pytest-playwright
 playwright
+lingua-language-detector==2.2.0

@@ -36,6 +36,7 @@ ERROR_STATUS_MATRIX = {
     "METHOD_NOT_ALLOWED": 405,
     "ROW_STALE": 409,
     "ROW_BUSY": 409,
+    "LANGUAGE_MISMATCH": 422,
     "SERVER_ERROR": 500,
     "DESK_FAILED": 500,
     "CONFIGURATION_ERROR": 500,
@@ -185,6 +186,11 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             if not language:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' query parameter")
 
+            bypass_lang_check = (
+                qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1') or
+                qs.get('force-language', ['false'])[0].lower() in ('true', '1')
+            )
+
             res = core_lookup(
                 text=text,
                 language=language,
@@ -199,6 +205,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 config=self.server.config,
                 resolved_paths=self.server.resolved_paths,
                 goldendict=self.server.goldendict,
+                bypass_lang_check=bypass_lang_check,
             )
             body = res["html"].encode('utf-8')
             self.send_response(200)
@@ -220,6 +227,11 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             if not language:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' query parameter")
 
+            bypass_lang_check = (
+                qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1') or
+                qs.get('force-language', ['false'])[0].lower() in ('true', '1')
+            )
+
             res = core_lookup(
                 text=text,
                 language=language,
@@ -234,6 +246,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 config=self.server.config,
                 resolved_paths=self.server.resolved_paths,
                 goldendict=self.server.goldendict,
+                bypass_lang_check=bypass_lang_check,
             )
             self._send_json(200, {
                 "session_zid": res["session_zid"],
