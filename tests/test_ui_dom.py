@@ -106,3 +106,55 @@ def test_handle_sent_text_rendered_html_scripts_load_without_syntax_errors(page,
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("en\narchive")
+
+
+def test_archive_click_does_not_highlight_unrelated_path_subtokens(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Archive Complete Change: 20260815131120-token-mapping-inflected-expansion Schema: spec-driven Archived to: openspec/changes/archive/20260815131120-token-mapping-inflected-expansion/ Specs:"
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "archive\tArchived, Archive\tархив\n"
+        "expansion\t20260815131120-token-mapping-inflected-expansion\tрасширение\n"
+        "token\t20260815131120-token-mapping-inflected-expansion\tжетон\n"
+    )
+    tsv_file = tmp_path / "20260815183341-archive-complete-change-token.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260815183341",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # Click on the word "Archive"
+    archive_span = page.locator("span.word:has-text('Archive')").first
+    archive_span.click()
+
+    # The archive row should be selected
+    archive_row = page.locator("tr[data-row-id='0']")
+    assert "selected" in archive_row.get_attribute("class")
+
+    # Tokens "Archive" and "Archived" should have active highlight
+    assert "highlight-orange-active" in archive_span.get_attribute("class")
+    archived_span = page.locator("span.word:has-text('Archived')").first
+    assert "highlight-orange-active" in archived_span.get_attribute("class")
+
+    # Unrelated tokens "token", "mapping", "expansion" should NOT be highlight-orange-active
+    token_spans = page.locator("span.word:has-text('token')").all()
+    for ts in token_spans:
+        cls = ts.get_attribute("class") or ""
+        assert "highlight-orange-active" not in cls, f"token span incorrectly highlighted as active: {cls}"
+
+    expansion_spans = page.locator("span.word:has-text('expansion')").all()
+    for es in expansion_spans:
+        cls = es.get_attribute("class") or ""
+        assert "highlight-orange-active" not in cls, f"expansion span incorrectly highlighted as active: {cls}"
+
+
