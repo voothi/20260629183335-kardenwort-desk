@@ -8547,10 +8547,16 @@ def cmd_reprocess_worker(args):
 
 _update_seq_counter = 0
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None):
     import time
     global _update_seq_counter
     _update_seq_counter += 1
+    
+    if config is None:
+        try:
+            config = load_config()[0]
+        except Exception:
+            config = None
     
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     updates_dir.mkdir(parents=True, exist_ok=True)
