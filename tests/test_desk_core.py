@@ -1539,6 +1539,93 @@ def test_deduplicate_rows_window_filtering_case_insensitive_start():
     assert deduped[1][0] == "solution"
 
 
+def test_deduplicate_rows_window_filtering_contractions_en():
+    import kardenwort_desk as desk
+    import configparser
+    from pathlib import Path
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'true')
+    config.set(SEC_SETTINGS, 'combine_source_words_order', 'contractions_first')
+
+    resolved_paths = {
+        'kardenwort_workspace': Path("U:/voothi/20241223170748-kardenwort").resolve()
+    }
+
+    data_rows = [
+        ["we're, are", "be", "1"],
+        ["we're, we", "we", "1"],
+        ["going", "go", "1"]
+    ]
+
+    window_text = "Today we're going to take a look at the new Deep Seek harness."
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=-1, col_inflected=0,
+        config=config, window_text=window_text, language='en', resolved_paths=resolved_paths
+    )
+
+    assert deduped[0][0] == "we're, are"
+    assert deduped[1][0] == "we're, we"
+    assert deduped[2][0] == "going"
+
+
+def test_deduplicate_rows_window_filtering_negative_contractions():
+    import kardenwort_desk as desk
+    import configparser
+    from pathlib import Path
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'true')
+
+    resolved_paths = {
+        'kardenwort_workspace': Path("U:/voothi/20241223170748-kardenwort").resolve()
+    }
+
+    data_rows = [
+        ["isn't, is", "be", "1"],
+        ["isn't, not", "not", "1"],
+    ]
+
+    window_text = "It isn't ready today."
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=-1, col_inflected=0,
+        config=config, window_text=window_text, language='en', resolved_paths=resolved_paths
+    )
+
+    assert deduped[0][0] == "isn't, is"
+    assert deduped[1][0] == "isn't, not"
+
+
+def test_deduplicate_rows_window_filtering_abbreviations_de():
+    import kardenwort_desk as desk
+    import configparser
+    from pathlib import Path
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'true')
+
+    resolved_paths = {
+        'kardenwort_workspace': Path("U:/voothi/20241223170748-kardenwort").resolve()
+    }
+
+    data_rows = [
+        ["z. B., zum", "zu", "1"],
+        ["z. B., Beispiel", "Beispiel", "1"],
+    ]
+
+    window_text = "wie z. B. in diesem Fall"
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=-1, col_inflected=0,
+        config=config, window_text=window_text, language='de', resolved_paths=resolved_paths
+    )
+
+    assert deduped[0][0] == "z. B., zum"
+    assert deduped[1][0] == "z. B., Beispiel"
+
+
 
 def test_deduplicate_rows_combine_source_words_false():
     import kardenwort_desk as desk

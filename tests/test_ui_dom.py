@@ -403,6 +403,39 @@ def test_lemma_strips_leading_zid_prefix(page, tmp_path):
     assert inflected_cell.inner_text() == "20260815131120-token-mapping-inflected-expansion"
 
 
+def test_contractions_inflected_expansion_dom_retention(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Today we're going to take a look at the new Deep Seek harness."
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "be\twe're, are\tбыть\n"
+        "we\twe're, we\tмы\n"
+    )
+    tsv_file = tmp_path / "20260816005700-test-were.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260816005700",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # Verify both rows retain their full constituent inflected forms in the UI table
+    be_inflected = page.locator('tr[data-row-id="0"] td[data-col="WordSourceInflectedForm"] .scrollable-cell')
+    assert be_inflected.inner_text() == "we're, are"
+
+    we_inflected = page.locator('tr[data-row-id="1"] td[data-col="WordSourceInflectedForm"] .scrollable-cell')
+    assert we_inflected.inner_text() == "we're, we"
+
+
+
 
 
 

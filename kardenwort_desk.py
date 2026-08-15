@@ -3,6 +3,7 @@ import argparse
 import json
 import logging
 import configparser
+import csv
 import os
 import re
 import subprocess
@@ -3219,6 +3220,79 @@ def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first', pr
     return unique_forms
 
 
+_TOKEN_MAPPINGS_CACHE: Dict[Tuple[str, str], Dict[str, List[str]]] = {}
+
+
+def get_desk_token_mappings(resolved_paths=None, language=None, config=None) -> Dict[str, List[str]]:
+    """
+    Loads and caches token mappings dictionary for the specified language.
+    Mapping keys (lowercased, whitespace stripped, normalized apostrophes)
+    map to list of target tokens (e.g. "we're" -> ["we", "are"]).
+    """
+    if not language:
+        return {}
+
+    lang_key = str(language).strip().lower()
+    ws_path = None
+    if resolved_paths and isinstance(resolved_paths, dict) and 'kardenwort_workspace' in resolved_paths:
+        p = resolved_paths['kardenwort_workspace']
+        ws_path = Path(p) if p else None
+    elif config and hasattr(config, 'get') and config.has_section(SEC_ENVIRONMENT):
+        env_ws = config.get(SEC_ENVIRONMENT, 'kardenwort_workspace', fallback=None)
+        if env_ws:
+            ws_path = Path(env_ws)
+
+    cache_key = (str(ws_path.resolve()) if ws_path and ws_path.exists() else "none", lang_key)
+    if cache_key in _TOKEN_MAPPINGS_CACHE:
+        return _TOKEN_MAPPINGS_CACHE[cache_key]
+
+    mappings: Dict[str, List[str]] = {}
+    mapping_files: List[Path] = []
+
+    if ws_path and ws_path.exists():
+        kw_config_path = ws_path / "config.ini"
+        if kw_config_path.exists():
+            try:
+                kw_cfg = configparser.ConfigParser(allow_no_value=True, interpolation=None)
+                kw_cfg.read(kw_config_path, encoding='utf-8')
+                if kw_cfg.has_section('token_mappings') and kw_cfg.has_option('token_mappings', lang_key):
+                    raw_entries = kw_cfg.get('token_mappings', lang_key)
+                    for entry in raw_entries.split(','):
+                        entry = entry.strip()
+                        if entry:
+                            fpath = ws_path / entry if not os.path.isabs(entry) else Path(entry)
+                            if fpath.exists():
+                                mapping_files.append(fpath)
+            except Exception as e:
+                logger.warning(f"Failed to read token_mappings from {kw_config_path}: {e}")
+
+        # Fallback to standard data/{lang} path if no config entries resolved
+        if not mapping_files:
+            data_dir = ws_path / "data" / lang_key
+            if data_dir.exists():
+                for candidate in data_dir.glob("lemma_*_*.tsv"):
+                    mapping_files.append(candidate)
+
+    for mf in mapping_files:
+        try:
+            with open(mf, "r", encoding="utf-8") as f:
+                reader = csv.reader(f, delimiter="\t")
+                for row in reader:
+                    if not row or row[0].startswith('#') or len(row) < 2:
+                        continue
+                    src = row[0].strip()
+                    norm_src = src.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
+                    norm_src = re.sub(r'\s+', '', norm_src).lower()
+                    targets = [t.strip() for t in row[1:] if t.strip()]
+                    if norm_src and targets:
+                        mappings[norm_src] = targets
+        except Exception as e:
+            logger.warning(f"Error loading token mapping file {mf}: {e}")
+
+    _TOKEN_MAPPINGS_CACHE[cache_key] = mappings
+    return mappings
+
+
 def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None):
     deduped_rows = []
     seen_words = {}
@@ -3249,6 +3323,23 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             for part in re.split(r"[" + apo_pattern + r"]+", w):
                 if part:
                     window_words_exact.add(part)
+
+        if token_mappings_enabled and language:
+            token_mappings = get_desk_token_mappings(resolved_paths, language, config)
+            if token_mappings:
+                for w in list(window_words_exact):
+                    norm_w = w.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
+                    norm_w = re.sub(r'\s+', '', norm_w).lower()
+                    if norm_w in token_mappings:
+                        for tgt in token_mappings[norm_w]:
+                            window_words_exact.add(tgt)
+                norm_window = window_text.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'").lower()
+                norm_window_stripped = re.sub(r'\s+', '', norm_window)
+                for norm_key, targets in token_mappings.items():
+                    if len(norm_key) > 1 and norm_key in norm_window_stripped:
+                        for tgt in targets:
+                            window_words_exact.add(tgt)
+
         window_words_lower = set(w.lower() for w in window_words_exact)
 
         def _is_in_window(p_clean):
