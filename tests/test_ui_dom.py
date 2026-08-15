@@ -292,5 +292,39 @@ def test_rmb_flip_compound_with_leading_zid_hides_zid_and_removes_leading_hyphen
     assert "20260815131120-token-mapping-inflected-expansion" in unflipped_text_2
 
 
+def test_apostrophe_possessive_token_mapping_and_inflected_preservation(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Testing pytest's execution buffer."
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "pytest\tpytest\tпитест\n"
+    )
+    tsv_file = tmp_path / "20260815194500-apostrophe.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260815194500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # 1. Verify span for pytest's is connected and highlighted
+    pytest_span = page.locator("span.word[data-lower-clean=\"pytest's\"]")
+    assert pytest_span.is_visible()
+    assert "highlight-orange" in pytest_span.get_attribute("class")
+
+    # 2. Verify table row for pytest has preserved non-empty INFLECTED field
+    inflected_cell = page.locator('tr[data-row-id="0"] td[data-col="WordSourceInflectedForm"] .scrollable-cell')
+    assert inflected_cell.inner_text() == "pytest"
+
+
+
 
 

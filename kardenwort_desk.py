@@ -3069,16 +3069,28 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         word_pattern = r"[\w" + apo_pattern + r"]+"
         raw_words = re.findall(word_pattern, window_text)
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
+        for w in list(window_words_exact):
+            stem = re.sub(r"[" + apo_pattern + r"]s?$", "", w, flags=re.IGNORECASE)
+            if stem and stem != w:
+                window_words_exact.add(stem)
+            for part in re.split(r"[" + apo_pattern + r"]+", w):
+                if part:
+                    window_words_exact.add(part)
         window_words_lower = set(w.lower() for w in window_words_exact)
 
         def _is_in_window(p_clean):
             if p_clean in window_words_exact or p_clean.lower() in window_words_lower:
                 return True
+            p_stem = re.sub(r"[" + apo_pattern + r"]s?$", "", p_clean, flags=re.IGNORECASE)
+            if p_stem in window_words_exact or p_stem.lower() in window_words_lower:
+                return True
             p_parts = [w for w in re.findall(word_pattern, p_clean) if w.strip()]
             if not p_parts:
                 return False
             for part in p_parts:
-                if part not in window_words_exact and part.lower() not in window_words_lower:
+                part_stem = re.sub(r"[" + apo_pattern + r"]s?$", "", part, flags=re.IGNORECASE)
+                if (part not in window_words_exact and part.lower() not in window_words_lower and
+                    part_stem not in window_words_exact and part_stem.lower() not in window_words_lower):
                     return False
             return True
 
@@ -4070,6 +4082,9 @@ html, body {{
                 else:
                     clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
                     _add_cand(clean_val)
+                    clean_val_stem = re.sub(r"[" + "".join(re.escape(c) for c in apo_set) + r"]s?$", "", clean_val)
+                    if clean_val_stem and clean_val_stem != clean_val:
+                        _add_cand(clean_val_stem)
                     subtokens = tok.decompose_identifier(val)
                     for sub in subtokens:
                         clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
@@ -4147,6 +4162,10 @@ html, body {{
         if token["is_word"]:
             lower_clean = token.get("lower_clean", "")
             mapped_rows = token_to_rows.get(lower_clean, [])
+            if not mapped_rows:
+                stem = re.sub(r"[" + "".join(re.escape(c) for c in apo_set) + r"]s?$", "", lower_clean)
+                if stem and stem in token_to_rows:
+                    mapped_rows = token_to_rows[stem]
             
             if eff_mode not in ('single', 'multi') and col_index != -1:
                 curr_c_idx = absolute_to_c_idx.get(current_a_idx, -1)
@@ -4325,6 +4344,10 @@ html, body {{
         if token["is_word"] and "lower_clean" in token:
             tok_data["lower_clean"] = token["lower_clean"]
             mapped_rows = token.get("filtered_mapped_rows", token_to_rows.get(token["lower_clean"], []))
+            if not mapped_rows:
+                stem = re.sub(r"[" + "".join(re.escape(c) for c in apo_set) + r"]s?$", "", token["lower_clean"])
+                if stem and stem in token_to_rows:
+                    mapped_rows = token_to_rows[stem]
             filtered_rows = []
             for r_idx in mapped_rows:
                 if r_idx in single_word_rows:
