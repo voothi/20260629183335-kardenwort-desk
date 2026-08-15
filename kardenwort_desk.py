@@ -3096,7 +3096,10 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             return True
 
     for row in data_rows:
-        if len(row) > col_word_source:
+        if len(row) > col_word_source and col_word_source != -1:
+            if re.match(r'^\d{14}-', row[col_word_source]):
+                row = list(row)
+                row[col_word_source] = re.sub(r'^\d{14}-', '', row[col_word_source])
             w = row[col_word_source].strip().lower()
             pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
             if not combine_source_words:
@@ -4038,6 +4041,10 @@ html, body {{
     token_to_rows = {}
     row_candidates = {}
     for row_id, row in enumerate(data_rows):
+        if col_lemma != -1 and len(row) > col_lemma and re.match(r'^\d{14}-', row[col_lemma]):
+            row = list(row)
+            row[col_lemma] = re.sub(r'^\d{14}-', '', row[col_lemma])
+            data_rows[row_id] = row
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
         
@@ -4282,6 +4289,10 @@ html, body {{
 
     table_rows = []
     for row_id, row in enumerate(data_rows):
+        if col_lemma != -1 and len(row) > col_lemma and re.match(r'^\d{14}-', row[col_lemma]):
+            row = list(row)
+            row[col_lemma] = re.sub(r'^\d{14}-', '', row[col_lemma])
+            data_rows[row_id] = row
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""

@@ -371,6 +371,39 @@ def test_contractions_and_abbreviations_compatibility(page, tmp_path):
         assert cell_text != ""
 
 
+def test_lemma_strips_leading_zid_prefix(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Branch 20260815131120-token-mapping-inflected-expansion is ready."
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "20260815131120-token-mapping-inflected-expansion\t20260815131120-token-mapping-inflected-expansion\tрасширение\n"
+    )
+    tsv_file = tmp_path / "20260815201400-zid-lemma.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260815201400",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # 1. Verify LEMMA column has ZID prefix stripped
+    lemma_cell = page.locator('tr[data-row-id="0"] td[data-col="WordSource"] .scrollable-cell')
+    assert lemma_cell.inner_text() == "token-mapping-inflected-expansion"
+
+    # 2. Verify INFLECTED column retains full surface form
+    inflected_cell = page.locator('tr[data-row-id="0"] td[data-col="WordSourceInflectedForm"] .scrollable-cell')
+    assert inflected_cell.inner_text() == "20260815131120-token-mapping-inflected-expansion"
+
+
+
 
 
 
