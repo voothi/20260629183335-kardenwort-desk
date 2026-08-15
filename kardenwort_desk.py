@@ -5165,56 +5165,147 @@ html, body {{
             return parts[0];
         }
 
+        function getSpanSpecificSpokenWord(span, sourceMode, group) {
+            if (!span) return "";
+            var spanClean = (span.getAttribute('data-lower-clean') || span.getAttribute('data-original-text') || span.textContent || "").trim().toLowerCase();
+            var spanText = (span.getAttribute('data-original-text') || span.textContent || span.innerText || "").trim();
+            var tokenData = findTokenData(span);
+            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                return spanText;
+            }
+
+            var bestRowLemma = "";
+            var bestRowInflected = "";
+            var exactMatchFound = false;
+
+            for (var j = 0; j < tokenData.row_ids.length; j++) {
+                var rowId = tokenData.row_ids[j];
+                var tr = null;
+                for (var k = 0; k < tableRows.length; k++) {
+                    if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                        tr = tableRows[k];
+                        break;
+                    }
+                }
+                if (!tr) continue;
+
+                var tds = tr.getElementsByTagName('td');
+                var lemma = "";
+                var inflected = "";
+                for (var m = 0; m < tds.length; m++) {
+                    var col = tds[m].getAttribute('data-col');
+                    if (col === '{lemma_col_name}') {
+                        lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                    } else if (col === '{inflected_col_name}') {
+                        inflected = (tds[m].textContent || tds[m].innerText || "").trim();
+                    }
+                }
+
+                var lemmaClean = lemma.toLowerCase();
+                var inflectedClean = inflected.toLowerCase();
+
+                if (lemmaClean === spanClean || inflectedClean === spanClean) {
+                    bestRowLemma = lemma;
+                    bestRowInflected = inflected;
+                    exactMatchFound = true;
+                    break;
+                }
+
+                if (!exactMatchFound && spanClean.length >= 4 && lemmaClean.length >= 4) {
+                    var stemLen = Math.min(spanClean.length, lemmaClean.length, 5);
+                    if (spanClean.substring(0, stemLen) === lemmaClean.substring(0, stemLen)) {
+                        bestRowLemma = lemma;
+                        bestRowInflected = inflected;
+                    }
+                }
+
+                if (!bestRowLemma && lemma) {
+                    bestRowLemma = lemma;
+                    bestRowInflected = inflected;
+                }
+            }
+
+            if (sourceMode === 'inflection') {
+                if (bestRowInflected) {
+                    if (group && group.length > 1 && bestRowInflected.toLowerCase() !== spanClean && (bestRowInflected.indexOf('-') !== -1 || bestRowInflected.indexOf('_') !== -1 || bestRowInflected.indexOf(' ') !== -1)) {
+                        return spanText;
+                    }
+                    var cleanInf = getCleanConstituentInflection(bestRowInflected, spanClean);
+                    return cleanInf || bestRowLemma || spanText;
+                }
+                return spanText;
+            } else {
+                if (group && group.length > 1 && bestRowLemma.toLowerCase() !== spanClean && (bestRowLemma.indexOf('-') !== -1 || bestRowLemma.indexOf('_') !== -1)) {
+                    return spanText;
+                }
+                return bestRowLemma || spanText;
+            }
+        }
+
         function getCompoundWordsToPlay(targetSpan, sourceMode) {
             if (!targetSpan) return "";
             var group = findCompoundSiblingSpans(targetSpan);
             if (!group || group.length === 0) group = [targetSpan];
             
             var words = [];
-            for (var i = 0; i < group.length; i++) {
-                var s = group[i];
-                var tokenData = findTokenData(s);
-                if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
-                    var fallback = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
-                    if (fallback) words.push(fallback);
-                    continue;
+            
+            if (group.length > 1) {
+                for (var i = 0; i < group.length; i++) {
+                    var s = group[i];
+                    var term = getSpanSpecificSpokenWord(s, sourceMode, group);
+                    if (term) words.push(term);
                 }
+            } else {
+                var s = group[0];
+                var tokenData = findTokenData(s);
+                var spanClean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || "").trim().toLowerCase();
+                var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
                 
-                for (var j = 0; j < tokenData.row_ids.length; j++) {
-                    var rowId = tokenData.row_ids[j];
-                    var tr = null;
-                    for (var k = 0; k < tableRows.length; k++) {
-                        if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                            tr = tableRows[k];
-                            break;
+                if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                    if (spanText) words.push(spanText);
+                } else if (tokenData.row_ids.length === 1) {
+                    var term = getSpanSpecificSpokenWord(s, sourceMode, group);
+                    if (term) words.push(term);
+                } else {
+                    for (var j = 0; j < tokenData.row_ids.length; j++) {
+                        var rowId = tokenData.row_ids[j];
+                        var tr = null;
+                        for (var k = 0; k < tableRows.length; k++) {
+                            if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                                tr = tableRows[k];
+                                break;
+                            }
                         }
-                    }
-                    if (!tr) continue;
-                    
-                    var tds = tr.getElementsByTagName('td');
-                    var lemma = "";
-                    var inflected = "";
-                    for (var m = 0; m < tds.length; m++) {
-                        var col = tds[m].getAttribute('data-col');
-                        if (col === '{lemma_col_name}') {
-                            lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                        } else if (col === '{inflected_col_name}') {
-                            inflected = (tds[m].textContent || tds[m].innerText || "").trim();
+                        if (!tr) continue;
+                        
+                        var tds = tr.getElementsByTagName('td');
+                        var lemma = "";
+                        var inflected = "";
+                        for (var m = 0; m < tds.length; m++) {
+                            var col = tds[m].getAttribute('data-col');
+                            if (col === '{lemma_col_name}') {
+                                lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                            } else if (col === '{inflected_col_name}') {
+                                inflected = (tds[m].textContent || tds[m].innerText || "").trim();
+                            }
                         }
-                    }
-                    
-                    if (sourceMode === 'inflection') {
-                        var spanText = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
-                        var cleanInflection = getCleanConstituentInflection(inflected, spanText);
-                        var term = cleanInflection || lemma || spanText;
-                        if (term) words.push(term);
-                    } else {
-                        var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
-                        var term = lemma || spanText;
-                        if (term) words.push(term);
+                        
+                        if (sourceMode === 'inflection') {
+                            var cleanInflection = getCleanConstituentInflection(inflected, spanClean);
+                            var term = cleanInflection || lemma || spanText;
+                            if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                                words.push(term);
+                            }
+                        } else {
+                            var term = lemma || spanText;
+                            if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                                words.push(term);
+                            }
+                        }
                     }
                 }
             }
+            
             return words.join(' ');
         }
 

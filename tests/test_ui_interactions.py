@@ -920,3 +920,72 @@ def test_contraction_audio_playback_resolution(page):
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("en\\nis not")
 
+
+def test_shared_multi_row_compound_audio_no_duplication(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="projekt">Projekt</span>'
+        '-'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="manager">Manager</span>'
+    )
+    # Both spans share all row_ids [0, 1, 2] from compound decomposition in TSV
+    manifest = [
+        {"text": "Projekt", "is_word": True, "visual_idx": 0, "lower_clean": "projekt", "row_ids": [0, 1, 2]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "Manager", "is_word": True, "visual_idx": 2, "lower_clean": "manager", "row_ids": [0, 1, 2]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">Projekt</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Projekt-Manager</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">проект</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">Manager</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Projekt-Manager</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">менеджер</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">Projekt-Manager</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Projekt-Manager</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">проектный менеджер</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. Test clicking Projekt under lemma mode
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_projekt = page.locator("span[data-lower-clean='projekt']")
+    span_projekt.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
+
+    # 2. Test clicking Manager under inflection mode
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
+    span_manager = page.locator("span[data-lower-clean='manager']")
+    span_manager.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
+
