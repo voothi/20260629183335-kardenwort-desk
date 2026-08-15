@@ -4937,7 +4937,7 @@ html, body {{
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
                 var txt = node.nodeValue || node.textContent || "";
-                return txt.length > 0 && /^[-_./:#@]+$/.test(txt);
+                return txt.length > 0 && /^[-_–—]+$/.test(txt);
             }
             return false;
         }

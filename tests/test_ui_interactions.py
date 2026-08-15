@@ -1062,3 +1062,78 @@ def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
     assert "много-к-занимать, слишком занят" in source_container.inner_text()
 
 
+def test_slash_separated_words_not_grouped_as_compound(page):
+    source_html = (
+        '('
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="separable">separable</span>'
+        '/'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="two">two</span>'
+        '-'
+        '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="part">part</span>'
+        ')'
+    )
+    manifest = [
+        {"text": "separable", "is_word": True, "visual_idx": 0, "lower_clean": "separable", "row_ids": [0]},
+        {"text": "/", "is_word": False, "visual_idx": 1},
+        {"text": "two", "is_word": True, "visual_idx": 2, "lower_clean": "two", "row_ids": [1, 2]},
+        {"text": "-", "is_word": False, "visual_idx": 3},
+        {"text": "part", "is_word": True, "visual_idx": 4, "lower_clean": "part", "row_ids": [1, 2]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">separable</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">separable</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">разделимый</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">two</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">two-part</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">два</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">part</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">two-part</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">часть</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. Clicking 'two' should only play 'two part', NOT including 'separable'
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_two = page.locator("span[data-lower-clean='two']")
+    span_two.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ntwo part")
+
+    # 2. Clicking 'separable' should only play 'separable'
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_separable = page.locator("span[data-lower-clean='separable']")
+    span_separable.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nseparable")
+
+
+
