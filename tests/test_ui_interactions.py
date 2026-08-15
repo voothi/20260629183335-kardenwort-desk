@@ -1136,4 +1136,211 @@ def test_slash_separated_words_not_grouped_as_compound(page):
     assert play_calls[0]["arg"].endswith("en\\nseparable")
 
 
+def test_zid_and_numeric_filtered_from_compound_audio_playback(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="20260815131120">20260815131120</span>'
+        '-'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="token">token</span>'
+        '-'
+        '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="mapping">mapping</span>'
+        '-'
+        '<span class="word" data-word-idx="6" data-line-idx="0" data-lower-clean="inflected">inflected</span>'
+        '-'
+        '<span class="word" data-word-idx="8" data-line-idx="0" data-lower-clean="expansion">expansion</span>'
+    )
+    manifest = [
+        {"text": "20260815131120", "is_word": True, "visual_idx": 0, "lower_clean": "20260815131120", "row_ids": []},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "token", "is_word": True, "visual_idx": 2, "lower_clean": "token", "row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 3},
+        {"text": "mapping", "is_word": True, "visual_idx": 4, "lower_clean": "mapping", "row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 5},
+        {"text": "inflected", "is_word": True, "visual_idx": 6, "lower_clean": "inflected", "row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 7},
+        {"text": "expansion", "is_word": True, "visual_idx": 8, "lower_clean": "expansion", "row_ids": [0]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">token</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">20260815131120-token-mapping-inflected-expansion</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">токен</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. Clicking on 'mapping' should play 'token mapping inflected expansion' without the 14-digit ZID
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_mapping = page.locator("span[data-lower-clean='mapping']")
+    span_mapping.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ntoken mapping inflected expansion")
+
+    # 2. Clicking on 'token' should also play 'token mapping inflected expansion' without the 14-digit ZID
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_token = page.locator("span[data-lower-clean='token']")
+    span_token.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ntoken mapping inflected expansion")
+
+    # 3. Clicking on the ZID span directly (which is excluded from candidate row selection) suppresses playback
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_zid = page.locator("span[data-lower-clean='20260815131120']")
+    span_zid.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0
+
+
+def test_pure_numeric_span_audio_playback_suppressed(page):
+    source_html = '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="20260815131120">20260815131120</span>'
+    manifest = [
+        {"text": "20260815131120", "is_word": True, "visual_idx": 0, "lower_clean": "20260815131120", "row_ids": []},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_zid = page.locator("span[data-lower-clean='20260815131120']")
+    span_zid.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0
+
+
+def test_path_level_slashes_delimit_compound_groups_in_audio(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="archive">archive</span>'
+        '/'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="20260815131120">20260815131120</span>'
+        '-'
+        '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="token">token</span>'
+        '-'
+        '<span class="word" data-word-idx="6" data-line-idx="0" data-lower-clean="mapping">mapping</span>'
+        '/'
+        '<span class="word" data-word-idx="8" data-line-idx="0" data-lower-clean="specs">specs</span>'
+        '/'
+        '<span class="word" data-word-idx="10" data-line-idx="0" data-lower-clean="spec">spec</span>'
+        '.'
+        '<span class="word" data-word-idx="12" data-line-idx="0" data-lower-clean="md">md</span>'
+    )
+    manifest = [
+        {"text": "archive", "is_word": True, "visual_idx": 0, "lower_clean": "archive", "row_ids": [0]},
+        {"text": "/", "is_word": False, "visual_idx": 1},
+        {"text": "20260815131120", "is_word": True, "visual_idx": 2, "lower_clean": "20260815131120", "row_ids": []},
+        {"text": "-", "is_word": False, "visual_idx": 3},
+        {"text": "token", "is_word": True, "visual_idx": 4, "lower_clean": "token", "row_ids": [1]},
+        {"text": "-", "is_word": False, "visual_idx": 5},
+        {"text": "mapping", "is_word": True, "visual_idx": 6, "lower_clean": "mapping", "row_ids": [1]},
+        {"text": "/", "is_word": False, "visual_idx": 7},
+        {"text": "specs", "is_word": True, "visual_idx": 8, "lower_clean": "specs", "row_ids": [2]},
+        {"text": "/", "is_word": False, "visual_idx": 9},
+        {"text": "spec", "is_word": True, "visual_idx": 10, "lower_clean": "spec", "row_ids": [3]},
+        {"text": ".", "is_word": False, "visual_idx": 11},
+        {"text": "md", "is_word": True, "visual_idx": 12, "lower_clean": "md", "row_ids": [4]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">archive</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">архив</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">token</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">token-mapping</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">токен</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">specs</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">спецификации</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">spec</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">спека</div></td>
+        </tr>
+        <tr data-row-id="4">
+          <td data-col="WordSource"><div class="scrollable-cell">md</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">маркдаун</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. Clicking on 'specs' should only play 'specs'
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_specs = page.locator("span[data-lower-clean='specs']")
+    span_specs.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nspecs")
+
+    # 2. Clicking on 'token' should only play 'token mapping' without crossing '/' to archive or specs
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_token = page.locator("span[data-lower-clean='token']")
+    span_token.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ntoken mapping")
+
+
+
 

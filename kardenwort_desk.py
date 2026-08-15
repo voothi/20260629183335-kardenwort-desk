@@ -3534,8 +3534,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
                         forms = [f.strip() for f in row_inf.split(',')] if row_inf else []
                         clean_lemma = row_lem.strip() if row_lem else ""
-                        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
-                        if clean_lemma and (any(ch in clean_lemma for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1):
+                        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
+                        if clean_lemma and (any(ch in clean_lemma for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1):
                             has_compound = True
                         if has_compound or not forms:
                             forms_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
@@ -3994,16 +3994,16 @@ html, body {{
         candidates_seen = set()
 
         def _add_cand(c):
-            if c and c not in candidates_seen:
+            if c and not c.isdigit() and c not in candidates_seen:
                 candidates_seen.add(c)
                 candidates.append(c)
 
         forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
         clean_lemma = lemma_val.strip() if lemma_val else ""
         
-        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
+        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
         if clean_lemma:
-            if any(ch in clean_lemma for ch in ('_', '-', '.', '/', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1:
+            if any(ch in clean_lemma for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1:
                 has_compound = True
                 
         if has_compound or not forms:
@@ -5210,6 +5210,8 @@ html, body {{
 
         function playAudio(text, lang) {
             if (!text || !lang) return;
+            var clean = text.trim();
+            if (!clean || /^[0-9]+$/.test(clean)) return;
             if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
                 var sanitizedText = text.replace(/\\r?\\n|\\r/g, ' ');
                 var escapedText = sanitizedText.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
@@ -5285,6 +5287,7 @@ html, body {{
                     if (spanClean.substring(0, stemLen) === lemmaClean.substring(0, stemLen)) {
                         bestRowLemma = lemma;
                         bestRowInflected = inflected;
+                        exactMatchFound = true;
                     }
                 }
 
@@ -5296,15 +5299,21 @@ html, body {{
 
             if (sourceMode === 'inflection') {
                 if (bestRowInflected) {
-                    if (group && group.length > 1 && bestRowInflected.toLowerCase() !== spanClean && (bestRowInflected.indexOf('-') !== -1 || bestRowInflected.indexOf('_') !== -1 || bestRowInflected.indexOf(' ') !== -1)) {
+                    if (group && group.length > 1 && bestRowInflected.toLowerCase() !== spanClean && (bestRowInflected.indexOf('-') !== -1 || bestRowInflected.indexOf('_') !== -1 || bestRowInflected.indexOf(' ') !== -1 || bestRowInflected.indexOf('/') !== -1)) {
                         return spanText;
                     }
                     var cleanInf = getCleanConstituentInflection(bestRowInflected, spanClean);
+                    if (group && group.length > 1 && cleanInf.toLowerCase() !== spanClean && !exactMatchFound) {
+                        return spanText;
+                    }
                     return cleanInf || bestRowLemma || spanText;
                 }
                 return spanText;
             } else {
-                if (group && group.length > 1 && bestRowLemma.toLowerCase() !== spanClean && (bestRowLemma.indexOf('-') !== -1 || bestRowLemma.indexOf('_') !== -1)) {
+                if (group && group.length > 1 && bestRowLemma.toLowerCase() !== spanClean && !exactMatchFound) {
+                    return spanText;
+                }
+                if (group && group.length > 1 && (bestRowLemma.indexOf('-') !== -1 || bestRowLemma.indexOf('_') !== -1 || bestRowLemma.indexOf('/') !== -1 || bestRowLemma.indexOf(' ') !== -1)) {
                     return spanText;
                 }
                 return bestRowLemma || spanText;
@@ -5322,7 +5331,9 @@ html, body {{
                 for (var i = 0; i < group.length; i++) {
                     var s = group[i];
                     var term = getSpanSpecificSpokenWord(s, sourceMode, group);
-                    if (term) words.push(term);
+                    if (term && !/^[0-9]+$/.test(term.trim())) {
+                        words.push(term);
+                    }
                 }
             } else {
                 var s = group[0];
@@ -5331,10 +5342,10 @@ html, body {{
                 var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
                 
                 if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
-                    if (spanText) words.push(spanText);
+                    if (spanText && !/^[0-9]+$/.test(spanText.trim())) words.push(spanText);
                 } else if (tokenData.row_ids.length === 1) {
                     var term = getSpanSpecificSpokenWord(s, sourceMode, group);
-                    if (term) words.push(term);
+                    if (term && !/^[0-9]+$/.test(term.trim())) words.push(term);
                 } else {
                     for (var j = 0; j < tokenData.row_ids.length; j++) {
                         var rowId = tokenData.row_ids[j];
@@ -5362,12 +5373,12 @@ html, body {{
                         if (sourceMode === 'inflection') {
                             var cleanInflection = getCleanConstituentInflection(inflected, spanClean);
                             var term = cleanInflection || lemma || spanText;
-                            if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                            if (term && !/^[0-9]+$/.test(term.trim()) && (words.length === 0 || words[words.length - 1] !== term)) {
                                 words.push(term);
                             }
                         } else {
                             var term = lemma || spanText;
-                            if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                            if (term && !/^[0-9]+$/.test(term.trim()) && (words.length === 0 || words[words.length - 1] !== term)) {
                                 words.push(term);
                             }
                         }

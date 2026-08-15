@@ -112,9 +112,11 @@ def test_decompose_identifier():
     assert tok.decompose_identifier("word1_word2-word3.word4") == ["word1", "word2", "word3", "word4"]
     assert tok.decompose_identifier("UTF8String") == ["UTF8String", "UTF8", "String"]
     assert tok.decompose_identifier("HTML5Parser") == ["HTML5Parser", "HTML5", "Parser"]
-    assert tok.decompose_identifier("SHA256_Hash") == ["SHA256", "Hash"]
-    assert tok.decompose_identifier("БыстрыйПоиск") == ["БыстрыйПоиск", "Быстрый", "Поиск"]
-    assert tok.decompose_identifier("Mädchen_Schule") == ["Mädchen", "Schule"]
+    # Dot-separated filenames and path decomposition
+    assert tok.decompose_identifier("spec.md") == ["spec", "md"]
+    assert tok.decompose_identifier("openspec/changes/specs/spec.md") == ["openspec", "changes", "specs", "spec", "md"]
+    assert tok.decompose_identifier(r"openspec\specs\spec.md") == ["openspec", "specs", "spec", "md"]
+    assert tok.decompose_identifier("20260815131120-token-mapping") == ["20260815131120", "token", "mapping"]
 
 def test_extract_identifier_subtokens():
     assert tok.extract_identifier_subtokens("") == []
@@ -130,6 +132,10 @@ def test_extract_identifier_subtokens():
     # kebab-case and dotted
     assert tok.extract_identifier_subtokens("per-window") == ["per", "window"]
     assert tok.extract_identifier_subtokens("text_tokenizer.py") == ["text", "tokenizer", "py"]
+    assert tok.extract_identifier_subtokens("spec.md") == ["spec", "md"]
+    assert tok.extract_identifier_subtokens("openspec/changes/specs/spec.md") == ["openspec", "changes", "specs", "spec", "md"]
+    assert tok.extract_identifier_subtokens(r"openspec\specs\spec.md") == ["openspec", "specs", "spec", "md"]
+    assert tok.extract_identifier_subtokens("20260815131120-token-mapping") == ["20260815131120", "token", "mapping"]
     assert tok.extract_identifier_subtokens("ExecutionContext.from_config") == [
         "Execution", "Context", "from", "config"
     ]

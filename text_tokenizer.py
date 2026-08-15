@@ -118,7 +118,7 @@ def decompose_identifier(s: str) -> list:
     """
     if not s:
         return []
-    raw_parts = re.split(r'[_.\-/:#@]+', s)
+    raw_parts = re.split(r'[_.\-/:#@\\]+', s)
     result = []
     for raw in raw_parts:
         if not raw:
@@ -137,7 +137,7 @@ def extract_identifier_subtokens(s: str) -> list:
     """
     if not s:
         return []
-    raw_parts = re.split(r'[_.\-/:#@]+', s)
+    raw_parts = re.split(r'[_.\-/:#@\\]+', s)
     result = []
     for raw in raw_parts:
         if not raw:

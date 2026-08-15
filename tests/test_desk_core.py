@@ -2706,6 +2706,82 @@ def test_composite_identifier_ordered_candidate_generation():
     assert candidates == ["splitcamelcase", "split", "camel", "case"]
 
 
+def test_numeric_and_zid_candidate_exclusion():
+    import text_tokenizer as tok
+
+    apo_set = {"'", "’", "‘", "`", "´", "ʼ"}
+
+    data_rows = [
+        ["token", "20260815131120-token-mapping-inflected-expansion"],
+        ["12345", "12345"],
+        ["spec", "spec.md"],
+    ]
+    col_lemma = 0
+    col_inflected = 1
+
+    token_to_rows = {}
+    row_candidates = {}
+    for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+
+        candidates = []
+        candidates_seen = set()
+
+        def _add_cand(c):
+            if c and not c.isdigit() and c not in candidates_seen:
+                candidates_seen.add(c)
+                candidates.append(c)
+
+        forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
+        clean_lemma = lemma_val.strip() if lemma_val else ""
+
+        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
+        if clean_lemma:
+            if any(ch in clean_lemma for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1:
+                has_compound = True
+
+        if has_compound or not forms:
+            vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
+        else:
+            vals_to_check = forms
+
+        for val in vals_to_check:
+            if val:
+                clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
+                _add_cand(clean_val)
+                subtokens = tok.decompose_identifier(val)
+                for sub in subtokens:
+                    clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
+                    _add_cand(clean_sub)
+
+        row_candidates[row_id] = candidates
+        for cand in candidates:
+            if cand not in token_to_rows:
+                token_to_rows[cand] = []
+            if row_id not in token_to_rows[cand]:
+                token_to_rows[cand].append(row_id)
+
+    # Row 0: 20260815131120-token-mapping-inflected-expansion
+    assert "token" in token_to_rows
+    assert "mapping" in token_to_rows
+    assert "inflected" in token_to_rows
+    assert "expansion" in token_to_rows
+    assert "20260815131120" not in token_to_rows
+    assert "20260815131120" not in row_candidates[0]
+
+    # Row 1: 12345 (pure numeric)
+    assert "12345" not in token_to_rows
+    assert row_candidates[1] == []
+
+    # Row 2: spec.md
+    assert "spec" in token_to_rows
+    assert "md" in token_to_rows
+    assert 2 in token_to_rows["spec"]
+    assert 2 in token_to_rows["md"]
+
+
+
 
 
 
