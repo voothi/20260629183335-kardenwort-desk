@@ -5148,54 +5148,82 @@ html, body {{
             }
         }
 
-        function getWordLemma(span) {
-            var tokenData = findTokenData(span);
-            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
-                return (span.textContent || span.innerText || "").trim();
+        function getCleanConstituentInflection(rawInflection, tokenText) {
+            if (!rawInflection) return "";
+            var parts = rawInflection.split(',');
+            parts = parts.map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; });
+            if (parts.length <= 1) {
+                return parts.length === 1 ? parts[0] : rawInflection.trim();
             }
-            var rowId = tokenData.row_ids[0];
-            var tr = null;
-            for (var k = 0; k < tableRows.length; k++) {
-                if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                    tr = tableRows[k];
-                    break;
+            var cleanToken = (tokenText || "").trim().toLowerCase();
+            var filtered = parts.filter(function(p) {
+                return p.trim().toLowerCase() !== cleanToken;
+            });
+            if (filtered.length > 0) {
+                return filtered[0];
+            }
+            return parts[0];
+        }
+
+        function getCompoundWordsToPlay(targetSpan, sourceMode) {
+            if (!targetSpan) return "";
+            var group = findCompoundSiblingSpans(targetSpan);
+            if (!group || group.length === 0) group = [targetSpan];
+            
+            var words = [];
+            for (var i = 0; i < group.length; i++) {
+                var s = group[i];
+                var tokenData = findTokenData(s);
+                if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                    var fallback = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
+                    if (fallback) words.push(fallback);
+                    continue;
                 }
-            }
-            if (tr) {
-                var tds = tr.getElementsByTagName('td');
-                for (var m = 0; m < tds.length; m++) {
-                    if (tds[m].getAttribute('data-col') === '{lemma_col_name}') {
-                        var val = (tds[m].textContent || tds[m].innerText || "").trim();
-                        if (val) return val;
+                
+                for (var j = 0; j < tokenData.row_ids.length; j++) {
+                    var rowId = tokenData.row_ids[j];
+                    var tr = null;
+                    for (var k = 0; k < tableRows.length; k++) {
+                        if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                            tr = tableRows[k];
+                            break;
+                        }
+                    }
+                    if (!tr) continue;
+                    
+                    var tds = tr.getElementsByTagName('td');
+                    var lemma = "";
+                    var inflected = "";
+                    for (var m = 0; m < tds.length; m++) {
+                        var col = tds[m].getAttribute('data-col');
+                        if (col === '{lemma_col_name}') {
+                            lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                        } else if (col === '{inflected_col_name}') {
+                            inflected = (tds[m].textContent || tds[m].innerText || "").trim();
+                        }
+                    }
+                    
+                    if (sourceMode === 'inflection') {
+                        var spanText = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
+                        var cleanInflection = getCleanConstituentInflection(inflected, spanText);
+                        var term = cleanInflection || lemma || spanText;
+                        if (term) words.push(term);
+                    } else {
+                        var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
+                        var term = lemma || spanText;
+                        if (term) words.push(term);
                     }
                 }
             }
-            return (span.textContent || span.innerText || "").trim();
+            return words.join(' ');
+        }
+
+        function getWordLemma(span) {
+            return getCompoundWordsToPlay(span, 'lemma');
         }
 
         function getWordInflectedForm(span) {
-            var tokenData = findTokenData(span);
-            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
-                return (span.textContent || span.innerText || "").trim();
-            }
-            var rowId = tokenData.row_ids[0];
-            var tr = null;
-            for (var k = 0; k < tableRows.length; k++) {
-                if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                    tr = tableRows[k];
-                    break;
-                }
-            }
-            if (tr) {
-                var tds = tr.getElementsByTagName('td');
-                for (var m = 0; m < tds.length; m++) {
-                    if (tds[m].getAttribute('data-col') === '{inflected_col_name}') {
-                        var val = (tds[m].textContent || tds[m].innerText || "").trim();
-                        if (val) return val;
-                    }
-                }
-            }
-            return (span.textContent || span.innerText || "").trim();
+            return getCompoundWordsToPlay(span, 'inflection');
         }
 
         for (var i = 0; i < tokenSpans.length; i++) {
@@ -5248,7 +5276,7 @@ html, body {{
                         updateBidirectionalHighlights();
                         
                         if (audioLmbPlay && tokenDragMode) {
-                            var textToPlay = (audioLmbSource === 'inflection') ? getWordInflectedForm(span) : getWordLemma(span);
+                            var textToPlay = getCompoundWordsToPlay(span, audioLmbSource);
                             var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
                             playAudio(textToPlay, sourceLang);
                         }

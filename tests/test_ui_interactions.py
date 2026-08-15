@@ -54,7 +54,7 @@ def get_base_html():
 """
     return html, None, None, headers, data_rows
 
-def extract_desk_js():
+def extract_desk_js(lmb_play=False, lmb_source="lemma", rmb_play=False, rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
     desk_path = Path(kardenwort_desk.__file__)
     content = desk_path.read_text(encoding="utf-8")
     js_lines = []
@@ -73,15 +73,16 @@ def extract_desk_js():
     js = re.sub(r"window\.addEventListener\('load',\s*init,\s*false\);", "init();", js)
     
     # Replace AHK python string formatting variables with valid defaults
-    js = js.replace("{audio_lmb_play}", "false")
-    js = js.replace("{audio_lmb_source}", "false")
-    js = js.replace("{audio_rmb_play}", "false")
-    js = js.replace("{audio_rmb_source}", "false")
-    js = js.replace("{audio_anki_tts_cli}", "''")
-    js = js.replace("{audio_python_exe}", "''")
+    js = js.replace("{audio_lmb_play}", "true" if lmb_play else "false")
+    js = js.replace("{audio_lmb_source}", f'"{lmb_source}"')
+    js = js.replace("{audio_rmb_play}", "true" if rmb_play else "false")
+    js = js.replace("{audio_rmb_source}", f'"{rmb_source}"')
+    js = js.replace("{audio_anki_tts_cli}", anki_tts_cli.replace("\\", "\\\\"))
+    js = js.replace("{audio_python_exe}", python_exe.replace("\\", "\\\\"))
     js = js.replace("{has_highlight_col}", "false")
     js = js.replace("{selected_col_name}", "DeskSelected")
     js = js.replace("{lemma_col_name}", "WordSource")
+    js = js.replace("{inflected_col_name}", "WordSourceInflectedForm")
     js = js.replace("{ipa_col_name}", "WordSourceIPA")
     js = js.replace("{theme_class}", "theme-dark")
     js = js.replace("{selectable_mode}", "false")
@@ -733,4 +734,189 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
     assert "flipped" not in (span_camel.get_attribute("class") or "")
     assert "flipped" not in (span_case.get_attribute("class") or "")
     assert "split_camel_case" in source_container.inner_text()
+
+
+def test_compound_audio_playback_resolution(page):
+    # Test 1: Projekt-Manager
+    source_html_pm = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="projekt">Projekt</span>'
+        '-'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="manager">Manager</span>'
+    )
+    manifest_pm = [
+        {"text": "Projekt", "is_word": True, "visual_idx": 0, "lower_clean": "projekt", "row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "Manager", "is_word": True, "visual_idx": 2, "lower_clean": "manager", "row_ids": [1]},
+    ]
+    
+    html_pm = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html_pm}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">Projekt</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Projekt</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">проект</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">Manager</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Manager</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">менеджер</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest_pm)}</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # Test Projekt-Manager with lemma mode
+    page.set_content(html_pm)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    js_lemma = extract_desk_js(lmb_play=True, lmb_source="lemma")
+    page.evaluate(js_lemma)
+    
+    span_pm = page.locator("span[data-lower-clean='manager']")
+    span_pm.click(button="left")
+    
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
+
+    # Test viel-zu-beschäftigte with lemma and inflection modes
+    source_html_vzb = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="viel">viel</span>'
+        '-'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="zu">zu</span>'
+        '-'
+        '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="beschäftigte">beschäftigte</span>'
+    )
+    manifest_vzb = [
+        {"text": "viel", "is_word": True, "visual_idx": 0, "lower_clean": "viel", "row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "zu", "is_word": True, "visual_idx": 2, "lower_clean": "zu", "row_ids": [1]},
+        {"text": "-", "is_word": False, "visual_idx": 3},
+        {"text": "beschäftigte", "is_word": True, "visual_idx": 4, "lower_clean": "beschäftigte", "row_ids": [2]},
+    ]
+    html_vzb = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html_vzb}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">viel</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">viel</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">много</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">zu</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">zu</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">слишком</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">beschäftigt</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">beschäftigte</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">занятой</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest_vzb)}</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # viel-zu-beschäftigte: lemma mode -> "viel zu beschäftigt"
+    page.set_content(html_vzb)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span_vzb = page.locator("span[data-lower-clean='beschäftigte']")
+    span_vzb.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nviel zu beschäftigt")
+
+    # viel-zu-beschäftigte: inflection mode -> "viel zu beschäftigte"
+    page.set_content(html_vzb)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
+    span_vzb = page.locator("span[data-lower-clean='viel']")
+    span_vzb.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nviel zu beschäftigte")
+
+
+def test_contraction_audio_playback_resolution(page):
+    source_html = '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="isn\'t">isn\'t</span>'
+    manifest = [
+        {"text": "isn't", "is_word": True, "visual_idx": 0, "lower_clean": "isn't", "row_ids": [0, 1]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">be</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">isn't, is</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">быть</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">not</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">isn't, not</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">не</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. Contraction: lemma mode -> "be not"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span = page.locator("span[data-lower-clean=\"isn't\"]")
+    span.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nbe not")
+
+    # 2. Contraction: inflection mode -> "is not"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
+    span = page.locator("span[data-lower-clean=\"isn't\"]")
+    span.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nis not")
 
