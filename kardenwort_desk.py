@@ -1527,6 +1527,16 @@ def generate_slug(text, max_words=4):
     slug = '-'.join(words)
     return slug if slug else "untitled"
 
+def normalize_bracket_spacing(text: str) -> str:
+    """Normalize spacing around brackets: remove inner whitespace in (...), [...], {...}."""
+    if not text:
+        return text
+    # Remove whitespace immediately after opening brackets
+    text = re.sub(r'([(\[{])\s+', r'\1', text)
+    # Remove whitespace immediately before closing brackets
+    text = re.sub(r'\s+([)\]}])', r'\1', text)
+    return text
+
 def load_tsv_rows(tsv_path):
     import csv
     comments = []
@@ -3231,7 +3241,9 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             _ACTIVE_ZIDS.discard(zid)
 
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
-    if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
+    if text:
+        text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
+        text = normalize_bracket_spacing(text)
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     
     display_mode_val = config.get(SEC_RENDERING, 'display_mode', fallback='progressive')
@@ -4185,7 +4197,7 @@ html, body {{
         for idx in range(max_non_empty_idx + 1):
             trans = sentence_translations.get(idx)
             if trans:
-                safe_trans = html.escape(trans)
+                safe_trans = html.escape(normalize_bracket_spacing(trans))
                 sentence_htmls.append(f"<div>{safe_trans}</div>")
             else:
                 sentence_htmls.append("<div>&nbsp;</div>")
@@ -8559,7 +8571,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                             if f.stem != source_stem_full:
                                 txt_content = f.read_text(encoding='utf-8').strip()
                                 if txt_content:
-                                    lines = [html.escape(line.strip()) for line in txt_content.splitlines()]
+                                    lines = [html.escape(normalize_bracket_spacing(line.strip())) for line in txt_content.splitlines()]
                                     is_single = True
                                     source_txt_path = tsv_path.with_suffix('.txt')
                                     if source_txt_path.exists():
@@ -8596,7 +8608,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                     idx_to_sentence[idx_val] = s
                     
                     sorted_keys = sorted(idx_to_sentence.keys())
-                    sentences = [idx_to_sentence[k] for k in sorted_keys]
+                    sentences = [html.escape(normalize_bracket_spacing(idx_to_sentence[k])) for k in sorted_keys]
                     
                     is_single = True
                     if source_text:

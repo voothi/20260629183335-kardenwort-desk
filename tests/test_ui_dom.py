@@ -158,3 +158,42 @@ def test_archive_click_does_not_highlight_unrelated_path_subtokens(page, tmp_pat
         assert "highlight-orange-active" not in cls, f"expansion span incorrectly highlighted as active: {cls}"
 
 
+def test_bracket_spacing_normalized_in_rendered_html(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "main spec ( openspec/specs/word-extraction/spec.md ) All artifacts"
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordDestination\tSentenceDestination\n"
+        "spec\tспецификация\tосновной спецификацией ( openspec/specs/word-extraction/spec.md ) Все\n"
+    )
+    tsv_file = tmp_path / "20260815185600-spec.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260815185600",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # In the rendered source text, the parenthesis should not contain inner whitespace
+    source_container = page.locator("#source-container")
+    source_inner_text = source_container.inner_text()
+    assert "(openspec/specs/word-extraction/spec.md)" in source_inner_text
+    assert "( openspec" not in source_inner_text
+    assert "spec.md )" not in source_inner_text
+
+    # In the rendered translation, the parenthesis should also not contain inner whitespace
+    trans_container = page.locator("#translation-container")
+    trans_inner_text = trans_container.inner_text()
+    assert "(openspec/specs/word-extraction/spec.md)" in trans_inner_text
+    assert "( openspec" not in trans_inner_text
+    assert "spec.md )" not in trans_inner_text
+
+
+
