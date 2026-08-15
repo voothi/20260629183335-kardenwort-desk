@@ -131,3 +131,22 @@ def decompose_identifier(s: str) -> list:
             result.append(raw)
     return result
 
+def extract_identifier_subtokens(s: str) -> list:
+    """
+    Extract constituent subtokens from composite identifiers strictly preserving left-to-right appearance order.
+    """
+    if not s:
+        return []
+    raw_parts = re.split(r'[_.\-/:#@]+', s)
+    result = []
+    for raw in raw_parts:
+        if not raw:
+            continue
+        camel_parts = split_camel_case(raw)
+        if camel_parts:
+            result.extend(camel_parts)
+        else:
+            result.append(raw)
+    return result
+
+

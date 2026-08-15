@@ -2626,5 +2626,39 @@ def test_candidate_indexing_compound_subtokens():
     assert row_candidates[4] == {"run"}
 
 
+def test_composite_identifier_ordered_candidate_generation():
+    import text_tokenizer as tok
+    import re
+
+    apo_set = {"'", "’", "‘", "`", "´", "ʼ"}
+    apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
+
+    # Verify that candidate generation preserves strict left-to-right appearance order
+    forms = ["split_camel_case"]
+    clean_lemma = "split"
+    vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
+    
+    candidates = []
+    candidates_seen = set()
+
+    def _add_cand(c):
+        if c and c not in candidates_seen:
+            candidates_seen.add(c)
+            candidates.append(c)
+
+    for val in vals_to_check:
+        clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
+        _add_cand(clean_val)
+        subtokens = tok.decompose_identifier(val)
+        for sub in subtokens:
+            clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
+            _add_cand(clean_sub)
+
+    # Candidates should appear in strict left-to-right sequence: splitcamelcase, split, camel, case
+    assert candidates == ["splitcamelcase", "split", "camel", "case"]
+
+
+
+
 
 

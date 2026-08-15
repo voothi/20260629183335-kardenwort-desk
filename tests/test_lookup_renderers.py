@@ -736,3 +736,68 @@ def test_render_flow_hyphenated_kebab_case(tmp_path, monkeypatch):
     assert 'class="word highlight-orange" data-word-idx="3" data-line-idx="0" data-lower-clean="per">per</span>' in html
     assert 'class="word highlight-orange" data-word-idx="5" data-line-idx="0" data-lower-clean="window">window</span>' in html
 
+
+def test_composite_identifier_ordered_reveal_rendering(tmp_path):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_TOKEN_MAPPINGS)
+    config.set(SEC_TOKEN_MAPPINGS, 'enabled', 'true')
+    config.set(SEC_TOKEN_MAPPINGS, 'apostrophe_chars', "', ’, ‘, `, ´, ʼ")
+    config.set(SEC_TOKEN_MAPPINGS, 'split_gap_limit', '3')
+    config.add_section(SEC_CLASSIFICATION)
+    config.set(SEC_CLASSIFICATION, 'enabled', 'false')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'theme', 'dark')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_content = (
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "split\tsplit_camel_case\tрасколоть\n"
+        "camel\tsplit_camel_case\tверблюд\n"
+        "case\tsplit_camel_case\tслучай\n"
+    )
+    tsv_path.write_text(tsv_content, encoding='utf-8')
+
+    html = run_render_flow(
+        text="def split_camel_case():",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    # Verify all 3 sub-tokens are individually rendered in order and connected
+    assert 'data-lower-clean="split">split</span>' in html
+    assert 'data-lower-clean="camel">camel</span>' in html
+    assert 'data-lower-clean="case">case</span>' in html
+    assert 'isCompoundDelimiterNode' in html
+    assert 'findCompoundSiblingSpans' in html
+
+

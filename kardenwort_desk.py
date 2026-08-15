@@ -3986,7 +3986,14 @@ html, body {{
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
         
-        candidates = set()
+        candidates = []
+        candidates_seen = set()
+
+        def _add_cand(c):
+            if c and c not in candidates_seen:
+                candidates_seen.add(c)
+                candidates.append(c)
+
         forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
         clean_lemma = lemma_val.strip() if lemma_val else ""
         
@@ -4003,24 +4010,23 @@ html, body {{
         for val in vals_to_check:
             if val:
                 clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
-                if clean_val:
-                    candidates.add(clean_val)
+                _add_cand(clean_val)
                 subtokens = tok.decompose_identifier(val)
                 for sub in subtokens:
                     clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                    if clean_sub:
-                        candidates.add(clean_sub)
+                    _add_cand(clean_sub)
                 parts = re.findall(apo_regex, val.lower())
                 if len(parts) > 1:
                     for part in parts:
                         clean_part = tok.utf8_to_lower("".join(ch for ch in part if ch.isalnum() or ch in apo_set))
-                        if clean_part:
-                            candidates.add(clean_part)
+                        _add_cand(clean_part)
         row_candidates[row_id] = candidates
         for cand in candidates:
             if cand not in token_to_rows:
                 token_to_rows[cand] = []
-            token_to_rows[cand].append(row_id)
+            if row_id not in token_to_rows[cand]:
+                token_to_rows[cand].append(row_id)
+
             
     source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
     source_word_cleans = [t["lower_clean"] for t in source_tokens if t.get("is_word") and "lower_clean" in t]
@@ -4406,6 +4412,9 @@ html, body {{
   .source-text span.word.highlight-purple-active:hover {
     background-color: {highlight_purple_active_hover_bg} !important;
     color: {highlight_purple_active_text} !important;
+  }
+  .source-text span.word.active-subtoken {
+    outline: 1.5px solid #2ea043 !important;
   }
   .translation-text {
     font-size: 16px;
@@ -4920,21 +4929,49 @@ html, body {{
         }
         
         
-        function flipWord(span, toTranslation) {
-            if (!span.getAttribute('data-original-text')) {
-                span.setAttribute('data-original-text', span.textContent || span.innerText || "");
+        function isCompoundDelimiterNode(node) {
+            if (!node) return false;
+            if (node.nodeType === 3) { // Text node
+                var txt = node.nodeValue || node.textContent || "";
+                return txt.length > 0 && /^[-_./:#@]+$/.test(txt);
             }
-            var isFlipped = span.classList.contains('flipped');
-            if (toTranslation && !isFlipped) {
-                var trans = getWordTranslation(span);
-                if (trans) {
-                    span.classList.add('flipped');
-                    span.textContent = trans;
+            return false;
+        }
+
+        function findCompoundSiblingSpans(span) {
+            if (!span || !span.classList || !span.classList.contains('word')) return span ? [span] : [];
+            
+            var startSpan = span;
+            var curr = span;
+            while (curr) {
+                var prevNode = curr.previousSibling;
+                if (isCompoundDelimiterNode(prevNode)) {
+                    var prevSpan = prevNode.previousSibling;
+                    if (prevSpan && prevSpan.nodeType === 1 && prevSpan.classList && prevSpan.classList.contains('word')) {
+                        startSpan = prevSpan;
+                        curr = prevSpan;
+                        continue;
+                    }
                 }
-            } else if (!toTranslation && isFlipped) {
-                span.classList.remove('flipped');
-                span.textContent = span.getAttribute('data-original-text');
+                break;
             }
+            
+            var group = [startSpan];
+            curr = startSpan;
+            while (curr) {
+                var nextNode = curr.nextSibling;
+                if (isCompoundDelimiterNode(nextNode)) {
+                    var nextSpan = nextNode.nextSibling;
+                    if (nextSpan && nextSpan.nodeType === 1 && nextSpan.classList && nextSpan.classList.contains('word')) {
+                        group.push(nextSpan);
+                        curr = nextSpan;
+                        continue;
+                    }
+                }
+                break;
+            }
+            
+            return group;
         }
 
         function findTokenData(span) {
@@ -4947,11 +4984,11 @@ html, body {{
             }
             return null;
         }
-        
-        function getWordTranslation(span) {
+
+        function getRawRowTranslations(span) {
             var tokenData = findTokenData(span);
             if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
-                return "";
+                return [];
             }
             var translations = [];
             for (var j = 0; j < tokenData.row_ids.length; j++) {
@@ -4976,8 +5013,122 @@ html, body {{
                     }
                 }
             }
-            return translations.join(', ');
+            return translations;
         }
+
+        function getSpanSpecificTranslation(span, group) {
+            if (!group) group = findCompoundSiblingSpans(span);
+            var tokenData = findTokenData(span);
+            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                return "";
+            }
+            
+            var spanClean = (span.getAttribute('data-lower-clean') || span.getAttribute('data-original-text') || span.textContent || "").trim().toLowerCase();
+            
+            // 1. Try to find a row matching this sub-token's lemma directly
+            for (var j = 0; j < tokenData.row_ids.length; j++) {
+                var rowId = tokenData.row_ids[j];
+                var tr = null;
+                for (var k = 0; k < tableRows.length; k++) {
+                    if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                        tr = tableRows[k];
+                        break;
+                    }
+                }
+                if (tr) {
+                    var tds = tr.getElementsByTagName('td');
+                    var lemma = "";
+                    var trans = "";
+                    for (var m = 0; m < tds.length; m++) {
+                        var col = tds[m].getAttribute('data-col');
+                        if (col === '{lemma_col_name}') {
+                            lemma = (tds[m].textContent || tds[m].innerText || "").trim().toLowerCase();
+                        } else if (col === 'WordDestination') {
+                            trans = (tds[m].textContent || tds[m].innerText || "").trim();
+                        }
+                    }
+                    if (lemma && spanClean && (lemma === spanClean || lemma.indexOf(spanClean) !== -1 || spanClean.indexOf(lemma) !== -1)) {
+                        if (trans) return trans;
+                    }
+                }
+            }
+            
+            // 2. If compound is a group and there is a shared multi-part translation
+            if (group.length > 1) {
+                var spanIdx = -1;
+                for (var i = 0; i < group.length; i++) {
+                    if (group[i] === span) {
+                        spanIdx = i;
+                        break;
+                    }
+                }
+                
+                var rowTranslations = getRawRowTranslations(span);
+                
+                if (rowTranslations.length === group.length && spanIdx >= 0 && spanIdx < rowTranslations.length) {
+                    return rowTranslations[spanIdx];
+                }
+                
+                if (rowTranslations.length === 1) {
+                    var singleTrans = rowTranslations[0];
+                    var parts = singleTrans.indexOf(',') !== -1 ? singleTrans.split(',') : (singleTrans.indexOf('_') !== -1 ? singleTrans.split('_') : []);
+                    parts = parts.map(function(p) { return p.trim(); }).filter(function(p) { return p.length > 0; });
+                    if (parts.length === group.length && spanIdx >= 0 && spanIdx < parts.length) {
+                        return parts[spanIdx];
+                    }
+                    if (spanIdx === 0) {
+                        return singleTrans;
+                    } else {
+                        return "";
+                    }
+                }
+            }
+            
+            var raw = getRawRowTranslations(span);
+            return raw.join(', ');
+        }
+
+        function getWordTranslation(span) {
+            var group = findCompoundSiblingSpans(span);
+            if (group.length > 1) {
+                var groupTrans = [];
+                for (var i = 0; i < group.length; i++) {
+                    var t = getSpanSpecificTranslation(group[i], group);
+                    if (t && groupTrans.indexOf(t) === -1) {
+                        groupTrans.push(t);
+                    }
+                }
+                if (groupTrans.length > 0) {
+                    return groupTrans.join(', ');
+                }
+            }
+            
+            var raw = getRawRowTranslations(span);
+            return raw.join(', ');
+        }
+
+        function flipWord(span, toTranslation) {
+            if (!span) return;
+            var group = findCompoundSiblingSpans(span);
+            for (var i = 0; i < group.length; i++) {
+                var s = group[i];
+                if (!s.getAttribute('data-original-text')) {
+                    s.setAttribute('data-original-text', s.textContent || s.innerText || "");
+                }
+                var isFlipped = s.classList.contains('flipped');
+                if (toTranslation && !isFlipped) {
+                    var trans = getSpanSpecificTranslation(s, group);
+                    if (trans !== undefined && trans !== null) {
+                        s.classList.add('flipped');
+                        s.textContent = trans;
+                    }
+                } else if (!toTranslation && isFlipped) {
+                    s.classList.remove('flipped');
+                    s.textContent = s.getAttribute('data-original-text');
+                }
+            }
+        }
+
         var audioLmbPlay = {audio_lmb_play};
         var audioLmbSource = {audio_lmb_source};
         var audioRmbPlay = {audio_rmb_play};
@@ -5170,13 +5321,16 @@ html, body {{
                         
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
-                            var td = findTokenData(s);
-                            if (td && td.row_ids) {
-                                for (var j = 0; j < td.row_ids.length; j++) {
-                                    if (tokenDragMode) {
-                                        selectedRowIdsMap[String(td.row_ids[j])] = true;
-                                    } else {
-                                        delete selectedRowIdsMap[String(td.row_ids[j])];
+                            var grp = findCompoundSiblingSpans(s);
+                            for (var g = 0; g < grp.length; g++) {
+                                var td = findTokenData(grp[g]);
+                                if (td && td.row_ids) {
+                                    for (var j = 0; j < td.row_ids.length; j++) {
+                                        if (tokenDragMode) {
+                                            selectedRowIdsMap[String(td.row_ids[j])] = true;
+                                        } else {
+                                            delete selectedRowIdsMap[String(td.row_ids[j])];
+                                        }
                                     }
                                 }
                             }
@@ -5198,12 +5352,28 @@ html, body {{
                         var minIdx = Math.min(tokenDragStartIdx, currIdx);
                         var maxIdx = Math.max(tokenDragStartIdx, currIdx);
                         
+                        var inRangeSpans = [];
+                        for (var k = minIdx; k <= maxIdx; k++) {
+                            var grp = findCompoundSiblingSpans(tokenSpans[k]);
+                            for (var g = 0; g < grp.length; g++) {
+                                if (inRangeSpans.indexOf(grp[g]) === -1) {
+                                    inRangeSpans.push(grp[g]);
+                                }
+                            }
+                        }
+                        
+                        var processedGroups = [];
                         for (var k = 0; k < tokenSpans.length; k++) {
                             var s = tokenSpans[k];
-                            var shouldFlip = initialFlippedMap[k];
-                            if (k >= minIdx && k <= maxIdx) {
-                                shouldFlip = rmbFlipMode;
+                            if (processedGroups.indexOf(s) !== -1) continue;
+                            
+                            var grp = findCompoundSiblingSpans(s);
+                            for (var g = 0; g < grp.length; g++) {
+                                processedGroups.push(grp[g]);
                             }
+                            
+                            var isTarget = inRangeSpans.indexOf(s) !== -1;
+                            var shouldFlip = isTarget ? rmbFlipMode : initialFlippedMap[k];
                             flipWord(s, shouldFlip);
                         }
                     }
@@ -5618,6 +5788,7 @@ html, body {{
                 try {
                     span.classList.remove('highlight-orange-active');
                     span.classList.remove('highlight-purple-active');
+                    span.classList.remove('active-subtoken');
                 } catch(e) {}
             }
             
@@ -5645,6 +5816,13 @@ html, body {{
                         }
                     }
                 }
+            }
+
+            if (mousedownTargetSpan && mousedownTargetSpan.classList && 
+                (mousedownTargetSpan.classList.contains('highlight-orange-active') || mousedownTargetSpan.classList.contains('highlight-purple-active'))) {
+                try {
+                    mousedownTargetSpan.classList.add('active-subtoken');
+                } catch(e) {}
             }
         }
         

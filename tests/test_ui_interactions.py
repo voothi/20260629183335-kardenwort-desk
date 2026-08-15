@@ -614,3 +614,123 @@ def test_ie_cache_busting_meta_header_and_in_place_updates(page, tmp_path):
     page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
     
     assert page.url == initial_url
+
+
+def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
+    source_html = (
+        'def <span class="word highlight-orange" data-word-idx="3" data-line-idx="0" data-lower-clean="split">split</span>'
+        '_'
+        '<span class="word highlight-orange" data-word-idx="5" data-line-idx="0" data-lower-clean="camel">camel</span>'
+        '_'
+        '<span class="word highlight-orange" data-word-idx="7" data-line-idx="0" data-lower-clean="case">case</span>'
+        '():'
+    )
+    
+    token_manifest = [
+        {"text": "def", "is_word": True, "visual_idx": 1},
+        {"text": " ", "is_word": False, "visual_idx": 2},
+        {"text": "split", "is_word": True, "visual_idx": 3, "lower_clean": "split", "row_ids": [0, 1, 2]},
+        {"text": "_", "is_word": False, "visual_idx": 4},
+        {"text": "camel", "is_word": True, "visual_idx": 5, "lower_clean": "camel", "row_ids": [0, 1, 2]},
+        {"text": "_", "is_word": False, "visual_idx": 6},
+        {"text": "case", "is_word": True, "visual_idx": 7, "lower_clean": "case", "row_ids": [0, 1, 2]},
+        {"text": "(", "is_word": False, "visual_idx": 8},
+        {"text": ")", "is_word": False, "visual_idx": 9},
+        {"text": ":", "is_word": False, "visual_idx": 10}
+    ]
+    
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="section-title">Source Text</div>
+    <div class="source-text" id="source-container">{source_html}</div>
+  </div>
+  
+  <div class="section">
+    <div class="section-title">Translation</div>
+    <div class="translation-text" id="translation-container">definition</div>
+  </div>
+  
+  <div class="section">
+    <div class="section-title">Lemmas</div>
+    <table id="lemma-table">
+      <thead>
+        <tr>
+          <th class="col-checkbox" data-col="DeskSelected">#</th>
+          <th data-col="WordSource">Source</th>
+          <th data-col="WordDestination">Translation</th>
+        </tr>
+      </thead>
+      <tbody>
+        <tr data-row-id="0">
+          <td class="col-checkbox" data-col="DeskSelected"></td>
+          <td data-col="WordSource"><div class="scrollable-cell">split</div></td>
+          <td data-col="WordDestination" class="editable"><div class="scrollable-cell">расколоть</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td class="col-checkbox" data-col="DeskSelected"></td>
+          <td data-col="WordSource"><div class="scrollable-cell">camel</div></td>
+          <td data-col="WordDestination" class="editable"><div class="scrollable-cell">верблюд</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td class="col-checkbox" data-col="DeskSelected"></td>
+          <td data-col="WordSource"><div class="scrollable-cell">case</div></td>
+          <td data-col="WordDestination" class="editable"><div class="scrollable-cell">случай</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">
+{json.dumps(token_manifest)}
+</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>
+"""
+    page.set_content(html)
+    desk_js = extract_desk_js()
+    page.evaluate(desk_js)
+    
+    span_split = page.locator("span[data-lower-clean='split']")
+    span_camel = page.locator("span[data-lower-clean='camel']")
+    span_case = page.locator("span[data-lower-clean='case']")
+    
+    # 1. Test LMB click on camel:
+    # All constituent sub-tokens highlighted in yellow, clicked sub-token gets active-subtoken
+    span_camel.click(button="left")
+    
+    assert "highlight-orange-active" in (span_split.get_attribute("class") or "")
+    assert "highlight-orange-active" in (span_camel.get_attribute("class") or "")
+    assert "highlight-orange-active" in (span_case.get_attribute("class") or "")
+    assert "active-subtoken" in (span_camel.get_attribute("class") or "")
+    
+    # 2. Test Unified RMB flip on camel:
+    # All constituent sub-tokens flip simultaneously to their ordered translations
+    span_camel.click(button="right")
+    
+    assert span_split.inner_text() == "расколоть"
+    assert span_camel.inner_text() == "верблюд"
+    assert span_case.inner_text() == "случай"
+    assert "flipped" in (span_split.get_attribute("class") or "")
+    assert "flipped" in (span_camel.get_attribute("class") or "")
+    assert "flipped" in (span_case.get_attribute("class") or "")
+    
+    source_container = page.locator("#source-container")
+    assert "расколоть_верблюд_случай" in source_container.inner_text()
+    
+    # 3. Test RMB unflip on case:
+    span_case.click(button="right")
+    
+    assert span_split.inner_text() == "split"
+    assert span_camel.inner_text() == "camel"
+    assert span_case.inner_text() == "case"
+    assert "flipped" not in (span_split.get_attribute("class") or "")
+    assert "flipped" not in (span_camel.get_attribute("class") or "")
+    assert "flipped" not in (span_case.get_attribute("class") or "")
+    assert "split_camel_case" in source_container.inner_text()
+

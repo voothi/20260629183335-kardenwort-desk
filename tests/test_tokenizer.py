@@ -116,4 +116,29 @@ def test_decompose_identifier():
     assert tok.decompose_identifier("БыстрыйПоиск") == ["БыстрыйПоиск", "Быстрый", "Поиск"]
     assert tok.decompose_identifier("Mädchen_Schule") == ["Mädchen", "Schule"]
 
+def test_extract_identifier_subtokens():
+    assert tok.extract_identifier_subtokens("") == []
+    assert tok.extract_identifier_subtokens(None) == []
+    assert tok.extract_identifier_subtokens("_") == []
+    assert tok.extract_identifier_subtokens("__init__") == ["init"]
+    assert tok.extract_identifier_subtokens("simple") == ["simple"]
+    
+    # snake_case left-to-right appearance order
+    assert tok.extract_identifier_subtokens("split_camel_case") == ["split", "camel", "case"]
+    assert tok.extract_identifier_subtokens("prepare_lookup_tsv") == ["prepare", "lookup", "tsv"]
+    
+    # kebab-case and dotted
+    assert tok.extract_identifier_subtokens("per-window") == ["per", "window"]
+    assert tok.extract_identifier_subtokens("text_tokenizer.py") == ["text", "tokenizer", "py"]
+    assert tok.extract_identifier_subtokens("ExecutionContext.from_config") == [
+        "Execution", "Context", "from", "config"
+    ]
+    assert tok.extract_identifier_subtokens("OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP") == [
+        "Operational", "Mode", "MULTI", "SENTENCE", "LOCAL", "DEDUP"
+    ]
+    assert tok.extract_identifier_subtokens("word1_word2-word3.word4") == ["word1", "word2", "word3", "word4"]
+    assert tok.extract_identifier_subtokens("UTF8String") == ["UTF8", "String"]
+    assert tok.extract_identifier_subtokens("БыстрыйПоиск") == ["Быстрый", "Поиск"]
+
+
 
