@@ -1492,12 +1492,21 @@ def extract_zid(path):
     match = re.match(r'^(\d{14})', name)
     return match.group(1) if match else "00000000000000"
 
+GERMAN_UMLAUT_MAP = {
+    'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss', 'ẞ': 'ss',
+    'Ä': 'ae', 'Ö': 'oe', 'Ü': 'ue',
+}
+
 def generate_slug(text, max_words=4):
     if not text:
         return "untitled"
     # Remove ASS and HTML tags
     cleaned = re.sub(r'\{[^}]*\}', ' ', text)
     cleaned = re.sub(r'<[^>]*>', ' ', cleaned)
+
+    # Normalize German umlauts matching zid_name.py
+    for src, dst in GERMAN_UMLAUT_MAP.items():
+        cleaned = cleaned.replace(src, dst)
 
     tokens = tok.build_word_list_internal(cleaned, keep_spaces=False)
     words = []

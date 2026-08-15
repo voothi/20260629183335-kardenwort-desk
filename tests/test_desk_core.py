@@ -135,7 +135,9 @@ def test_generate_slug():
     assert desk.generate_slug("20260815131120-token-mapping-inflected-expansion") == "token-mapping-inflected-expansion"
     assert desk.generate_slug("openspec/changes/archive/20260815131120-token-mapping/specs/spec.md") == "openspec-changes-archive-token"
     assert desk.generate_slug("SHA256_Hash generator") == "sha256-hash-generator"
-    assert desk.generate_slug("Mädchen in der Schule") == "mädchen-in-der-schule"
+    assert desk.generate_slug("Mädchen in der Schule") == "maedchen-in-der-schule"
+    assert desk.generate_slug("Über die Brücke") == "ueber-die-bruecke"
+    assert desk.generate_slug("Große Straße") == "grosse-strasse"
     assert desk.generate_slug("БыстрыйПоиск (тест)") == "быстрый-поиск-тест"
 
 def test_load_tsv_rows():
