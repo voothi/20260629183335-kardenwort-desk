@@ -66,3 +66,43 @@ def test_playwright_dom_validation(page, tmp_path):
     
     # Verify the table was updated with the payload
     assert page.locator("td:has-text('дом')").is_visible(), "Table should be updated with new destination word"
+
+
+def test_handle_sent_text_rendered_html_scripts_load_without_syntax_errors(page, tmp_path):
+    errors = []
+    page.on("pageerror", lambda exc: errors.append(str(exc)))
+    page.add_init_script("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("audio"):
+        config.add_section("audio")
+    config.set("audio", "lmb_play", "True")
+    config.set("audio", "lmb_source", "lemma")
+    resolved_paths["anki_tts_cli"] = Path("C:/fake/tts.py")
+    resolved_paths["kardenwort_python"] = Path("python.exe")
+    
+    tsv_file = tmp_path / "20260815180100-archive.en.tsv"
+    tsv_file.write_text("# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\narchive/20260815131120\tarchive/20260815131120-token-mapping/\tархив\n", encoding="utf-8")
+    
+    html = kardenwort_desk.run_render_flow(
+        text="archive", 
+        language="en", 
+        zid="20260815180100",
+        text_mode="single",
+        config=config, 
+        resolved_paths=resolved_paths, 
+        tsv_path=str(tsv_file)
+    )
+    
+    page.set_content(html)
+    assert len(errors) == 0, f"Page load caused JavaScript errors: {errors}"
+    
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    
+    # Click table row 0
+    row = page.locator("tr[data-row-id='0']")
+    row.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\narchive")

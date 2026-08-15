@@ -5238,10 +5238,10 @@ html, body {{
             // Strip 14-digit ZIDs
             s = s.replace(/(^|[^0-9])[0-9]{14}(?![0-9])/g, '$1 ');
             // Replace path separators, colons, and underscore delimiters with spaces
-            s = s.replace(/[/\\_:]/g, ' ');
+            s = s.replace(/[\\/\\\\_:]/g, ' ');
             // Strip standalone numeric tokens
-            s = s.replace(/(^|[ \t\r\n])[0-9]+(?=[ \t\r\n]|$)/g, ' ');
-            return s.replace(/[ \t\r\n]+/g, ' ').trim();
+            s = s.replace(/(^|\\s)[0-9]+(?=\\s|$)/g, ' ');
+            return s.replace(/\\s+/g, ' ').trim();
         }
 
         function playAudio(text, lang) {
@@ -5336,7 +5336,7 @@ html, body {{
 
             if (sourceMode === 'inflection') {
                 if (bestRowInflected) {
-                    if (bestRowInflected.toLowerCase() !== spanClean && (bestRowInflected.indexOf('-') !== -1 || bestRowInflected.indexOf('_') !== -1 || bestRowInflected.indexOf(' ') !== -1 || bestRowInflected.indexOf('/') !== -1 || bestRowInflected.indexOf('\\') !== -1)) {
+                    if (bestRowInflected.toLowerCase() !== spanClean && (bestRowInflected.indexOf('-') !== -1 || bestRowInflected.indexOf('_') !== -1 || bestRowInflected.indexOf(' ') !== -1 || bestRowInflected.indexOf('/') !== -1 || bestRowInflected.indexOf('\\\\') !== -1)) {
                         return spanText;
                     }
                     var cleanInf = getCleanConstituentInflection(bestRowInflected, spanClean);
@@ -5350,7 +5350,7 @@ html, body {{
                 if (bestRowLemma.toLowerCase() !== spanClean && !exactMatchFound) {
                     return spanText;
                 }
-                if (bestRowLemma.toLowerCase() !== spanClean && (bestRowLemma.indexOf('-') !== -1 || bestRowLemma.indexOf('_') !== -1 || bestRowLemma.indexOf('/') !== -1 || bestRowLemma.indexOf('\\') !== -1 || bestRowLemma.indexOf(' ') !== -1)) {
+                if (bestRowLemma.toLowerCase() !== spanClean && (bestRowLemma.indexOf('-') !== -1 || bestRowLemma.indexOf('_') !== -1 || bestRowLemma.indexOf('/') !== -1 || bestRowLemma.indexOf('\\\\') !== -1 || bestRowLemma.indexOf(' ') !== -1)) {
                     return spanText;
                 }
                 return bestRowLemma || spanText;
