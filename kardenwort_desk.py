@@ -4610,6 +4610,7 @@ html, body {{
     
     token_manifest = []
     word_counter = 0
+    token_mappings = get_desk_token_mappings(resolved_paths, language, config) if token_cfg.token_mappings_enabled else {}
     for token in source_tokens:
         tok_data = {
             "text": token["text"],
@@ -4617,10 +4618,11 @@ html, body {{
             "visual_idx": token["visual_idx"]
         }
         if token["is_word"] and "lower_clean" in token:
-            tok_data["lower_clean"] = token["lower_clean"]
-            mapped_rows = token.get("filtered_mapped_rows", token_to_rows.get(token["lower_clean"], []))
+            lower_clean = token["lower_clean"]
+            tok_data["lower_clean"] = lower_clean
+            mapped_rows = token.get("filtered_mapped_rows", token_to_rows.get(lower_clean, []))
             if not mapped_rows:
-                stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", token["lower_clean"], flags=re.IGNORECASE)
+                stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", lower_clean, flags=re.IGNORECASE)
                 if stem and stem in token_to_rows:
                     mapped_rows = token_to_rows[stem]
             filtered_rows = []
@@ -4630,6 +4632,29 @@ html, body {{
                 elif word_counter in anchored_positions.get(r_idx, set()):
                     filtered_rows.append(r_idx)
             if filtered_rows:
+                if token_mappings and lower_clean:
+                    norm_tok = lower_clean.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
+                    norm_tok = re.sub(r'\s+', '', norm_tok).lower()
+                    if norm_tok in token_mappings:
+                        targets = [t.lower().strip() for t in token_mappings[norm_tok] if t.strip()]
+                        if targets:
+                            def _row_rank(r_idx):
+                                if 0 <= r_idx < len(data_rows):
+                                    r = data_rows[r_idx]
+                                    lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
+                                    inf = r[col_inflected].strip().lower() if col_inflected != -1 and len(r) > col_inflected else ""
+                                    forms = [f.strip() for f in inf.split(',') if f.strip()]
+                                    r_words = set(forms)
+                                    if lem:
+                                        r_words.add(lem)
+                                    for f in forms:
+                                        for part in f.split():
+                                            r_words.add(part)
+                                    for idx, target in enumerate(targets):
+                                        if target in r_words:
+                                            return idx
+                                return len(targets)
+                            filtered_rows = sorted(filtered_rows, key=_row_rank)
                 tok_data["row_ids"] = filtered_rows
             word_counter += 1
         token_manifest.append(tok_data)

@@ -921,6 +921,108 @@ def test_contraction_audio_playback_resolution(page):
     assert play_calls[0]["arg"].endswith("en\\nis not")
 
 
+def test_contraction_audio_order_were(page):
+    source_html = '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="we\'re">we\'re</span>'
+    manifest = [
+        {"text": "we're", "is_word": True, "visual_idx": 0, "lower_clean": "we're", "row_ids": [1, 0]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">be</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">we're, are</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">быть</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">we</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">we're, we</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мы</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. Contraction we're: lemma mode -> "we be"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    span = page.locator("span[data-lower-clean=\"we're\"]")
+    span.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nwe be")
+
+    # 2. Contraction we're: inflection mode -> "we are"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
+    span = page.locator("span[data-lower-clean=\"we're\"]")
+    span.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nwe are")
+
+    # 3. Contraction we're: RMB flip translation audio -> "мы, быть"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(rmb_play=True))
+    span = page.locator("span[data-lower-clean=\"we're\"]")
+    span.click(button="right")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nмы, быть")
+
+
+def test_render_flow_ordered_manifest_rows(tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Today we're going to take a look."
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "be\twe're, are\tбыть\n"
+        "we\twe're, we\tмы\n"
+    )
+    tsv_file = tmp_path / "20260816005700-test-ordered.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260816005700",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    import re
+    m = re.search(r'<script id="token-map" type="application/json">\s*([\s\S]*?)\s*</script>', html)
+    assert m is not None
+    manifest = json.loads(m.group(1))
+
+    were_token = next((t for t in manifest if t.get("lower_clean") == "we're"), None)
+    assert were_token is not None
+    # Row 0 is 'be', Row 1 is 'we'. Mapped targets for "we're" are ["we", "are"].
+    # Row for 'we' (1) must precede row for 'be' (0).
+    assert were_token["row_ids"] == [1, 0]
+
+
 def test_shared_multi_row_compound_audio_no_duplication(page):
     source_html = (
         '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="projekt">Projekt</span>'
