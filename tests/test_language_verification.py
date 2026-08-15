@@ -155,3 +155,90 @@ def test_core_lookup_passes_when_bypassed():
             bypass_lang_check=True,
         )
         assert res["language"] == "en"
+
+
+# ===================================================================================
+# Matrix Test Suites for Language Verification
+# ===================================================================================
+
+@pytest.mark.parametrize(
+    "text, expected_lang, enabled, bypass, min_char_length, action, expected_is_match, expected_action",
+    [
+        # Disabled or Bypassed Matrix combinations -> always match & proceed
+        ("Das ist ein Test", "en", False, False, 4, "prompt", True, "proceed"),
+        ("Das ist ein Test", "en", False, True, 4, "prompt", True, "proceed"),
+        ("Das ist ein Test", "en", True, True, 4, "prompt", True, "proceed"),
+        ("The quick brown fox", "de", True, True, 4, "block", True, "proceed"),
+        # Short text threshold boundary matrix
+        ("Ja", "en", True, False, 4, "prompt", True, "proceed"),
+        ("Hi", "de", True, False, 4, "prompt", True, "proceed"),
+        ("Das ist ein deutsches Haus", "en", True, False, 100, "prompt", True, "proceed"),
+        # Matching language matrix
+        ("Das ist ein wunderbares deutsches Haus in Berlin", "de", True, False, 4, "prompt", True, "proceed"),
+        ("The quick brown fox jumps over the lazy dog in London", "en", True, False, 4, "prompt", True, "proceed"),
+        # Mismatch with distinct actions matrix
+        ("Das ist ein wunderbares deutsches Haus in Berlin", "en", True, False, 4, "prompt", False, "prompt"),
+        ("Das ist ein wunderbares deutsches Haus in Berlin", "en", True, False, 4, "block", False, "block"),
+        ("Das ist ein wunderbares deutsches Haus in Berlin", "en", True, False, 4, "warn", False, "warn"),
+        ("The quick brown fox jumps over the lazy dog in London", "de", True, False, 4, "prompt", False, "prompt"),
+        ("The quick brown fox jumps over the lazy dog in London", "de", True, False, 4, "block", False, "block"),
+        ("The quick brown fox jumps over the lazy dog in London", "de", True, False, 4, "warn", False, "warn"),
+    ],
+)
+def test_verify_language_matrix(
+    text, expected_lang, enabled, bypass, min_char_length, action, expected_is_match, expected_action
+):
+    cfg = _make_config(
+        enabled=enabled,
+        languages="en, de",
+        min_char_length=min_char_length,
+        confidence_threshold=0.60,
+        action=action,
+    )
+    result = verify_language(text, expected_lang, cfg, bypass=bypass)
+    assert result.is_match == expected_is_match
+    assert result.action == expected_action
+
+
+@pytest.mark.parametrize(
+    "action, bypass, expect_error",
+    [
+        ("prompt", False, True),
+        ("block", False, True),
+        ("warn", False, False),
+        ("prompt", True, False),
+        ("block", True, False),
+        ("warn", True, False),
+    ],
+)
+def test_core_lookup_action_matrix(action, bypass, expect_error):
+    cfg = _make_config(enabled=True, action=action)
+    cfg.add_section(SEC_LANGUAGES)
+    cfg.set(SEC_LANGUAGES, "en_prompt", "English Prompt")
+
+    from pathlib import Path
+
+    with patch("kardenwort_desk.run_lookup_flow") as mock_flow:
+        mock_flow.return_value = ([], ["WordSource"], [["test"]], "test translation", Path("results/test.tsv"))
+
+        if expect_error:
+            with pytest.raises(StructuredError) as exc_info:
+                core_lookup(
+                    text="Das ist ein schönes deutsches Haus in Berlin",
+                    language="en",
+                    config=cfg,
+                    resolved_paths={"kardenwort_workspace": Path(".")},
+                    goldendict={"format": "html", "sections": ["source"], "lemma_columns": ["lemma"], "run_intellifiller": False},
+                    bypass_lang_check=bypass,
+                )
+            assert exc_info.value.error_code == ErrorCode.LANGUAGE_MISMATCH
+        else:
+            res = core_lookup(
+                text="Das ist ein schönes deutsches Haus in Berlin",
+                language="en",
+                config=cfg,
+                resolved_paths={"kardenwort_workspace": Path(".")},
+                goldendict={"format": "html", "sections": ["source"], "lemma_columns": ["lemma"], "run_intellifiller": False},
+                bypass_lang_check=bypass,
+            )
+            assert res["language"] == "en"
