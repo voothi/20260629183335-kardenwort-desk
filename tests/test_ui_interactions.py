@@ -803,9 +803,8 @@ def test_compound_audio_playback_resolution(page):
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 2  # mousedown on projekt + mouseup on drag range
-    assert play_calls[0]["arg"].endswith("de\\nProjekt")
-    assert play_calls[1]["arg"].endswith("de\\nProjekt Manager")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
 
     # Test viel-zu-beschäftigte with lemma and inflection modes
     source_html_vzb = (
@@ -893,9 +892,8 @@ def test_compound_audio_playback_resolution(page):
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 2
-    assert play_calls[0]["arg"].endswith("de\\nviel")
-    assert play_calls[1]["arg"].endswith("de\\nviel zu beschäftigte")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nviel zu beschäftigte")
 
 
 def test_contraction_audio_playback_resolution(page):
@@ -1129,9 +1127,8 @@ def test_shared_multi_row_compound_audio_no_duplication(page):
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 2
-    assert play_calls[0]["arg"].endswith("de\\nProjekt")
-    assert play_calls[1]["arg"].endswith("de\\nProjekt Manager")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
 
 
 def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
@@ -1293,9 +1290,8 @@ def test_slash_separated_words_not_grouped_as_compound(page):
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 2
-    assert play_calls[0]["arg"].endswith("en\\ntwo")
-    assert play_calls[1]["arg"].endswith("en\\ntwo part")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ntwo part")
 
 
 def test_zid_and_numeric_filtered_from_compound_audio_playback(page):
@@ -1380,9 +1376,8 @@ def test_zid_and_numeric_filtered_from_compound_audio_playback(page):
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 2
-    assert play_calls[0]["arg"].endswith("en\\ntoken")
-    assert play_calls[1]["arg"].endswith("en\\ntoken mapping inflected expansion")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ntoken mapping inflected expansion")
 
     # 4. Clicking on the ZID span directly (which is excluded from candidate row selection) suppresses playback
     page.set_content(html)
@@ -1533,9 +1528,8 @@ def test_path_level_slashes_delimit_compound_groups_in_audio(page):
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 2
-    assert play_calls[0]["arg"].endswith("en\\ntoken")
-    assert play_calls[1]["arg"].endswith("en\\ntoken mapping")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ntoken mapping")
 
 
 def test_single_span_with_multiple_compound_tsv_rows_plays_only_direct_match(page):
@@ -1996,6 +1990,84 @@ def test_compound_subtoken_isolated_from_standalone_words(page, tmp_path, monkey
     # Standalone split and case are NOT highlighted (isolated from row 0)
     assert "highlight-orange-active" not in (standalone_split.get_attribute("class") or "")
     assert "highlight-orange-active" not in (standalone_case.get_attribute("class") or "")
+
+
+def test_drag_selection_audio_deferred_until_mouseup(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="hello">hello</span> '
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="world">world</span>'
+    )
+    manifest = [
+        {"text": "hello", "is_word": True, "visual_idx": 0, "lower_clean": "hello", "row_ids": [0]},
+        {"text": " ", "is_word": False, "visual_idx": 1},
+        {"text": "world", "is_word": True, "visual_idx": 2, "lower_clean": "world", "row_ids": [1]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">hello</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">привет</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">world</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мир</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+
+    # 1. During mousedown: zero audio calls
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='hello']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    assert len([c for c in calls if c.get("action") == "play"]) == 0
+
+    # 2. During mouseover: still zero audio calls
+    page.evaluate("""() => {
+        const s2 = document.querySelector("span[data-lower-clean='world']");
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    assert len([c for c in calls if c.get("action") == "play"]) == 0
+
+    # 3. Upon mouseup: exactly one audio call with joined text
+    page.evaluate("""() => {
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nhello world")
+
+    # 4. Deselection gesture suppresses audio on mouseup
+    page.evaluate("window.__ahkCalls = [];")
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='hello']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0
+
 
 
 

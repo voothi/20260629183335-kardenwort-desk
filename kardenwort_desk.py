@@ -5975,12 +5975,6 @@ html, body {{
                         updateRowStyles();
                         updateBidirectionalHighlights();
                         
-                        if (audioLmbPlay && tokenDragMode) {
-                            var textToPlay = getSingleTokenWordsToPlay(span, audioLmbSource);
-                            var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
-                            playAudio(textToPlay, sourceLang);
-                        }
-                        
                         if (e.preventDefault) {
                             e.preventDefault();
                         } else {
@@ -6328,26 +6322,36 @@ html, body {{
                     setTimeout(function() {
                         justFinishedDrag = false;
                     }, 50);
-                    
-                    if (isTokenDragSelecting && tokenDragMode && audioLmbPlay && tokenDragStartIdx !== -1 && tokenDragLastIdx !== -1) {
-                        var minIdx = Math.min(tokenDragStartIdx, tokenDragLastIdx);
-                        var maxIdx = Math.max(tokenDragStartIdx, tokenDragLastIdx);
-                        if (minIdx !== maxIdx) {
-                            var dragWords = [];
-                            for (var k = minIdx; k <= maxIdx; k++) {
-                                var term = getSingleTokenWordsToPlay(tokenSpans[k], audioLmbSource);
-                                if (term) {
-                                    dragWords.push(term);
-                                }
+                }
+                
+                if (isTokenDragSelecting && tokenDragMode && audioLmbPlay && tokenDragStartIdx !== -1) {
+                    var minIdx = (tokenDragLastIdx !== -1) ? Math.min(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
+                    var maxIdx = (tokenDragLastIdx !== -1) ? Math.max(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
+                    if (dragOccurred && minIdx !== maxIdx) {
+                        var dragWords = [];
+                        for (var k = minIdx; k <= maxIdx; k++) {
+                            var term = getSingleTokenWordsToPlay(tokenSpans[k], audioLmbSource);
+                            if (term) {
+                                dragWords.push(term);
                             }
-                            var dragText = dragWords.join(' ');
-                            if (dragText) {
+                        }
+                        var dragText = dragWords.join(' ');
+                        if (dragText) {
+                            var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                            playAudio(dragText, sourceLang);
+                        }
+                    } else {
+                        var targetSpan = mousedownTargetSpan || (tokenDragStartIdx !== -1 ? tokenSpans[tokenDragStartIdx] : null);
+                        if (targetSpan) {
+                            var singleText = getSingleTokenWordsToPlay(targetSpan, audioLmbSource);
+                            if (singleText) {
                                 var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
-                                playAudio(dragText, sourceLang);
+                                playAudio(singleText, sourceLang);
                             }
                         }
                     }
                 }
+                
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
                 isRmbDragFlipping = false;
