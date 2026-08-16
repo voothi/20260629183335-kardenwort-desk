@@ -4791,9 +4791,11 @@ html, body {{
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <style>
-  
-
-  
+  html, body {
+    height: 100%;
+    min-height: 100%;
+    background-color: {bg_color};
+  }
 
   *, *:before, *:after {
     -webkit-box-sizing: border-box;

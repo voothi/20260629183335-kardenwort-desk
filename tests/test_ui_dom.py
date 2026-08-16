@@ -634,6 +634,72 @@ def test_subtoken_hover_selection_isolation(page, tmp_path):
     assert "selected" not in (row_id.get_attribute("class") or "")
 
 
+def test_full_viewport_canvas_background_styling(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    tsv_file = tmp_path / "20260816202412-this-digest-is-ai.en.tsv"
+    tsv_file.write_text(
+        "# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\ndigest\tdigest\tдайджест\n",
+        encoding="utf-8"
+    )
+
+    for theme in ["dark", "light", "white"]:
+        html = kardenwort_desk.run_render_flow(
+            text="This digest is AI-curated.",
+            language="en",
+            zid="20260816202412",
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            theme=theme,
+            tsv_path=str(tsv_file)
+        )
+        expected_bg = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
+        assert f"background-color: {expected_bg}" in html
+        assert "html, body {" in html
+        assert "height: 100%;" in html
+        assert "min-height: 100%;" in html
+
+        page.set_content(html)
+        html_bg = page.evaluate("window.getComputedStyle(document.documentElement).backgroundColor")
+        body_bg = page.evaluate("window.getComputedStyle(document.body).backgroundColor")
+        expected_rgb = "rgb(246, 248, 250)" if theme in ("light", "white") else "rgb(13, 15, 18)"
+        assert html_bg == expected_rgb
+        assert body_bg == expected_rgb
+
+
+def test_sample_digest_rendering_uniform_background(page):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    tsv_path = Path(__file__).parent.parent / "results" / "20260816202412-this-digest-is-ai.en.tsv"
+    if not tsv_path.exists():
+        pytest.skip("Sample TSV results/20260816202412-this-digest-is-ai.en.tsv not found")
+
+    html = kardenwort_desk.run_render_flow(
+        text="This digest is AI-curated.",
+        language="en",
+        zid="20260816202412",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_path)
+    )
+
+    assert "html, body {" in html
+    assert "height: 100%;" in html
+    assert "min-height: 100%;" in html
+    assert "background-color: #0d0f12;" in html
+
+    page.set_viewport_size({"width": 800, "height": 957})
+    page.set_content(html)
+
+    html_bg = page.evaluate("window.getComputedStyle(document.documentElement).backgroundColor")
+    body_bg = page.evaluate("window.getComputedStyle(document.body).backgroundColor")
+    assert html_bg == "rgb(13, 15, 18)"
+    assert body_bg == "rgb(13, 15, 18)"
+
+
+
+
 
 
 
