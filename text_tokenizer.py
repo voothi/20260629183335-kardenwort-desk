@@ -118,6 +118,77 @@ def build_word_list(text: str) -> list:
     tokens = build_word_list_internal(text, False)
     return [t["text"] for t in tokens if t["is_word"]]
 
+def build_orthographic_token_spans(text: str) -> list:
+    """Tokenizes text into top-level orthographic words and delimiters without camelCase decomposition."""
+    tokens = []
+    if not text:
+        return tokens
+
+    chars = list(text)
+    i = 0
+    n = len(chars)
+    curr_visual_idx = 1
+
+    while i < n:
+        c = chars[i]
+        token = {
+            "text": "",
+            "is_word": False,
+            "visual_idx": curr_visual_idx
+        }
+
+        # 1. Handle ASS Tags
+        if c == "{":
+            start = i
+            while i < n and chars[i] != "}":
+                i += 1
+            if i < n:
+                i += 1
+            token["text"] = "".join(chars[start:i])
+
+        # 2. Handle Whitespace
+        elif c.isspace() or c == "\u00a0":
+            start = i
+            while i < n and (chars[i].isspace() or chars[i] == "\u00a0"):
+                i += 1
+            token["text"] = "".join(chars[start:i])
+
+        # 3. Handle Word Characters (Scanning contiguous blocks with intra-word apostrophes/connectors without camelCase splitting)
+        elif is_word_char(c):
+            start = i
+            while i < n:
+                if is_word_char(chars[i]):
+                    i += 1
+                elif chars[i] in APOSTROPHE_CHARS and i + 1 < n and is_word_char(chars[i + 1]):
+                    i += 1
+                elif chars[i] in ('_', '.') and i + 1 < n and is_word_char(chars[i + 1]):
+                    i += 1
+                else:
+                    break
+            raw_word = "".join(chars[start:i])
+            token["text"] = raw_word
+            token["is_word"] = True
+
+        # 4. Handle Line Breaks (\N, \n, \h)
+        elif c == "\\" and i + 1 < n and chars[i + 1] in ("N", "n", "h"):
+            token["text"] = c + chars[i + 1]
+            i += 2
+
+        # 5. Handle Punctuation/Misc
+        else:
+            token["text"] = c
+            i += 1
+
+        tokens.append(token)
+        curr_visual_idx += 1
+
+    return tokens
+
+def build_orthographic_word_list(text: str) -> list:
+    """Returns list of top-level orthographic word strings extracted from text."""
+    tokens = build_orthographic_token_spans(text)
+    return [t["text"] for t in tokens if t["is_word"]]
+
 def split_camel_case(s: str) -> list:
     """Split camelCase, PascalCase, or uppercase acronym boundaries into constituent words."""
     if not s:

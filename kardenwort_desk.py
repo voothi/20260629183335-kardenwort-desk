@@ -2152,8 +2152,8 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
         spans.append((start, end))
         current_pos = end
         
-    # Get all tokens using the repository's own tokenizer utility
-    tokens = tok.build_word_list_internal(original_text, keep_spaces=True)
+    # Get all top-level orthographic tokens
+    tokens = tok.build_orthographic_token_spans(original_text)
     
     # Pre-calculate the character span of each token in original_text
     token_spans = []
@@ -2163,7 +2163,8 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
         token_spans.append({
             "start": curr_idx,
             "end": curr_idx + t_len,
-            "is_word": t["is_word"]
+            "is_word": t["is_word"],
+            "text": t["text"]
         })
         curr_idx += t_len
         
@@ -2172,7 +2173,7 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
         pad_s = s_i
         pad_e = e_i
         
-        # Word-based padding using the tokenizer spans
+        # Word-based padding using the orthographic token spans
         if words_before > 0:
             words_before_tokens = [ts for ts in token_spans if ts["end"] <= s_i and ts["is_word"]]
             if len(words_before_tokens) >= words_before:
@@ -2192,10 +2193,10 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
         
         # Truncate context if it exceeds max_words
         if max_words > 0:
-            padded_words = tok.build_word_list(padded_sentence)
+            padded_words = tok.build_orthographic_word_list(padded_sentence)
             if len(padded_words) > max_words:
                 target_sentence = sentences[i]
-                target_words = tok.build_word_list(target_sentence)
+                target_words = tok.build_orthographic_word_list(target_sentence)
                 if target_words:
                     n_p = len(padded_words)
                     n_t = len(target_words)
@@ -2233,7 +2234,7 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
                         crop_start = target_start_idx - actual_left_cap
                         crop_end = target_end_idx + actual_right_cap
                         
-                    p_tokens = tok.build_word_list_internal(padded_sentence, keep_spaces=True)
+                    p_tokens = tok.build_orthographic_token_spans(padded_sentence)
                     p_token_spans = []
                     p_curr_idx = 0
                     for t in p_tokens:
@@ -2272,7 +2273,7 @@ def pad_translated_sentences(translated_sentences, words_before=0, words_after=0
         words_b_str = ""
         if words_before > 0 and i > 0:
             prev_s = translated_sentences[i - 1]
-            prev_words = tok.build_word_list_internal(prev_s, keep_spaces=True)
+            prev_words = tok.build_orthographic_token_spans(prev_s)
             valid_word_indices = [idx for idx, t in enumerate(prev_words) if t["is_word"]]
             if len(valid_word_indices) >= words_before:
                 start_token_idx = valid_word_indices[-words_before]
@@ -2284,7 +2285,7 @@ def pad_translated_sentences(translated_sentences, words_before=0, words_after=0
         words_a_str = ""
         if words_after > 0 and i < num_sentences - 1:
             next_s = translated_sentences[i + 1]
-            next_words = tok.build_word_list_internal(next_s, keep_spaces=True)
+            next_words = tok.build_orthographic_token_spans(next_s)
             valid_word_indices = [idx for idx, t in enumerate(next_words) if t["is_word"]]
             if len(valid_word_indices) >= words_after:
                 end_token_idx = valid_word_indices[words_after - 1]
@@ -2304,13 +2305,11 @@ def pad_translated_sentences(translated_sentences, words_before=0, words_after=0
         padded_sentence = re.sub(r'\s+', ' ', padded_sentence)
 
         # Truncate context if it exceeds max_words by removing words from the edges.
-        # We count actual word counts of before/after context strings — the previous
-        # implementation used len(words_b) which was always 0 or 1 (list length, not word count).
         if max_words > 0:
-            padded_words = tok.build_word_list(padded_sentence)
+            padded_words = tok.build_orthographic_word_list(padded_sentence)
             if len(padded_words) > max_words:
-                before_word_count = len(tok.build_word_list(words_b_str)) if words_b_str else 0
-                after_word_count = len(tok.build_word_list(words_a_str)) if words_a_str else 0
+                before_word_count = len(tok.build_orthographic_word_list(words_b_str)) if words_b_str else 0
+                after_word_count = len(tok.build_orthographic_word_list(words_a_str)) if words_a_str else 0
                 n_p = len(padded_words)
                 excess = n_p - max_words
                 # Remove excess from context only — never touch target sentence words.

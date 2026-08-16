@@ -243,6 +243,22 @@ def test_context_truncation():
     # TargetSentence (1 word) + 2 words left + 2 words right = 5 words total
     assert res[0] == "word2 word3 TargetSentence word4 word5"
 
+def test_pad_sentences_with_camel_case_numbers_and_punctuation():
+    text = "alpha1, beta2 split_camel_case isNumericToken (v2.0) TargetPascalCase! extraWord1 extraWord2"
+    sentences = ["isNumericToken (v2.0) TargetPascalCase!"]
+    
+    # 2 words before: "beta2", "split_camel_case"
+    # 2 words after: "extraWord1", "extraWord2"
+    # Target sentence has 3 orthographic words: "isNumericToken", "v2.0", "TargetPascalCase"
+    res = desk.pad_sentences(sentences, text, words_before=2, words_after=2, max_words=7)
+    assert res[0] == "beta2 split_camel_case isNumericToken (v2.0) TargetPascalCase! extraWord1 extraWord2"
+
+    # Truncate with max_words=5:
+    # 3 target words + 1 left ("split_camel_case") + 1 right ("extraWord1")
+    res_trunc = desk.pad_sentences(sentences, text, words_before=2, words_after=2, max_words=5)
+    assert res_trunc[0] == "split_camel_case isNumericToken (v2.0) TargetPascalCase! extraWord1"
+
+
 def test_punctuation_marks_prevent_wrapping():
     # Long text with a comma but no terminators (.!?)
     text = "Here is why this synchronization is only necessary for multi mode, whereas single mode handles it implicitly"
