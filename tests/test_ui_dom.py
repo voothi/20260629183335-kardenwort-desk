@@ -698,6 +698,45 @@ def test_sample_digest_rendering_uniform_background(page):
     assert body_bg == "rgb(13, 15, 18)"
 
 
+def test_short_content_zoom_150_min_height_and_canvas_coverage(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    tsv_file = tmp_path / "20260817005100-short.en.tsv"
+    tsv_file.write_text(
+        "# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\nshort\tshort\tкороткий\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text="Short text.",
+        language="en",
+        zid="20260817005100",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        zoom_level="150",
+        theme="dark",
+        tsv_path=str(tsv_file)
+    )
+
+    assert "min-height: 66.667%;" in html
+    assert "width: 66.667%;" in html
+    assert "zoom: 150%;" in html
+    assert "background-color: #0d0f12;" in html
+
+    page.set_viewport_size({"width": 800, "height": 900})
+    page.set_content(html)
+
+    html_bg = page.evaluate("window.getComputedStyle(document.documentElement).backgroundColor")
+    body_bg = page.evaluate("window.getComputedStyle(document.body).backgroundColor")
+    assert html_bg == "rgb(13, 15, 18)"
+    assert body_bg == "rgb(13, 15, 18)"
+
+    # With zoom 150% and viewport height 900, the body height spans the viewport
+    body_rect = page.evaluate("() => ({ width: document.body.getBoundingClientRect().width, height: document.body.getBoundingClientRect().height })")
+    assert body_rect["height"] >= 900, f"Expected body height to span viewport (>= 900), got {body_rect['height']}"
+
+
+
 
 
 

@@ -4827,6 +4827,7 @@ html, body {{
     line-height: 1.5;
     zoom: {zoom_level};
     width: {inverse_zoom_width};
+    min-height: {inverse_zoom_height};
     /* For IE11 / Shell.Explorer emulation scrollbar styling */
     scrollbar-face-color: {scrollbar_thumb};
     scrollbar-track-color: {scrollbar_track};
@@ -7197,14 +7198,17 @@ setTimeout(function() {{
     try:
         numeric_zoom = float(zoom_level.replace('%', ''))
         inverse_width = f"{10000 / numeric_zoom:.3f}%"
+        inverse_height = f"{10000 / numeric_zoom:.3f}%"
     except Exception:
         inverse_width = "100%"
+        inverse_height = "100%"
 
     if zoom_level.isdigit():
         zoom_level = f"{zoom_level}%"
         
     html_page = html_page.replace("{zoom_level}", zoom_level)
     html_page = html_page.replace("{inverse_zoom_width}", inverse_width)
+    html_page = html_page.replace("{inverse_zoom_height}", inverse_height)
     html_page = html_page.replace("{source_html}", source_html)
     html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{table_header_html}", table_header_html)
