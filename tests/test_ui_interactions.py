@@ -1767,6 +1767,128 @@ def test_compound_subtoken_lmb_selection(page):
         assert "selected" not in cls
 
 
+def test_compound_subtoken_isolated_from_standalone_words(page, tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("triggers")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "manual")
+    config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(tmp_path))
+    config.add_section("languages")
+    config.set("languages", "en_lemma_index", "en_idx")
+    config.set("languages", "en_lemma_override", "en_over")
+    config.set("languages", "en_prompt", "en_prompt")
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section("fields")
+    mapping.add_section("fields_mapping.word")
+    mapping.add_section("desk_columns")
+    mapping.set("desk_columns", "WordSource", "lemma")
+    mapping.set("desk_columns", "WordSourceInflectedForm", "inflected")
+    mapping.set("desk_columns", "WordDestination", "word_translation")
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, "w") as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "anki_mapping_file": str(mapping_file),
+        "kardenwort_python": sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "split_camel_case\tsplit_camel_case\tразбиение camelCase\n"
+        "camel\tcamel\tверблюд\n",
+        encoding="utf-8"
+    )
+
+    html = run_render_flow(
+        text="split_camel_case split camel case",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # Spans inside compound split_camel_case
+    comp_split = page.locator("span[data-word-idx='1']")
+    comp_camel = page.locator("span[data-word-idx='3']")
+    comp_case = page.locator("span[data-word-idx='5']")
+
+    # Standalone spans
+    standalone_split = page.locator("span[data-word-idx='7']")
+    standalone_camel = page.locator("span[data-word-idx='9']")
+    standalone_case = page.locator("span[data-word-idx='11']")
+
+    # Standalone split and case are not connected (isolated from row 0)
+    assert "not-connected" in (standalone_split.get_attribute("class") or "")
+    assert "not-connected" in (standalone_case.get_attribute("class") or "")
+    # Standalone camel is highlight-orange (matches row 1)
+    assert "highlight-orange" in (standalone_camel.get_attribute("class") or "")
+
+    # Subtokens inside compound are highlight-orange (match row 0, and camel matches row 1)
+    assert "highlight-orange" in (comp_split.get_attribute("class") or "")
+    assert "highlight-orange" in (comp_camel.get_attribute("class") or "")
+    assert "highlight-orange" in (comp_case.get_attribute("class") or "")
+
+    # 1. Click standalone 'camel': should select Row 1 only, highlighting ONLY standalone camel and comp_camel
+    standalone_camel.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [1]
+
+    # Check bidirectional highlights
+    assert "highlight-orange-active" in (standalone_camel.get_attribute("class") or "")
+    assert "highlight-orange-active" in (comp_camel.get_attribute("class") or "")
+    # comp_split and comp_case do NOT highlight because row 0 is NOT selected
+    assert "highlight-orange-active" not in (comp_split.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (comp_case.get_attribute("class") or "")
+    # standalone split and case do NOT highlight
+    assert "highlight-orange-active" not in (standalone_split.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (standalone_case.get_attribute("class") or "")
+
+    # Deselect standalone camel
+    standalone_camel.click(button="left")
+    assert json.loads(page.evaluate("window.getSelectedRows()")) == []
+
+    # 2. Click compound 'camel': should select both Row 0 (compound) and Row 1 (camel lemma)
+    comp_camel.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert sorted(selected_rows) == [0, 1]
+
+    # Entire compound is highlighted
+    assert "highlight-orange-active" in (comp_split.get_attribute("class") or "")
+    assert "highlight-orange-active" in (comp_camel.get_attribute("class") or "")
+    assert "highlight-orange-active" in (comp_case.get_attribute("class") or "")
+    # Standalone camel is highlighted (due to row 1)
+    assert "highlight-orange-active" in (standalone_camel.get_attribute("class") or "")
+    # Standalone split and case are NOT highlighted (isolated from row 0)
+    assert "highlight-orange-active" not in (standalone_split.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (standalone_case.get_attribute("class") or "")
+
+
+
 
 
 

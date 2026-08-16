@@ -4304,6 +4304,8 @@ html, body {{
                     
     token_to_rows = {}
     row_candidates = {}
+    compound_rows = set()
+    row_primary_lemmas = {}
     for row_id, row in enumerate(data_rows):
         if col_lemma != -1 and len(row) > col_lemma and re.match(r'^\d{14}-', row[col_lemma]):
             row = list(row)
@@ -4322,18 +4324,27 @@ html, body {{
 
         forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
         clean_lemma = lemma_val.strip() if lemma_val else ""
+        clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
+        row_primary_lemmas[row_id] = clean_lemma_lower
         
-        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
-        if clean_lemma:
-            if any(ch in clean_lemma for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1:
-                has_compound = True
+        def _has_comp_marker(s):
+            if not s:
+                return False
+            if any(ch in s for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')):
+                return True
+            return any(len(tok.split_camel_case(w)) > 1 for w in s.split())
+
+        has_compound = any(_has_comp_marker(f) for f in forms)
+        if clean_lemma and _has_comp_marker(clean_lemma):
+            has_compound = True
                 
+        if has_compound:
+            compound_rows.add(row_id)
+
         if has_compound or not forms:
             vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
         else:
             vals_to_check = forms
-
-        clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
         
         for val in vals_to_check:
             if val:
@@ -4387,6 +4398,35 @@ html, body {{
             
     source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
     source_word_cleans = [t["lower_clean"] for t in source_tokens if t.get("is_word") and "lower_clean" in t]
+
+    COMPOUND_DELIMITERS = {'_', '-', '.', '/', '\\', ':', '#', '@'}
+    n_tokens = len(source_tokens)
+    i = 0
+    while i < n_tokens:
+        if source_tokens[i].get("is_word"):
+            j = i
+            chain = [j]
+            while j + 2 < n_tokens:
+                delim_tok = source_tokens[j + 1]
+                next_word_tok = source_tokens[j + 2]
+                if (not delim_tok.get("is_word") and 
+                    delim_tok.get("text") and 
+                    all(c in COMPOUND_DELIMITERS for c in delim_tok.get("text")) and
+                    next_word_tok.get("is_word")):
+                    chain.append(j + 2)
+                    j += 2
+                else:
+                    break
+            if len(chain) > 1:
+                for idx in chain:
+                    source_tokens[idx]["is_in_compound"] = True
+                i = chain[-1] + 1
+                continue
+            elif source_tokens[i].get("compound_id") is not None:
+                source_tokens[i]["is_in_compound"] = True
+            else:
+                source_tokens[i]["is_in_compound"] = False
+        i += 1
 
     single_word_rows = set()
     anchored_positions = {}
@@ -4453,6 +4493,16 @@ html, body {{
             if eff_mode not in ('single', 'multi') and col_index != -1:
                 curr_c_idx = absolute_to_c_idx.get(current_a_idx, -1)
                 mapped_rows = [r_idx for r_idx in mapped_rows if row_to_c_idx.get(r_idx, -1) == curr_c_idx]
+
+            is_in_comp = token.get("is_in_compound", token.get("compound_id") is not None)
+            filtered_cand_rows = []
+            for r_idx in mapped_rows:
+                if r_idx in compound_rows and not is_in_comp:
+                    if row_primary_lemmas.get(r_idx) == lower_clean:
+                        filtered_cand_rows.append(r_idx)
+                else:
+                    filtered_cand_rows.append(r_idx)
+            mapped_rows = filtered_cand_rows
                 
             token["filtered_mapped_rows"] = mapped_rows
             
@@ -4639,6 +4689,16 @@ html, body {{
                 stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", lower_clean, flags=re.IGNORECASE)
                 if stem and stem in token_to_rows:
                     mapped_rows = token_to_rows[stem]
+            is_in_comp = token.get("is_in_compound", token.get("compound_id") is not None)
+            filtered_cand_rows = []
+            for r_idx in mapped_rows:
+                if r_idx in compound_rows and not is_in_comp:
+                    if row_primary_lemmas.get(r_idx) == lower_clean:
+                        filtered_cand_rows.append(r_idx)
+                else:
+                    filtered_cand_rows.append(r_idx)
+            mapped_rows = filtered_cand_rows
+            
             filtered_rows = []
             for r_idx in mapped_rows:
                 if r_idx in single_word_rows:
