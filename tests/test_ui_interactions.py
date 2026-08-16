@@ -1587,6 +1587,77 @@ def test_rmb_drag_flip_preserves_unconnected_words_and_numbers(page):
     assert page.locator("span[data-lower-clean='unknown']").is_visible()
 
 
+def test_quoted_words_and_camel_case_rmb_flip_interactions(page):
+    manifest = [
+        {"text": "display", "is_word": True, "visual_idx": 1, "lower_clean": "display", "row_ids": [0]},
+        {"text": " ", "is_word": False, "visual_idx": 2},
+        {"text": "=", "is_word": False, "visual_idx": 3},
+        {"text": " ", "is_word": False, "visual_idx": 4},
+        {"text": "'", "is_word": False, "visual_idx": 5},
+        {"text": "none", "is_word": True, "visual_idx": 6, "lower_clean": "none", "row_ids": [1]},
+        {"text": "'", "is_word": False, "visual_idx": 7},
+        {"text": ";", "is_word": False, "visual_idx": 8},
+        {"text": " ", "is_word": False, "visual_idx": 9},
+        {"text": "flip", "is_word": True, "visual_idx": 10, "lower_clean": "flip", "row_ids": [2]},
+        {"text": "Word", "is_word": True, "visual_idx": 11, "lower_clean": "word", "row_ids": [3]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div id="source-container">
+  <span class="word highlight-orange" data-word-idx="1" data-line-idx="0" data-lower-clean="display">display</span>
+  = '<span class="word highlight-orange" data-word-idx="6" data-line-idx="0" data-lower-clean="none">none</span>';
+  <span class="word highlight-orange" data-word-idx="10" data-line-idx="0" data-lower-clean="flip">flip</span><span class="word highlight-orange" data-word-idx="11" data-line-idx="0" data-lower-clean="word">Word</span>
+</div>
+<div id="table-container">
+  <table id="lemma-table">
+    <tr data-row-id="0">
+      <td data-col="WordSource">display</td>
+      <td data-col="WordDestination">отображение</td>
+    </tr>
+    <tr data-row-id="1">
+      <td data-col="WordSource">none</td>
+      <td data-col="WordDestination">ничего</td>
+    </tr>
+    <tr data-row-id="2">
+      <td data-col="WordSource">flip</td>
+      <td data-col="WordDestination">переворачивать</td>
+    </tr>
+    <tr data-row-id="3">
+      <td data-col="WordSource">word</td>
+      <td data-col="WordDestination">слово</td>
+    </tr>
+  </table>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span_none = page.locator("span[data-lower-clean='none']")
+    span_flip = page.locator("span[data-lower-clean='flip']")
+    span_word = page.locator("span[data-lower-clean='word']")
+
+    # 1. RMB click on quoted word 'none'
+    span_none.click(button="right")
+    assert span_none.inner_text() == "ничего"
+    assert "'" in page.locator("#source-container").inner_text()
+
+    # 2. RMB click on camelCase 'flip' flips both adjacent spans
+    span_flip.click(button="right")
+    assert span_flip.inner_text() == "переворачивать"
+    assert span_word.inner_text() == "слово"
+
+    # 3. RMB click on 'Word' unflips both back to English
+    span_word.click(button="right")
+    assert span_flip.inner_text() == "flip"
+    assert span_word.inner_text() == "Word"
+
+
+
 
 
 

@@ -495,6 +495,85 @@ def test_rmb_flip_gray_untranslated_and_numeric_tokens_remain_visible(page, tmp_
     assert span_unknown.is_visible()
 
 
+def test_quoted_word_rendering_and_rmb_flip(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "style.display = 'none'"
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordDestination\n"
+        "display\tотображение\n"
+        "none\tничего\n"
+    )
+    tsv_file = tmp_path / "20260816110100-quoted-word.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260816110100",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+    source_container = page.locator("#source-container")
+
+    # Verify 'none' matched TSV dictionary and has clean lower_clean
+    span_none = page.locator("span.word[data-lower-clean='none']").first
+    assert span_none.is_visible()
+    assert "highlight-" in (span_none.get_attribute("class") or "")
+
+    # RMB click on 'none' flips to 'ничего'
+    span_none.click(button="right")
+    assert "ничего" in source_container.inner_text()
+    assert "'" in source_container.inner_text()
+
+
+def test_camel_case_identifier_adjacent_spans_and_rmb_flip(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "function flipWord() {"
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "flip\tflipWord\tпереворачивать\n"
+        "word\tflipWord\tслово\n"
+    )
+    tsv_file = tmp_path / "20260816110200-camel-case.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260816110200",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+    source_container = page.locator("#source-container")
+
+    span_flip = page.locator("span.word[data-lower-clean='flip']").first
+    span_word = page.locator("span.word[data-lower-clean='word']").first
+
+    assert span_flip.is_visible()
+    assert span_word.is_visible()
+
+    # RMB click on 'flip' flips both adjacent sub-spans
+    span_flip.click(button="right")
+    assert "переворачивать" in source_container.inner_text()
+    assert "слово" in source_container.inner_text()
+
+    # RMB click on 'Word' unflips both adjacent sub-spans back to English
+    span_word.click(button="right")
+    assert "flip" in source_container.inner_text()
+    assert "Word" in source_container.inner_text()
+
+
+
 
 
 

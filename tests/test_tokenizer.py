@@ -5,12 +5,12 @@ def test_is_word_char():
     assert tok.is_word_char("a") is True
     assert tok.is_word_char("Z") is True
     assert tok.is_word_char("9") is True
-    assert tok.is_word_char("'") is True
-    assert tok.is_word_char("’") is True
-    assert tok.is_word_char("‘") is True
-    assert tok.is_word_char("`") is True
-    assert tok.is_word_char("´") is True
-    assert tok.is_word_char("ʼ") is True
+    assert tok.is_word_char("'") is False
+    assert tok.is_word_char("’") is False
+    assert tok.is_word_char("‘") is False
+    assert tok.is_word_char("`") is False
+    assert tok.is_word_char("´") is False
+    assert tok.is_word_char("ʼ") is False
     assert tok.is_word_char("ä") is True
     assert tok.is_word_char("Ö") is True
     assert tok.is_word_char("ß") is True
@@ -145,6 +145,40 @@ def test_extract_identifier_subtokens():
     assert tok.extract_identifier_subtokens("word1_word2-word3.word4") == ["word1", "word2", "word3", "word4"]
     assert tok.extract_identifier_subtokens("UTF8String") == ["UTF8", "String"]
     assert tok.extract_identifier_subtokens("БыстрыйПоиск") == ["Быстрый", "Поиск"]
+
+
+def test_build_word_list_quoted_words():
+    text = "display = 'none'"
+    tokens = tok.build_word_list_internal(text, keep_spaces=True)
+    word_tokens = [t for t in tokens if t["is_word"]]
+    assert len(word_tokens) == 2
+    assert word_tokens[0]["text"] == "display"
+    assert word_tokens[0]["lower_clean"] == "display"
+    assert word_tokens[1]["text"] == "none"
+    assert word_tokens[1]["lower_clean"] == "none"
+    
+    # Check punctuation tokens for single quotes
+    punct_tokens = [t for t in tokens if not t["is_word"] and t["text"] == "'"]
+    assert len(punct_tokens) == 2
+
+
+def test_build_word_list_camel_case_splitting():
+    text = "flipWord and PascalCase"
+    tokens = tok.build_word_list_internal(text, keep_spaces=True)
+    word_tokens = [t for t in tokens if t["is_word"]]
+    assert len(word_tokens) == 5
+    assert [t["text"] for t in word_tokens] == ["flip", "Word", "and", "Pascal", "Case"]
+    assert [t["lower_clean"] for t in word_tokens] == ["flip", "word", "and", "pascal", "case"]
+
+
+def test_build_word_list_decimal_numbers():
+    text = "Version 2.0 released"
+    tokens = tok.build_word_list_internal(text, keep_spaces=True)
+    word_tokens = [t for t in tokens if t["is_word"]]
+    assert [t["text"] for t in word_tokens] == ["Version", "2", "0", "released"]
+    dot_tokens = [t for t in tokens if not t["is_word"] and t["text"] == "."]
+    assert len(dot_tokens) == 1
+
 
 
 

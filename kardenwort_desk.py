@@ -5336,6 +5336,10 @@ html, body {{
                         curr = prevSpan;
                         continue;
                     }
+                } else if (prevNode && prevNode.nodeType === 1 && prevNode.classList && prevNode.classList.contains('word')) {
+                    startSpan = prevNode;
+                    curr = prevNode;
+                    continue;
                 }
                 break;
             }
@@ -5351,6 +5355,10 @@ html, body {{
                         curr = nextSpan;
                         continue;
                     }
+                } else if (nextNode && nextNode.nodeType === 1 && nextNode.classList && nextNode.classList.contains('word')) {
+                    group.push(nextNode);
+                    curr = nextNode;
+                    continue;
                 }
                 break;
             }

@@ -13,11 +13,11 @@ def utf8_to_lower(s: str) -> str:
     return "".join(CYRILLIC_MAP.get(c, c.lower()) for c in s)
 
 def is_word_char(c: str) -> bool:
-    """Check if character is a word character (ASCII alnum + apostrophe, or Russian/German mapping)."""
+    """Check if character is a base word character (ASCII alnum or Russian/German mapping)."""
     if not c:
         return False
     if len(c) == 1:
-        if ('a' <= c <= 'z') or ('A' <= c <= 'Z') or ('0' <= c <= '9') or c in APOSTROPHE_CHARS:
+        if ('a' <= c <= 'z') or ('A' <= c <= 'Z') or ('0' <= c <= '9'):
             return True
     return c in WORD_CHARS
 
@@ -64,20 +64,34 @@ def build_word_list_internal(text: str, keep_spaces: bool) -> list:
             else:
                 token = None
 
-        # 4. Handle Word Characters (Scanning contiguous blocks)
+        # 4. Handle Word Characters (Scanning contiguous blocks with intra-word apostrophes and camelCase splitting)
         elif is_word_char(c):
             start = i
-            while i < n and is_word_char(chars[i]):
-                i += 1
-            token["text"] = "".join(chars[start:i])
-            token["is_word"] = True
-            
-            # Clean non-alphanumeric chars (excluding apostrophe) and lowercase
-            cleaned_text = "".join(ch for ch in token["text"] if ch.isalnum() or ch in APOSTROPHE_CHARS)
-            token["lower_clean"] = utf8_to_lower(cleaned_text)
-            token["logical_idx"] = curr_logical_idx
-            curr_logical_idx += 1
-            curr_sub_idx = 0.1
+            while i < n:
+                if is_word_char(chars[i]):
+                    i += 1
+                elif chars[i] in APOSTROPHE_CHARS and i + 1 < n and is_word_char(chars[i + 1]):
+                    i += 1
+                else:
+                    break
+            raw_word = "".join(chars[start:i])
+            camel_parts = split_camel_case(raw_word)
+            sub_units = camel_parts if len(camel_parts) > 1 else [raw_word]
+
+            for unit in sub_units:
+                sub_tok = {
+                    "text": unit,
+                    "is_word": True,
+                    "logical_idx": curr_logical_idx,
+                    "visual_idx": curr_visual_idx
+                }
+                cleaned_text = "".join(ch for ch in unit if ch.isalnum() or ch in APOSTROPHE_CHARS or ch in WORD_CHARS)
+                sub_tok["lower_clean"] = utf8_to_lower(cleaned_text)
+                tokens.append(sub_tok)
+                curr_logical_idx += 1
+                curr_visual_idx += 1
+                curr_sub_idx = 0.1
+            token = None
 
         # 5. Handle Line Breaks (Atomize \N, \n, \h)
         elif c == "\\" and i + 1 < n and chars[i + 1] in ("N", "n", "h"):
@@ -108,7 +122,7 @@ def split_camel_case(s: str) -> list:
     """Split camelCase, PascalCase, or uppercase acronym boundaries into constituent words."""
     if not s:
         return []
-    parts = re.findall(r'[A-ZА-ЯÄÖÜ0-9]+(?=[A-ZА-ЯÄÖÜ][a-zа-яäöüß])|[A-ZА-ЯÄÖÜ]?[a-zа-яäöüß\']+[0-9]*|[A-ZА-ЯÄÖÜ0-9]+', s)
+    parts = re.findall(r'[A-ZА-ЯÄÖÜ0-9]+(?=[A-ZА-ЯÄÖÜ][a-zа-яäöüß])|[A-ZА-ЯÄÖÜ]?[a-zа-яäöüß\'’‘`´ʼ]+[0-9]*|[A-ZА-ЯÄÖÜ0-9]+', s)
     return [p for p in parts if p]
 
 def decompose_identifier(s: str) -> list:
