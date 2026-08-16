@@ -259,38 +259,37 @@ def test_rmb_flip_compound_with_leading_zid_preserves_zid(page, tmp_path):
 
     page.set_content(html)
 
-    # Find the token span and RMB click it to flip the compound
     token_span = page.locator("span.word[data-lower-clean='token']").first
     assert token_span.is_visible()
 
-    # Dispatch RMB click (button 2)
+    # 1. RMB click on isolated sub-token 'token' flips only 'token'
     token_span.click(button="right")
-
     source_container = page.locator("#source-container")
-    flipped_text = source_container.inner_text()
+    assert "20260815131120-жетон-mapping-inflected-expansion" in source_container.inner_text()
 
-    # The flipped text should preserve the ZID and flip translated sub-tokens
+    # Re-click to un-flip 'token'
+    token_span.click(button="right")
+    assert "20260815131120-token-mapping-inflected-expansion" in source_container.inner_text()
+
+    # 2. Drag across all sub-tokens flips all while preserving ZID
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span.word[data-lower-clean='token']");
+        const s2 = document.querySelector("span.word[data-lower-clean='expansion']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+    flipped_text = source_container.inner_text()
     assert "20260815131120" in flipped_text
     assert "жетон" in flipped_text
     assert "сопоставление" in flipped_text
     assert "изменять" in flipped_text
     assert "расширение" in flipped_text
 
-    # RMB click again to un-flip
+    # 3. RMB click on 'token' unflips 'token'
     token_span.click(button="right")
-    unflipped_text = source_container.inner_text()
-    assert "20260815131120-token-mapping-inflected-expansion" in unflipped_text
+    assert "20260815131120-token-сопоставление-изменять-расширение" in source_container.inner_text()
 
-    # 3rd RMB click: flip back to Russian
-    token_span.click(button="right")
-    flipped_text_2 = source_container.inner_text()
-    assert "20260815131120" in flipped_text_2
-    assert "жетон" in flipped_text_2
-
-    # 4th RMB click: un-flip back to English
-    token_span.click(button="right")
-    unflipped_text_2 = source_container.inner_text()
-    assert "20260815131120-token-mapping-inflected-expansion" in unflipped_text_2
 
 
 def test_apostrophe_possessive_token_mapping_and_inflected_preservation(page, tmp_path):
@@ -562,15 +561,28 @@ def test_camel_case_identifier_adjacent_spans_and_rmb_flip(page, tmp_path):
     assert span_flip.is_visible()
     assert span_word.is_visible()
 
-    # RMB click on 'flip' flips both adjacent sub-spans
+    # 1. RMB click on 'flip' isolates flip to 'flip'
     span_flip.click(button="right")
-    assert "переворачивать" in source_container.inner_text()
-    assert "слово" in source_container.inner_text()
+    assert "function переворачиватьWord() {" in source_container.inner_text()
 
-    # RMB click on 'Word' unflips both adjacent sub-spans back to English
+    # Re-click to unflip
+    span_flip.click(button="right")
+    assert "function flipWord() {" in source_container.inner_text()
+
+    # 2. Drag across 'flip' to 'Word' flips both
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span.word[data-lower-clean='flip']");
+        const s2 = document.querySelector("span.word[data-lower-clean='word']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+    assert "function переворачиватьслово() {" in source_container.inner_text()
+
+    # 3. RMB click on 'Word' unflips 'Word' while 'flip' remains flipped
     span_word.click(button="right")
-    assert "flip" in source_container.inner_text()
-    assert "Word" in source_container.inner_text()
+    assert "function переворачиватьWord() {" in source_container.inner_text()
+
 
 
 def test_subtoken_hover_selection_isolation(page, tmp_path):

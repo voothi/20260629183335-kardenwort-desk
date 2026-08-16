@@ -3985,11 +3985,13 @@ html, body {{
     lmb_source_val = "lemma"
     lmb_chain_mode_val = "joined"
     rmb_play_val = "false"
+    rmb_chain_mode_val = "separate"
     if config.has_section(SEC_AUDIO):
         lmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'lmb_play', fallback=False) else "false"
         lmb_source_val = config.get(SEC_AUDIO, 'lmb_source', fallback='lemma').strip().lower()
         lmb_chain_mode_val = config.get(SEC_AUDIO, 'lmb_chain_mode', fallback='joined').strip().lower()
         rmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'rmb_play', fallback=False) else "false"
+        rmb_chain_mode_val = config.get(SEC_AUDIO, 'rmb_chain_mode', fallback='separate').strip().lower()
 
     anki_tts_cli_path = ""
     if 'anki_tts_cli' in resolved_paths:
@@ -5105,6 +5107,7 @@ html, body {{
     };
 
     function init() {
+        var tableRows = [];
         var selectedRowIdsMap = {};
         var initialHighlights = {};
         var hasHighlightCol = false;
@@ -5412,8 +5415,18 @@ html, body {{
                 tokenSpans.push(spans[i]);
             }
         }
-        
-        
+        var lemmaTable = document.getElementById('lemma-table');
+        if (lemmaTable) {
+            var tbodies = lemmaTable.getElementsByTagName('tbody');
+            var rowsContainer = tbodies.length > 0 ? tbodies[0] : lemmaTable;
+            var allRows = rowsContainer.getElementsByTagName('tr');
+            for (var i = 0; i < allRows.length; i++) {
+                if (allRows[i].getAttribute('data-row-id') !== null) {
+                    tableRows.push(allRows[i]);
+                }
+            }
+        }
+
         function isCompoundDelimiterNode(node) {
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
@@ -5607,20 +5620,7 @@ html, body {{
             }
 
             if (specificTranslations.length > 0) {
-                if (compoundTranslations.length > 0 && group && group.length > 1 && group[group.length - 1] === span) {
-                    var combined = specificTranslations.slice();
-                    for (var c = 0; c < compoundTranslations.length; c++) {
-                        if (combined.indexOf(compoundTranslations[c]) === -1) {
-                            combined.push(compoundTranslations[c]);
-                        }
-                    }
-                    return combined.join(', ');
-                }
                 return specificTranslations.join(', ');
-            }
-
-            if (compoundTranslations.length > 0 && group && group.length > 1 && group[group.length - 1] === span) {
-                return compoundTranslations.join(', ');
             }
 
             // 2. If compound is a group and there is a shared multi-part translation
@@ -5661,27 +5661,53 @@ html, body {{
         function getWordTranslation(span) {
             var group = findCompoundSiblingSpans(span);
             if (group.length > 1) {
-                var groupTrans = [];
-                for (var i = 0; i < group.length; i++) {
-                    var t = getSpanSpecificTranslation(group[i], group);
-                    if (t && groupTrans.indexOf(t) === -1) {
-                        groupTrans.push(t);
-                    }
-                }
-                if (groupTrans.length > 0) {
-                    return groupTrans.join(', ');
-                }
+                var t = getSpanSpecificTranslation(span, group);
+                if (t) return t;
             }
             
             var raw = getRawRowTranslations(span);
             return raw.join(', ');
         }
 
-        function flipWord(span, toTranslation) {
+        function flipWord(span, toTranslation, forceCompound) {
             if (!span) return;
             var group = findCompoundSiblingSpans(span);
-            for (var i = 0; i < group.length; i++) {
-                var s = group[i];
+            var targets = [span];
+
+            if (forceCompound === true) {
+                targets = group;
+            } else if (forceCompound === false) {
+                targets = [span];
+            } else {
+                // Default logic: flip full compound ONLY if the compound is already fully selected
+                if (group.length > 1) {
+                    var allSelected = true;
+                    for (var g = 0; g < group.length; g++) {
+                        var gSpan = group[g];
+                        var hasHighlight = gSpan.classList.contains('highlight-orange-active') || gSpan.classList.contains('highlight-purple-active');
+                        var gTd = findTokenData(gSpan);
+                        var compoundRowSelected = false;
+                        if (gTd && gTd.compound_row_ids) {
+                            for (var c = 0; c < gTd.compound_row_ids.length; c++) {
+                                if (selectedRowIdsMap.hasOwnProperty(String(gTd.compound_row_ids[c]))) {
+                                    compoundRowSelected = true;
+                                    break;
+                                }
+                            }
+                        }
+                        if (!hasHighlight && !compoundRowSelected) {
+                            allSelected = false;
+                            break;
+                        }
+                    }
+                    if (allSelected) {
+                        targets = group;
+                    }
+                }
+            }
+
+            for (var i = 0; i < targets.length; i++) {
+                var s = targets[i];
                 if (!s.getAttribute('data-original-text')) {
                     s.setAttribute('data-original-text', s.textContent || s.innerText || "");
                 }
@@ -5724,6 +5750,7 @@ html, body {{
         var audioLmbSource = {audio_lmb_source};
         var audioLmbChainMode = {audio_lmb_chain_mode};
         var audioRmbPlay = {audio_rmb_play};
+        var audioRmbChainMode = {audio_rmb_chain_mode};
         var audioAnkiTtsCli = "{audio_anki_tts_cli}";
         var audioPythonExe = "{audio_python_exe}";
 
@@ -6020,25 +6047,21 @@ html, body {{
                         mousedownTargetSpan = span;
                         
                         tokenDragStartIdx = -1;
+                        tokenDragLastIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
                             if (tokenSpans[k] === span) {
                                 tokenDragStartIdx = k;
+                                tokenDragLastIdx = k;
                                 break;
                             }
-                        }
-                        
-                        initialFlippedMap = [];
-                        for (var k = 0; k < tokenSpans.length; k++) {
-                            initialFlippedMap.push(tokenSpans[k].classList.contains('flipped'));
                         }
                         
                         rmbFlipMode = !span.classList.contains('flipped');
                         flipWord(span, rmbFlipMode);
                         
-                        if (audioRmbPlay && rmbFlipMode) {
-                            var textToPlay = getWordTranslation(span);
-                            var targetLang = (document.getElementById('session-target-lang').textContent || document.getElementById('session-target-lang').innerText || 'ru').trim();
-                            playAudio(textToPlay, targetLang);
+                        initialFlippedMap = [];
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            initialFlippedMap.push(tokenSpans[k].classList.contains('flipped'));
                         }
                         
                         if (e.preventDefault) {
@@ -6139,8 +6162,6 @@ html, body {{
                         updateRowStyles();
                         updateBidirectionalHighlights();
                     } else if (isRmbDragFlipping) {
-                        dragOccurred = true;
-                        
                         var currIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
                             if (tokenSpans[k] === span) {
@@ -6149,33 +6170,18 @@ html, body {{
                             }
                         }
                         if (currIdx === -1 || tokenDragStartIdx === -1) return;
+                        if (currIdx === tokenDragStartIdx && !dragOccurred) return;
+                        dragOccurred = true;
+                        tokenDragLastIdx = currIdx;
                         
                         var minIdx = Math.min(tokenDragStartIdx, currIdx);
                         var maxIdx = Math.max(tokenDragStartIdx, currIdx);
                         
-                        var inRangeSpans = [];
-                        for (var k = minIdx; k <= maxIdx; k++) {
-                            var grp = findCompoundSiblingSpans(tokenSpans[k]);
-                            for (var g = 0; g < grp.length; g++) {
-                                if (inRangeSpans.indexOf(grp[g]) === -1) {
-                                    inRangeSpans.push(grp[g]);
-                                }
-                            }
-                        }
-                        
-                        var processedGroups = [];
                         for (var k = 0; k < tokenSpans.length; k++) {
                             var s = tokenSpans[k];
-                            if (processedGroups.indexOf(s) !== -1) continue;
-                            
-                            var grp = findCompoundSiblingSpans(s);
-                            for (var g = 0; g < grp.length; g++) {
-                                processedGroups.push(grp[g]);
-                            }
-                            
-                            var isTarget = inRangeSpans.indexOf(s) !== -1;
-                            var shouldFlip = isTarget ? rmbFlipMode : initialFlippedMap[k];
-                            flipWord(s, shouldFlip);
+                            var inRange = (k >= minIdx && k <= maxIdx);
+                            var shouldFlip = inRange ? rmbFlipMode : initialFlippedMap[k];
+                            flipWord(s, shouldFlip, false);
                         }
                     }
                 });
@@ -6430,6 +6436,44 @@ html, body {{
                             if (singleText) {
                                 var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
                                 playAudio(singleText, sourceLang);
+                            }
+                        }
+                    }
+                } else if (isRmbDragFlipping && rmbFlipMode && audioRmbPlay && tokenDragStartIdx !== -1) {
+                    var minIdx = (tokenDragLastIdx !== -1) ? Math.min(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
+                    var maxIdx = (tokenDragLastIdx !== -1) ? Math.max(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
+                    var targetLang = (document.getElementById('session-target-lang').textContent || document.getElementById('session-target-lang').innerText || 'ru').trim();
+
+                    if (dragOccurred && minIdx !== maxIdx) {
+                        var dragTranslations = [];
+                        for (var k = minIdx; k <= maxIdx; k++) {
+                            var s = tokenSpans[k];
+                            var trans = getSpanSpecificTranslation(s, findCompoundSiblingSpans(s));
+                            if (!trans) trans = getWordTranslation(s);
+                            if (trans) {
+                                var cleanTrans = sanitizeSpokenText(trans);
+                                if (cleanTrans) {
+                                    dragTranslations.push(cleanTrans);
+                                }
+                            }
+                        }
+                        if (dragTranslations.length > 0) {
+                            if (audioRmbChainMode === 'separate' || audioRmbChainMode === 'per_word') {
+                                playAudio(dragTranslations.join(' ||| '), targetLang);
+                            } else {
+                                var dragText = dragTranslations.join(' ');
+                                if (dragText) {
+                                    playAudio(dragText, targetLang);
+                                }
+                            }
+                        }
+                    } else {
+                        var targetSpan = mousedownTargetSpan || (tokenDragStartIdx !== -1 ? tokenSpans[tokenDragStartIdx] : null);
+                        if (targetSpan) {
+                            var singleTrans = getSpanSpecificTranslation(targetSpan, findCompoundSiblingSpans(targetSpan));
+                            if (!singleTrans) singleTrans = getWordTranslation(targetSpan);
+                            if (singleTrans) {
+                                playAudio(singleTrans, targetLang);
                             }
                         }
                     }
@@ -7156,6 +7200,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{audio_lmb_source}", f'"{lmb_source_val}"')
     html_page = html_page.replace("{audio_lmb_chain_mode}", f'"{lmb_chain_mode_val}"')
     html_page = html_page.replace("{audio_rmb_play}", rmb_play_val)
+    html_page = html_page.replace("{audio_rmb_chain_mode}", f'"{rmb_chain_mode_val}"')
     html_page = html_page.replace("{audio_anki_tts_cli}", anki_tts_cli_path.replace("\\", "\\\\"))
     html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")

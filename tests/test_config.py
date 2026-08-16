@@ -374,6 +374,7 @@ lmb_play = true
 lmb_source = inflection
 lmb_chain_mode = separate
 rmb_play = false
+rmb_chain_mode = separate
 """
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
@@ -385,6 +386,7 @@ rmb_play = false
         assert config.get(SEC_AUDIO, 'lmb_source') == 'inflection'
         assert config.get(SEC_AUDIO, 'lmb_chain_mode') == 'separate'
         assert config.getboolean(SEC_AUDIO, 'rmb_play') is False
+        assert config.get(SEC_AUDIO, 'rmb_chain_mode') == 'separate'
 
 
 

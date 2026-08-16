@@ -54,7 +54,7 @@ def get_base_html():
 """
     return html, None, None, headers, data_rows
 
-def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined", rmb_play=False, rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
+def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined", rmb_play=False, rmb_chain_mode="separate", rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
     desk_path = Path(kardenwort_desk.__file__)
     content = desk_path.read_text(encoding="utf-8")
     js_lines = []
@@ -77,6 +77,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     js = js.replace("{audio_lmb_source}", f'"{lmb_source}"')
     js = js.replace("{audio_lmb_chain_mode}", f'"{lmb_chain_mode}"')
     js = js.replace("{audio_rmb_play}", "true" if rmb_play else "false")
+    js = js.replace("{audio_rmb_chain_mode}", f'"{rmb_chain_mode}"')
     js = js.replace("{audio_rmb_source}", f'"{rmb_source}"')
     js = js.replace("{audio_anki_tts_cli}", anki_tts_cli.replace("\\", "\\\\"))
     js = js.replace("{audio_python_exe}", python_exe.replace("\\", "\\\\"))
@@ -711,10 +712,9 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
     assert "highlight-orange-active" in (span_case.get_attribute("class") or "")
     assert "active-subtoken" in (span_camel.get_attribute("class") or "")
     
-    # 2. Test Unified RMB flip on camel:
+    # 2. Test Full compound RMB flip when all sub-tokens are highlighted/selected:
     # All constituent sub-tokens flip simultaneously to their ordered translations
     span_camel.click(button="right")
-    
     assert span_split.inner_text() == "расколоть"
     assert span_camel.inner_text() == "верблюд"
     assert span_case.inner_text() == "случай"
@@ -725,7 +725,7 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
     source_container = page.locator("#source-container")
     assert "расколоть_верблюд_случай" in source_container.inner_text()
     
-    # 3. Test RMB unflip on case:
+    # 3. Test RMB unflip on case when all are selected: unflips all spans together
     span_case.click(button="right")
     
     assert span_split.inner_text() == "split"
@@ -735,6 +735,7 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
     assert "flipped" not in (span_camel.get_attribute("class") or "")
     assert "flipped" not in (span_case.get_attribute("class") or "")
     assert "split_camel_case" in source_container.inner_text()
+
 
 
 def test_compound_audio_playback_resolution(page):
@@ -1228,15 +1229,29 @@ def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
     span_zu = page.locator("span[data-lower-clean='zu']")
     span_besch = page.locator("span[data-lower-clean='beschäftigte']")
     
-    # Right click on the compound word to flip all constituent parts
+    # 1. Right click on isolated sub-token 'beschäftigte' flips only that sub-token
     span_besch.click(button="right")
     
+    assert span_viel.inner_text() == "viel"
+    assert span_zu.inner_text() == "zu"
+    assert span_besch.inner_text() == "занимать"
+    
+    # 2. Dragging across all constituent parts flips all of them cleanly without composite bleeding
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='viel']");
+        const s2 = document.querySelector("span[data-lower-clean='beschäftigte']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+
     assert span_viel.inner_text() == "много"
     assert span_zu.inner_text() == "к"
-    assert span_besch.inner_text() == "занимать, слишком занят"
+    assert span_besch.inner_text() == "занимать"
     
     source_container = page.locator("#source-container")
-    assert "много-к-занимать, слишком занят" in source_container.inner_text()
+    assert "много-к-занимать" in source_container.inner_text()
+
 
 
 def test_slash_separated_words_not_grouped_as_compound(page):
@@ -1769,14 +1784,29 @@ def test_quoted_words_and_camel_case_rmb_flip_interactions(page):
     assert span_none.inner_text() == "ничего"
     assert "'" in page.locator("#source-container").inner_text()
 
-    # 2. RMB click on camelCase 'flip' flips both adjacent spans
+    # 2. RMB click on camelCase 'flip' isolates flip to 'flip' sub-token
     span_flip.click(button="right")
+    assert span_flip.inner_text() == "переворачивать"
+    assert span_word.inner_text() == "Word"
+
+    # Re-click to unflip 'flip'
+    span_flip.click(button="right")
+    assert span_flip.inner_text() == "flip"
+
+    # Drag across 'flip' to 'Word' flips both
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='flip']");
+        const s2 = document.querySelector("span[data-lower-clean='word']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
     assert span_flip.inner_text() == "переворачивать"
     assert span_word.inner_text() == "слово"
 
-    # 3. RMB click on 'Word' unflips both back to English
+    # 3. RMB click on 'Word' unflips 'Word' while 'flip' remains flipped
     span_word.click(button="right")
-    assert span_flip.inner_text() == "flip"
+    assert span_flip.inner_text() == "переворачивать"
     assert span_word.inner_text() == "Word"
 
 
@@ -2577,6 +2607,277 @@ def test_compound_with_inflected_forms_preserves_standalone_token_highlight(page
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
     assert selected_rows == [0]
     assert "highlight-orange-active" in (clicking_span.get_attribute("class") or "")
+
+
+def test_rmb_subtoken_flip_isolation_and_full_compound_flip(page):
+    manifest = [
+        {"text": "multi", "is_word": True, "visual_idx": 0, "lower_clean": "multi", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "token", "is_word": True, "visual_idx": 2, "lower_clean": "token", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="multi">multi</span>-<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="token">token</span>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">multi-token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти-токен</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">multi</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">токен</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # 1. RMB click on 'multi' when compound is NOT fully selected
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='multi']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+
+    multi_flipped = page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").classList.contains('flipped')")
+    multi_text = page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").textContent")
+    token_flipped = page.evaluate("document.querySelector(\"span[data-lower-clean='token']\").classList.contains('flipped')")
+    token_text = page.evaluate("document.querySelector(\"span[data-lower-clean='token']\").textContent")
+
+    assert multi_flipped is True
+    assert multi_text == "мульти"
+    assert token_flipped is False
+    assert token_text == "token"
+
+    # Re-click RMB on 'multi' to unflip
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='multi']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").classList.contains('flipped')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").textContent") == "multi"
+
+    # 2. Select entire compound via row 0 (composite row)
+    page.evaluate("""() => {
+        const row0 = document.querySelector("tr[data-row-id='0']");
+        row0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    }""")
+
+    # RMB click on 'multi' when compound IS fully selected -> flips all constituent spans
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='multi']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").classList.contains('flipped')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").textContent") == "мульти"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='token']\").classList.contains('flipped')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='token']\").textContent") == "токен"
+
+
+def test_rmb_drag_flipping_and_unflipping_and_delimiter_preservation(page):
+    source_html = (
+        '<span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="split">split</span>_'
+        '<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="camel">camel</span>_'
+        '<span class="word highlight-orange" data-word-idx="4" data-line-idx="0" data-lower-clean="case">case</span>'
+    )
+    manifest = [
+        {"text": "split", "is_word": True, "visual_idx": 0, "lower_clean": "split", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "_", "is_word": False, "visual_idx": 1},
+        {"text": "camel", "is_word": True, "visual_idx": 2, "lower_clean": "camel", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]},
+        {"text": "_", "is_word": False, "visual_idx": 3},
+        {"text": "case", "is_word": True, "visual_idx": 4, "lower_clean": "case", "row_ids": [0, 3], "atomic_row_ids": [3], "compound_row_ids": [0]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0"><td data-col="WordSource"><div class="scrollable-cell">split_camel_case</div></td><td data-col="WordDestination"><div class="scrollable-cell">разделить_кэмел_кейс</div></td></tr>
+        <tr data-row-id="1"><td data-col="WordSource"><div class="scrollable-cell">split</div></td><td data-col="WordDestination"><div class="scrollable-cell">разделить</div></td></tr>
+        <tr data-row-id="2"><td data-col="WordSource"><div class="scrollable-cell">camel</div></td><td data-col="WordDestination"><div class="scrollable-cell">верблюд</div></td></tr>
+        <tr data-row-id="3"><td data-col="WordSource"><div class="scrollable-cell">case</div></td><td data-col="WordDestination"><div class="scrollable-cell">регистр</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Drag RMB from 'split' to 'case'
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        const s4 = document.querySelector("span[data-lower-clean='case']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='split']\").textContent") == "разделить"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='camel']\").textContent") == "верблюд"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='case']\").textContent") == "регистр"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='split']\").classList.contains('flipped')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='camel']\").classList.contains('flipped')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='case']\").classList.contains('flipped')") is True
+
+    # Check that delimiters are intact in source-container
+    container_text = page.evaluate("document.getElementById('source-container').textContent")
+    assert container_text == "разделить_верблюд_регистр"
+
+    # Drag RMB to UN-FLIP (starting from flipped 'split' across to 'case')
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        const s4 = document.querySelector("span[data-lower-clean='case']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='split']\").textContent") == "split"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='camel']\").textContent") == "camel"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='case']\").textContent") == "case"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='split']\").classList.contains('flipped')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='camel']\").classList.contains('flipped')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='case']\").classList.contains('flipped')") is False
+
+
+def test_rmb_audio_deferred_click_drag_chaining_and_unflip_suppression(page):
+    source_html = (
+        '<span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="split">split</span>_'
+        '<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="camel">camel</span>_'
+        '<span class="word highlight-orange" data-word-idx="4" data-line-idx="0" data-lower-clean="case">case</span>'
+    )
+    manifest = [
+        {"text": "split", "is_word": True, "visual_idx": 0, "lower_clean": "split", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "_", "is_word": False, "visual_idx": 1},
+        {"text": "camel", "is_word": True, "visual_idx": 2, "lower_clean": "camel", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]},
+        {"text": "_", "is_word": False, "visual_idx": 3},
+        {"text": "case", "is_word": True, "visual_idx": 4, "lower_clean": "case", "row_ids": [0, 3], "atomic_row_ids": [3], "compound_row_ids": [0]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0"><td data-col="WordSource"><div class="scrollable-cell">split_camel_case</div></td><td data-col="WordDestination"><div class="scrollable-cell">разделить_кэмел_кейс</div></td></tr>
+        <tr data-row-id="1"><td data-col="WordSource"><div class="scrollable-cell">split</div></td><td data-col="WordDestination"><div class="scrollable-cell">разделить</div></td></tr>
+        <tr data-row-id="2"><td data-col="WordSource"><div class="scrollable-cell">camel</div></td><td data-col="WordDestination"><div class="scrollable-cell">верблюд</div></td></tr>
+        <tr data-row-id="3"><td data-col="WordSource"><div class="scrollable-cell">case</div></td><td data-col="WordDestination"><div class="scrollable-cell">регистр</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js(rmb_play=True, rmb_chain_mode="separate"))
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+
+    # 1. RMB Click: mousedown emits no audio; mouseup emits audio for single word
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0, f"Expected 0 play calls on mousedown, got {play_calls}"
+
+    page.evaluate("""() => {
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nразделить")
+
+    # Unflip 'split'
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+
+    # 2. RMB Drag in separate chain mode ('separate' -> ' ||| ')
+    page.evaluate("window.__ahkCalls = [];")
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        const s4 = document.querySelector("span[data-lower-clean='case']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nразделить ||| верблюд ||| регистр")
+
+    # 3. RMB Un-flip drag suppresses audio
+    page.evaluate("window.__ahkCalls = [];")
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        const s4 = document.querySelector("span[data-lower-clean='case']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0, f"Expected 0 audio calls on un-flip, got {play_calls}"
+
+    # 4. RMB Drag in joined chain mode ('joined' -> space)
+    page.set_content(html)
+    page.evaluate(extract_desk_js(rmb_play=True, rmb_chain_mode="joined"))
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        const s4 = document.querySelector("span[data-lower-clean='case']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 2, buttons: 2 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 2, buttons: 2 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 2, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nразделить верблюд регистр")
+
 
 
 
