@@ -3016,6 +3016,23 @@ def test_numeric_and_zid_candidate_exclusion():
     assert 2 in token_to_rows["md"]
 
 
+def test_acronym_plurals_candidates_not_fragmented():
+    """Verify acronym plurals (LLMs, GPUs, APIs, CPUs, SDKs, URLs) are not split into false sub-tokens."""
+    import text_tokenizer as tok
+
+    acronyms = ["LLMs", "GPUs", "APIs", "CPUs", "SDKs", "URLs"]
+    for word in acronyms:
+        split_res = tok.split_camel_case(word)
+        assert split_res == [word], f"Expected [{word}], got {split_res}"
+        
+        decomposed = tok.decompose_identifier(word)
+        assert decomposed == [word], f"Expected [{word}], got {decomposed}"
+        
+        subtokens = tok.extract_identifier_subtokens(word)
+        assert subtokens == [word], f"Expected [{word}], got {subtokens}"
+
+
+
 
 
 

@@ -801,3 +801,98 @@ def test_composite_identifier_ordered_reveal_rendering(tmp_path):
     assert 'findCompoundSiblingSpans' in html
 
 
+def _create_render_test_env(tmp_path):
+    import configparser
+    import sys
+    config = configparser.ConfigParser()
+    config.add_section(SEC_TOKEN_MAPPINGS)
+    config.set(SEC_TOKEN_MAPPINGS, 'enabled', 'true')
+    config.set(SEC_TOKEN_MAPPINGS, 'apostrophe_chars', "', ’, ‘, `, ´, ʼ")
+    config.set(SEC_TOKEN_MAPPINGS, 'split_gap_limit', '3')
+    config.add_section(SEC_CLASSIFICATION)
+    config.set(SEC_CLASSIFICATION, 'enabled', 'false')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'theme', 'dark')
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+    return config, resolved_paths
+
+
+def test_render_acronym_plurals_not_split(tmp_path):
+    from kardenwort_desk import run_render_flow
+    config, resolved_paths = _create_render_test_env(tmp_path)
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "20260816202413-llms.en.tsv"
+    tsv_content = (
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "LLMs\tLLMs\tLLM\n"
+    )
+    tsv_path.write_text(tsv_content, encoding='utf-8')
+
+    html = run_render_flow(
+        text="LLMs can make mistakes. APIs and GPUs are fast.",
+        language="en",
+        zid="20260816202413",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    # Verify LLMs, APIs, GPUs are rendered as intact single tokens, not split into LL + Ms or GP + Us
+    assert 'data-lower-clean="llms">LLMs</span>' in html
+    assert 'data-lower-clean="apis">APIs</span>' in html
+    assert 'data-lower-clean="gpus">GPUs</span>' in html
+    assert 'data-lower-clean="ms">Ms</span>' not in html
+    assert 'data-lower-clean="ll">LL</span>' not in html
+
+
+def test_render_sample_llms_can_make(tmp_path):
+    from pathlib import Path
+    from kardenwort_desk import run_render_flow
+    config, resolved_paths = _create_render_test_env(tmp_path)
+    
+    sample_tsv = Path("results/20260816202413-ll-ms-can-make.en.tsv")
+    sample_txt = Path("results/20260816202413-ll-ms-can-make.en.txt")
+    if sample_tsv.exists() and sample_txt.exists():
+        text = sample_txt.read_text(encoding='utf-8')
+        html = run_render_flow(
+            text=text,
+            language="en",
+            zid="20260816202413",
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=sample_tsv
+        )
+        assert 'data-lower-clean="llms">LLMs</span>' in html
+        assert 'data-lower-clean="ms">Ms</span>' not in html
+        assert 'data-lower-clean="ll">LL</span>' not in html
+
+
+
+
+

@@ -83,6 +83,12 @@ def test_split_camel_case():
     assert tok.split_camel_case("HTMLParser") == ["HTML", "Parser"]
     assert tok.split_camel_case("getHTTPResponse") == ["get", "HTTP", "Response"]
     assert tok.split_camel_case("MULTI") == ["MULTI"]
+    assert tok.split_camel_case("LLMs") == ["LLMs"]
+    assert tok.split_camel_case("GPUs") == ["GPUs"]
+    assert tok.split_camel_case("APIs") == ["APIs"]
+    assert tok.split_camel_case("CPUs") == ["CPUs"]
+    assert tok.split_camel_case("SDKs") == ["SDKs"]
+    assert tok.split_camel_case("URLs") == ["URLs"]
 
 def test_decompose_identifier():
     assert tok.decompose_identifier("") == []
