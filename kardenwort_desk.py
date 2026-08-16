@@ -4337,7 +4337,7 @@ html, body {{
         forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
         clean_lemma = lemma_val.strip() if lemma_val else ""
         clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
-        row_primary_lemmas[row_id] = clean_lemma_lower
+        row_primary_lemmas[row_id] = clean_lemma
         
         direct_cands = set()
         if clean_lemma_lower:
@@ -4384,6 +4384,11 @@ html, body {{
                                                (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
                                 if sub_matches:
                                     _add_cand(clean_sub)
+                                    if not _has_comp_marker(clean_lemma):
+                                        direct_cands.add(clean_sub)
+                                        clean_sub_stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", clean_sub, flags=re.IGNORECASE)
+                                        if clean_sub_stem and clean_sub_stem != clean_sub:
+                                            direct_cands.add(clean_sub_stem)
                 else:
                     clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
                     _add_cand(clean_val)
@@ -4399,6 +4404,11 @@ html, body {{
                                        (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
                         if sub_matches:
                             _add_cand(clean_sub)
+                            if not _has_comp_marker(clean_lemma):
+                                direct_cands.add(clean_sub)
+                                clean_sub_stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", clean_sub, flags=re.IGNORECASE)
+                                if clean_sub_stem and clean_sub_stem != clean_sub:
+                                    direct_cands.add(clean_sub_stem)
                     if any(c.isspace() for c in val):
                         parts = re.findall(apo_regex, val.lower())
                         if len(parts) > 1:
@@ -5987,9 +5997,11 @@ html, body {{
                         var clickedTokenData = findTokenData(span);
                         if (!clickedTokenData) return;
 
-                        var targetRowIds = (clickedTokenData.atomic_row_ids !== undefined)
+                        var targetRowIds = (clickedTokenData.atomic_row_ids && clickedTokenData.atomic_row_ids.length > 0)
                             ? clickedTokenData.atomic_row_ids.slice()
-                            : (clickedTokenData.row_ids || []).slice();
+                            : (clickedTokenData.compound_row_ids && clickedTokenData.compound_row_ids.length > 0)
+                                ? clickedTokenData.compound_row_ids.slice()
+                                : (clickedTokenData.row_ids || []).slice();
                         
                         isTokenDragSelecting = true;
                         dragOccurred = false;
@@ -6107,7 +6119,11 @@ html, body {{
                             var s = tokenSpans[k];
                             var td = findTokenData(s);
                             if (td) {
-                                var atomics = (td.atomic_row_ids !== undefined) ? td.atomic_row_ids : (td.row_ids || []);
+                                var atomics = (td.atomic_row_ids && td.atomic_row_ids.length > 0)
+                                    ? td.atomic_row_ids
+                                    : (td.compound_row_ids && td.compound_row_ids.length > 0)
+                                        ? td.compound_row_ids
+                                        : (td.row_ids || []);
                                 for (var j = 0; j < atomics.length; j++) {
                                     if (tokenDragMode) {
                                         selectedRowIdsMap[String(atomics[j])] = true;

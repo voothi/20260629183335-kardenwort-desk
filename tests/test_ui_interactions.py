@@ -2879,6 +2879,197 @@ def test_rmb_audio_deferred_click_drag_chaining_and_unflip_suppression(page):
     assert play_calls[0]["arg"].endswith("ru\\nразделить верблюд регистр")
 
 
+def test_subtoken_inflected_form_lmb_click_selects_lemma_and_highlights(page, tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("triggers")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "manual")
+    config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(tmp_path))
+    config.add_section("languages")
+    config.set("languages", "en_lemma_index", "en_idx")
+    config.set("languages", "en_lemma_override", "en_over")
+    config.set("languages", "en_prompt", "en_prompt")
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section("fields")
+    mapping.add_section("fields_mapping.word")
+    mapping.add_section("desk_columns")
+    mapping.set("desk_columns", "WordSource", "lemma")
+    mapping.set("desk_columns", "WordSourceInflectedForm", "inflected")
+    mapping.set("desk_columns", "WordDestination", "word_translation")
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, "w") as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "anki_mapping_file": str(mapping_file),
+        "kardenwort_python": sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "test-ai-curated.en.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "AI\tAI-curated\tИИ\n"
+        "AI-curated\tAI-curated\tкурировать\n"
+        "curate\tAI-curated\tкурировать\n",
+        encoding="utf-8"
+    )
+
+    html = run_render_flow(
+        text="This digest is AI-curated.",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # curated span must have highlight-orange and NOT be not-connected
+    curated_span = page.locator("span[data-lower-clean='curated']")
+    assert "highlight-orange" in (curated_span.get_attribute("class") or "")
+    assert "not-connected" not in (curated_span.get_attribute("class") or "")
+
+    # Click on 'curated' should select row 2 (curate) and NOT row 1 (AI-curated)
+    curated_span.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [2]
+    assert "highlight-orange-active" in (curated_span.get_attribute("class") or "")
+
+    # Sibling 'AI' span must NOT be highlighted as active
+    ai_span = page.locator("span[data-lower-clean='ai']")
+    assert "highlight-orange-active" not in (ai_span.get_attribute("class") or "")
+
+
+def test_subtoken_click_fallback_when_atomic_row_ids_empty(page):
+    manifest = [
+        {"text": "custom", "is_word": True, "visual_idx": 0, "lower_clean": "custom", "row_ids": [0], "atomic_row_ids": [], "compound_row_ids": [0]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="custom">custom</span>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">custom-word</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">кастомное-слово</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span = page.locator("span[data-lower-clean='custom']")
+    span.click(button="left")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [0]
+    assert "highlight-orange-active" in (span.get_attribute("class") or "")
+
+
+def test_sample_file_ai_curated_bidirectional_selection(page, monkeypatch):
+    import configparser
+    import sys
+    from pathlib import Path
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    workspace_path = Path(kardenwort_desk.__file__).parent
+    tsv_path = workspace_path / "results" / "20260816202412-this-digest-is-ai.en.tsv"
+    txt_path = workspace_path / "results" / "20260816202412-this-digest-is-ai.en.txt"
+    if not tsv_path.exists() or not txt_path.exists():
+        pytest.skip("Sample files not present")
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("triggers")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "manual")
+    config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(workspace_path))
+    config.add_section("languages")
+    config.set("languages", "en_lemma_index", "en_idx")
+    config.set("languages", "en_lemma_override", "en_over")
+    config.set("languages", "en_prompt", "en_prompt")
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section("fields")
+    mapping.add_section("fields_mapping.word")
+    mapping.add_section("desk_columns")
+    mapping.set("desk_columns", "WordSource", "lemma")
+    mapping.set("desk_columns", "WordSourceInflectedForm", "inflected")
+    mapping.set("desk_columns", "WordDestination", "word_translation")
+
+    mapping_file = workspace_path / "anki-mapping.ini"
+    resolved_paths = {
+        "kardenwort_workspace": workspace_path,
+        "anki_mapping_file": str(mapping_file),
+        "kardenwort_python": sys.executable
+    }
+
+    text_content = txt_path.read_text(encoding="utf-8").strip()
+
+    html = run_render_flow(
+        text=text_content,
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # Click on 'curated' span -> selects curate row (row index 5 in 0-indexed data rows)
+    curated_span = page.locator("span[data-lower-clean='curated']")
+    assert "highlight-orange" in (curated_span.get_attribute("class") or "")
+    curated_span.click(button="left")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert 5 in selected_rows
+    assert "highlight-orange-active" in (curated_span.get_attribute("class") or "")
+
+
 
 
 
