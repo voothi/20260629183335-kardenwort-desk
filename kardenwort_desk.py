@@ -5568,28 +5568,25 @@ html, body {{
                 if (!s.getAttribute('data-original-text')) {
                     s.setAttribute('data-original-text', s.textContent || s.innerText || "");
                 }
-                var clean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || "").trim();
-                var isNumericToken = /^[0-9]+$/.test(clean);
                 var isFlipped = s.classList.contains('flipped');
 
                 if (toTranslation) {
                     if (!isFlipped) {
-                        var trans = isNumericToken ? "" : getSpanSpecificTranslation(s, group);
-                        if (trans !== undefined && trans !== null) {
+                        var trans = getSpanSpecificTranslation(s, group);
+                        if (trans !== undefined && trans !== null && trans.trim().length > 0) {
                             s.classList.add('flipped');
                             s.textContent = trans;
+                        } else {
+                            s.textContent = s.getAttribute('data-original-text');
                         }
-                    }
-                    if (!s.textContent || isNumericToken) {
-                        s.style.display = 'none';
                     }
                 } else {
                     if (isFlipped) {
                         s.classList.remove('flipped');
                         s.textContent = s.getAttribute('data-original-text');
                     }
-                    s.style.display = '';
                 }
+                s.style.display = '';
             }
 
             // Manage delimiters between sibling spans in the compound group
@@ -5601,17 +5598,7 @@ html, body {{
                     if (delimNode._origVal === undefined) {
                         delimNode._origVal = delimNode.nodeValue || "";
                     }
-                    if (toTranslation) {
-                        var currVisible = Boolean(currSpan.textContent) && currSpan.style.display !== 'none';
-                        var nextVisible = Boolean(nextSpan.textContent) && nextSpan.style.display !== 'none';
-                        if (!currVisible || !nextVisible) {
-                            delimNode.nodeValue = "";
-                        } else {
-                            delimNode.nodeValue = delimNode._origVal;
-                        }
-                    } else {
-                        delimNode.nodeValue = delimNode._origVal;
-                    }
+                    delimNode.nodeValue = delimNode._origVal;
                 }
             }
         }

@@ -233,7 +233,7 @@ def test_bracket_spacing_disabled_via_config(page, tmp_path):
 
 
 
-def test_rmb_flip_compound_with_leading_zid_hides_zid_and_removes_leading_hyphen(page, tmp_path):
+def test_rmb_flip_compound_with_leading_zid_preserves_zid(page, tmp_path):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     source_text = "Change: 20260815131120-token-mapping-inflected-expansion Schema:"
     tsv_content = (
@@ -269,11 +269,12 @@ def test_rmb_flip_compound_with_leading_zid_hides_zid_and_removes_leading_hyphen
     source_container = page.locator("#source-container")
     flipped_text = source_container.inner_text()
 
-    # The flipped text should not have a leading hyphen before жетон, nor should the ZID be visible
-    assert "Change: жетон" in flipped_text or "Change:жетон" in flipped_text
-    assert "Change: - жетон" not in flipped_text
-    assert "Change: -жетон" not in flipped_text
-    assert "20260815131120" not in flipped_text
+    # The flipped text should preserve the ZID and flip translated sub-tokens
+    assert "20260815131120" in flipped_text
+    assert "жетон" in flipped_text
+    assert "сопоставление" in flipped_text
+    assert "изменять" in flipped_text
+    assert "расширение" in flipped_text
 
     # RMB click again to un-flip
     token_span.click(button="right")
@@ -283,8 +284,8 @@ def test_rmb_flip_compound_with_leading_zid_hides_zid_and_removes_leading_hyphen
     # 3rd RMB click: flip back to Russian
     token_span.click(button="right")
     flipped_text_2 = source_container.inner_text()
-    assert "Change: жетон" in flipped_text_2 or "Change:жетон" in flipped_text_2
-    assert "20260815131120" not in flipped_text_2
+    assert "20260815131120" in flipped_text_2
+    assert "жетон" in flipped_text_2
 
     # 4th RMB click: un-flip back to English
     token_span.click(button="right")
@@ -433,6 +434,66 @@ def test_contractions_inflected_expansion_dom_retention(page, tmp_path):
 
     we_inflected = page.locator('tr[data-row-id="1"] td[data-col="WordSourceInflectedForm"] .scrollable-cell')
     assert we_inflected.inner_text() == "we're, we"
+
+
+def test_rmb_flip_gray_untranslated_and_numeric_tokens_remain_visible(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Version 2.0 release 100 features unknownword test."
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordDestination\n"
+        "version\tверсия\n"
+        "release\tрелиз\n"
+        "features\tфункции\n"
+        "test\tтест\n"
+    )
+    tsv_file = tmp_path / "20260816110000-gray-numeric.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260816110000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+    source_container = page.locator("#source-container")
+
+    # 1. RMB click on "Version" -> flips to "версия"
+    span_version = page.locator("span.word[data-lower-clean='version']").first
+    span_version.click(button="right")
+    assert "версия" in source_container.inner_text()
+
+    # 2. RMB click on "2.0" numeric parts (e.g. span for '2' or '0')
+    span_two = page.locator("span.word[data-lower-clean='2']").first
+    assert span_two.is_visible()
+    span_two.click(button="right")
+
+    # Verify "2.0" remains visible in source container and is not hidden
+    text_after_click_two = source_container.inner_text()
+    assert "2.0" in text_after_click_two
+    assert span_two.is_visible()
+
+    # 3. RMB click on "100" standalone numeric token
+    span_100 = page.locator("span.word[data-lower-clean='100']").first
+    assert span_100.is_visible()
+    span_100.click(button="right")
+    text_after_click_100 = source_container.inner_text()
+    assert "100" in text_after_click_100
+    assert span_100.is_visible()
+
+    # 4. RMB click on gray / untranslated token "unknownword"
+    span_unknown = page.locator("span.word[data-lower-clean='unknownword']").first
+    assert span_unknown.is_visible()
+    span_unknown.click(button="right")
+    text_after_click_unknown = source_container.inner_text()
+    assert "unknownword" in text_after_click_unknown
+    assert span_unknown.is_visible()
+
 
 
 

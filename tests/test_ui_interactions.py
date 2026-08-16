@@ -1506,6 +1506,88 @@ def test_single_span_with_multiple_compound_tsv_rows_plays_only_direct_match(pag
     assert play_calls[0]["arg"].endswith("en\\narchive")
 
 
+def test_rmb_drag_flip_preserves_unconnected_words_and_numbers(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="version">Version</span> '
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="2">2</span>'
+        '.'
+        '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="0">0</span> '
+        '<span class="word" data-word-idx="6" data-line-idx="0" data-lower-clean="release">release</span> '
+        '<span class="word" data-word-idx="8" data-line-idx="0" data-lower-clean="100">100</span> '
+        '<span class="word" data-word-idx="10" data-line-idx="0" data-lower-clean="unknown">unknown</span>'
+    )
+    manifest = [
+        {"text": "Version", "is_word": True, "visual_idx": 0, "lower_clean": "version", "row_ids": [0]},
+        {"text": " ", "is_word": False, "visual_idx": 1},
+        {"text": "2", "is_word": True, "visual_idx": 2, "lower_clean": "2", "row_ids": []},
+        {"text": ".", "is_word": False, "visual_idx": 3},
+        {"text": "0", "is_word": True, "visual_idx": 4, "lower_clean": "0", "row_ids": []},
+        {"text": " ", "is_word": False, "visual_idx": 5},
+        {"text": "release", "is_word": True, "visual_idx": 6, "lower_clean": "release", "row_ids": [1]},
+        {"text": " ", "is_word": False, "visual_idx": 7},
+        {"text": "100", "is_word": True, "visual_idx": 8, "lower_clean": "100", "row_ids": []},
+        {"text": " ", "is_word": False, "visual_idx": 9},
+        {"text": "unknown", "is_word": True, "visual_idx": 10, "lower_clean": "unknown", "row_ids": []},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">version</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">версия</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">release</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">релиз</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span_version = page.locator("span[data-lower-clean='version']")
+    span_unknown = page.locator("span[data-lower-clean='unknown']")
+    
+    # RMB drag from Version across 2, 0, release, 100, unknown
+    span_version.dispatch_event("mousedown", {"button": 2, "which": 3})
+    page.locator("span[data-lower-clean='2']").dispatch_event("mouseover")
+    page.locator("span[data-lower-clean='0']").dispatch_event("mouseover")
+    page.locator("span[data-lower-clean='release']").dispatch_event("mouseover")
+    page.locator("span[data-lower-clean='100']").dispatch_event("mouseover")
+    span_unknown.dispatch_event("mouseover")
+    page.evaluate("window.dispatchEvent(new MouseEvent('mouseup', {button: 2, which: 3}))")
+
+    source_text = page.locator("#source-container").inner_text()
+
+    # Translated words are flipped
+    assert "версия" in source_text
+    assert "релиз" in source_text
+
+    # Untranslated words, numbers, and decimals are preserved and visible
+    assert "2.0" in source_text
+    assert "100" in source_text
+    assert "unknown" in source_text
+    assert page.locator("span[data-lower-clean='2']").is_visible()
+    assert page.locator("span[data-lower-clean='0']").is_visible()
+    assert page.locator("span[data-lower-clean='100']").is_visible()
+    assert page.locator("span[data-lower-clean='unknown']").is_visible()
+
+
+
 
 
 
