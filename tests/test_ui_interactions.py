@@ -1976,8 +1976,31 @@ def test_compound_subtoken_isolated_from_standalone_words(page, tmp_path, monkey
     standalone_camel.click(button="left")
     assert json.loads(page.evaluate("window.getSelectedRows()")) == []
 
-    # 2. Click compound 'camel': should select both Row 0 (compound) and Row 1 (camel lemma)
+    # 2. Click compound 'camel': should select ONLY Row 1 (camel lemma) and NOT Row 0 (compound)
     comp_camel.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [1]
+
+    # Only camel spans are highlighted; sibling sub-tokens inside compound are NOT highlighted
+    assert "highlight-orange-active" not in (comp_split.get_attribute("class") or "")
+    assert "highlight-orange-active" in (comp_camel.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (comp_case.get_attribute("class") or "")
+    assert "highlight-orange-active" in (standalone_camel.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (standalone_split.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (standalone_case.get_attribute("class") or "")
+
+    # Deselect
+    comp_camel.click(button="left")
+    assert json.loads(page.evaluate("window.getSelectedRows()")) == []
+
+    # 3. Drag across entire compound (comp_split -> comp_camel -> comp_case): selects Row 0 and Row 1
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-word-idx='1']");
+        const s2 = document.querySelector("span[data-word-idx='5']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
     assert sorted(selected_rows) == [0, 1]
 
@@ -2067,6 +2090,251 @@ def test_drag_selection_audio_deferred_until_mouseup(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 0
+
+
+def test_compound_subtoken_click_isolation_selects_only_atomic_row(page):
+    manifest = [
+        {"text": "multi", "is_word": True, "visual_idx": 0, "lower_clean": "multi", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "token", "is_word": True, "visual_idx": 2, "lower_clean": "token", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="multi">multi</span>-<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="token">token</span>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">multi-token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти-токен</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">multi</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">токен</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Click on 'multi' sub-token span
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='multi']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [1], f"Expected only atomic row [1] to be selected, got {selected_rows}"
+
+    is_multi_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").classList.contains('highlight-orange-active')")
+    is_token_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='token']\").classList.contains('highlight-orange-active')")
+    assert is_multi_highlighted is True
+    assert is_token_highlighted is False
+
+
+def test_compound_subtoken_drag_selection_full_range_selects_composite_row(page):
+    manifest = [
+        {"text": "multi", "is_word": True, "visual_idx": 0, "lower_clean": "multi", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "token", "is_word": True, "visual_idx": 2, "lower_clean": "token", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="multi">multi</span>-<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="token">token</span>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">multi-token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти-токен</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">multi</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">токен</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Drag across 'multi' to 'token'
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='multi']");
+        const s2 = document.querySelector("span[data-lower-clean='token']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert set(selected_rows) == {0, 1, 2}, f"Expected rows [0, 1, 2] to be selected, got {selected_rows}"
+
+    is_multi_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").classList.contains('highlight-orange-active')")
+    is_token_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='token']\").classList.contains('highlight-orange-active')")
+    assert is_multi_highlighted is True
+    assert is_token_highlighted is True
+
+
+def test_compound_partial_drag_selection_suppresses_composite_row(page):
+    manifest = [
+        {"text": "split", "is_word": True, "visual_idx": 0, "lower_clean": "split", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "_", "is_word": False, "visual_idx": 1},
+        {"text": "camel", "is_word": True, "visual_idx": 2, "lower_clean": "camel", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]},
+        {"text": "_", "is_word": False, "visual_idx": 3},
+        {"text": "case", "is_word": True, "visual_idx": 4, "lower_clean": "case", "row_ids": [0, 3], "atomic_row_ids": [3], "compound_row_ids": [0]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="split">split</span>_<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="camel">camel</span>_<span class="word highlight-orange" data-word-idx="4" data-line-idx="0" data-lower-clean="case">case</span>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">split_camel_case</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">разделить_кэмел_кейс</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">split</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">разделить</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">camel</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">верблюд</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">case</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">регистр</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Drag across 'split' to 'camel' only (partial drag: 2 out of 3 tokens)
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='split']");
+        const s2 = document.querySelector("span[data-lower-clean='camel']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert set(selected_rows) == {1, 2}, f"Expected partial sub-token rows [1, 2], got {selected_rows}"
+
+    is_split_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='split']\").classList.contains('highlight-orange-active')")
+    is_camel_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='camel']\").classList.contains('highlight-orange-active')")
+    is_case_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='case']\").classList.contains('highlight-orange-active')")
+    assert is_split_highlighted is True
+    assert is_camel_highlighted is True
+    assert is_case_highlighted is False
+
+
+def test_compound_table_row_click_highlights_all_constituent_spans(page):
+    manifest = [
+        {"text": "multi", "is_word": True, "visual_idx": 0, "lower_clean": "multi", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "token", "is_word": True, "visual_idx": 2, "lower_clean": "token", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="multi">multi</span>-<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="token">token</span>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">multi-token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти-токен</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">multi</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мульти</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">token</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">токен</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Click directly on Table Row 0 (composite compound row)
+    page.evaluate("""() => {
+        const row0 = document.querySelector("tr[data-row-id='0']");
+        row0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    }""")
+
+    is_multi_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='multi']\").classList.contains('highlight-orange-active')")
+    is_token_highlighted = page.evaluate("document.querySelector(\"span[data-lower-clean='token']\").classList.contains('highlight-orange-active')")
+    assert is_multi_highlighted is True
+    assert is_token_highlighted is True
+
 
 
 

@@ -4302,6 +4302,13 @@ html, body {{
     apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
     apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
                     
+    def _has_comp_marker(s):
+        if not s:
+            return False
+        if any(ch in s for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')):
+            return True
+        return any(len(tok.split_camel_case(w)) > 1 for w in s.split())
+
     token_to_rows = {}
     row_candidates = {}
     compound_rows = set()
@@ -4327,13 +4334,6 @@ html, body {{
         clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
         row_primary_lemmas[row_id] = clean_lemma_lower
         
-        def _has_comp_marker(s):
-            if not s:
-                return False
-            if any(ch in s for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')):
-                return True
-            return any(len(tok.split_camel_case(w)) > 1 for w in s.split())
-
         has_compound = any(_has_comp_marker(f) for f in forms)
         if clean_lemma and _has_comp_marker(clean_lemma):
             has_compound = True
@@ -4730,6 +4730,19 @@ html, body {{
                                 return len(targets)
                             filtered_rows = sorted(filtered_rows, key=_row_rank)
                 tok_data["row_ids"] = filtered_rows
+                
+                atomic_rows = []
+                compound_cand_rows = []
+                for r_idx in filtered_rows:
+                    if r_idx in compound_rows:
+                        if row_primary_lemmas.get(r_idx) == lower_clean and not _has_comp_marker(row_primary_lemmas.get(r_idx)):
+                            atomic_rows.append(r_idx)
+                        else:
+                            compound_cand_rows.append(r_idx)
+                    else:
+                        atomic_rows.append(r_idx)
+                tok_data["atomic_row_ids"] = atomic_rows
+                tok_data["compound_row_ids"] = compound_cand_rows
             word_counter += 1
         token_manifest.append(tok_data)
         
@@ -5390,7 +5403,7 @@ html, body {{
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
                 var txt = node._origVal !== undefined ? node._origVal : (node.nodeValue || node.textContent || "");
-                return txt.length > 0 && /^[-_–—]+$/.test(txt);
+                return txt.length > 0 && /^[-_–—.:#@]+$/.test(txt);
             }
             return false;
         }
@@ -5929,10 +5942,11 @@ html, body {{
                     
                     if (e.button === 0) { // LMB
                         var clickedTokenData = findTokenData(span);
-                        if (!clickedTokenData || !clickedTokenData.row_ids || clickedTokenData.row_ids.length === 0) return;
+                        if (!clickedTokenData) return;
 
-                        var targetRowIds = clickedTokenData.row_ids.slice();
-                        if (targetRowIds.length === 0) return;
+                        var targetRowIds = (clickedTokenData.atomic_row_ids !== undefined)
+                            ? clickedTokenData.atomic_row_ids.slice()
+                            : (clickedTokenData.row_ids || []).slice();
                         
                         isTokenDragSelecting = true;
                         dragOccurred = false;
@@ -5956,10 +5970,14 @@ html, body {{
                         }
                         
                         var allSelected = true;
-                        for (var j = 0; j < targetRowIds.length; j++) {
-                            if (!selectedRowIdsMap.hasOwnProperty(String(targetRowIds[j]))) {
-                                allSelected = false;
-                                break;
+                        if (targetRowIds.length === 0) {
+                            allSelected = false;
+                        } else {
+                            for (var j = 0; j < targetRowIds.length; j++) {
+                                if (!selectedRowIdsMap.hasOwnProperty(String(targetRowIds[j]))) {
+                                    allSelected = false;
+                                    break;
+                                }
                             }
                         }
                         
@@ -6049,16 +6067,59 @@ html, body {{
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
                             var td = findTokenData(s);
-                            if (td && td.row_ids) {
-                                for (var j = 0; j < td.row_ids.length; j++) {
+                            if (td) {
+                                var atomics = (td.atomic_row_ids !== undefined) ? td.atomic_row_ids : (td.row_ids || []);
+                                for (var j = 0; j < atomics.length; j++) {
                                     if (tokenDragMode) {
-                                        selectedRowIdsMap[String(td.row_ids[j])] = true;
+                                        selectedRowIdsMap[String(atomics[j])] = true;
                                     } else {
-                                        delete selectedRowIdsMap[String(td.row_ids[j])];
+                                        delete selectedRowIdsMap[String(atomics[j])];
                                     }
                                 }
                             }
                         }
+                        
+                        var evaluatedGroups = [];
+                        for (var k = minIdx; k <= maxIdx; k++) {
+                            var s = tokenSpans[k];
+                            if (evaluatedGroups.indexOf(s) !== -1) continue;
+                            var grp = findCompoundSiblingSpans(s);
+                            for (var g = 0; g < grp.length; g++) {
+                                evaluatedGroups.push(grp[g]);
+                            }
+                            
+                            var allInDragRange = true;
+                            for (var g = 0; g < grp.length; g++) {
+                                var grpSpan = grp[g];
+                                var grpIdx = -1;
+                                for (var idx = 0; idx < tokenSpans.length; idx++) {
+                                    if (tokenSpans[idx] === grpSpan) {
+                                        grpIdx = idx;
+                                        break;
+                                    }
+                                }
+                                if (grpIdx < minIdx || grpIdx > maxIdx) {
+                                    allInDragRange = false;
+                                    break;
+                                }
+                            }
+                            
+                            if (allInDragRange) {
+                                for (var g = 0; g < grp.length; g++) {
+                                    var gTd = findTokenData(grp[g]);
+                                    if (gTd && gTd.compound_row_ids) {
+                                        for (var j = 0; j < gTd.compound_row_ids.length; j++) {
+                                            if (tokenDragMode) {
+                                                selectedRowIdsMap[String(gTd.compound_row_ids[j])] = true;
+                                            } else {
+                                                delete selectedRowIdsMap[String(gTd.compound_row_ids[j])];
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        
                         updateRowStyles();
                         updateBidirectionalHighlights();
                     } else if (isRmbDragFlipping) {
