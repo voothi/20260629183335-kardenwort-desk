@@ -5864,8 +5864,22 @@ html, body {{
                     e = e || window.event;
                     
                     if (e.button === 0) { // LMB
-                        var tokenData = findTokenData(span);
-                        if (!tokenData || !tokenData.row_ids) return;
+                        var clickedTokenData = findTokenData(span);
+                        if (!clickedTokenData || !clickedTokenData.row_ids || clickedTokenData.row_ids.length === 0) return;
+
+                        var grp = findCompoundSiblingSpans(span);
+                        var targetRowIds = [];
+                        for (var g = 0; g < grp.length; g++) {
+                            var td = findTokenData(grp[g]);
+                            if (td && td.row_ids) {
+                                for (var j = 0; j < td.row_ids.length; j++) {
+                                    if (targetRowIds.indexOf(td.row_ids[j]) === -1) {
+                                        targetRowIds.push(td.row_ids[j]);
+                                    }
+                                }
+                            }
+                        }
+                        if (targetRowIds.length === 0) return;
                         
                         isTokenDragSelecting = true;
                         dragOccurred = false;
@@ -5887,8 +5901,8 @@ html, body {{
                         }
                         
                         var allSelected = true;
-                        for (var j = 0; j < tokenData.row_ids.length; j++) {
-                            if (!selectedRowIdsMap.hasOwnProperty(String(tokenData.row_ids[j]))) {
+                        for (var j = 0; j < targetRowIds.length; j++) {
+                            if (!selectedRowIdsMap.hasOwnProperty(String(targetRowIds[j]))) {
                                 allSelected = false;
                                 break;
                             }
@@ -5896,11 +5910,11 @@ html, body {{
                         
                         tokenDragMode = !allSelected;
                         
-                        for (var j = 0; j < tokenData.row_ids.length; j++) {
+                        for (var j = 0; j < targetRowIds.length; j++) {
                             if (tokenDragMode) {
-                                selectedRowIdsMap[String(tokenData.row_ids[j])] = true;
+                                selectedRowIdsMap[String(targetRowIds[j])] = true;
                             } else {
-                                delete selectedRowIdsMap[String(tokenData.row_ids[j])];
+                                delete selectedRowIdsMap[String(targetRowIds[j])];
                             }
                         }
                         updateRowStyles();

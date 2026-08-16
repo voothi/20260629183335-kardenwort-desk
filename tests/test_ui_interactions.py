@@ -1704,6 +1704,70 @@ def test_adjacent_spans_lineage_grouping_safety(page):
     assert span_second.inner_text() == "второй"
 
 
+def test_compound_subtoken_lmb_selection(page):
+    manifest = [
+        {"text": "split", "is_word": True, "visual_idx": 0, "lower_clean": "split", "row_ids": [0, 3]},
+        {"text": "_", "is_word": False, "visual_idx": 1},
+        {"text": "camel", "is_word": True, "visual_idx": 2, "lower_clean": "camel", "row_ids": [1, 3]},
+        {"text": "_", "is_word": False, "visual_idx": 3},
+        {"text": "case", "is_word": True, "visual_idx": 4, "lower_clean": "case", "row_ids": [2, 3]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div id="source-container">
+  <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="split">split</span>_<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="camel">camel</span>_<span class="word highlight-orange" data-word-idx="4" data-line-idx="0" data-lower-clean="case">case</span>
+</div>
+<div id="table-container">
+  <table id="lemma-table">
+    <tr data-row-id="0">
+      <td data-col="WordSource">split</td>
+      <td data-col="WordDestination">разделять</td>
+    </tr>
+    <tr data-row-id="1">
+      <td data-col="WordSource">camel</td>
+      <td data-col="WordDestination">верблюд</td>
+    </tr>
+    <tr data-row-id="2">
+      <td data-col="WordSource">case</td>
+      <td data-col="WordDestination">случай</td>
+    </tr>
+    <tr data-row-id="3">
+      <td data-col="WordSource">split_camel_case</td>
+      <td data-col="WordDestination">разбиение camelCase</td>
+    </tr>
+  </table>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span_split = page.locator("span[data-lower-clean='split']")
+    span_camel = page.locator("span[data-lower-clean='camel']")
+    
+    # 1. Clicking on 'split' sub-token selects all constituent rows (0, 1, 2) and compound row (3)
+    span_split.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert sorted(selected_rows) == [0, 1, 2, 3]
+
+    for row_id in [0, 1, 2, 3]:
+        assert "selected" in page.locator(f"tr[data-row-id='{row_id}']").get_attribute("class")
+
+    # 2. Clicking on 'camel' sub-token while all are selected toggles and deselects all rows
+    span_camel.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == []
+
+    for row_id in [0, 1, 2, 3]:
+        cls = page.locator(f"tr[data-row-id='{row_id}']").get_attribute("class") or ""
+        assert "selected" not in cls
+
+
+
 
 
 
