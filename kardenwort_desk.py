@@ -3359,12 +3359,20 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                     return False
             return True
 
+    POSSESSIVE_DISCARD_TOKENS = {"'s", "’s", "‘s", "´s", "`s", "ʼs", "'", "’"}
     for row in data_rows:
         if len(row) > col_word_source and col_word_source != -1:
             if re.match(r'^\d{14}-', row[col_word_source]):
                 row = list(row)
                 row[col_word_source] = re.sub(r'^\d{14}-', '', row[col_word_source])
             w = row[col_word_source].strip().lower()
+            if w in POSSESSIVE_DISCARD_TOKENS:
+                continue
+            if w == "s":
+                inf_val = row[col_inflected].strip().lower() if col_inflected != -1 and len(row) > col_inflected else ""
+                quot_val = row[0].strip().lower() if len(row) > 0 else ""
+                if not inf_val or inf_val in POSSESSIVE_DISCARD_TOKENS or inf_val == "s" or quot_val in POSSESSIVE_DISCARD_TOKENS:
+                    continue
             pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
             if not combine_source_words:
                 inf_form_lower = row[col_inflected].strip().lower() if col_inflected != -1 and len(row) > col_inflected else ""

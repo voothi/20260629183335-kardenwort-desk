@@ -1598,6 +1598,37 @@ def test_deduplicate_rows_window_filtering_negative_contractions():
     assert deduped[1][0] == "isn't, not"
 
 
+def test_deduplicate_rows_possessive_enclitic_filtering():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'false')
+
+    # Rows simulating Alibaba's / world's / 's / orphan s
+    data_rows = [
+        ["Alibaba's", "Alibaba", "PROPN"],
+        ["world's", "world", "NOUN"],
+        ["'s", "'s", "PART"],
+        ["'s", "s", "PART"],
+        ["China's", "China", "PROPN"],
+    ]
+
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config
+    )
+
+    words = [r[1] for r in deduped]
+    assert "Alibaba" in words
+    assert "world" in words
+    assert "China" in words
+    assert "'s" not in words
+    assert "s" not in words
+    assert len(deduped) == 3
+
+
+
 def test_deduplicate_rows_window_filtering_abbreviations_de():
     import kardenwort_desk as desk
     import configparser

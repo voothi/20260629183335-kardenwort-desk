@@ -607,3 +607,26 @@ class TestWordfillIntegration:
         assert row_test[dest_idx] == 'тест_wordfilled'
         assert row_test[ipa_idx] == '/tɛst/'
         assert row_test[morph_idx] == 'noun'
+
+    def test_possessive_apostrophe_s_rows_suppression(self):
+        """Verify deduplicate_rows removes possessive 's and orphan s rows."""
+        import configparser
+        config = configparser.ConfigParser()
+        config.add_section('settings')
+        config.set('settings', 'filter_inflected_by_window', 'false')
+
+        rows = [
+            ["Alibaba's", "Alibaba", "PROPN"],
+            ["world's", "world", "NOUN"],
+            ["'s", "'s", "PART"],
+            ["'s", "s", "PART"],
+            ["China's", "China", "PROPN"]
+        ]
+        deduped = desk.deduplicate_rows(rows, col_word_source=1, col_pos=2, col_inflected=0, config=config)
+        lemmas = [r[1] for r in deduped]
+        assert "'s" not in lemmas
+        assert "s" not in lemmas
+        assert "Alibaba" in lemmas
+        assert "world" in lemmas
+        assert "China" in lemmas
+
