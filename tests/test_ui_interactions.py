@@ -54,7 +54,7 @@ def get_base_html():
 """
     return html, None, None, headers, data_rows
 
-def extract_desk_js(lmb_play=False, lmb_source="lemma", rmb_play=False, rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
+def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined", rmb_play=False, rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
     desk_path = Path(kardenwort_desk.__file__)
     content = desk_path.read_text(encoding="utf-8")
     js_lines = []
@@ -75,6 +75,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", rmb_play=False, rmb_sour
     # Replace AHK python string formatting variables with valid defaults
     js = js.replace("{audio_lmb_play}", "true" if lmb_play else "false")
     js = js.replace("{audio_lmb_source}", f'"{lmb_source}"')
+    js = js.replace("{audio_lmb_chain_mode}", f'"{lmb_chain_mode}"')
     js = js.replace("{audio_rmb_play}", "true" if rmb_play else "false")
     js = js.replace("{audio_rmb_source}", f'"{rmb_source}"')
     js = js.replace("{audio_anki_tts_cli}", anki_tts_cli.replace("\\", "\\\\"))
@@ -2090,6 +2091,126 @@ def test_drag_selection_audio_deferred_until_mouseup(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 0
+
+
+def test_drag_selection_audio_separate_mode_emits_individual_calls(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="hello">hello</span> '
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="world">world</span>'
+    )
+    manifest = [
+        {"text": "hello", "is_word": True, "visual_idx": 0, "lower_clean": "hello", "row_ids": [0]},
+        {"text": " ", "is_word": False, "visual_idx": 1},
+        {"text": "world", "is_word": True, "visual_idx": 2, "lower_clean": "world", "row_ids": [1]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">hello</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">привет</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">world</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мир</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+
+    # 1. During mousedown: zero audio calls
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='hello']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    assert len([c for c in calls if c.get("action") == "play"]) == 0
+
+    # 2. During mouseover: still zero audio calls
+    page.evaluate("""() => {
+        const s2 = document.querySelector("span[data-lower-clean='world']");
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    assert len([c for c in calls if c.get("action") == "play"]) == 0
+
+    # 3. Upon mouseup: exactly two separate sequential audio calls
+    page.evaluate("""() => {
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 2
+    assert play_calls[0]["arg"].endswith("en\\nhello")
+    assert play_calls[1]["arg"].endswith("en\\nworld")
+
+
+def test_drag_selection_audio_three_tokens_separate_vs_joined(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="split">split</span>_'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="camel">camel</span>_'
+        '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="case">case</span>'
+    )
+    manifest = [
+        {"text": "split", "is_word": True, "visual_idx": 0, "lower_clean": "split", "row_ids": [0]},
+        {"text": "_", "is_word": False, "visual_idx": 1},
+        {"text": "camel", "is_word": True, "visual_idx": 2, "lower_clean": "camel", "row_ids": [1]},
+        {"text": "_", "is_word": False, "visual_idx": 3},
+        {"text": "case", "is_word": True, "visual_idx": 4, "lower_clean": "case", "row_ids": [2]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0"><td data-col="WordSource"><div class="scrollable-cell">split</div></td><td data-col="WordDestination"><div class="scrollable-cell">разделить</div></td></tr>
+        <tr data-row-id="1"><td data-col="WordSource"><div class="scrollable-cell">camel</div></td><td data-col="WordDestination"><div class="scrollable-cell">верблюд</div></td></tr>
+        <tr data-row-id="2"><td data-col="WordSource"><div class="scrollable-cell">case</div></td><td data-col="WordDestination"><div class="scrollable-cell">регистр</div></td></tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        const s4 = document.querySelector("span[data-lower-clean='case']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 3
+    assert play_calls[0]["arg"].endswith("en\\nsplit")
+    assert play_calls[1]["arg"].endswith("en\\ncamel")
+    assert play_calls[2]["arg"].endswith("en\\ncase")
 
 
 def test_compound_subtoken_click_isolation_selects_only_atomic_row(page):

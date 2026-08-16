@@ -3983,10 +3983,12 @@ html, body {{
     # Resolve audio playback configuration
     lmb_play_val = "false"
     lmb_source_val = "lemma"
+    lmb_chain_mode_val = "joined"
     rmb_play_val = "false"
     if config.has_section(SEC_AUDIO):
         lmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'lmb_play', fallback=False) else "false"
         lmb_source_val = config.get(SEC_AUDIO, 'lmb_source', fallback='lemma').strip().lower()
+        lmb_chain_mode_val = config.get(SEC_AUDIO, 'lmb_chain_mode', fallback='joined').strip().lower()
         rmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'rmb_play', fallback=False) else "false"
 
     anki_tts_cli_path = ""
@@ -5720,6 +5722,7 @@ html, body {{
 
         var audioLmbPlay = {audio_lmb_play};
         var audioLmbSource = {audio_lmb_source};
+        var audioLmbChainMode = {audio_lmb_chain_mode};
         var audioRmbPlay = {audio_rmb_play};
         var audioAnkiTtsCli = "{audio_anki_tts_cli}";
         var audioPythonExe = "{audio_python_exe}";
@@ -6409,10 +6412,18 @@ html, body {{
                                 dragWords.push(term);
                             }
                         }
-                        var dragText = dragWords.join(' ');
-                        if (dragText) {
+                        if (dragWords.length > 0) {
                             var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
-                            playAudio(dragText, sourceLang);
+                            if (audioLmbChainMode === 'separate' || audioLmbChainMode === 'per_word') {
+                                for (var w = 0; w < dragWords.length; w++) {
+                                    playAudio(dragWords[w], sourceLang);
+                                }
+                            } else {
+                                var dragText = dragWords.join(' ');
+                                if (dragText) {
+                                    playAudio(dragText, sourceLang);
+                                }
+                            }
                         }
                     } else {
                         var targetSpan = mousedownTargetSpan || (tokenDragStartIdx !== -1 ? tokenSpans[tokenDragStartIdx] : null);
@@ -7145,6 +7156,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{inflected_col_name}", inflected_col_name)
     html_page = html_page.replace("{audio_lmb_play}", lmb_play_val)
     html_page = html_page.replace("{audio_lmb_source}", f'"{lmb_source_val}"')
+    html_page = html_page.replace("{audio_lmb_chain_mode}", f'"{lmb_chain_mode_val}"')
     html_page = html_page.replace("{audio_rmb_play}", rmb_play_val)
     html_page = html_page.replace("{audio_anki_tts_cli}", anki_tts_cli_path.replace("\\", "\\\\"))
     html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))

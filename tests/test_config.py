@@ -372,6 +372,7 @@ anki_mapping_file = ./anki-mapping.ini
 [audio]
 lmb_play = true
 lmb_source = inflection
+lmb_chain_mode = separate
 rmb_play = false
 """
         config_file = desk_dir / "config.ini"
@@ -382,6 +383,7 @@ rmb_play = false
         assert resolved_paths["anki_tts_cli"] == cli_script.resolve()
         assert config.getboolean(SEC_AUDIO, 'lmb_play') is True
         assert config.get(SEC_AUDIO, 'lmb_source') == 'inflection'
+        assert config.get(SEC_AUDIO, 'lmb_chain_mode') == 'separate'
         assert config.getboolean(SEC_AUDIO, 'rmb_play') is False
 
 
