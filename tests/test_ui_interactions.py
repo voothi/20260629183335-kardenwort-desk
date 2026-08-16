@@ -881,7 +881,7 @@ def test_compound_audio_playback_resolution(page):
     # viel-zu-beschäftigte: inflection mode drag across all 3 words -> "viel zu beschäftigte"
     page.set_content(html_vzb)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
-    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection", lmb_chain_mode="joined"))
     page.evaluate("""() => {
         const s1 = document.querySelector("span[data-lower-clean='viel']");
         const s2 = document.querySelector("span[data-lower-clean='zu']");
@@ -895,6 +895,24 @@ def test_compound_audio_playback_resolution(page):
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("de\\nviel zu beschäftigte")
+
+    # viel-zu-beschäftigte: separate chain mode drag across all 3 words -> single call with "viel ||| zu ||| beschäftigte"
+    page.set_content(html_vzb)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection", lmb_chain_mode="separate"))
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='viel']");
+        const s2 = document.querySelector("span[data-lower-clean='zu']");
+        const s3 = document.querySelector("span[data-lower-clean='beschäftigte']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        s3.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nviel ||| zu ||| beschäftigte")
 
 
 def test_contraction_audio_playback_resolution(page):
@@ -1118,7 +1136,7 @@ def test_shared_multi_row_compound_audio_no_duplication(page):
     # 3. Test drag across Projekt -> Manager -> plays "Projekt Manager" on release
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
-    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined"))
     page.evaluate("""() => {
         const s1 = document.querySelector("span[data-lower-clean='projekt']");
         const s2 = document.querySelector("span[data-lower-clean='manager']");
@@ -1130,6 +1148,22 @@ def test_shared_multi_row_compound_audio_no_duplication(page):
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
+
+    # 4. Test drag across Projekt -> Manager with separate chain mode -> plays "Projekt ||| Manager"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='projekt']");
+        const s2 = document.querySelector("span[data-lower-clean='manager']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nProjekt ||| Manager")
 
 
 def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
@@ -2149,15 +2183,14 @@ def test_drag_selection_audio_separate_mode_emits_individual_calls(page):
     calls = page.evaluate("window.__ahkCalls")
     assert len([c for c in calls if c.get("action") == "play"]) == 0
 
-    # 3. Upon mouseup: exactly two separate sequential audio calls
+    # 3. Upon mouseup: exactly one single audio call with delimited words
     page.evaluate("""() => {
         document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 2
-    assert play_calls[0]["arg"].endswith("en\\nhello")
-    assert play_calls[1]["arg"].endswith("en\\nworld")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nhello ||| world")
 
 
 def test_drag_selection_audio_three_tokens_separate_vs_joined(page):
@@ -2207,10 +2240,23 @@ def test_drag_selection_audio_three_tokens_separate_vs_joined(page):
     }""")
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 3
-    assert play_calls[0]["arg"].endswith("en\\nsplit")
-    assert play_calls[1]["arg"].endswith("en\\ncamel")
-    assert play_calls[2]["arg"].endswith("en\\ncase")
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nsplit ||| camel ||| case")
+
+    # Joined mode
+    page.evaluate("window.__ahkCalls = [];")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined"))
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-lower-clean='split']");
+        const s4 = document.querySelector("span[data-lower-clean='case']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nsplit camel case")
 
 
 def test_compound_subtoken_click_isolation_selects_only_atomic_row(page):

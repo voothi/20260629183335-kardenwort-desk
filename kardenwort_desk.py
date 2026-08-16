@@ -6415,9 +6415,7 @@ html, body {{
                         if (dragWords.length > 0) {
                             var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
                             if (audioLmbChainMode === 'separate' || audioLmbChainMode === 'per_word') {
-                                for (var w = 0; w < dragWords.length; w++) {
-                                    playAudio(dragWords[w], sourceLang);
-                                }
+                                playAudio(dragWords.join(' ||| '), sourceLang);
                             } else {
                                 var dragText = dragWords.join(' ');
                                 if (dragText) {
