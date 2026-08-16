@@ -1608,7 +1608,7 @@ def test_quoted_words_and_camel_case_rmb_flip_interactions(page):
 <div id="source-container">
   <span class="word highlight-orange" data-word-idx="1" data-line-idx="0" data-lower-clean="display">display</span>
   = '<span class="word highlight-orange" data-word-idx="6" data-line-idx="0" data-lower-clean="none">none</span>';
-  <span class="word highlight-orange" data-word-idx="10" data-line-idx="0" data-lower-clean="flip">flip</span><span class="word highlight-orange" data-word-idx="11" data-line-idx="0" data-lower-clean="word">Word</span>
+  <span class="word highlight-orange" data-word-idx="10" data-line-idx="0" data-compound-id="1" data-lower-clean="flip">flip</span><span class="word highlight-orange" data-word-idx="11" data-line-idx="0" data-compound-id="1" data-lower-clean="word">Word</span>
 </div>
 <div id="table-container">
   <table id="lemma-table">
@@ -1655,6 +1655,54 @@ def test_quoted_words_and_camel_case_rmb_flip_interactions(page):
     span_word.click(button="right")
     assert span_flip.inner_text() == "flip"
     assert span_word.inner_text() == "Word"
+
+
+def test_adjacent_spans_lineage_grouping_safety(page):
+    # Two adjacent words WITHOUT delimiter and WITHOUT matching compound id
+    # should NOT be grouped together into a single compound entity.
+    manifest = [
+        {"text": "first", "is_word": True, "visual_idx": 0, "lower_clean": "first", "row_ids": [0]},
+        {"text": "second", "is_word": True, "visual_idx": 1, "lower_clean": "second", "row_ids": [1]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div id="source-container">
+  <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="first">first</span><span class="word highlight-orange" data-word-idx="1" data-line-idx="0" data-lower-clean="second">second</span>
+</div>
+<div id="table-container">
+  <table id="lemma-table">
+    <tr data-row-id="0">
+      <td data-col="WordSource">first</td>
+      <td data-col="WordDestination">первый</td>
+    </tr>
+    <tr data-row-id="1">
+      <td data-col="WordSource">second</td>
+      <td data-col="WordDestination">второй</td>
+    </tr>
+  </table>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span_first = page.locator("span[data-lower-clean='first']")
+    span_second = page.locator("span[data-lower-clean='second']")
+
+    # RMB click on 'first' should ONLY flip 'first' to 'первый', NOT 'second'
+    span_first.click(button="right")
+    assert span_first.inner_text() == "первый"
+    assert span_second.inner_text() == "second"
+
+    # RMB click on 'second' should ONLY flip 'second' to 'второй'
+    span_second.click(button="right")
+    assert span_first.inner_text() == "первый"
+    assert span_second.inner_text() == "второй"
+
 
 
 

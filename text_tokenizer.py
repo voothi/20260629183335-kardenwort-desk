@@ -33,6 +33,7 @@ def build_word_list_internal(text: str, keep_spaces: bool) -> list:
     curr_logical_idx = 1
     curr_sub_idx = 0.1
     curr_visual_idx = 1
+    curr_compound_id = 1
 
     while i < n:
         c = chars[i]
@@ -77,6 +78,9 @@ def build_word_list_internal(text: str, keep_spaces: bool) -> list:
             raw_word = "".join(chars[start:i])
             camel_parts = split_camel_case(raw_word)
             sub_units = camel_parts if len(camel_parts) > 1 else [raw_word]
+            comp_id = curr_compound_id if len(camel_parts) > 1 else None
+            if len(camel_parts) > 1:
+                curr_compound_id += 1
 
             for unit in sub_units:
                 sub_tok = {
@@ -85,6 +89,8 @@ def build_word_list_internal(text: str, keep_spaces: bool) -> list:
                     "logical_idx": curr_logical_idx,
                     "visual_idx": curr_visual_idx
                 }
+                if comp_id is not None:
+                    sub_tok["compound_id"] = comp_id
                 cleaned_text = "".join(ch for ch in unit if ch.isalnum() or ch in APOSTROPHE_CHARS or ch in WORD_CHARS)
                 sub_tok["lower_clean"] = utf8_to_lower(cleaned_text)
                 tokens.append(sub_tok)

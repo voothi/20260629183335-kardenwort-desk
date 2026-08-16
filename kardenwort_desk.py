@@ -4457,9 +4457,11 @@ html, body {{
             else:
                 classes.append("not-connected")
             classes_str = " ".join(classes)
+            compound_id = token.get("compound_id")
+            compound_attr = f' data-compound-id="{compound_id}"' if compound_id is not None else ""
             span_htmls.append(
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
-                f'data-line-idx="{current_a_idx}" '
+                f'data-line-idx="{current_a_idx}"{compound_attr} '
                 f'data-lower-clean="{lower_clean}">{text_escaped}</span>'
             )
             word_counter += 1
@@ -5324,6 +5326,7 @@ html, body {{
         function findCompoundSiblingSpans(span) {
             if (!span || !span.classList || !span.classList.contains('word')) return span ? [span] : [];
             
+            var compoundId = span.getAttribute('data-compound-id');
             var startSpan = span;
             var curr = span;
             while (curr) {
@@ -5336,9 +5339,12 @@ html, body {{
                         continue;
                     }
                 } else if (prevNode && prevNode.nodeType === 1 && prevNode.classList && prevNode.classList.contains('word')) {
-                    startSpan = prevNode;
-                    curr = prevNode;
-                    continue;
+                    var prevCompoundId = prevNode.getAttribute('data-compound-id');
+                    if (compoundId && prevCompoundId && compoundId === prevCompoundId) {
+                        startSpan = prevNode;
+                        curr = prevNode;
+                        continue;
+                    }
                 }
                 break;
             }
@@ -5355,9 +5361,13 @@ html, body {{
                         continue;
                     }
                 } else if (nextNode && nextNode.nodeType === 1 && nextNode.classList && nextNode.classList.contains('word')) {
-                    group.push(nextNode);
-                    curr = nextNode;
-                    continue;
+                    var nextCompoundId = nextNode.getAttribute('data-compound-id');
+                    var currCompoundId = curr.getAttribute('data-compound-id');
+                    if (currCompoundId && nextCompoundId && currCompoundId === nextCompoundId) {
+                        group.push(nextNode);
+                        curr = nextNode;
+                        continue;
+                    }
                 }
                 break;
             }
