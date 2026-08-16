@@ -4828,6 +4828,7 @@ html, body {{
     zoom: {zoom_level};
     width: {inverse_zoom_width};
     min-height: {inverse_zoom_height};
+    min-height: {inverse_zoom_vh};
     /* For IE11 / Shell.Explorer emulation scrollbar styling */
     scrollbar-face-color: {scrollbar_thumb};
     scrollbar-track-color: {scrollbar_track};
@@ -4842,6 +4843,8 @@ html, body {{
     padding: 16px;
     display: inline-block;
     min-width: 100%;
+    min-height: {inverse_zoom_height};
+    min-height: {inverse_zoom_vh};
   }
   .section {
     background: {section_bg};
@@ -7191,24 +7194,54 @@ setTimeout(function() {{
 }}, {timeout_ms});
 </script>"""
 
-    html_page = html_page.replace("</body>", f"{watchdog_js}\n</body>")
-
     # zoom_level is now passed as an argument
-    
     try:
         numeric_zoom = float(zoom_level.replace('%', ''))
         inverse_width = f"{10000 / numeric_zoom:.3f}%"
         inverse_height = f"{10000 / numeric_zoom:.3f}%"
+        inverse_vh = f"{10000 / numeric_zoom:.3f}vh"
     except Exception:
+        numeric_zoom = 100.0
         inverse_width = "100%"
         inverse_height = "100%"
+        inverse_vh = "100vh"
 
     if zoom_level.isdigit():
         zoom_level = f"{zoom_level}%"
+
+    canvas_coverage_js = f"""<script>
+(function() {{
+    function ensureCanvasCoverage() {{
+        try {{
+            var h = window.innerHeight || (document.documentElement && document.documentElement.clientHeight) || (document.body && document.body.clientHeight) || 0;
+            var z = parseFloat(document.body.style.zoom || "{numeric_zoom}") || 100;
+            if (h > 0 && z > 0) {{
+                var minPx = Math.ceil((h * 100) / z);
+                if (document.body) document.body.style.minHeight = minPx + "px";
+                var c = document.querySelector(".container");
+                if (c) c.style.minHeight = minPx + "px";
+            }}
+        }} catch(e) {{}}
+    }}
+    if (window.addEventListener) {{
+        window.addEventListener("resize", ensureCanvasCoverage);
+        window.addEventListener("load", ensureCanvasCoverage);
+    }} else if (window.attachEvent) {{
+        window.attachEvent("onresize", ensureCanvasCoverage);
+        window.attachEvent("onload", ensureCanvasCoverage);
+    }}
+    setTimeout(ensureCanvasCoverage, 10);
+    setTimeout(ensureCanvasCoverage, 100);
+}})();
+</script>"""
+
+    html_page = html_page.replace("</body>", f"{watchdog_js}\n{canvas_coverage_js}\n</body>")
         
     html_page = html_page.replace("{zoom_level}", zoom_level)
+    html_page = html_page.replace("{numeric_zoom}", str(numeric_zoom))
     html_page = html_page.replace("{inverse_zoom_width}", inverse_width)
     html_page = html_page.replace("{inverse_zoom_height}", inverse_height)
+    html_page = html_page.replace("{inverse_zoom_vh}", inverse_vh)
     html_page = html_page.replace("{source_html}", source_html)
     html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{table_header_html}", table_header_html)
