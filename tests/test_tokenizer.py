@@ -180,5 +180,18 @@ def test_build_word_list_decimal_numbers():
     assert len(dot_tokens) == 1
 
 
+def test_decompose_function_signatures_with_brackets():
+    assert tok.decompose_identifier("split_camel_case(raw_word)") == [
+        "split", "camel", "case", "raw", "word"
+    ]
+    assert tok.extract_identifier_subtokens("split_camel_case(raw_word)") == [
+        "split", "camel", "case", "raw", "word"
+    ]
+    assert tok.extract_identifier_subtokens("[key]") == ["key"]
+    assert tok.extract_identifier_subtokens("func(\"param\")") == ["func", "param"]
+    assert tok.extract_identifier_subtokens("curr_logical_idx") == ["curr", "logical", "idx"]
+
+
+
 
 

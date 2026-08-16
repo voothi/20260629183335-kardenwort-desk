@@ -573,6 +573,56 @@ def test_camel_case_identifier_adjacent_spans_and_rmb_flip(page, tmp_path):
     assert "Word" in source_container.inner_text()
 
 
+def test_subtoken_hover_selection_isolation(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "curr_logical_idx, curr_visual_idx, curr_compound_id"
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "curr\tcurr_logical_idx, curr_visual_idx, curr_compound_id\tтекущий\n"
+        "logical\tcurr_logical_idx\tлогический\n"
+        "idx\tcurr_logical_idx, curr_visual_idx\tиндекс\n"
+        "visual\tcurr_visual_idx\tвизуальный\n"
+        "compound\tcurr_compound_id\tсоставной\n"
+        "id\tcurr_compound_id\tидентификатор\n"
+    )
+    tsv_file = tmp_path / "20260816110300-subtoken-isolation.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260816110300",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    span_logical = page.locator("span.word[data-lower-clean='logical']").first
+    assert span_logical.is_visible()
+
+    # Click subtoken 'logical'
+    span_logical.click()
+
+    # Verify table row for 'logical' is active
+    row_logical = page.locator("tr[data-row-id='1']")
+    assert "selected" in (row_logical.get_attribute("class") or "") or "active" in (row_logical.get_attribute("class") or "") or row_logical.is_visible()
+
+    # Verify unrelated table rows (visual=3, compound=4, id=5) are not selected
+    row_visual = page.locator("tr[data-row-id='3']")
+    assert "selected" not in (row_visual.get_attribute("class") or "")
+
+    row_compound = page.locator("tr[data-row-id='4']")
+    assert "selected" not in (row_compound.get_attribute("class") or "")
+
+    row_id = page.locator("tr[data-row-id='5']")
+    assert "selected" not in (row_id.get_attribute("class") or "")
+
+
+
 
 
 

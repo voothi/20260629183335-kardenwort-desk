@@ -4350,7 +4350,12 @@ html, body {{
                             _add_cand(clean_node)
                             for sub in node_subs:
                                 clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                                _add_cand(clean_sub)
+                                sub_matches = (not clean_lemma_lower or
+                                               clean_sub == clean_lemma_lower or
+                                               clean_lemma_lower == clean_node or
+                                               (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
+                                if sub_matches:
+                                    _add_cand(clean_sub)
                 else:
                     clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
                     _add_cand(clean_val)
@@ -4360,12 +4365,18 @@ html, body {{
                     subtokens = tok.decompose_identifier(val)
                     for sub in subtokens:
                         clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                        _add_cand(clean_sub)
-                    parts = re.findall(apo_regex, val.lower())
-                    if len(parts) > 1:
-                        for part in parts:
-                            clean_part = tok.utf8_to_lower("".join(ch for ch in part if ch.isalnum() or ch in apo_set))
-                            _add_cand(clean_part)
+                        sub_matches = (not clean_lemma_lower or
+                                       clean_sub == clean_lemma_lower or
+                                       clean_lemma_lower == clean_val or
+                                       (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
+                        if sub_matches:
+                            _add_cand(clean_sub)
+                    if any(c.isspace() for c in val):
+                        parts = re.findall(apo_regex, val.lower())
+                        if len(parts) > 1:
+                            for part in parts:
+                                clean_part = tok.utf8_to_lower("".join(ch for ch in part if ch.isalnum() or ch in apo_set))
+                                _add_cand(clean_part)
         row_candidates[row_id] = candidates
         for cand in candidates:
             if cand not in token_to_rows:

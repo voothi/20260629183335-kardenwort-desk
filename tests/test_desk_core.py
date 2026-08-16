@@ -2732,7 +2732,7 @@ def test_candidate_indexing_compound_subtokens():
     import text_tokenizer as tok
 
     data_rows = [
-        ["prepare_lookup_tsv", "lookup"],
+        ["prepare_lookup_tsv", "prepare_lookup_tsv"],
         ["per-window", "window"],
         ["", "ExecutionContext.from_config"],
         ["", "OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP"],
@@ -2763,21 +2763,33 @@ def test_candidate_indexing_compound_subtokens():
         else:
             vals_to_check = forms
 
+        clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
+
         for val in vals_to_check:
             if val:
                 clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
-                if clean_val:
+                val_matches = (not clean_lemma_lower or clean_lemma_lower == clean_val or clean_lemma_lower in clean_val or
+                               (len(clean_lemma_lower) >= 4 and len(clean_val) >= 4 and clean_val[:4] == clean_lemma_lower[:4]))
+                if val_matches:
                     candidates.add(clean_val)
                 subtokens = tok.decompose_identifier(val)
                 for sub in subtokens:
                     clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                    if clean_sub:
+                    sub_matches = (not clean_lemma_lower or
+                                   clean_sub == clean_lemma_lower or
+                                   clean_lemma_lower == clean_val or
+                                   (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
+                    if sub_matches:
                         candidates.add(clean_sub)
                 parts = re.findall(apo_regex, val.lower())
                 if len(parts) > 1:
                     for part in parts:
                         clean_part = tok.utf8_to_lower("".join(ch for ch in part if ch.isalnum() or ch in apo_set))
-                        if clean_part:
+                        part_matches = (not clean_lemma_lower or
+                                        clean_part == clean_lemma_lower or
+                                        clean_lemma_lower == clean_val or
+                                        (len(clean_lemma_lower) >= 4 and len(clean_part) >= 4 and clean_part[:4] == clean_lemma_lower[:4]))
+                        if part_matches:
                             candidates.add(clean_part)
         row_candidates[row_id] = candidates
         for cand in candidates:
@@ -2785,16 +2797,16 @@ def test_candidate_indexing_compound_subtokens():
                 token_to_rows[cand] = []
             token_to_rows[cand].append(row_id)
 
-    # Row 0: prepare_lookup_tsv + lookup -> indexes prepare, lookup, tsv
+    # Row 0: prepare_lookup_tsv (composite lemma) -> indexes prepare, lookup, tsv
     assert "prepare" in row_candidates[0]
     assert "lookup" in row_candidates[0]
     assert "tsv" in row_candidates[0]
     assert 0 in token_to_rows["lookup"]
     assert 0 in token_to_rows["prepare"]
 
-    # Row 1: per-window + window -> indexes per, window
-    assert "per" in row_candidates[1]
+    # Row 1: per-window + window -> indexes window (not per)
     assert "window" in row_candidates[1]
+    assert "per" not in row_candidates[1]
 
     # Row 2: ExecutionContext.from_config -> indexes execution, context, from, config
     assert "execution" in row_candidates[2]
@@ -2810,6 +2822,91 @@ def test_candidate_indexing_compound_subtokens():
 
     # Row 4: run -> indexes run only
     assert row_candidates[4] == {"run"}
+
+
+def test_subtoken_bidirectional_highlight_isolation():
+    import re
+    import kardenwort_desk as desk
+    import text_tokenizer as tok
+
+    data_rows = [
+        ["curr_logical_idx, curr_visual_idx, curr_compound_id", "curr"],
+        ["curr_logical_idx", "logical"],
+        ["curr_logical_idx, curr_visual_idx", "idx"],
+        ["curr_visual_idx", "visual"],
+        ["curr_compound_id", "compound"],
+        ["curr_compound_id", "id"],
+    ]
+    col_inflected = 0
+    col_lemma = 1
+    apo_set = set("', ’, ‘, `, ´, ʼ".split(','))
+    apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
+
+    token_to_rows = {}
+    row_candidates = {}
+    for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+
+        candidates = []
+        candidates_seen = set()
+
+        def _add_cand(c):
+            if c and not c.isdigit() and c not in candidates_seen:
+                candidates_seen.add(c)
+                candidates.append(c)
+
+        forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
+        clean_lemma = lemma_val.strip() if lemma_val else ""
+
+        has_compound = any(any(ch in f for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(f)) > 1 for f in forms)
+        if clean_lemma:
+            if any(ch in clean_lemma for ch in ('_', '-', '.', '/', '\\', ':', '#', '@')) or len(tok.split_camel_case(clean_lemma)) > 1:
+                has_compound = True
+
+        if has_compound or not forms:
+            vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
+        else:
+            vals_to_check = forms
+
+        clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
+
+        for val in vals_to_check:
+            if val:
+                clean_val = tok.utf8_to_lower("".join(ch for ch in val if ch.isalnum() or ch in apo_set))
+                val_matches = (not clean_lemma_lower or clean_lemma_lower == clean_val or clean_lemma_lower in clean_val or
+                               (len(clean_lemma_lower) >= 4 and len(clean_val) >= 4 and clean_val[:4] == clean_lemma_lower[:4]))
+                if val_matches:
+                    _add_cand(clean_val)
+                subtokens = tok.decompose_identifier(val)
+                for sub in subtokens:
+                    clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
+                    sub_matches = (not clean_lemma_lower or
+                                   clean_sub == clean_lemma_lower or
+                                   clean_lemma_lower == clean_val or
+                                   (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
+                    if sub_matches:
+                        _add_cand(clean_sub)
+
+        row_candidates[row_id] = candidates
+        for cand in candidates:
+            if cand not in token_to_rows:
+                token_to_rows[cand] = []
+            if row_id not in token_to_rows[cand]:
+                token_to_rows[cand].append(row_id)
+
+    # Row 0 (curr) should NOT receive subtoken candidates for logical, visual, compound, id
+    assert 0 in token_to_rows["curr"]
+    assert 0 not in token_to_rows.get("logical", [])
+    assert 0 not in token_to_rows.get("visual", [])
+    assert 0 not in token_to_rows.get("compound", [])
+    assert 0 not in token_to_rows.get("id", [])
+
+    # Individual subtokens map ONLY to their corresponding lemma rows
+    assert token_to_rows["logical"] == [1]
+    assert token_to_rows["visual"] == [3]
+    assert token_to_rows["compound"] == [4]
+    assert token_to_rows["id"] == [5]
 
 
 def test_composite_identifier_ordered_candidate_generation():

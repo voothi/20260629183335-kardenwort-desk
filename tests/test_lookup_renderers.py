@@ -599,10 +599,10 @@ def test_render_flow_compound_identifier_snake_case(tmp_path, monkeypatch):
         tsv_path=tsv_path
     )
 
-    # Constituent sub-tokens should receive highlight-orange class
-    assert 'class="word highlight-orange" data-word-idx="3" data-line-idx="0" data-lower-clean="prepare">prepare</span>' in html
+    # Matching sub-token 'lookup' receives highlight-orange class while non-matched siblings remain not-connected
+    assert 'class="word not-connected" data-word-idx="3" data-line-idx="0" data-lower-clean="prepare">prepare</span>' in html
     assert 'class="word highlight-orange" data-word-idx="5" data-line-idx="0" data-lower-clean="lookup">lookup</span>' in html
-    assert 'class="word highlight-orange" data-word-idx="7" data-line-idx="0" data-lower-clean="tsv">tsv</span>' in html
+    assert 'class="word not-connected" data-word-idx="7" data-line-idx="0" data-lower-clean="tsv">tsv</span>' in html
     # Unmatched tokens stay not-connected
     assert 'class="word not-connected" data-word-idx="1" data-line-idx="0" data-lower-clean="call">call</span>' in html
     assert 'class="word not-connected" data-word-idx="9" data-line-idx="0" data-lower-clean="now">now</span>' in html
@@ -732,8 +732,8 @@ def test_render_flow_hyphenated_kebab_case(tmp_path, monkeypatch):
         tsv_path=tsv_path
     )
 
-    # Sub-tokens 'per' and 'window' are highlighted orange
-    assert 'class="word highlight-orange" data-word-idx="3" data-line-idx="0" data-lower-clean="per">per</span>' in html
+    # Matching sub-token 'window' is highlighted orange, non-matching sibling 'per' remains not-connected
+    assert 'class="word not-connected" data-word-idx="3" data-line-idx="0" data-lower-clean="per">per</span>' in html
     assert 'class="word highlight-orange" data-word-idx="5" data-line-idx="0" data-lower-clean="window">window</span>' in html
 
 

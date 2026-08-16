@@ -205,11 +205,11 @@ def split_camel_case(s: str) -> list:
 def decompose_identifier(s: str) -> list:
     """
     Decompose composite identifiers across snake_case (_), kebab-case (-), dot (.),
-    slashes/symbols, and camelCase boundaries.
+    syntax delimiters/brackets, slashes/symbols, and camelCase boundaries.
     """
     if not s:
         return []
-    raw_parts = re.split(r'[_.\-/:#@\\]+', s)
+    raw_parts = re.split(r'[_.\-/:#@\\()\[\]{}"\'<>]+', s)
     result = []
     for raw in raw_parts:
         if not raw:
@@ -228,7 +228,7 @@ def extract_identifier_subtokens(s: str) -> list:
     """
     if not s:
         return []
-    raw_parts = re.split(r'[_.\-/:#@\\]+', s)
+    raw_parts = re.split(r'[_.\-/:#@\\()\[\]{}"\'<>]+', s)
     result = []
     for raw in raw_parts:
         if not raw:
