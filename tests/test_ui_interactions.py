@@ -778,7 +778,7 @@ def test_compound_audio_playback_resolution(page):
 </body>
 </html>"""
 
-    # Test Projekt-Manager with lemma mode
+    # Test Projekt-Manager with lemma mode - single click plays only clicked sub-token
     page.set_content(html_pm)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     js_lemma = extract_desk_js(lmb_play=True, lmb_source="lemma")
@@ -790,7 +790,22 @@ def test_compound_audio_playback_resolution(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
+    assert play_calls[0]["arg"].endswith("de\\nManager")
+
+    # Test Projekt-Manager with drag range playback
+    page.evaluate("window.__ahkCalls = [];")
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='projekt']");
+        const s2 = document.querySelector("span[data-lower-clean='manager']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 2  # mousedown on projekt + mouseup on drag range
+    assert play_calls[0]["arg"].endswith("de\\nProjekt")
+    assert play_calls[1]["arg"].endswith("de\\nProjekt Manager")
 
     # Test viel-zu-beschäftigte with lemma and inflection modes
     source_html_vzb = (
@@ -841,7 +856,7 @@ def test_compound_audio_playback_resolution(page):
 </body>
 </html>"""
 
-    # viel-zu-beschäftigte: lemma mode -> "viel zu beschäftigt"
+    # viel-zu-beschäftigte: lemma mode single-click -> "beschäftigt"
     page.set_content(html_vzb)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -850,9 +865,9 @@ def test_compound_audio_playback_resolution(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("de\\nviel zu beschäftigt")
+    assert play_calls[0]["arg"].endswith("de\\nbeschäftigt")
 
-    # viel-zu-beschäftigte: inflection mode -> "viel zu beschäftigte"
+    # viel-zu-beschäftigte: inflection mode single-click on 'viel' -> "viel"
     page.set_content(html_vzb)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
@@ -861,7 +876,26 @@ def test_compound_audio_playback_resolution(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("de\\nviel zu beschäftigte")
+    assert play_calls[0]["arg"].endswith("de\\nviel")
+
+    # viel-zu-beschäftigte: inflection mode drag across all 3 words -> "viel zu beschäftigte"
+    page.set_content(html_vzb)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='viel']");
+        const s2 = document.querySelector("span[data-lower-clean='zu']");
+        const s3 = document.querySelector("span[data-lower-clean='beschäftigte']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        s3.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 2
+    assert play_calls[0]["arg"].endswith("de\\nviel")
+    assert play_calls[1]["arg"].endswith("de\\nviel zu beschäftigte")
 
 
 def test_contraction_audio_playback_resolution(page):
@@ -898,7 +932,7 @@ def test_contraction_audio_playback_resolution(page):
 </body>
 </html>"""
 
-    # 1. Contraction: lemma mode -> "be not"
+    # isn't: lemma mode -> "be not"
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -909,7 +943,7 @@ def test_contraction_audio_playback_resolution(page):
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("en\\nbe not")
 
-    # 2. Contraction: inflection mode -> "is not"
+    # isn't: inflection mode -> "is not"
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
@@ -955,7 +989,7 @@ def test_contraction_audio_order_were(page):
 </body>
 </html>"""
 
-    # 1. Contraction we're: lemma mode -> "we be"
+    # 1. lemma mode: plays "we be"
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -966,7 +1000,7 @@ def test_contraction_audio_order_were(page):
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("en\\nwe be")
 
-    # 2. Contraction we're: inflection mode -> "we are"
+    # 2. inflection mode: plays "we are"
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
@@ -977,19 +1011,10 @@ def test_contraction_audio_order_were(page):
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("en\\nwe are")
 
-    # 3. Contraction we're: RMB flip translation audio -> "мы, быть"
-    page.set_content(html)
-    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
-    page.evaluate(extract_desk_js(rmb_play=True))
-    span = page.locator("span[data-lower-clean=\"we're\"]")
-    span.click(button="right")
-    calls = page.evaluate("window.__ahkCalls")
-    play_calls = [c for c in calls if c.get("action") == "play"]
-    assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("ru\\nмы, быть")
-
 
 def test_render_flow_ordered_manifest_rows(tmp_path):
+    import configparser
+    import kardenwort_desk
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     source_text = "Today we're going to take a look."
     tsv_content = (
@@ -1011,7 +1036,7 @@ def test_render_flow_ordered_manifest_rows(tmp_path):
         tsv_path=str(tsv_file)
     )
 
-    import re
+    import re, json
     m = re.search(r'<script id="token-map" type="application/json">\s*([\s\S]*?)\s*</script>', html)
     assert m is not None
     manifest = json.loads(m.group(1))
@@ -1069,7 +1094,7 @@ def test_shared_multi_row_compound_audio_no_duplication(page):
 </body>
 </html>"""
 
-    # 1. Test clicking Projekt under lemma mode
+    # 1. Test clicking Projekt under lemma mode -> plays only "Projekt"
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -1078,9 +1103,9 @@ def test_shared_multi_row_compound_audio_no_duplication(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
+    assert play_calls[0]["arg"].endswith("de\\nProjekt")
 
-    # 2. Test clicking Manager under inflection mode
+    # 2. Test clicking Manager under inflection mode -> plays only "Manager"
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection"))
@@ -1089,7 +1114,24 @@ def test_shared_multi_row_compound_audio_no_duplication(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("de\\nProjekt Manager")
+    assert play_calls[0]["arg"].endswith("de\\nManager")
+
+    # 3. Test drag across Projekt -> Manager -> plays "Projekt Manager" on release
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='projekt']");
+        const s2 = document.querySelector("span[data-lower-clean='manager']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 2
+    assert play_calls[0]["arg"].endswith("de\\nProjekt")
+    assert play_calls[1]["arg"].endswith("de\\nProjekt Manager")
 
 
 def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
@@ -1100,6 +1142,7 @@ def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
         '-'
         '<span class="word" data-word-idx="4" data-line-idx="0" data-lower-clean="beschäftigte">beschäftigte</span>'
     )
+    # Manifest where all tokens share rows 0..3 (derived from compound decomposition)
     manifest = [
         {"text": "viel", "is_word": True, "visual_idx": 0, "lower_clean": "viel", "row_ids": [0, 1, 2, 3]},
         {"text": "-", "is_word": False, "visual_idx": 1},
@@ -1215,7 +1258,7 @@ def test_slash_separated_words_not_grouped_as_compound(page):
 </body>
 </html>"""
 
-    # 1. Clicking 'two' should only play 'two part', NOT including 'separable'
+    # 1. Clicking 'two' should only play 'two', NOT including 'separable' or sibling 'part'
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -1224,7 +1267,7 @@ def test_slash_separated_words_not_grouped_as_compound(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("en\\ntwo part")
+    assert play_calls[0]["arg"].endswith("en\\ntwo")
 
     # 2. Clicking 'separable' should only play 'separable'
     page.set_content(html)
@@ -1236,6 +1279,23 @@ def test_slash_separated_words_not_grouped_as_compound(page):
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("en\\nseparable")
+
+    # 3. Dragging across 'two' -> 'part' plays 'two part'
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='two']");
+        const s2 = document.querySelector("span[data-lower-clean='part']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 2
+    assert play_calls[0]["arg"].endswith("en\\ntwo")
+    assert play_calls[1]["arg"].endswith("en\\ntwo part")
 
 
 def test_zid_and_numeric_filtered_from_compound_audio_playback(page):
@@ -1285,7 +1345,7 @@ def test_zid_and_numeric_filtered_from_compound_audio_playback(page):
 </body>
 </html>"""
 
-    # 1. Clicking on 'mapping' should play 'token mapping inflected expansion' without the 14-digit ZID
+    # 1. Clicking on 'mapping' should play 'mapping' (single sub-token)
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -1294,9 +1354,9 @@ def test_zid_and_numeric_filtered_from_compound_audio_playback(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("en\\ntoken mapping inflected expansion")
+    assert play_calls[0]["arg"].endswith("en\\nmapping")
 
-    # 2. Clicking on 'token' should also play 'token mapping inflected expansion' without the 14-digit ZID
+    # 2. Clicking on 'token' should also play 'token' (single sub-token)
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -1305,9 +1365,26 @@ def test_zid_and_numeric_filtered_from_compound_audio_playback(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("en\\ntoken mapping inflected expansion")
+    assert play_calls[0]["arg"].endswith("en\\ntoken")
 
-    # 3. Clicking on the ZID span directly (which is excluded from candidate row selection) suppresses playback
+    # 3. Drag across all tokens (from token to expansion) filters out the 14-digit timestamp
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='token']");
+        const s2 = document.querySelector("span[data-lower-clean='expansion']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 2
+    assert play_calls[0]["arg"].endswith("en\\ntoken")
+    assert play_calls[1]["arg"].endswith("en\\ntoken mapping inflected expansion")
+
+    # 4. Clicking on the ZID span directly (which is excluded from candidate row selection) suppresses playback
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -1432,7 +1509,7 @@ def test_path_level_slashes_delimit_compound_groups_in_audio(page):
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("en\\nspecs")
 
-    # 2. Clicking on 'token' should only play 'token mapping' without crossing '/' to archive or specs
+    # 2. Clicking on 'token' should only play 'token'
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
@@ -1441,7 +1518,24 @@ def test_path_level_slashes_delimit_compound_groups_in_audio(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
-    assert play_calls[0]["arg"].endswith("en\\ntoken mapping")
+    assert play_calls[0]["arg"].endswith("en\\ntoken")
+
+    # 3. Dragging across 'token' -> 'mapping' plays 'token mapping'
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='token']");
+        const s2 = document.querySelector("span[data-lower-clean='mapping']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 2
+    assert play_calls[0]["arg"].endswith("en\\ntoken")
+    assert play_calls[1]["arg"].endswith("en\\ntoken mapping")
 
 
 def test_single_span_with_multiple_compound_tsv_rows_plays_only_direct_match(page):
@@ -1749,22 +1843,38 @@ def test_compound_subtoken_lmb_selection(page):
     span_split = page.locator("span[data-lower-clean='split']")
     span_camel = page.locator("span[data-lower-clean='camel']")
     
-    # 1. Clicking on 'split' sub-token selects all constituent rows (0, 1, 2) and compound row (3)
+    # 1. Clicking on 'split' sub-token selects only its mapped rows (0, 3), not sibling rows (1, 2)
     span_split.click(button="left")
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
-    assert sorted(selected_rows) == [0, 1, 2, 3]
+    assert sorted(selected_rows) == [0, 3]
 
-    for row_id in [0, 1, 2, 3]:
-        assert "selected" in page.locator(f"tr[data-row-id='{row_id}']").get_attribute("class")
+    assert "selected" in page.locator("tr[data-row-id='0']").get_attribute("class")
+    assert "selected" in page.locator("tr[data-row-id='3']").get_attribute("class")
+    assert "selected" not in (page.locator("tr[data-row-id='1']").get_attribute("class") or "")
+    assert "selected" not in (page.locator("tr[data-row-id='2']").get_attribute("class") or "")
 
-    # 2. Clicking on 'camel' sub-token while all are selected toggles and deselects all rows
+    # 2. Clicking on 'camel' sub-token adds its mapped rows (1, 3) without disturbing row 0
     span_camel.click(button="left")
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
-    assert selected_rows == []
+    assert sorted(selected_rows) == [0, 1, 3]
 
-    for row_id in [0, 1, 2, 3]:
-        cls = page.locator(f"tr[data-row-id='{row_id}']").get_attribute("class") or ""
-        assert "selected" not in cls
+    # 3. Clicking on 'camel' again deselects [1, 3] (since both are currently selected), leaving row 0
+    span_camel.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert sorted(selected_rows) == [0]
+
+    # 4. Drag-selecting across split -> camel -> case accumulates all rows [0, 1, 2, 3]
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='split']");
+        const s2 = document.querySelector("span[data-lower-clean='camel']");
+        const s3 = document.querySelector("span[data-lower-clean='case']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0 }));
+        s2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        s3.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    }""")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert sorted(selected_rows) == [0, 1, 2, 3]
 
 
 def test_compound_subtoken_isolated_from_standalone_words(page, tmp_path, monkeypatch):

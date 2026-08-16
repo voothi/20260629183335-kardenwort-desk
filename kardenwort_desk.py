@@ -5096,6 +5096,7 @@ html, body {{
         var dragOccurred = false;
         var justFinishedDrag = false;
         var tokenDragStartIdx = -1;
+        var tokenDragLastIdx = -1;
         var initialSelectedMap = null;
         var mousedownTargetSpan = null;
         var isRmbDragFlipping = false;
@@ -5822,99 +5823,102 @@ html, body {{
             }
         }
 
-        function getCompoundWordsToPlay(targetSpan, sourceMode) {
-            if (!targetSpan) return "";
-            var group = findCompoundSiblingSpans(targetSpan);
-            if (!group || group.length === 0) group = [targetSpan];
-            
+        function getSingleTokenWordsToPlay(s, sourceMode) {
+            if (!s) return "";
             var words = [];
+            var tokenData = findTokenData(s);
+            var spanClean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || "").trim().toLowerCase();
+            var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
             
-            if (group.length > 1) {
-                for (var i = 0; i < group.length; i++) {
-                    var s = group[i];
-                    var term = getSpanSpecificSpokenWord(s, sourceMode, group);
-                    term = sanitizeSpokenText(term);
-                    if (term) {
-                        words.push(term);
-                    }
-                }
+            if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
+                var sanitized = sanitizeSpokenText(spanText);
+                if (sanitized) words.push(sanitized);
             } else {
-                var s = group[0];
-                var tokenData = findTokenData(s);
-                var spanClean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || "").trim().toLowerCase();
-                var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
-                
-                if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
-                    var sanitized = sanitizeSpokenText(spanText);
-                    if (sanitized) words.push(sanitized);
-                } else {
-                    // Check for direct-match rows (e.g. contractions like "isn't" -> [be, not])
-                    var directMatchRows = [];
-                    for (var j = 0; j < tokenData.row_ids.length; j++) {
-                        var rowId = tokenData.row_ids[j];
-                        var tr = null;
-                        for (var k = 0; k < tableRows.length; k++) {
-                            if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                                tr = tableRows[k];
-                                break;
-                            }
+                // Check for direct-match rows (e.g. contractions like "isn't" -> [be, not], or sub-token "camel" -> [camel])
+                var directMatchRows = [];
+                for (var j = 0; j < tokenData.row_ids.length; j++) {
+                    var rowId = tokenData.row_ids[j];
+                    var tr = null;
+                    for (var k = 0; k < tableRows.length; k++) {
+                        if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                            tr = tableRows[k];
+                            break;
                         }
-                        if (!tr) continue;
-                        
-                        var tds = tr.getElementsByTagName('td');
-                        var lemma = "";
-                        var inflected = "";
-                        for (var m = 0; m < tds.length; m++) {
-                            var col = tds[m].getAttribute('data-col');
-                            if (col === '{lemma_col_name}') {
-                                lemma = (tds[m].textContent || tds[m].innerText || "").trim();
-                            } else if (col === '{inflected_col_name}') {
-                                inflected = (tds[m].textContent || tds[m].innerText || "").trim();
-                            }
-                        }
-                        
-                        var lemmaClean = lemma.toLowerCase();
-                        var inflectedClean = inflected.toLowerCase();
-                        var inflectedParts = inflectedClean.split(',').map(function(f) { return f.trim(); });
-                        
-                        if (lemmaClean === spanClean || inflectedClean === spanClean || inflectedParts.indexOf(spanClean) !== -1) {
-                            directMatchRows.push({ rowId: rowId, lemma: lemma, inflected: inflected });
+                    }
+                    if (!tr) continue;
+                    
+                    var tds = tr.getElementsByTagName('td');
+                    var lemma = "";
+                    var inflected = "";
+                    for (var m = 0; m < tds.length; m++) {
+                        var col = tds[m].getAttribute('data-col');
+                        if (col === '{lemma_col_name}') {
+                            lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                        } else if (col === '{inflected_col_name}') {
+                            inflected = (tds[m].textContent || tds[m].innerText || "").trim();
                         }
                     }
                     
-                    if (directMatchRows.length > 0) {
-                        for (var d = 0; d < directMatchRows.length; d++) {
-                            var rowObj = directMatchRows[d];
-                            if (sourceMode === 'inflection') {
-                                var cleanInflection = getCleanConstituentInflection(rowObj.inflected, spanClean);
-                                var term = sanitizeSpokenText(cleanInflection || rowObj.lemma || spanText);
-                                if (term && (words.length === 0 || words[words.length - 1] !== term)) {
-                                    words.push(term);
-                                }
-                            } else {
-                                var term = sanitizeSpokenText(rowObj.lemma || spanText);
-                                if (term && (words.length === 0 || words[words.length - 1] !== term)) {
-                                    words.push(term);
-                                }
+                    var lemmaClean = lemma.toLowerCase();
+                    var inflectedClean = inflected.toLowerCase();
+                    var inflectedParts = inflectedClean.split(',').map(function(f) { return f.trim(); });
+                    
+                    if (lemmaClean === spanClean || inflectedClean === spanClean || inflectedParts.indexOf(spanClean) !== -1) {
+                        directMatchRows.push({ rowId: rowId, lemma: lemma, inflected: inflected });
+                    }
+                }
+                
+                if (directMatchRows.length > 0) {
+                    for (var d = 0; d < directMatchRows.length; d++) {
+                        var rowObj = directMatchRows[d];
+                        if (sourceMode === 'inflection') {
+                            var cleanInflection = getCleanConstituentInflection(rowObj.inflected, spanClean);
+                            if (cleanInflection && cleanInflection.toLowerCase() !== spanClean && (cleanInflection.indexOf('-') !== -1 || cleanInflection.indexOf('_') !== -1 || cleanInflection.indexOf(' ') !== -1 || cleanInflection.indexOf('/') !== -1 || cleanInflection.indexOf('\\\\') !== -1)) {
+                                cleanInflection = (rowObj.lemma && rowObj.lemma.toLowerCase() === spanClean) ? rowObj.lemma : spanText;
+                            }
+                            var term = sanitizeSpokenText(cleanInflection || rowObj.lemma || spanText);
+                            if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                                words.push(term);
+                            }
+                        } else {
+                            var term = sanitizeSpokenText(rowObj.lemma || spanText);
+                            if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                                words.push(term);
                             }
                         }
-                    } else {
-                        var term = getSpanSpecificSpokenWord(s, sourceMode, group);
-                        term = sanitizeSpokenText(term);
-                        if (term) words.push(term);
                     }
+                } else {
+                    var term = getSpanSpecificSpokenWord(s, sourceMode, [s]);
+                    term = sanitizeSpokenText(term);
+                    if (term) words.push(term);
                 }
             }
             
             return words.join(' ');
         }
 
+        function getCompoundWordsToPlay(targetSpan, sourceMode) {
+            if (!targetSpan) return "";
+            var group = findCompoundSiblingSpans(targetSpan);
+            if (!group || group.length === 0) group = [targetSpan];
+            
+            var words = [];
+            for (var i = 0; i < group.length; i++) {
+                var s = group[i];
+                var term = getSingleTokenWordsToPlay(s, sourceMode);
+                if (term) {
+                    words.push(term);
+                }
+            }
+            return words.join(' ');
+        }
+
         function getWordLemma(span) {
-            return getCompoundWordsToPlay(span, 'lemma');
+            return getSingleTokenWordsToPlay(span, 'lemma');
         }
 
         function getWordInflectedForm(span) {
-            return getCompoundWordsToPlay(span, 'inflection');
+            return getSingleTokenWordsToPlay(span, 'inflection');
         }
 
         for (var i = 0; i < tokenSpans.length; i++) {
@@ -5927,18 +5931,7 @@ html, body {{
                         var clickedTokenData = findTokenData(span);
                         if (!clickedTokenData || !clickedTokenData.row_ids || clickedTokenData.row_ids.length === 0) return;
 
-                        var grp = findCompoundSiblingSpans(span);
-                        var targetRowIds = [];
-                        for (var g = 0; g < grp.length; g++) {
-                            var td = findTokenData(grp[g]);
-                            if (td && td.row_ids) {
-                                for (var j = 0; j < td.row_ids.length; j++) {
-                                    if (targetRowIds.indexOf(td.row_ids[j]) === -1) {
-                                        targetRowIds.push(td.row_ids[j]);
-                                    }
-                                }
-                            }
-                        }
+                        var targetRowIds = clickedTokenData.row_ids.slice();
                         if (targetRowIds.length === 0) return;
                         
                         isTokenDragSelecting = true;
@@ -5946,9 +5939,11 @@ html, body {{
                         mousedownTargetSpan = span;
                         
                         tokenDragStartIdx = -1;
+                        tokenDragLastIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
                             if (tokenSpans[k] === span) {
                                 tokenDragStartIdx = k;
+                                tokenDragLastIdx = k;
                                 break;
                             }
                         }
@@ -5981,7 +5976,7 @@ html, body {{
                         updateBidirectionalHighlights();
                         
                         if (audioLmbPlay && tokenDragMode) {
-                            var textToPlay = getCompoundWordsToPlay(span, audioLmbSource);
+                            var textToPlay = getSingleTokenWordsToPlay(span, audioLmbSource);
                             var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
                             playAudio(textToPlay, sourceLang);
                         }
@@ -6056,18 +6051,16 @@ html, body {{
                         var minIdx = Math.min(tokenDragStartIdx, currIdx);
                         var maxIdx = Math.max(tokenDragStartIdx, currIdx);
                         
+                        tokenDragLastIdx = currIdx;
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
-                            var grp = findCompoundSiblingSpans(s);
-                            for (var g = 0; g < grp.length; g++) {
-                                var td = findTokenData(grp[g]);
-                                if (td && td.row_ids) {
-                                    for (var j = 0; j < td.row_ids.length; j++) {
-                                        if (tokenDragMode) {
-                                            selectedRowIdsMap[String(td.row_ids[j])] = true;
-                                        } else {
-                                            delete selectedRowIdsMap[String(td.row_ids[j])];
-                                        }
+                            var td = findTokenData(s);
+                            if (td && td.row_ids) {
+                                for (var j = 0; j < td.row_ids.length; j++) {
+                                    if (tokenDragMode) {
+                                        selectedRowIdsMap[String(td.row_ids[j])] = true;
+                                    } else {
+                                        delete selectedRowIdsMap[String(td.row_ids[j])];
                                     }
                                 }
                             }
@@ -6335,6 +6328,25 @@ html, body {{
                     setTimeout(function() {
                         justFinishedDrag = false;
                     }, 50);
+                    
+                    if (isTokenDragSelecting && tokenDragMode && audioLmbPlay && tokenDragStartIdx !== -1 && tokenDragLastIdx !== -1) {
+                        var minIdx = Math.min(tokenDragStartIdx, tokenDragLastIdx);
+                        var maxIdx = Math.max(tokenDragStartIdx, tokenDragLastIdx);
+                        if (minIdx !== maxIdx) {
+                            var dragWords = [];
+                            for (var k = minIdx; k <= maxIdx; k++) {
+                                var term = getSingleTokenWordsToPlay(tokenSpans[k], audioLmbSource);
+                                if (term) {
+                                    dragWords.push(term);
+                                }
+                            }
+                            var dragText = dragWords.join(' ');
+                            if (dragText) {
+                                var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                                playAudio(dragText, sourceLang);
+                            }
+                        }
+                    }
                 }
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
@@ -6342,6 +6354,8 @@ html, body {{
                 needNotify = true;
             }
             mousedownTargetSpan = null;
+            tokenDragStartIdx = -1;
+            tokenDragLastIdx = -1;
             if (needNotify) {
                 notifyAHKSelection();
             }
