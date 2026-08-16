@@ -2336,6 +2336,83 @@ def test_compound_table_row_click_highlights_all_constituent_spans(page):
     assert is_token_highlighted is True
 
 
+def test_compound_with_inflected_forms_preserves_standalone_token_highlight(page, tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("triggers")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "manual")
+    config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(tmp_path))
+    config.add_section("languages")
+    config.set("languages", "en_lemma_index", "en_idx")
+    config.set("languages", "en_lemma_override", "en_over")
+    config.set("languages", "en_prompt", "en_prompt")
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section("fields")
+    mapping.add_section("fields_mapping.word")
+    mapping.add_section("desk_columns")
+    mapping.set("desk_columns", "WordSource", "lemma")
+    mapping.set("desk_columns", "WordSourceInflectedForm", "inflected")
+    mapping.set("desk_columns", "WordDestination", "word_translation")
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, "w") as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "anki_mapping_file": str(mapping_file),
+        "kardenwort_python": sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "test-clicking.en.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "click\tright-click, clicking\tщелкните\n",
+        encoding="utf-8"
+    )
+
+    html = run_render_flow(
+        text="When clicking a sub-token and right-click flips.",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # Standalone 'clicking' span must have highlight-orange and NOT be not-connected
+    clicking_span = page.locator("span[data-lower-clean='clicking']")
+    assert "highlight-orange" in (clicking_span.get_attribute("class") or "")
+    assert "not-connected" not in (clicking_span.get_attribute("class") or "")
+
+    # Click on 'clicking' should select row 0 (click)
+    clicking_span.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [0]
+    assert "highlight-orange-active" in (clicking_span.get_attribute("class") or "")
+
+
+
 
 
 

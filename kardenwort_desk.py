@@ -4311,6 +4311,7 @@ html, body {{
 
     token_to_rows = {}
     row_candidates = {}
+    row_direct_candidates = {}
     compound_rows = set()
     row_primary_lemmas = {}
     for row_id, row in enumerate(data_rows):
@@ -4334,6 +4335,18 @@ html, body {{
         clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
         row_primary_lemmas[row_id] = clean_lemma_lower
         
+        direct_cands = set()
+        if clean_lemma_lower:
+            direct_cands.add(clean_lemma_lower)
+        for form in forms:
+            c_form = tok.utf8_to_lower("".join(ch for ch in form if ch.isalnum() or ch in apo_set))
+            if c_form:
+                direct_cands.add(c_form)
+                c_stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", c_form, flags=re.IGNORECASE)
+                if c_stem:
+                    direct_cands.add(c_stem)
+        row_direct_candidates[row_id] = direct_cands
+
         has_compound = any(_has_comp_marker(f) for f in forms)
         if clean_lemma and _has_comp_marker(clean_lemma):
             has_compound = True
@@ -4498,7 +4511,7 @@ html, body {{
             filtered_cand_rows = []
             for r_idx in mapped_rows:
                 if r_idx in compound_rows and not is_in_comp:
-                    if row_primary_lemmas.get(r_idx) == lower_clean:
+                    if lower_clean in row_direct_candidates.get(r_idx, set()):
                         filtered_cand_rows.append(r_idx)
                 else:
                     filtered_cand_rows.append(r_idx)
@@ -4693,7 +4706,7 @@ html, body {{
             filtered_cand_rows = []
             for r_idx in mapped_rows:
                 if r_idx in compound_rows and not is_in_comp:
-                    if row_primary_lemmas.get(r_idx) == lower_clean:
+                    if lower_clean in row_direct_candidates.get(r_idx, set()):
                         filtered_cand_rows.append(r_idx)
                 else:
                     filtered_cand_rows.append(r_idx)
@@ -4735,7 +4748,7 @@ html, body {{
                 compound_cand_rows = []
                 for r_idx in filtered_rows:
                     if r_idx in compound_rows:
-                        if row_primary_lemmas.get(r_idx) == lower_clean and not _has_comp_marker(row_primary_lemmas.get(r_idx)):
+                        if lower_clean in row_direct_candidates.get(r_idx, set()) and not _has_comp_marker(row_primary_lemmas.get(r_idx)):
                             atomic_rows.append(r_idx)
                         else:
                             compound_cand_rows.append(r_idx)
