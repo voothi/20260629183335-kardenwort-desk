@@ -5569,6 +5569,11 @@ html, body {{
             if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
                 return "";
             }
+
+            if (!group || group.length <= 1) {
+                var raw = getRawRowTranslations(span);
+                return raw.join(' ');
+            }
             
             var spanClean = (span.getAttribute('data-lower-clean') || span.getAttribute('data-original-text') || span.textContent || "").trim().toLowerCase();
             
@@ -5638,7 +5643,7 @@ html, body {{
             }
 
             if (specificTranslations.length > 0) {
-                return specificTranslations.join(', ');
+                return specificTranslations.join(' ');
             }
 
             // 2. If compound is a group and there is a shared multi-part translation
@@ -5673,7 +5678,7 @@ html, body {{
             }
             
             var raw = getRawRowTranslations(span);
-            return raw.join(', ');
+            return raw.join(' ');
         }
 
         function getWordTranslation(span) {
@@ -5684,7 +5689,7 @@ html, body {{
             }
             
             var raw = getRawRowTranslations(span);
-            return raw.join(', ');
+            return raw.join(' ');
         }
 
         function flipWord(span, toTranslation, forceCompound) {
@@ -6186,6 +6191,10 @@ html, body {{
                         updateRowStyles();
                         updateBidirectionalHighlights();
                     } else if (isRmbDragFlipping) {
+                        if (e.isTrusted && e.buttons !== undefined && (e.buttons & 2) === 0) {
+                            isRmbDragFlipping = false;
+                            return;
+                        }
                         var currIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
                             if (tokenSpans[k] === span) {
@@ -6420,7 +6429,7 @@ html, body {{
             })(tableRows[i]);
         }
         
-        addEvent(document, 'mouseup', function(e) {
+        function handleMouseUp(e) {
             e = e || window.event;
             var needNotify = false;
             if (isDragSelecting || isTokenDragSelecting || isRmbDragFlipping) {
@@ -6514,7 +6523,9 @@ html, body {{
             if (needNotify) {
                 notifyAHKSelection();
             }
-        });
+        }
+        addEvent(document, 'mouseup', handleMouseUp);
+        addEvent(window, 'mouseup', handleMouseUp);
         
         addEvent(document, 'contextmenu', function(e) {
             if (justFinishedDrag) {

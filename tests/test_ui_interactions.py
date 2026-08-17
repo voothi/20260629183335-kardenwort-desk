@@ -3070,6 +3070,284 @@ def test_sample_file_ai_curated_bidirectional_selection(page, monkeypatch):
     assert "highlight-orange-active" in (curated_span.get_attribute("class") or "")
 
 
+def test_rmb_contraction_decomposition_flip(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="we\'ll">we\'ll</span> '
+        '<span class="word" data-word-idx="1" data-line-idx="0" data-lower-clean="let\'s">let\'s</span> '
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="they\'re">they\'re</span>'
+    )
+    manifest = [
+        {"text": "we'll", "is_word": True, "visual_idx": 0, "lower_clean": "we'll", "row_ids": [0, 1]},
+        {"text": "let's", "is_word": True, "visual_idx": 1, "lower_clean": "let's", "row_ids": [2, 3]},
+        {"text": "they're", "is_word": True, "visual_idx": 2, "lower_clean": "they're", "row_ids": [4, 5]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">we</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мы</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">will</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">воля</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">let</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">позволять</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">us</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мы</div></td>
+        </tr>
+        <tr data-row-id="4">
+          <td data-col="WordSource"><div class="scrollable-cell">they</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">они</div></td>
+        </tr>
+        <tr data-row-id="5">
+          <td data-col="WordSource"><div class="scrollable-cell">be</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">быть</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span_well = page.locator("span[data-lower-clean=\"we'll\"]")
+    span_lets = page.locator("span[data-lower-clean=\"let's\"]")
+    span_theyre = page.locator("span[data-lower-clean=\"they're\"]")
+
+    # 1. Flip we'll -> "мы воля"
+    span_well.click(button="right")
+    assert span_well.inner_text() == "мы воля"
+
+    # 2. Flip let's -> "позволять мы"
+    span_lets.click(button="right")
+    assert span_lets.inner_text() == "позволять мы"
+
+    # 3. Flip they're -> "они быть"
+    span_theyre.click(button="right")
+    assert span_theyre.inner_text() == "они быть"
+
+    # 4. Unflip back
+    span_well.click(button="right")
+    assert span_well.inner_text() == "we'll"
+
+    span_lets.click(button="right")
+    assert span_lets.inner_text() == "let's"
+
+    span_theyre.click(button="right")
+    assert span_theyre.inner_text() == "they're"
+
+
+def test_rmb_abbreviation_decomposition_flip(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="fyi">fyi</span> '
+        '<span class="word" data-word-idx="1" data-line-idx="0" data-lower-clean="gui">GUI</span>'
+    )
+    manifest = [
+        {"text": "fyi", "is_word": True, "visual_idx": 0, "lower_clean": "fyi", "row_ids": [0, 1, 2]},
+        {"text": "GUI", "is_word": True, "visual_idx": 1, "lower_clean": "gui", "row_ids": [3, 4, 5]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">for</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">для</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">your</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">ваш</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">information</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">информация</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">graphical</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">графический</div></td>
+        </tr>
+        <tr data-row-id="4">
+          <td data-col="WordSource"><div class="scrollable-cell">user</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">пользователь</div></td>
+        </tr>
+        <tr data-row-id="5">
+          <td data-col="WordSource"><div class="scrollable-cell">interface</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">интерфейс</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span_fyi = page.locator("span[data-lower-clean='fyi']")
+    span_gui = page.locator("span[data-lower-clean='gui']")
+
+    # 1. Flip fyi -> "для ваш информация"
+    span_fyi.click(button="right")
+    assert span_fyi.inner_text() == "для ваш информация"
+
+    # 2. Flip GUI -> "графический пользователь интерфейс"
+    span_gui.click(button="right")
+    assert span_gui.inner_text() == "графический пользователь интерфейс"
+
+    # 3. Unflip
+    span_fyi.click(button="right")
+    assert span_fyi.inner_text() == "fyi"
+
+    span_gui.click(button="right")
+    assert span_gui.inner_text() == "GUI"
+
+
+def test_rmb_multi_span_compound_subtoken_isolation(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="state">state</span>-'
+        '<span class="word" data-word-idx="1" data-line-idx="0" data-lower-clean="of">of</span>-'
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="the">the</span>-'
+        '<span class="word" data-word-idx="3" data-line-idx="0" data-lower-clean="art">art</span>'
+    )
+    manifest = [
+        {"text": "state", "is_word": True, "visual_idx": 0, "lower_clean": "state", "row_ids": [0, 4]},
+        {"text": "of", "is_word": True, "visual_idx": 1, "lower_clean": "of", "row_ids": [1, 4]},
+        {"text": "the", "is_word": True, "visual_idx": 2, "lower_clean": "the", "row_ids": [2, 4]},
+        {"text": "art", "is_word": True, "visual_idx": 3, "lower_clean": "art", "row_ids": [3, 4]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">state</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">состояние</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">of</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">из</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">the</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">этот</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">art</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">искусство</div></td>
+        </tr>
+        <tr data-row-id="4">
+          <td data-col="WordSource"><div class="scrollable-cell">state_of_the_art</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">новейший</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    span_state = page.locator("span[data-lower-clean='state']")
+    span_of = page.locator("span[data-lower-clean='of']")
+    span_the = page.locator("span[data-lower-clean='the']")
+    span_art = page.locator("span[data-lower-clean='art']")
+
+    # Clicking 'state' sub-span flips only 'state' to 'состояние' (not compound 'новейший')
+    span_state.click(button="right")
+    assert span_state.inner_text() == "состояние"
+    assert span_art.inner_text() == "art"
+
+    # Clicking 'art' sub-span flips only 'art' to 'искусство'
+    span_art.click(button="right")
+    assert span_art.inner_text() == "искусство"
+
+    # Unflip
+    span_state.click(button="right")
+    assert span_state.inner_text() == "state"
+
+
+def test_rmb_contraction_audio_playback_resolution(page):
+    source_html = '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="we\'ll">we\'ll</span>'
+    manifest = [
+        {"text": "we'll", "is_word": True, "visual_idx": 0, "lower_clean": "we'll", "row_ids": [0, 1]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">we</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мы</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">will</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">воля</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(rmb_play=True))
+
+    span = page.locator("span[data-lower-clean=\"we'll\"]")
+    span.click(button="right")
+
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nмы воля")
+
+
+
 
 
 
