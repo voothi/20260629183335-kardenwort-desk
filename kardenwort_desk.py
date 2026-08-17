@@ -10049,7 +10049,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
 
         col_map = {}
         for sib_c, h in enumerate(sib_headers):
-            if h in headers and sib_c != sib_col_lemma:
+            if h in headers and sib_c != sib_col_lemma and is_wordfill_eligible(h):
                 col_map[sib_c] = headers.index(h)
 
         for sib_row in sib_rows:

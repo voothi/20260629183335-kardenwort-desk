@@ -243,3 +243,94 @@ def test_translate_lemmas_fast_path_individual_fallback(monkeypatch):
     assert res == {"Haus": "house", "Buch": "book"}
     assert "Haus" in calls
     assert "Buch" in calls
+
+
+# ---------------------------------------------------------------------------
+# Task 2.6: Sibling cross-pollination strictly excludes sentence-level fields
+# ---------------------------------------------------------------------------
+
+def test_cross_pollinate_excludes_sentence_level_fields(tmp_path):
+    """
+    Verify that cross_pollinate_from_siblings copies word-level fields
+    (WordDestination, WordSourceIPA, WordSourceMorphologyAI) but NEVER copies
+    or overwrites sentence-level fields (SentenceSource, SentenceDestination,
+    SentenceSourceContextPrevious, Quotation, TextSource) even if the target has empty
+    or different sentence fields.
+    """
+    child_name = "20260809190005-child.en.tsv"
+    sibling_name = "20260809190000-sibling.en.tsv"
+
+    headers = [
+        "WordSource",
+        "WordDestination",
+        "WordSourceIPA",
+        "WordSourceMorphologyAI",
+        "SentenceSource",
+        "SentenceDestination",
+        "SentenceSourceContextPrevious",
+        "Quotation",
+        "TextSource",
+    ]
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "ipa": "WordSourceIPA",
+        "morphology": "WordSourceMorphologyAI",
+        "sentence_source": "SentenceSource",
+        "sentence_destination": "SentenceDestination",
+    }
+
+    # Child TSV: has "Haus" in Sentence B ("Das ist mein Haus."), translation missing
+    child_rows = [
+        [
+            "Haus",
+            "",
+            "",
+            "",
+            "Das ist mein Haus.",
+            "That is my house.",
+            "Vorheriger Satz.",
+            "Zitat B",
+            "Text Quelle B",
+        ],
+    ]
+    child_tsv = tmp_path / child_name
+    child_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(child_rows[0]) + "\n",
+        encoding="utf-8",
+    )
+
+    # Sibling TSV: has "Haus" in Sentence A ("Ein altes Haus steht dort.")
+    sibling_rows = [
+        [
+            "Haus",
+            "house",
+            "/haʊs/",
+            "Noun, neuter",
+            "Ein altes Haus steht dort.",
+            "An old house stands there.",
+            "Anderer Kontext.",
+            "Zitat A",
+            "Text Quelle A",
+        ],
+    ]
+    sibling_tsv = tmp_path / sibling_name
+    sibling_tsv.write_text(
+        "\t".join(headers) + "\n" + "\t".join(sibling_rows[0]) + "\n",
+        encoding="utf-8",
+    )
+
+    result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers, role_fields)
+
+    # Word-level fields SHOULD be populated
+    assert result[0][1] == "house", "WordDestination should be cross-pollinated"
+    assert result[0][2] == "/haʊs/", "WordSourceIPA should be cross-pollinated"
+    assert result[0][3] == "Noun, neuter", "WordSourceMorphologyAI should be cross-pollinated"
+
+    # Sentence-level fields MUST NOT be overwritten by sibling
+    assert result[0][4] == "Das ist mein Haus.", "SentenceSource must NOT be overwritten by sibling"
+    assert result[0][5] == "That is my house.", "SentenceDestination must NOT be overwritten by sibling"
+    assert result[0][6] == "Vorheriger Satz.", "SentenceSourceContextPrevious must NOT be overwritten by sibling"
+    assert result[0][7] == "Zitat B", "Quotation must NOT be overwritten by sibling"
+    assert result[0][8] == "Text Quelle B", "TextSource must NOT be overwritten by sibling"
+
