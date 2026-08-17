@@ -3334,9 +3334,10 @@ def test_rmb_contraction_audio_playback_resolution(page):
 </body>
 </html>"""
 
+    # 1. Separate chain mode (default): plays "мы ||| воля"
     page.set_content(html)
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
-    page.evaluate(extract_desk_js(rmb_play=True))
+    page.evaluate(extract_desk_js(rmb_play=True, rmb_chain_mode="separate"))
 
     span = page.locator("span[data-lower-clean=\"we'll\"]")
     span.click(button="right")
@@ -3344,7 +3345,240 @@ def test_rmb_contraction_audio_playback_resolution(page):
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nмы ||| воля")
+
+    # 2. Joined chain mode: plays "мы воля"
+    page.evaluate("window.__ahkCalls = [];")
+    page.evaluate(extract_desk_js(rmb_play=True, rmb_chain_mode="joined"))
+    span.click(button="right")
+
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("ru\\nмы воля")
+
+
+def test_lmb_contraction_single_token_chain_modes(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="we\'ll">we\'ll</span> '
+        '<span class="word" data-word-idx="1" data-line-idx="0" data-lower-clean="we\'re">we\'re</span>'
+    )
+    manifest = [
+        {"text": "we'll", "is_word": True, "visual_idx": 0, "lower_clean": "we'll", "row_ids": [0, 1]},
+        {"text": "we're", "is_word": True, "visual_idx": 1, "lower_clean": "we're", "row_ids": [2, 3]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">we</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">we'll, we</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мы</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">will</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">we'll, will</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">воля</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">we</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">we're, we</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">мы</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">be</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">we're, are</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">быть</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. we'll: lemma mode with separate chain mode -> "we ||| will"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+    span_well = page.locator("span[data-lower-clean=\"we'll\"]")
+    span_well.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nwe ||| will")
+
+    # 2. we'll: lemma mode with joined chain mode -> "we will"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined"))
+    span_well = page.locator("span[data-lower-clean=\"we'll\"]")
+    span_well.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nwe will")
+
+    # 3. we're: inflection mode with separate chain mode -> "we ||| are"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection", lmb_chain_mode="separate"))
+    span_were = page.locator("span[data-lower-clean=\"we're\"]")
+    span_were.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nwe ||| are")
+
+    # 4. we're: inflection mode with joined chain mode -> "we are"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection", lmb_chain_mode="joined"))
+    span_were = page.locator("span[data-lower-clean=\"we're\"]")
+    span_were.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nwe are")
+
+    # 5. we're: lemma mode with separate chain mode -> "we ||| be"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+    span_were = page.locator("span[data-lower-clean=\"we're\"]")
+    span_were.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nwe ||| be")
+
+
+def test_abbreviation_single_token_audio_chain_modes(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="fyi">fyi</span> '
+        '<span class="word" data-word-idx="1" data-line-idx="0" data-lower-clean="gui">GUI</span>'
+    )
+    manifest = [
+        {"text": "fyi", "is_word": True, "visual_idx": 0, "lower_clean": "fyi", "row_ids": [0, 1, 2]},
+        {"text": "GUI", "is_word": True, "visual_idx": 1, "lower_clean": "gui", "row_ids": [3, 4, 5]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">for</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">для</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">your</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">ваш</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">information</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">информация</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">graphical</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">графический</div></td>
+        </tr>
+        <tr data-row-id="4">
+          <td data-col="WordSource"><div class="scrollable-cell">user</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">пользователь</div></td>
+        </tr>
+        <tr data-row-id="5">
+          <td data-col="WordSource"><div class="scrollable-cell">interface</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">интерфейс</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">en</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # 1. FYI: LMB separate chain mode -> "for ||| your ||| information"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+    span_fyi = page.locator("span[data-lower-clean='fyi']")
+    span_fyi.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nfor ||| your ||| information")
+
+    # 2. FYI: LMB joined chain mode -> "for your information"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined"))
+    span_fyi = page.locator("span[data-lower-clean='fyi']")
+    span_fyi.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\nfor your information")
+
+    # 3. FYI: RMB separate chain mode -> "для ||| ваш ||| информация"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(rmb_play=True, rmb_chain_mode="separate"))
+    span_fyi = page.locator("span[data-lower-clean='fyi']")
+    span_fyi.click(button="right")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nдля ||| ваш ||| информация")
+
+    # 4. FYI: RMB joined chain mode -> "для ваш информация"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(rmb_play=True, rmb_chain_mode="joined"))
+    span_fyi = page.locator("span[data-lower-clean='fyi']")
+    span_fyi.click(button="right")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nдля ваш информация")
+
+    # 5. GUI: LMB separate chain mode -> "graphical ||| user ||| interface"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+    span_gui = page.locator("span[data-lower-clean='gui']")
+    span_gui.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("en\\ngraphical ||| user ||| interface")
+
+    # 6. GUI: RMB separate chain mode -> "графический ||| пользователь ||| интерфейс"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(rmb_play=True, rmb_chain_mode="separate"))
+    span_gui.click(button="right")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("ru\\nграфический ||| пользователь ||| интерфейс")
+
 
 
 

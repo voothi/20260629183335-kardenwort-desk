@@ -5780,6 +5780,15 @@ html, body {{
         function sanitizeSpokenText(text) {
             if (!text) return "";
             var s = String(text);
+            if (s.indexOf('|||') !== -1) {
+                var parts = s.split('|||');
+                var cleanParts = [];
+                for (var i = 0; i < parts.length; i++) {
+                    var p = sanitizeSpokenText(parts[i]);
+                    if (p) cleanParts.push(p);
+                }
+                return cleanParts.join(' ||| ');
+            }
             // Strip 14-digit ZIDs
             s = s.replace(/(^|[^0-9])[0-9]{14}(?![0-9])/g, '$1 ');
             // Replace path separators, colons, and underscore delimiters with spaces
@@ -5902,7 +5911,7 @@ html, body {{
             }
         }
 
-        function getSingleTokenWordsToPlay(s, sourceMode) {
+        function getSingleTokenWordsToPlay(s, sourceMode, chainMode) {
             if (!s) return "";
             var words = [];
             var tokenData = findTokenData(s);
@@ -5967,13 +5976,47 @@ html, body {{
                         }
                     }
                 } else {
-                    var term = getSpanSpecificSpokenWord(s, sourceMode, [s]);
-                    term = sanitizeSpokenText(term);
-                    if (term) words.push(term);
+                    var group = findCompoundSiblingSpans(s);
+                    if ((!group || group.length <= 1) && tokenData.row_ids.length > 0) {
+                        for (var j = 0; j < tokenData.row_ids.length; j++) {
+                            var rowId = tokenData.row_ids[j];
+                            var tr = null;
+                            for (var k = 0; k < tableRows.length; k++) {
+                                if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
+                                    tr = tableRows[k];
+                                    break;
+                                }
+                            }
+                            if (!tr) continue;
+                            var tds = tr.getElementsByTagName('td');
+                            var lemma = "";
+                            var inflected = "";
+                            for (var m = 0; m < tds.length; m++) {
+                                var col = tds[m].getAttribute('data-col');
+                                if (col === '{lemma_col_name}') {
+                                    lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                                } else if (col === '{inflected_col_name}') {
+                                    inflected = (tds[m].textContent || tds[m].innerText || "").trim();
+                                }
+                            }
+                            var term = (sourceMode === 'inflection' && inflected) ? inflected : lemma;
+                            if (!term) term = lemma || inflected || spanText;
+                            term = sanitizeSpokenText(term);
+                            if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                                words.push(term);
+                            }
+                        }
+                    }
+                    if (words.length === 0) {
+                        var term = getSpanSpecificSpokenWord(s, sourceMode, [s]);
+                        term = sanitizeSpokenText(term);
+                        if (term) words.push(term);
+                    }
                 }
             }
             
-            return words.join(' ');
+            var delim = (chainMode === 'separate' || chainMode === 'per_word') ? ' ||| ' : ' ';
+            return words.join(delim);
         }
 
         function getCompoundWordsToPlay(targetSpan, sourceMode) {
@@ -6446,7 +6489,7 @@ html, body {{
                     if (dragOccurred && minIdx !== maxIdx) {
                         var dragWords = [];
                         for (var k = minIdx; k <= maxIdx; k++) {
-                            var term = getSingleTokenWordsToPlay(tokenSpans[k], audioLmbSource);
+                            var term = getSingleTokenWordsToPlay(tokenSpans[k], audioLmbSource, audioLmbChainMode);
                             if (term) {
                                 dragWords.push(term);
                             }
@@ -6465,7 +6508,7 @@ html, body {{
                     } else {
                         var targetSpan = mousedownTargetSpan || (tokenDragStartIdx !== -1 ? tokenSpans[tokenDragStartIdx] : null);
                         if (targetSpan) {
-                            var singleText = getSingleTokenWordsToPlay(targetSpan, audioLmbSource);
+                            var singleText = getSingleTokenWordsToPlay(targetSpan, audioLmbSource, audioLmbChainMode);
                             if (singleText) {
                                 var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
                                 playAudio(singleText, sourceLang);
@@ -6481,13 +6524,22 @@ html, body {{
                         var dragTranslations = [];
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
-                            var trans = getSpanSpecificTranslation(s, findCompoundSiblingSpans(s));
-                            if (!trans) trans = getWordTranslation(s);
-                            if (trans) {
-                                var cleanTrans = sanitizeSpokenText(trans);
-                                if (cleanTrans) {
-                                    dragTranslations.push(cleanTrans);
-                                }
+                            var grp = findCompoundSiblingSpans(s);
+                            var rawTrans = (grp && grp.length > 1)
+                                ? [getSpanSpecificTranslation(s, grp)]
+                                : getRawRowTranslations(s);
+                            if (!rawTrans || rawTrans.length === 0) {
+                                var wt = getWordTranslation(s);
+                                if (wt) rawTrans = [wt];
+                            }
+                            var delim = (audioRmbChainMode === 'separate' || audioRmbChainMode === 'per_word') ? ' ||| ' : ' ';
+                            var cleanParts = [];
+                            for (var t = 0; t < rawTrans.length; t++) {
+                                var c = sanitizeSpokenText(rawTrans[t]);
+                                if (c) cleanParts.push(c);
+                            }
+                            if (cleanParts.length > 0) {
+                                dragTranslations.push(cleanParts.join(delim));
                             }
                         }
                         if (dragTranslations.length > 0) {
@@ -6503,10 +6555,22 @@ html, body {{
                     } else {
                         var targetSpan = mousedownTargetSpan || (tokenDragStartIdx !== -1 ? tokenSpans[tokenDragStartIdx] : null);
                         if (targetSpan) {
-                            var singleTrans = getSpanSpecificTranslation(targetSpan, findCompoundSiblingSpans(targetSpan));
-                            if (!singleTrans) singleTrans = getWordTranslation(targetSpan);
-                            if (singleTrans) {
-                                playAudio(singleTrans, targetLang);
+                            var grp = findCompoundSiblingSpans(targetSpan);
+                            var rawTrans = (grp && grp.length > 1)
+                                ? [getSpanSpecificTranslation(targetSpan, grp)]
+                                : getRawRowTranslations(targetSpan);
+                            if (!rawTrans || rawTrans.length === 0) {
+                                var wt = getWordTranslation(targetSpan);
+                                if (wt) rawTrans = [wt];
+                            }
+                            var delim = (audioRmbChainMode === 'separate' || audioRmbChainMode === 'per_word') ? ' ||| ' : ' ';
+                            var cleanParts = [];
+                            for (var t = 0; t < rawTrans.length; t++) {
+                                var c = sanitizeSpokenText(rawTrans[t]);
+                                if (c) cleanParts.push(c);
+                            }
+                            if (cleanParts.length > 0) {
+                                playAudio(cleanParts.join(delim), targetLang);
                             }
                         }
                     }
