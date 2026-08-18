@@ -2800,7 +2800,7 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
         logger.error(f"Headless IntelliFiller failed with exit code {res.returncode}: {res.stderr}")
         return False
 
-def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None):
+def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, zid=None, trace_id=None):
     python_exe = sys.executable
     desk_script = Path(__file__).resolve()
     
@@ -2824,6 +2824,10 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
         "--prompt", prompt_name,
         "--rows", rows_str
     ]
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
         
     logger.info(f"Kicking off background batch-worker: {' '.join(cmd)}")
     if sys.platform == 'win32':
@@ -2845,9 +2849,17 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
             close_fds=True
         )
 
-def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False, text_mode='single'):
+def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False, text_mode='single', zid=None, trace_id=None):
     python_exe = sys.executable
     desk_script = Path(__file__).resolve()
+    if not zid:
+        import re
+        m = re.match(r"^(\d{14})", Path(tsv_path).name)
+        if m:
+            zid = m.group(1)
+    if not trace_id and zid:
+        trace_id = f"{zid}:progressive:worker"
+
     cmd = [
         str(python_exe),
         str(desk_script),
@@ -2860,6 +2872,10 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
         "--word-empty", str(word_translations_empty),
         "--text-mode", text_mode
     ]
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
     if skip_intellifiller:
         cmd.append("--skip-intellifiller")
     logger.info(f"Kicking off background progressive-worker: {' '.join(cmd)}")
@@ -3516,19 +3532,19 @@ def parse_source_sentences(text, text_mode, config):
                 source_sentences = text.splitlines()
     return source_sentences, text, smc
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
             logger.warning(f"[{zid}] Concurrent render skipped — already active. Rapid duplicate hotkey fire detected.")
             return ""
         _ACTIVE_ZIDS.add(zid)
     try:
-        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num)
+        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id)
     finally:
         with _ACTIVE_ZIDS_LOCK:
             _ACTIVE_ZIDS.discard(zid)
 
-def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None):
+def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None):
     normalize_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
     if text:
         text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
@@ -4263,7 +4279,19 @@ html, body {{
             if needs_worker:
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none') or is_master_window
                 try:
-                    run_progressive_worker_async(working_tsv_path, language, target_lang, prompt_name, base_provider, str(has_untranslated_lemmas), skip_intellifiller, eff_mode)
+                    try:
+                        run_progressive_worker_async(
+                            working_tsv_path, language, target_lang, prompt_name,
+                            base_provider, str(has_untranslated_lemmas),
+                            skip_intellifiller, eff_mode,
+                            zid=zid, trace_id=(trace_id or f"{zid}:progressive:worker")
+                        )
+                    except TypeError:
+                        run_progressive_worker_async(
+                            working_tsv_path, language, target_lang, prompt_name,
+                            base_provider, str(has_untranslated_lemmas),
+                            skip_intellifiller, eff_mode
+                        )
                     worker_launched = True
                 except Exception as e:
                     logger.error(f"Failed to launch progressive worker async: {e}")
@@ -8575,7 +8603,8 @@ def cmd_render(args):
     try:
         zoom_val = args.zoom if args.zoom else config.get(SEC_RENDERING, 'default_zoom', fallback=config.get(SEC_SETTINGS, 'default_zoom', fallback='100'))
         split_gap = args.split_gap_limit if args.split_gap_limit is not None else config.getint(SEC_SETTINGS, 'split_gap_limit', fallback=60)
-        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill, seq_num=getattr(args, 'seq_num', None))
+        trace_id = getattr(args, 'trace_id', None) or (f"{args.zid}:render:init" if getattr(args, 'zid', None) else None)
+        html = run_render_flow(text, args.language, args.zid, args.text_mode, config, resolved_paths, zoom_val, args.theme, args.tsv, split_gap_limit=split_gap, wordfill_cfg=_wordfill, seq_num=getattr(args, 'seq_num', None), trace_id=trace_id)
         from b64util import encode
         emit_payload(encode(html), raw=True)
     except Exception as e:
@@ -9035,6 +9064,7 @@ def cmd_reprocess(args):
     python_exe = sys.executable
     desk_script = Path(__file__).resolve()
     
+    trace_id = getattr(args, 'trace_id', None) or (f"{zid}:reprocess:worker" if zid else None)
     cmd = [
         str(python_exe),
         str(desk_script),
@@ -9043,6 +9073,10 @@ def cmd_reprocess(args):
         "--prompt", prompt_name,
         "--rows", ",".join(str(r) for r in selected_rows)
     ]
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
     if args.config:
         cmd.extend(["--config", args.config])
         
@@ -9687,6 +9721,7 @@ def cmd_retext(args):
     python_exe = sys.executable
     desk_script = Path(__file__).resolve()
     
+    trace_id = getattr(args, 'trace_id', None) or (f"{zid}:retext:worker" if zid else None)
     cmd = [
         str(python_exe),
         str(desk_script),
@@ -9695,6 +9730,10 @@ def cmd_retext(args):
         "--language", lang,
         "--text-mode", args.text_mode
     ]
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
     if args.config:
         cmd.extend(["--config", args.config])
         
@@ -11150,6 +11189,8 @@ def main():
     parser.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     parser.add_argument("--debug", action="store_true", help="Debug logging")
+    parser.add_argument("--zid", default=None, help="Session ZID")
+    parser.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     subparsers = parser.add_subparsers(dest="command", required=True)
 
@@ -11166,12 +11207,15 @@ def main():
     p_lookup.add_argument("--disable-css", action="store_true", help="Disable outputting CSS styles in HTML")
     p_lookup.add_argument("--theme", choices=["dark", "light", "compact"], help="Theme (html format)")
     p_lookup.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
+    p_lookup.add_argument("--zid", default=None, help="Session ZID")
+    p_lookup.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # render
     p_render = subparsers.add_parser("render")
     p_render.add_argument("--text", help="Selected text")
     p_render.add_argument("--language", required=True, help="Language code")
     p_render.add_argument("--zid", required=True, help="Session ZID")
+    p_render.add_argument("--trace-id", default=None, help="Trace correlation ID")
     p_render.add_argument("--text-mode", choices=["single", "multi"], default="single")
     p_render.add_argument("--zoom", default=None, help="Zoom level for CSS scaling (falls back to config default_zoom)")
     p_render.add_argument("--tsv", default=None, help="Path to TSV file to render")
@@ -11184,39 +11228,53 @@ def main():
     p_export = subparsers.add_parser("export")
     p_export.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_export.add_argument("--language", required=True, help="Language code")
+    p_export.add_argument("--zid", default=None, help="Session ZID")
+    p_export.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     p_export_selected = subparsers.add_parser("export-selected")
     p_export_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
     p_export_selected.add_argument("--language", default=None, help="Language code")
     p_export_selected.add_argument("--pause", action="store_true", help="Pause on exit")
+    p_export_selected.add_argument("--zid", default=None, help="Session ZID")
+    p_export_selected.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     p_import_selected = subparsers.add_parser("import-selected")
     p_import_selected.add_argument("--files", nargs="+", required=True, help="Paths to TSV files")
     p_import_selected.add_argument("--language", default=None, help="Language code")
     p_import_selected.add_argument("--pause", action="store_true", help="Pause on exit")
+    p_import_selected.add_argument("--zid", default=None, help="Session ZID")
+    p_import_selected.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # reprocess
     p_reprocess = subparsers.add_parser("reprocess")
     p_reprocess.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_reprocess.add_argument("--language", required=True, help="Language code")
+    p_reprocess.add_argument("--zid", default=None, help="Session ZID")
+    p_reprocess.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # retext
     p_retext = subparsers.add_parser("retext")
     p_retext.add_argument("--selection-manifest", required=True, help="Selection manifest path")
     p_retext.add_argument("--language", required=True, help="Language code")
     p_retext.add_argument("--text-mode", default="single", choices=["single", "multi"], help="Text mode (single or multi)")
+    p_retext.add_argument("--zid", default=None, help="Session ZID")
+    p_retext.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # batch-worker
     p_batch_worker = subparsers.add_parser("batch-worker")
     p_batch_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
     p_batch_worker.add_argument("--prompt", required=True, help="Prompt name")
     p_batch_worker.add_argument("--rows", required=True, help="Comma-separated list of row indices")
+    p_batch_worker.add_argument("--zid", default=None, help="Session ZID")
+    p_batch_worker.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # retext-worker
     p_retext_worker = subparsers.add_parser("retext-worker")
     p_retext_worker.add_argument("--tsv", required=True, help="Explicit TSV path")
     p_retext_worker.add_argument("--language", required=True, help="Language code")
     p_retext_worker.add_argument("--text-mode", default="single", choices=["single", "multi"], help="Text mode (single or multi)")
+    p_retext_worker.add_argument("--zid", default=None, help="Session ZID")
+    p_retext_worker.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # progressive-worker
     p_prog_worker = subparsers.add_parser("progressive-worker")
@@ -11228,11 +11286,14 @@ def main():
     p_prog_worker.add_argument("--word-empty", required=True, help="Word translations empty flag")
     p_prog_worker.add_argument("--text-mode", default="single", help="Text chunking mode")
     p_prog_worker.add_argument("--skip-intellifiller", action="store_true", help="Skip intellifiller phase")
+    p_prog_worker.add_argument("--zid", default=None, help="Session ZID")
+    p_prog_worker.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # edit-save
     p_edit = subparsers.add_parser("edit-save")
     p_edit.add_argument("--deltas", required=True, help="Deltas JSON file path")
     p_edit.add_argument("--zid", required=True, help="Session ZID")
+    p_edit.add_argument("--trace-id", default=None, help="Trace correlation ID")
     p_edit.add_argument("--language", help="Language code")
     p_edit.add_argument("--tsv", help="Explicit TSV path")
 
@@ -11258,6 +11319,8 @@ def main():
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
     p_desk.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
     p_desk.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
+    p_desk.add_argument("--zid", default=None, help="Session ZID")
+    p_desk.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
     # wordfill
     p_wordfill = subparsers.add_parser("wordfill")
