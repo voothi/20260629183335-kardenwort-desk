@@ -3063,6 +3063,95 @@ def test_acronym_plurals_candidates_not_fragmented():
         assert subtokens == [word], f"Expected [{word}], got {subtokens}"
 
 
+def test_session_logger(tmp_path):
+    import re
+    results_dir = tmp_path / "results"
+    zid = "20260818223000"
+    trace_id = "20260818223000:test-trace"
+    
+    logger = desk.SessionLogger(zid, results_dir, trace_id=trace_id)
+    logger.info("Starting test translation process")
+    logger.warning("Subprocess slow response")
+    logger.error("API limit reached")
+    
+    log_file = results_dir / f"{zid}.log"
+    assert log_file.exists()
+    content = log_file.read_text(encoding="utf-8")
+    lines = content.strip().splitlines()
+    assert len(lines) == 3
+    
+    # Check format: [YYYY-MM-DD HH:MM:SS.mmm] [TRACE_ID] [LEVEL] Message
+    pattern = r"^\[\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{3}\] \[" + re.escape(trace_id) + r"\] \[(INFO|WARNING|ERROR)\] .+$"
+    for line in lines:
+        assert re.match(pattern, line), f"Line did not match pattern: {line}"
+    assert "Starting test translation process" in lines[0]
+    assert "Subprocess slow response" in lines[1]
+    assert "API limit reached" in lines[2]
+
+
+def test_write_update_js_error_envelope(tmp_path):
+    import re
+    tsv_path = tmp_path / "20260818223000-session.tsv"
+    tsv_path.write_text("Word\tTranslation\nApple\tApfel\n", encoding="utf-8")
+    headers = ["Word", "Translation"]
+    role_fields = {"lemma": "Word", "word_translation": "Translation"}
+    data_rows = [["Apple", "Apfel"]]
+    
+    error_obj = {
+        "status": "error",
+        "zid": "20260818223000",
+        "trace_id": "20260818223000:retext:worker",
+        "code": "ERR_DEEPL_QUOTA",
+        "message": "DeepL API translation quota exceeded",
+        "provider": "deepl",
+        "details": {"http_code": 456}
+    }
+    
+    desk.write_update_js(
+        tsv_path,
+        data_rows,
+        headers,
+        role_fields,
+        stage="finished",
+        status="failed",
+        error=error_obj,
+        zid="20260818223000",
+        trace_id="20260818223000:retext:worker"
+    )
+    
+    updates_dir = tmp_path / "20260818223000-session.updates"
+    js_files = list(updates_dir.glob("*.js"))
+    assert len(js_files) == 1
+    content = js_files[0].read_text(encoding="utf-8")
+    
+    match = re.search(r"window\.receiveUpdate\((.*)\);", content, re.DOTALL)
+    assert match
+    payload = json.loads(match.group(1))
+    
+    assert payload["status"] == "failed"
+    assert payload["stage"] == "finished"
+    assert payload["zid"] == "20260818223000"
+    assert payload["trace_id"] == "20260818223000:retext:worker"
+    assert payload["error"]["code"] == "ERR_DEEPL_QUOTA"
+    assert payload["error"]["message"] == "DeepL API translation quota exceeded"
+    assert payload["error"]["details"]["http_code"] == 456
+
+
+def test_translation_exception_envelope():
+    env = {
+        "status": "error",
+        "code": "ERR_GOOGLE_RATE_LIMIT",
+        "message": "Google translate rate limit exceeded",
+        "provider": "google",
+        "details": {"http_code": 429}
+    }
+    exc = desk.TranslationException("Google translate rate limit exceeded", envelope=env)
+    assert exc.code == "ERR_GOOGLE_RATE_LIMIT"
+    assert exc.message == "Google translate rate limit exceeded"
+    assert exc.details == {"http_code": 429}
+    assert exc.envelope == env
+
+
 
 
 

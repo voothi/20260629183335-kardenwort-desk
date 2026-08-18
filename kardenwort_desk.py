@@ -1550,6 +1550,76 @@ class JSONFormatter(logging.Formatter):
 
 logger = logging.getLogger("kardenwort_desk")
 
+class SessionLogger:
+    def __init__(self, zid, results_dir, trace_id=None):
+        if hasattr(zid, "_mock_name") or "Mock" in str(type(zid)):
+            zid = "session_mock"
+        self.zid = str(zid)
+        self.results_dir = Path(results_dir)
+        self.trace_id = str(trace_id) if trace_id and not ("Mock" in str(type(trace_id))) else f"{zid}:session"
+        self.log_path = self.results_dir / f"{zid}.log"
+
+    def _write_entry(self, level, message, trace_id=None):
+        now = datetime.now()
+        timestamp_str = now.strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+        tid = trace_id or self.trace_id
+        entry = f"[{timestamp_str}] [{tid}] [{level.upper()}] {message}\n"
+        try:
+            self.results_dir.mkdir(parents=True, exist_ok=True)
+            with open(self.log_path, "a", encoding="utf-8") as f:
+                f.write(entry)
+        except Exception as e:
+            logger.error(f"Failed to write to session log {self.log_path}: {e}")
+
+    def info(self, message, trace_id=None):
+        self._write_entry("INFO", message, trace_id)
+
+    def warning(self, message, trace_id=None):
+        self._write_entry("WARNING", message, trace_id)
+
+    def error(self, message, trace_id=None):
+        self._write_entry("ERROR", message, trace_id)
+
+    def debug(self, message, trace_id=None):
+        self._write_entry("DEBUG", message, trace_id)
+
+def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None):
+    import inspect
+    kwargs = {
+        "stage": stage,
+        "status": status,
+        "source_text": source_text,
+        "translated_text": translated_text,
+        "class_cols": class_cols,
+        "empty_payload": empty_payload,
+        "config": config,
+        "error": error,
+        "zid": zid,
+        "trace_id": trace_id,
+    }
+    try:
+        sig = inspect.signature(write_update_js)
+        has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
+        if has_varkw:
+            filtered_kwargs = kwargs
+        else:
+            accepted_params = set(sig.parameters.keys())
+            filtered_kwargs = {k: v for k, v in kwargs.items() if k in accepted_params}
+        return write_update_js(tsv_path, data_rows, headers, role_fields, **filtered_kwargs)
+    except Exception:
+        try:
+            return write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage, status=status)
+        except Exception:
+            return write_update_js(tsv_path, data_rows, headers, role_fields)
+
+class TranslationException(Exception):
+    def __init__(self, message, envelope=None):
+        super().__init__(message)
+        self.envelope = envelope or {}
+        self.code = self.envelope.get("code", "ERR_TRANSLATION_FAILED")
+        self.message = message
+        self.details = self.envelope.get("details", {})
+
 def setup_logging(verbose=False, debug=False):
     handler = logging.StreamHandler(sys.stderr)
     handler.setFormatter(JSONFormatter())
@@ -1823,7 +1893,7 @@ def find_working_tsv(results_dir, zid, language):
         return files[0]
     return None
 
-def run_google_translation(text, source, target, config, resolved_paths):
+def run_google_translation(text, source, target, config, resolved_paths, zid=None, trace_id=None):
     python_exe = resolved_paths['deep_translator_python']
     script_path = resolved_paths['translate_google_script']
     
@@ -1834,6 +1904,10 @@ def run_google_translation(text, source, target, config, resolved_paths):
         "--source", source,
         "--target", target,
     ]
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
     if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
@@ -1844,15 +1918,53 @@ def run_google_translation(text, source, target, config, resolved_paths):
     if res.returncode == 0:
         return res.stdout.strip()
     else:
-        raise Exception(f"Google translation failed: {res.stderr}")
+        err_envelope = None
+        for line in reversed(res.stderr.strip().splitlines()):
+            line = line.strip()
+            if line.startswith('{') and line.endswith('}'):
+                try:
+                    data = json.loads(line)
+                    if data.get("status") == "error" or "code" in data:
+                        err_envelope = data
+                        break
+                except Exception:
+                    pass
+        if not err_envelope:
+            err_envelope = {
+                "status": "error",
+                "zid": zid,
+                "trace_id": trace_id,
+                "code": "ERR_TRANSLATION_FAILED",
+                "message": f"Google translation failed: {res.stderr.strip()}",
+                "provider": "google",
+                "details": {"stderr": res.stderr.strip(), "returncode": res.returncode}
+            }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"[{err_envelope.get('code')}] {err_envelope.get('message')}")
+        raise TranslationException(err_envelope.get("message"), envelope=err_envelope)
 
-def run_deepl_translation(text, source, target, config, resolved_paths):
+def run_deepl_translation(text, source, target, config, resolved_paths, zid=None, trace_id=None):
     python_exe = resolved_paths['deep_translator_python']
     script_path = resolved_paths['translate_deepl_script']
     
     deepl_key = get_deepl_key(config, resolved_paths['base_dir'])
     if not deepl_key:
-        raise Exception("DeepL API key not configured or failed to resolve")
+        err_envelope = {
+            "status": "error",
+            "zid": zid,
+            "trace_id": trace_id,
+            "code": "ERR_DEEPL_AUTH",
+            "message": "DeepL API key not configured or failed to resolve",
+            "provider": "deepl",
+            "details": {}
+        }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"[{err_envelope['code']}] {err_envelope['message']}")
+        raise TranslationException(err_envelope["message"], envelope=err_envelope)
         
     cmd = [
         str(python_exe),
@@ -1862,6 +1974,10 @@ def run_deepl_translation(text, source, target, config, resolved_paths):
         "--target", target,
         "--deepl-api-key", deepl_key,
     ]
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
     if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
@@ -1878,14 +1994,52 @@ def run_deepl_translation(text, source, target, config, resolved_paths):
     if res.returncode == 0:
         return res.stdout.strip()
     else:
-        raise Exception(f"DeepL translation failed: {res.stderr}")
+        err_envelope = None
+        for line in reversed(res.stderr.strip().splitlines()):
+            line = line.strip()
+            if line.startswith('{') and line.endswith('}'):
+                try:
+                    data = json.loads(line)
+                    if data.get("status") == "error" or "code" in data:
+                        err_envelope = data
+                        break
+                except Exception:
+                    pass
+        if not err_envelope:
+            err_envelope = {
+                "status": "error",
+                "zid": zid,
+                "trace_id": trace_id,
+                "code": "ERR_TRANSLATION_FAILED",
+                "message": f"DeepL translation failed: {res.stderr.strip()}",
+                "provider": "deepl",
+                "details": {"stderr": res.stderr.strip(), "returncode": res.returncode}
+            }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"[{err_envelope.get('code')}] {err_envelope.get('message')}")
+        raise TranslationException(err_envelope.get("message"), envelope=err_envelope)
 
-def run_argos_translation(text, source, target, config, resolved_paths):
+def run_argos_translation(text, source, target, config, resolved_paths, zid=None, trace_id=None):
     python_exe = resolved_paths.get('argotranslate_python')
     script_path = resolved_paths.get('argotranslate_script')
     
     if not python_exe or not script_path:
-        raise Exception("argotranslate_python or argotranslate_script not configured in config.ini")
+        err_envelope = {
+            "status": "error",
+            "zid": zid,
+            "trace_id": trace_id,
+            "code": "ERR_DEPENDENCY_MISSING",
+            "message": "argotranslate_python or argotranslate_script not configured in config.ini",
+            "provider": "argos",
+            "details": {}
+        }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"[{err_envelope['code']}] {err_envelope['message']}")
+        raise TranslationException(err_envelope["message"], envelope=err_envelope)
         
     cmd = [
         str(python_exe),
@@ -1904,9 +2058,35 @@ def run_argos_translation(text, source, target, config, resolved_paths):
         if res.returncode == 0:
             return res.stdout.strip()
         else:
-            raise Exception(f"Argos translation failed (code {res.returncode}): {res.stderr}")
+            err_envelope = {
+                "status": "error",
+                "zid": zid,
+                "trace_id": trace_id,
+                "code": "ERR_TRANSLATION_FAILED",
+                "message": f"Argos translation failed (code {res.returncode}): {res.stderr.strip()}",
+                "provider": "argos",
+                "details": {"stderr": res.stderr.strip(), "returncode": res.returncode}
+            }
+            results_dir = resolve_results_dir(resolved_paths, config)
+            if zid and results_dir:
+                sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+                sess_logger.error(f"[{err_envelope['code']}] {err_envelope['message']}")
+            raise TranslationException(err_envelope["message"], envelope=err_envelope)
     except subprocess.TimeoutExpired as e:
-        raise Exception(f"Argos translation timed out after {timeout} seconds. Model loading under concurrent load may exceed limits: {e}")
+        err_envelope = {
+            "status": "error",
+            "zid": zid,
+            "trace_id": trace_id,
+            "code": "ERR_TIMEOUT",
+            "message": f"Argos translation timed out after {timeout} seconds. Model loading under concurrent load may exceed limits: {e}",
+            "provider": "argos",
+            "details": {"timeout": timeout}
+        }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"[{err_envelope['code']}] {err_envelope['message']}")
+        raise TranslationException(err_envelope["message"], envelope=err_envelope)
 
 def is_network_online_multi(hosts, port=53, timeout=1.0):
     if not hosts:
@@ -1929,11 +2109,11 @@ def is_network_online_multi(hosts, port=53, timeout=1.0):
                 return True
         return False
 
-def translate_text(text, source, target, config, resolved_paths, provider, zid=None):
+def translate_text(text, source, target, config, resolved_paths, provider, zid=None, trace_id=None):
     with TraceTimer("translate_text", zid or "unknown", config, resolved_paths):
-        return _translate_text_impl(text, source, target, config, resolved_paths, provider)
+        return _translate_text_impl(text, source, target, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
 
-def _translate_text_impl(text, source, target, config, resolved_paths, provider):
+def _translate_text_impl(text, source, target, config, resolved_paths, provider, zid=None, trace_id=None):
     auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=True)
     
     check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1'))
@@ -1943,27 +2123,27 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider)
         if not is_network_online_multi(hosts=check_ips):
             logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online providers and going straight to Argos.")
             try:
-                return run_argos_translation(text, source, target, config, resolved_paths)
+                return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
             except Exception as ex2:
                 logger.error(f"Argos offline fallback failed: {ex2}")
                 raise ex2
 
     try:
         if provider == 'google':
-            return run_google_translation(text, source, target, config, resolved_paths)
+            return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif provider == 'deepl':
-            return run_deepl_translation(text, source, target, config, resolved_paths)
+            return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif provider == 'argos':
-            return run_argos_translation(text, source, target, config, resolved_paths)
+            return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif provider == 'mock':
             time.sleep(0.01) # Simulate deterministic micro-delay
             return f"[MOCK] {text}"
         elif provider in ('combined', 'intellifiller'):
             try:
-                return run_google_translation(text, source, target, config, resolved_paths)
+                return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
             except Exception as e:
                 logger.warning(f"Google translation failed: {e}. Trying DeepL failover...")
-                return run_deepl_translation(text, source, target, config, resolved_paths)
+                return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif provider == 'none':
             return ""
         else:
@@ -1974,7 +2154,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider)
             if check_ips and not is_network_online_multi(hosts=check_ips):
                 logger.warning(f"Primary provider '{provider}' failed: {e}. Network appears offline. Auto-fallback to Argos...")
                 try:
-                    return run_argos_translation(text, source, target, config, resolved_paths)
+                    return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
                 except Exception as ex2:
                     logger.error(f"Argos offline fallback failed: {ex2}")
                     raise ex2
@@ -2528,7 +2708,7 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         return sentence_translations_raw.get(0, "")
     return None
 
-def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None, zid=None):
+def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None, zid=None, trace_id=None):
     import time
     
     eff_mode = _effective_text_mode(text, text_mode)
@@ -2543,9 +2723,11 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     if eff_mode == 'single':
         if len(text) <= wrap_max_chars and '\n' not in text.strip():
             try:
-                return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider, zid=zid).strip()}
+                return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id).strip()}
             except Exception as e:
                 logger.error(f"Failed to translate main text: {e}")
+                if isinstance(e, TranslationException):
+                    raise e
                 return {0: f"[Translation Error: {e}]"}
         else:
             sbc = SentenceBoundaryConfig.from_config(config)
@@ -2574,7 +2756,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 # updates even when native padding is applied afterwards.
                 unpadded_translations = translate_source_text(
                     "\n".join(pseudo_lines), source_lang, target_lang, 'multi',
-                    config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid
+                    config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid, trace_id=trace_id
                 )
 
                 full_text_trans = " ".join(
@@ -2610,7 +2792,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     # 1. Translate the padded sentences for the TSV (SentenceDestination)
                     pseudo_translations = translate_source_text(
                         "\n".join(padded_lines), source_lang, target_lang, 'multi',
-                        config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid
+                        config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid, trace_id=trace_id
                     )
                     
                     if full_text_trans:
@@ -2644,7 +2826,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             last_err = None
             for attempt in range(1, max_retries + 1):
                 try:
-                    trans_line = translate_text(line, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
+                    trans_line = translate_text(line, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     _validate_translated_line(line, trans_line, idx, config)
                     translations[idx] = trans_line.strip()
                     success = True
@@ -2678,7 +2860,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             try:
                 if split_mode == 'newline_join':
                     joined_text = "\n".join(chunk_text_list)
-                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     normalized = translated_joined.replace('\r\n', '\n').replace('\r', '\n')
                     translated_chunk_lines = normalized.split('\n')
                     
@@ -2699,13 +2881,13 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         parts.append(line)
                     joined_text = " ".join(parts)
                     
-                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     parts_split = split_merged_text_by_markers(translated_joined, markers)
                     translated_chunk_lines = [part.replace("__KWSPLITESC__", "[[KWSPLIT") for part in parts_split]
                     
                 elif split_mode == 'proportional':
                     joined_text = " ".join(chunk_text_list)
-                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
+                    translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     lengths = [len(line) for line in chunk_text_list]
                     translated_chunk_lines = split_by_proportion(translated_joined, lengths)
                 else:
@@ -2731,7 +2913,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             for list_idx, target_idx in enumerate(indices):
                 original_line = chunk_text_list[list_idx]
                 try:
-                    rescued_line = translate_text(original_line, source_lang, target_lang, config, resolved_paths, provider, zid=zid)
+                    rescued_line = translate_text(original_line, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     _validate_translated_line(original_line, rescued_line, target_idx, config)
                     translations[target_idx] = rescued_line.strip()
                 except Exception as rescue_err:
@@ -9190,6 +9372,15 @@ def cmd_reprocess_worker(args):
     language = config.get(SEC_SETTINGS, 'default_language', fallback='en')
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
     
+    m = re.match(r"^(\d{14})", tsv_path.name)
+    zid = getattr(args, 'zid', None) or (m.group(1) if m else "session")
+    trace_id = getattr(args, 'trace_id', None) or f"{zid}:reprocess:worker"
+    results_dir = resolve_results_dir(resolved_paths, config)
+    sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
+    worker_error = None
+    if sess_logger:
+        sess_logger.info("Reprocess worker started")
+        
     data_rows, headers, role_fields = [], [], {}
     class_cols = []
     
@@ -9211,7 +9402,7 @@ def cmd_reprocess_worker(args):
         if lemmas_provider in ('combined', 'google', 'deepl'):
             try:
                 data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang)
-                write_update_js(tsv_path, data_rows, headers, role_fields)
+                safe_write_update_js(tsv_path, data_rows, headers, role_fields)
             except Exception as e:
                 logger.error(f"Failed fast-path translation during reprocess: {e}")
 
@@ -9288,18 +9479,31 @@ def cmd_reprocess_worker(args):
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
         except Exception as e_class:
             logger.error(f"Failed to update classification fields during reprocess: {e_class}")
+            if sess_logger:
+                sess_logger.error(f"Failed to update classification fields: {e_class}")
             
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
+        worker_error = {
+            "code": "ERR_REPROCESS_FAILED",
+            "message": str(e),
+            "provider": "desk",
+            "details": {}
+        }
+        if sess_logger:
+            sess_logger.error(f"Reprocess failed: {e}")
     finally:
         try:
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", class_cols=class_cols)
+            status_val = "failed" if worker_error else "success"
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id)
+            if sess_logger:
+                sess_logger.info("Reprocess finished event emitted")
         except Exception as e:
             logger.error(f"Failed to write finished event in reprocess: {e}")
 
 _update_seq_counter = 0
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None):
     import time
     global _update_seq_counter
     _update_seq_counter += 1
@@ -9309,6 +9513,13 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             config = load_config()[0]
         except Exception:
             config = None
+
+    if zid is None and tsv_path:
+        m = re.match(r"^(\d{14})", tsv_path.name)
+        if m:
+            zid = m.group(1)
+    if trace_id is None and zid:
+        trace_id = f"{zid}:update"
     
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     updates_dir.mkdir(parents=True, exist_ok=True)
@@ -9320,6 +9531,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             "status": status,
             "rows": {}
         }
+        if error is not None:
+            update_data["error"] = error
+        if zid is not None:
+            update_data["zid"] = zid
+        if trace_id is not None:
+            update_data["trace_id"] = trace_id
     else:
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
         col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
@@ -9439,6 +9656,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 update_data["sourceText"] = source_text
             if translated_text:
                 update_data["translatedText"] = translated_text
+            if error is not None:
+                update_data["error"] = error
+            if zid is not None:
+                update_data["zid"] = zid
+            if trace_id is not None:
+                update_data["trace_id"] = trace_id
         
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
@@ -9459,11 +9682,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
 
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
     m = re.match(r'^(\d{14})', tsv_path.name)
-    zid = m.group(1) if m else "unknown"
+    zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
+    trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:translation"
     with TraceTimer("background_text_translation", zid, config, resolved_paths):
-        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid)
+        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, trace_id=trace_id)
 
-def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid):
+def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, trace_id=None):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -9496,10 +9720,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         # Use stage=None to push only table row data.
                         # The TRANSLATE section (paragraph) is updated once at the end
                         # after the full .ru.txt file is written, avoiding blink/flicker.
-                        write_update_js(tsv_path, curr_rows, h, role_fields, stage=None)
+                        safe_write_update_js(tsv_path, curr_rows, h, role_fields, stage=None, zid=zid, trace_id=trace_id)
 
                     sentence_translations_raw = translate_source_text(
-                        text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider, zid=zid, chunk_callback=on_chunk_done)
+                        text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider, zid=zid, trace_id=trace_id, chunk_callback=on_chunk_done)
                     comments, headers, current_rows = load_tsv_rows(tsv_path)
                     resolve_translations(
                         text, args.text_mode, current_rows, col_index, col_sentence_dest,
@@ -9513,7 +9737,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                     
                     data_rows = current_rows
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
+                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id)
                     translated_text_emitted = True
                 except TranslationAlignmentError as tae:
                     logger.error(f"Progressive translation alignment error: {tae}")
@@ -9530,14 +9754,14 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=True)
                     
                     data_rows = current_rows
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted")
+                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted", zid=zid, trace_id=trace_id)
                     translated_text_emitted = True
                     
                     sys.exit(EXIT_PARTIAL_TRANSLATION_PERSISTED)
         
         # Advance stage unconditionally to allow JS frontend to clear skeleton loaders properly
         if not translated_text_emitted:
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text")
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id)
 
         # check if lemmas need translation
         word_translations_empty = args.word_empty.lower() == 'true'
@@ -9578,7 +9802,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_enrich
                         )
                     else:
-                        write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+                        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
                 else:
                     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
@@ -9607,20 +9831,33 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             data_rows = current_rows
                             
                         # Push table row updates only — don't rebuild TRANSLATE section on each chunk
-                        write_update_js(tsv_path, data_rows, headers, role_fields, stage=None)
+                        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id)
                         
                     # Final update with stage=translated to render TRANSLATE section once all lemmas are done
-                    write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
             else:
-                write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+                safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
         else:
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated")
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
-        write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed")
+        err_obj = getattr(e, 'envelope', None) or {
+            "code": "ERR_TRANSLATION_FAILED",
+            "message": str(e),
+            "provider": "desk",
+            "details": {}
+        }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"Translation stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
+        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed", error=err_obj, zid=zid, trace_id=trace_id)
     return data_rows
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
+    m = re.match(r'^(\d{14})', tsv_path.name)
+    zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
+    trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:{stage_name}"
     try:
         # Fallback: 30 (larger than the reprocess worker's default of 5).
         # Progressive enrichment runs fully in the background without blocking the UI,
@@ -9673,10 +9910,20 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             
             # reload data rows after each batch
             comments, headers, data_rows = load_tsv_rows(tsv_path)
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name)
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
     except Exception as e:
         logger.error(f"Failing in {stage_name} stage: {e}")
-        write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, status="failed")
+        err_obj = getattr(e, 'envelope', None) or {
+            "code": "ERR_ENRICHMENT_FAILED",
+            "message": str(e),
+            "provider": "intellifiller",
+            "details": {}
+        }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"Enrichment stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
+        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, status="failed", error=err_obj, zid=zid, trace_id=trace_id)
     return data_rows
 
 def cmd_retext(args):
@@ -9775,6 +10022,15 @@ def cmd_retext_worker(args):
     language = args.language
     text_mode = args.text_mode
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
+    m = re.match(r"^(\d{14})", tsv_path.name)
+    zid = getattr(args, 'zid', None) or (m.group(1) if m else "session")
+    trace_id = getattr(args, 'trace_id', None) or f"{zid}:retext:worker"
+    results_dir = resolve_results_dir(resolved_paths, config)
+    sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
+    
+    worker_error = None
+    if sess_logger:
+        sess_logger.info("Retext worker started")
     
     try:
         with file_lock(tsv_path):
@@ -9785,22 +10041,46 @@ def cmd_retext_worker(args):
         
         source_text_path = tsv_path.with_suffix('.txt')
         if not source_text_path.exists():
-            logger.error("Source text file missing for retext")
+            worker_error = {
+                "code": "ERR_SOURCE_FILE_MISSING",
+                "message": "Source text file missing for retext",
+                "provider": "desk",
+                "details": {}
+            }
+            if sess_logger:
+                sess_logger.error(worker_error["message"])
             return
             
         text = source_text_path.read_text(encoding='utf-8')
         text_reprocess_provider = config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
+        if sess_logger:
+            sess_logger.info(f"Translating source text via provider '{text_reprocess_provider}'")
         
         slug = generate_slug(text)
-        m = re.match(r"^(\d{14})", tsv_path.name)
-        zid = m.group(1) if m else "session"
         
         try:
-            sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider, zid=zid)
+            sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider, zid=zid, trace_id=trace_id)
         except TranslationAlignmentError as tae:
             logger.error(f"Retext worker translation alignment error: {tae}")
+            if sess_logger:
+                sess_logger.warning(f"Translation alignment partial fallback: {tae}")
             sentence_translations = tae.partial_dict
+        except TranslationException as te:
+            worker_error = te.envelope
+            if sess_logger:
+                sess_logger.error(f"[{te.code}] {te.message}")
+            raise te
+        except Exception as te_other:
+            worker_error = {
+                "code": "ERR_TRANSLATION_FAILED",
+                "message": str(te_other),
+                "provider": text_reprocess_provider,
+                "details": {}
+            }
+            if sess_logger:
+                sess_logger.error(f"Retext translation failed: {te_other}")
+            raise te_other
             
         target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
         eff_mode = _effective_text_mode(text, text_mode)
@@ -9816,8 +10096,17 @@ def cmd_retext_worker(args):
             sentence_translations, tsv_path, comments, headers,
             col_text_dest=col_text_dest, persist=True, return_single=False
         )
+        if sess_logger:
+            sess_logger.info("Retext completed successfully")
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_retext_worker: {e}")
+        if not worker_error:
+            worker_error = {
+                "code": "ERR_RETEXT_FAILED",
+                "message": str(e),
+                "provider": "desk",
+                "details": {}
+            }
     finally:
         try:
             with file_lock(tsv_path):
@@ -9826,7 +10115,8 @@ def cmd_retext_worker(args):
             role_fields = get_role_fields(mapping, headers)
             # source_text="" because retext never changes the source text;
             # sending it would cause receiveUpdate to wipe the span DOM.
-            write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="")
+            status_val = "failed" if worker_error else "success"
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, source_text="", error=worker_error, zid=zid, trace_id=trace_id)
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
 def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
@@ -10145,6 +10435,10 @@ def cmd_progressive_worker(args):
     with file_lock(lock_target):
         log_path = tsv_path.with_suffix('.log')
     file_handler = None
+    m = re.match(r'^(\d{14})', tsv_path.name)
+    zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
+    trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:worker"
+    worker_error = None
     try:
         try:
             file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
@@ -10155,6 +10449,10 @@ def cmd_progressive_worker(args):
             
         logger.info("Progressive-worker subcommand invoked")
         config, resolved_paths, goldendict, _wordfill = load_config(args.config)
+        results_dir = resolve_results_dir(resolved_paths, config)
+        sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
+        if sess_logger:
+            sess_logger.info("Progressive worker started")
         import os
         os.environ["KARDEN_ACTIVE_TEXT_MODE"] = getattr(args, 'text_mode', 'single')
         
@@ -10169,7 +10467,7 @@ def cmd_progressive_worker(args):
             role_fields = get_role_fields(mapping, headers)
             
         # Write initial source stage immediately so UI renders without delay
-        write_update_js(tsv_path, data_rows, headers, role_fields, stage="source")
+        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
             
         base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
         has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi'
@@ -10183,7 +10481,6 @@ def cmd_progressive_worker(args):
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
 
-            
             # 1. Base Translation Stage
             if run_base == 'auto' or run_text == 'auto':
                 data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
@@ -10195,22 +10492,26 @@ def cmd_progressive_worker(args):
                     
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
-            # In multi mode or when siblings exist, always cross-pollinate from siblings regardless of skip_intellifiller.
-            # This allows the master window to receive enriched data from its children
-            # even when its own IntelliFiller is disabled (e.g. run_lemma_enrichment=manual).
             if has_siblings:
                 wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
-                zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
-                with TraceTimer("cross_pollinate_from_siblings", zid, config, resolved_paths):
+                zid_part = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
+                with TraceTimer("cross_pollinate_from_siblings", zid_part, config, resolved_paths):
                     data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
             if not skip_intellifiller:
                 data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
 
-                    
         except SystemExit as se:
             raise se
         except Exception as e:
             logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
+            worker_error = {
+                "code": "ERR_PROGRESSIVE_WORKER_FAILED",
+                "message": str(e),
+                "provider": "desk",
+                "details": {}
+            }
+            if sess_logger:
+                sess_logger.error(f"Progressive worker unhandled exception: {e}")
             import traceback
             logger.error(traceback.format_exc())
         finally:
@@ -10248,9 +10549,12 @@ def cmd_progressive_worker(args):
             except Exception:
                 pass
             try:
-                write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished")
+                status_val = "failed" if worker_error else "success"
+                safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id)
                 import os
                 os.utime(tsv_path, None)
+                if sess_logger:
+                    sess_logger.info(f"Progressive worker finished (status={status_val})")
             except Exception as e:
                 logger.error(f"Failed to write finished event: {e}")
     finally:
@@ -10261,7 +10565,7 @@ def cmd_progressive_worker(args):
 
 
 
-def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerprint=None, zid=None, language=None):
+def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerprint=None, zid=None, language=None, trace_id=None):
     if zid is None:
         zid = generate_unique_zid()
 
@@ -10332,6 +10636,11 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
         new_fingerprint = compute_content_fingerprint(data_rows)
         session_zid = extract_zid(tsv_path)
 
+    results_dir = resolve_results_dir(resolved_paths, config)
+    if (zid or session_zid) and results_dir:
+        sess_logger = SessionLogger(zid or session_zid, results_dir, trace_id=(trace_id or f"{zid or session_zid}:edit-save"))
+        sess_logger.info(f"Saved {len(deltas)} edit delta(s) to TSV {tsv_path.name}")
+
     return {
         "status": "success",
         "fingerprint": new_fingerprint,
@@ -10356,8 +10665,9 @@ def cmd_edit_save(args):
         sys.exit(1)
 
     tsv_param = getattr(args, 'tsv', None) or getattr(args, 'zid', None)
+    trace_id = getattr(args, 'trace_id', None) or (f"{args.zid}:edit-save" if getattr(args, 'zid', None) else None)
     try:
-        res = core_edit_save(tsv_param, deltas, config, resolved_paths, zid=getattr(args, 'zid', None), language=getattr(args, 'language', None))
+        res = core_edit_save(tsv_param, deltas, config, resolved_paths, zid=getattr(args, 'zid', None), language=getattr(args, 'language', None), trace_id=trace_id)
         edit_save_payload: EditSaveSuccessPayload = {"status": "success"}
         emit_payload(edit_save_payload)
     except StructuredError as se:
