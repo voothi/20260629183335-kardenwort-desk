@@ -2932,12 +2932,19 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             
     return translations
 
-def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False):
-    zid = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
-    with TraceTimer("intellifiller_enrichment", zid, config, resolved_paths):
-        return _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows, reprocess)
+class IntelliFillerError(Exception):
+    def __init__(self, message: str, envelope: Optional[dict] = None):
+        super().__init__(message)
+        self.envelope = envelope or {}
 
-def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False):
+def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+    if zid is None:
+        m = re.match(r"^(\d{14})", tsv_path.name)
+        zid = m.group(1) if m else (tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown")
+    with TraceTimer("intellifiller_enrichment", zid, config, resolved_paths):
+        return _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows, reprocess, zid=zid, trace_id=trace_id)
+
+def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
     lock_target = Path(str(tsv_path) + ".intellifiller")
     with file_lock(lock_target):
         python_exe = resolved_paths['kardenwort_python']
@@ -2951,6 +2958,10 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
     ]
     if reprocess:
         cmd.append("--reprocess")
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
     
     if selected_rows:
         rows_str = ",".join(str(r) for r in selected_rows)
@@ -2979,8 +2990,34 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
         logger.info("Headless IntelliFiller finished successfully.")
         return True
     else:
-        logger.error(f"Headless IntelliFiller failed with exit code {res.returncode}: {res.stderr}")
-        return False
+        parsed_err = None
+        combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
+        for line in reversed(combined_output.strip().splitlines()):
+            line = line.strip()
+            if line.startswith("{") and line.endswith("}"):
+                try:
+                    data = json.loads(line)
+                    if isinstance(data, dict) and data.get("status") == "error":
+                        parsed_err = data
+                        break
+                except Exception:
+                    pass
+
+        if not parsed_err:
+            err_msg = res.stderr.strip() if res.stderr else f"Process exited with code {res.returncode}"
+            parsed_err = {
+                "status": "error",
+                "zid": str(zid) if zid else "",
+                "trace_id": str(trace_id) if trace_id else "",
+                "code": "ERR_INTELLIFILLER_CRASH",
+                "message": err_msg,
+                "row_id": None,
+                "retryable": False,
+                "details": {"exit_code": res.returncode}
+            }
+
+        logger.error(f"Headless IntelliFiller failed with exit code {res.returncode}: [{parsed_err.get('code')}] {parsed_err.get('message')}")
+        raise IntelliFillerError(parsed_err.get("message", "Headless IntelliFiller failed"), envelope=parsed_err)
 
 def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, zid=None, trace_id=None):
     python_exe = sys.executable
@@ -9339,7 +9376,7 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
     return data_rows
 
 
-def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows):
+def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows, zid=None, trace_id=None):
     # Fallback: 5 (smaller than the progressive worker's default of 30).
     # This is user-triggered (interactive reprocess), so smaller batches give faster
     # intermediate UI updates between each IntelliFiller call. Config key: intellifiller_batch_size.
@@ -9347,14 +9384,15 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
     for i in range(0, len(selected_rows), batch_size):
         batch = selected_rows[i:i + batch_size]
         logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
-        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch, reprocess=True)
+        batch_trace_id = f"{trace_id}:batch_{i // batch_size + 1}" if trace_id else None
+        run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch, reprocess=True, zid=zid, trace_id=batch_trace_id)
         
         try:
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
-                write_update_js(tsv_path, data_rows, headers, role_fields)
+                write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=batch_trace_id)
         except Exception as e:
             logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
     return data_rows
@@ -9402,86 +9440,95 @@ def cmd_reprocess_worker(args):
         if lemmas_provider in ('combined', 'google', 'deepl'):
             try:
                 data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang)
-                safe_write_update_js(tsv_path, data_rows, headers, role_fields)
+                safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
             except Exception as e:
                 logger.error(f"Failed fast-path translation during reprocess: {e}")
 
         if lemmas_provider in ('intellifiller', 'combined'):
             try:
-                data_rows = _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows)
+                data_rows = _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows, zid=zid, trace_id=trace_id)
             except Exception as e:
                 logger.error(f"Failed IntelliFiller stage during reprocess: {e}")
+                worker_error = getattr(e, 'envelope', None) or {
+                    "code": "ERR_INTELLIFILLER_FAILED",
+                    "message": str(e),
+                    "provider": "intellifiller",
+                    "details": {}
+                }
+                if sess_logger:
+                    sess_logger.error(f"IntelliFiller stage failed: [{worker_error.get('code')}] {worker_error.get('message')}")
                 
-        # Restore original lemmas if run_lemmatizer is disabled
-        if not run_lemmatizer and col_lemma != -1 and original_lemmas:
-            with file_lock(tsv_path):
-                comments_latest, headers_latest, data_rows_latest = load_tsv_rows(tsv_path)
-                for row_id, orig_val in original_lemmas.items():
-                    if 0 <= row_id < len(data_rows_latest):
-                        data_rows_latest[row_id][col_lemma] = orig_val
-                save_tsv_rows_safely(tsv_path, comments_latest, headers_latest, data_rows_latest)
-                data_rows = data_rows_latest
-                
-        # Update classification fields if enabled
-        try:
-            desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
-            kardenwort_workspace = resolved_paths['kardenwort_workspace']
-            kw_config = load_kardenwort_config(kardenwort_workspace)
-            if desk_classification_enabled and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
-                # Import core kardenwort loaders
-                import sys
-                if str(kardenwort_workspace / "src") not in sys.path:
-                    sys.path.append(str(kardenwort_workspace / "src"))
-                from kardenwort.core.kardenwort import load_classification_dictionaries
-                
-                if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{language}'):
-                    dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{language}', fallback='')
-                else:
-                    dicts = kw_config.get(SEC_CLASSIFICATION, 'dictionaries', fallback='')
-                classify_args = []
-                if dicts:
-                    for d in dicts.split(','):
-                        d = d.strip()
-                        if d and '=' in d:
-                            name, path_str = d.split('=', 1)
-                            name = name.strip()
-                            path_str = path_str.strip()
-                            
-                            # Support prefix path e.g. 3k:data/en/oxford.tsv
-                            prefix = ""
-                            if ":" in path_str:
-                                parts = path_str.split(":", 1)
-                                possible_prefix = parts[0].strip()
-                                if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
-                                    prefix = possible_prefix + ":"
-                                    path_str = parts[1].strip()
-                                    
-                            resolved_path = (kardenwort_workspace / path_str).resolve()
-                            classify_args.append(f"{name}={prefix}{resolved_path}")
-                            
-                classifications = load_classification_dictionaries(classify_args)
-                col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
-                if col_lemma != -1:
-                    with file_lock(tsv_path):
-                        comments, headers, data_rows = load_tsv_rows(tsv_path)
-                        for name, c_dict in classifications.items():
-                            if name in role_fields and role_fields[name] in headers:
-                                col_idx = headers.index(role_fields[name])
-                                class_cols.append((name, col_idx))
-                                for row_id in selected_rows:
-                                    if 0 <= row_id < len(data_rows):
-                                        lemma = data_rows[row_id][col_lemma].strip().lower()
-                                        val = c_dict.get(lemma, "")
-                                        while len(data_rows[row_id]) <= col_idx:
-                                            data_rows[row_id].append("")
-                                        data_rows[row_id][col_idx] = val
+        if not worker_error:
+            # Restore original lemmas if run_lemmatizer is disabled
+            if not run_lemmatizer and col_lemma != -1 and original_lemmas:
+                with file_lock(tsv_path):
+                    comments_latest, headers_latest, data_rows_latest = load_tsv_rows(tsv_path)
+                    for row_id, orig_val in original_lemmas.items():
+                        if 0 <= row_id < len(data_rows_latest):
+                            data_rows_latest[row_id][col_lemma] = orig_val
+                    save_tsv_rows_safely(tsv_path, comments_latest, headers_latest, data_rows_latest)
+                    data_rows = data_rows_latest
+                    
+            # Update classification fields if enabled
+            try:
+                desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
+                kardenwort_workspace = resolved_paths['kardenwort_workspace']
+                kw_config = load_kardenwort_config(kardenwort_workspace)
+                if desk_classification_enabled and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
+                    # Import core kardenwort loaders
+                    import sys
+                    if str(kardenwort_workspace / "src") not in sys.path:
+                        sys.path.append(str(kardenwort_workspace / "src"))
+                    from kardenwort.core.kardenwort import load_classification_dictionaries
+                    
+                    if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{language}'):
+                        dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{language}', fallback='')
+                    else:
+                        dicts = kw_config.get(SEC_CLASSIFICATION, 'dictionaries', fallback='')
+                    classify_args = []
+                    if dicts:
+                        for d in dicts.split(','):
+                            d = d.strip()
+                            if d and '=' in d:
+                                name, path_str = d.split('=', 1)
+                                name = name.strip()
+                                path_str = path_str.strip()
+                                
+                                # Support prefix path e.g. 3k:data/en/oxford.tsv
+                                prefix = ""
+                                if ":" in path_str:
+                                    parts = path_str.split(":", 1)
+                                    possible_prefix = parts[0].strip()
+                                    if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
+                                        prefix = possible_prefix + ":"
+                                        path_str = parts[1].strip()
                                         
-                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-        except Exception as e_class:
-            logger.error(f"Failed to update classification fields during reprocess: {e_class}")
-            if sess_logger:
-                sess_logger.error(f"Failed to update classification fields: {e_class}")
-            
+                                resolved_path = (kardenwort_workspace / path_str).resolve()
+                                classify_args.append(f"{name}={prefix}{resolved_path}")
+                                
+                    classifications = load_classification_dictionaries(classify_args)
+                    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+                    if col_lemma != -1:
+                        with file_lock(tsv_path):
+                            comments, headers, data_rows = load_tsv_rows(tsv_path)
+                            for name, c_dict in classifications.items():
+                                if name in role_fields and role_fields[name] in headers:
+                                    col_idx = headers.index(role_fields[name])
+                                    class_cols.append((name, col_idx))
+                                    for row_id in selected_rows:
+                                        if 0 <= row_id < len(data_rows):
+                                            lemma = data_rows[row_id][col_lemma].strip().lower()
+                                            val = c_dict.get(lemma, "")
+                                            while len(data_rows[row_id]) <= col_idx:
+                                                data_rows[row_id].append("")
+                                            data_rows[row_id][col_idx] = val
+                                            
+                            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            except Exception as e_class:
+                logger.error(f"Failed to update classification fields during reprocess: {e_class}")
+                if sess_logger:
+                    sess_logger.error(f"Failed to update classification fields: {e_class}")
+                
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
         worker_error = {

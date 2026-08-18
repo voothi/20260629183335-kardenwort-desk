@@ -613,3 +613,71 @@ def test_translate_source_text_native_padding(monkeypatch, tmp_path):
     # Assert padding was natively applied in the returned dictionary
     assert "FULL_TEXT" in res
     assert res[1] == "Он вошел в темную комнату. Он включил свет. Лампочка слегка мигнула."
+
+
+def test_cmd_reprocess_worker_handles_intellifiller_error(monkeypatch, tmp_path):
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'load_config', lambda *a, **kw: (config, resolved_paths, goldendict, {}))
+    
+    kardenwort_workspace = resolved_paths['kardenwort_workspace']
+    
+    mapping = configparser.ConfigParser()
+    mapping.read_string("""
+[fields]
+WordSource=lemma
+WordDestination=word_translation
+[desk_columns]
+WordSource=lemma
+WordDestination=word_translation
+""")
+    with open(resolved_paths['anki_mapping_file'], 'w') as f:
+        mapping.write(f)
+        
+    config.set(SEC_PIPELINE, 'lemma_reprocess_provider', 'intellifiller')
+    
+    tsv_path = kardenwort_workspace / "results" / "20260818190200-test.tsv"
+    tsv_path.parent.mkdir(parents=True, exist_ok=True)
+    tsv_path.write_text("WordSource\tWordDestination\napple\t\n", encoding='utf-8')
+    tsv_path.with_suffix('.txt').write_text("apple", encoding='utf-8')
+    
+    error_envelope = {
+        "status": "error",
+        "zid": "20260818190200",
+        "trace_id": "20260818190200:reprocess:worker",
+        "code": "ERR_LLM_RATE_LIMIT",
+        "message": "OpenAI API rate limit exceeded (HTTP 429)",
+        "row_id": 0,
+        "retryable": True,
+        "details": {"http_status": 429}
+    }
+    
+    def mock_run_intellifiller(*a, **kw):
+        raise kardenwort_desk.IntelliFillerError("Rate limit exceeded", envelope=error_envelope)
+        
+    monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', mock_run_intellifiller)
+    
+    captured_updates = []
+    def mock_write_update_js(*args, **kwargs):
+        captured_updates.append(kwargs)
+        
+    monkeypatch.setattr(kardenwort_desk, 'write_update_js', mock_write_update_js)
+    
+    args = MagicMock()
+    args.tsv = str(tsv_path)
+    args.rows = "0"
+    args.config = None
+    args.prompt = "English"
+    args.zid = "20260818190200"
+    args.trace_id = "20260818190200:reprocess:worker"
+    
+    # Execution should not raise exception
+    kardenwort_desk.cmd_reprocess_worker(args)
+    
+    # Verify update JS was written with stage="finished" and status="failed" and structured error
+    finished_updates = [u for u in captured_updates if u.get('stage') == 'finished']
+    assert len(finished_updates) >= 1
+    last_update = finished_updates[-1]
+    assert last_update["status"] == "failed"
+    assert last_update["error"]["code"] == "ERR_LLM_RATE_LIMIT"
+    assert last_update["error"]["retryable"] is True
+
