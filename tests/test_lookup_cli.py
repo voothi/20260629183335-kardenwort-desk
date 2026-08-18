@@ -17,6 +17,7 @@ default_target_language=ru
 generated_results_dir=results
 [languages]
 en_prompt=en_prompt
+de_prompt=de_prompt
 en_lemma_index=en_idx
 en_lemma_override=en_over
 [goldendict]
@@ -85,6 +86,7 @@ default_target_language=ru
 generated_results_dir=results
 [languages]
 en_prompt=en_prompt
+de_prompt=de_prompt
 [goldendict]
 """)
     workspace = tmp_path / "workspace"

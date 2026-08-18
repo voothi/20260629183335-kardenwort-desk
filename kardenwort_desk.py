@@ -3937,18 +3937,18 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 
                 core_exc = future_core.exception()
                 if core_exc:
-                    logger.error(f"Core TSV generation failed in parallel executor: {core_exc}")
+                    logger.error(f"[{zid}] Core TSV generation failed in parallel executor: {core_exc}")
                     raise core_exc
                     
                 trans_exc = future_trans.exception()
                 if trans_exc:
-                    logger.warning(f"Holistic translation failed in parallel executor: {trans_exc}")
+                    logger.warning(f"[{zid}] Holistic translation failed in parallel executor: {trans_exc}")
                 else:
                     try:
                         translated_paragraph = future_trans.result()
                         translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
                     except Exception as e:
-                        logger.warning(f"Holistic translation failed in parallel executor during split: {e}")
+                        logger.warning(f"[{zid}] Holistic translation failed in parallel executor during split: {e}")
                         
                 master_tsv_path = future_core.result()
             finally:
@@ -3961,7 +3961,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 translated_paragraph = do_translation()
                 translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
             except Exception as e:
-                logger.warning(f"Holistic translation failed: {e}")
+                logger.warning(f"[{zid}] Holistic translation failed: {e}")
                 
             master_tsv_path = do_core()
                 
@@ -3971,11 +3971,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             try:
                 translations_dict = translate_source_text(
                     "\n".join(source_sentences), language, target_lang, 'multi',
-                    config, resolved_paths, main_text_provider
+                    config, resolved_paths, main_text_provider, zid=zid
                 )
                 translated_sentences = [translations_dict.get(i, "").strip() for i in range(len(source_sentences))]
             except Exception as e:
-                logger.error(f"Newline-join alignment fallback failed: {e}")
+                logger.error(f"[{zid}] Newline-join alignment fallback failed: {e}")
                 
         # Final proportional safety net fallback
         if not is_progressive_translation_enabled and len(translated_sentences) != len(source_sentences):
