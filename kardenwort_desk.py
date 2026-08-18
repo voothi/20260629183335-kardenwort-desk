@@ -5179,6 +5179,12 @@ html, body {{
                 var isTerminal = (data.stage === 'finished' || data.status === 'failed' || data.status === 'partial_persisted');
                 if (isTerminal) {
                     window.AppState.isFinished = true;
+                    try {
+                        if (document.body) {
+                            document.body.setAttribute('data-worker-status', 'finished');
+                        }
+                    } catch (e) {
+                    }
                 }
                 
                 var updated = false;
@@ -5240,7 +5246,10 @@ html, body {{
                 // Signal AHK only after all rendering is complete so that "Ready"
                 // in the window title reflects the window being fully populated.
                 if (isTerminal && window.ahkCall) {
-                    window.ahkCall('finished', '');
+                    try {
+                        window.ahkCall('finished', '');
+                    } catch (e) {
+                    }
                 }
             }
         };
@@ -5805,7 +5814,10 @@ html, body {{
             if (window.ahkCall && audioAnkiTtsCli && audioPythonExe) {
                 var sanitizedText = clean.replace(/\\r?\\n|\\r/g, ' ');
                 var escapedText = sanitizedText.replace(/\\\\/g, '\\\\\\\\').replace(/"/g, '\\\\"');
-                window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
+                try {
+                    window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
+                } catch (e) {
+                }
             }
         }
 
@@ -6819,8 +6831,11 @@ html, body {{
         
         function notifyAHKSelection() {
             if (window.ahkCall) {
-                window.ahkCall('selection', getSelectedRowsArray().join(','));
-                window.ahkCall('dirty', window.isDirty() ? 'true' : 'false');
+                try {
+                    window.ahkCall('selection', getSelectedRowsArray().join(','));
+                    window.ahkCall('dirty', window.isDirty() ? 'true' : 'false');
+                } catch (e) {
+                }
             }
         }
         
@@ -7076,7 +7091,10 @@ html, body {{
             }
             
             if (window.ahkCall) {
-                window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
+                try {
+                    window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
+                } catch (e) {
+                }
             }
             
             // Force MSHTML repaint/reflow after undo/redo
@@ -7122,7 +7140,10 @@ html, body {{
                 tds[k].classList.remove('dirty');
             }
             if (window.ahkCall) {
-                window.ahkCall('dirty', 'false');
+                try {
+                    window.ahkCall('dirty', 'false');
+                } catch (e) {
+                }
             }
         };
         

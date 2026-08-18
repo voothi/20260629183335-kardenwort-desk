@@ -634,12 +634,39 @@ def test_subtoken_hover_selection_isolation(page, tmp_path):
     assert "selected" not in (row_id.get_attribute("class") or "")
 
 
+def test_terminal_payload_sets_dom_status_and_catches_ahk_errors(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    tsv_file = tmp_path / "20260818175000-test.de.tsv"
+    tsv_file.write_text("# comment\nWordSource\tWordDestination\nHaus\tдом\n", encoding="utf-8")
+    html = kardenwort_desk.run_render_flow(
+        text="Das Haus",
+        language="de",
+        zid="20260818175000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+    page.set_content(html)
 
+    # Set up broken ahkCall that throws an exception
+    page.evaluate("""() => {
+        window.ahkCall = function(action, arg) {
+            throw new Error("Simulated Trident COM bridge failure");
+        };
+    }""")
 
+    # Apply terminal delta
+    page.evaluate("""() => {
+        window.AppState.applyDeltas({
+            stage: "finished",
+            status: "success",
+            rows: { 0: { lemma: "Haus", trans: "дом" } }
+        });
+    }""")
 
-
-
-
-
-
+    # Verify DOM marker attribute is set
+    body_status = page.evaluate("() => document.body.getAttribute('data-worker-status')")
+    assert body_status == "finished"
+    assert page.evaluate("() => window.AppState.isFinished") is True
 
