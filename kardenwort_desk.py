@@ -59,6 +59,11 @@ class ErrorCode(str, Enum):
     ROW_BUSY = "ROW_BUSY"
     SERVER_ERROR = "SERVER_ERROR"
     LANGUAGE_MISMATCH = "LANGUAGE_MISMATCH"
+    # Anki export & import pipeline error codes
+    ERR_ANKI_NOT_RUNNING = "ERR_ANKI_NOT_RUNNING"
+    ERR_ANKICONNECT_DISABLED = "ERR_ANKICONNECT_DISABLED"
+    ERR_DECK_NOT_FOUND = "ERR_DECK_NOT_FOUND"
+    ERR_NOTE_TYPE_MISMATCH = "ERR_NOTE_TYPE_MISMATCH"
 
 
 # Frozen set of all valid catalog codes for O(1) membership checks.
@@ -3110,21 +3115,26 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
             stderr=subprocess.DEVNULL, close_fds=True
         )
 
-def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
+def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_id=None):
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     runner_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort_runner.py"
+    
+    if not trace_id:
+        trace_id = f"{zid}:export:anki"
     
     cmd = [
         str(python_exe),
         str(runner_script),
         "--import-only",
         "--tsv", str(favorites_tsv_path),
+        "--zid", str(zid),
+        "--trace-id", str(trace_id),
         "--play-sound-on-completion"
     ]
     
     log_file_path = favorites_tsv_path.parent / f"{zid}-import.log"
-    log_file = open(log_file_path, 'w', encoding='utf-8')
+    log_file = open(log_file_path, 'a', encoding='utf-8')
     
     logger.info(f"Launching detached import: {' '.join(cmd)}")
     
@@ -3158,7 +3168,7 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid):
         
     return p.pid, str(log_file_path)
 
-def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
+def run_synchronous_import(favorites_tsv_path, config, resolved_paths, zid=None, trace_id=None):
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     runner_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort_runner.py"
@@ -3169,6 +3179,12 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths):
         "--import-only",
         "--tsv", str(favorites_tsv_path),
     ]
+    if zid:
+        cmd.extend(["--zid", str(zid)])
+    if trace_id:
+        cmd.extend(["--trace-id", str(trace_id)])
+    elif zid:
+        cmd.extend(["--trace-id", f"{zid}:export:anki"])
     
     logger.info(f"Running synchronous import: {' '.join(cmd)}")
     try:
@@ -8830,7 +8846,7 @@ def cmd_render(args):
         print_structured_error("DESK_FAILED", f"Render failed: {str(e)}")
         sys.exit(1)
 
-def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, fingerprint=None, zid=None, language=None):
+def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, fingerprint=None, zid=None, language=None, trace_id=None):
     if zid is None:
         zid = generate_unique_zid()
 
@@ -8874,7 +8890,7 @@ def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, f
     results_dir = resolve_results_dir(resolved_paths, kw_config)
     lang = language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
 
-    res = execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui=False, data_rows=data_rows, headers=headers, comments=comments)
+    res = execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui=False, data_rows=data_rows, headers=headers, comments=comments, trace_id=trace_id)
     if not isinstance(res, dict):
         res = {"status": "success", "import_started": False, "tsv": str(tsv_path), "zid": zid}
     else:
@@ -8899,16 +8915,18 @@ def cmd_export(args):
         sys.exit(1)
 
     selected_rows = manifest.get("selected_row_ids", [])
-    zid = manifest.get("zid")
+    zid = manifest.get("zid") or getattr(args, "zid", None)
     if not zid:
         print_structured_error("INVALID_STATE", "Selection manifest must contain 'zid'")
         sys.exit(1)
+
+    trace_id = getattr(args, "trace_id", None) or manifest.get("trace_id") or (f"{zid}:export:selection" if zid else None)
 
     tsv_path_str = manifest.get("tsv_path")
     tsv_param = Path(tsv_path_str) if tsv_path_str else zid
 
     try:
-        payload = core_export(tsv_param, selected_rows, config, resolved_paths, zid=zid, language=args.language)
+        payload = core_export(tsv_param, selected_rows, config, resolved_paths, zid=zid, language=args.language, trace_id=trace_id)
         emit_payload(payload)
     except StructuredError as se:
         print_structured_error(se.error_code, se.message, se.details)
@@ -8918,7 +8936,7 @@ def cmd_export(args):
         sys.exit(1)
 
 
-def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui, data_rows, headers, comments, save_to_favorites_override=None, send_to_anki_override=None):
+def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results_dir, zid, lang, is_from_ui, data_rows, headers, comments, save_to_favorites_override=None, send_to_anki_override=None, trace_id=None):
     if not actual_export_rows:
         logger.warning("No rows to export based on selection mode.")
         skipped_payload: ExportSkippedPayload = {
@@ -9019,7 +9037,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
             show_window = config.getboolean(SEC_SETTINGS, 'show_import_window', fallback=False)
             if detach:
                 show_window = False
-                pid, log_path = run_detached_import(import_path, config, resolved_paths, zid)
+                pid, log_path = run_detached_import(import_path, config, resolved_paths, zid, trace_id=trace_id)
                 response: ExportImportStartedPayload = {
                     "import_started": True,
                     "show_window": show_window,
@@ -9032,7 +9050,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                     emit_payload(response)
                 return response
             else:
-                success, output = run_synchronous_import(import_path, config, resolved_paths)
+                success, output = run_synchronous_import(import_path, config, resolved_paths, zid=zid, trace_id=trace_id)
                 if success:
                     import_complete_payload: ExportImportCompletePayload = {
                         "import_complete": True,
@@ -9048,6 +9066,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                         sys.exit(1)
                     else:
                         raise StructuredError(ErrorCode.DESK_FAILED, "Anki import failed synchronously", {"details": output})
+
         else:
             if save_to_favorites:
                 show_window = config.getboolean(SEC_SETTINGS, 'show_import_window', fallback=False)
@@ -9137,6 +9156,7 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
             logger.info(f"No selected rows found in {tsv_path.name}. Skipping.")
             continue
             
+        trace_id = getattr(args, 'trace_id', None) or (f"{zid}:export:selected" if zid else None)
         execute_export(
             tsv_path=tsv_path,
             actual_export_rows=actual_export_rows,
@@ -9150,7 +9170,8 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
             headers=headers,
             comments=comments,
             save_to_favorites_override=True,
-            send_to_anki_override=force_send_to_anki
+            send_to_anki_override=force_send_to_anki,
+            trace_id=trace_id
         )
         
     print("Selected pipeline execution complete.")

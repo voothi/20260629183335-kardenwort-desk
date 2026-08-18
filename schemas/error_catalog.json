@@ -162,6 +162,30 @@
       "category": "input",
       "description": "Detected natural language of the input text does not match the configured or expected source language.",
       "resolution": "Switch the active language to the detected language, or supply the bypass flag to proceed."
+    },
+    {
+      "code": "ERR_ANKI_NOT_RUNNING",
+      "category": "process",
+      "description": "Anki desktop application is not running or the AnkiConnect endpoint (127.0.0.1:8765) is unreachable.",
+      "resolution": "Launch Anki desktop application and ensure the AnkiConnect add-on is active, then retry the export."
+    },
+    {
+      "code": "ERR_ANKICONNECT_DISABLED",
+      "category": "process",
+      "description": "The AnkiConnect add-on is missing or disabled within the running Anki desktop application.",
+      "resolution": "Install or enable the AnkiConnect add-on (code 2055492159) in Anki Tools -> Add-ons, then restart Anki."
+    },
+    {
+      "code": "ERR_DECK_NOT_FOUND",
+      "category": "runtime",
+      "description": "The target Anki deck could not be created or accessed via AnkiConnect.",
+      "resolution": "Verify the target deck name and ensure write permissions for the active Anki profile."
+    },
+    {
+      "code": "ERR_NOTE_TYPE_MISMATCH",
+      "category": "input",
+      "description": "The requested note type or its fields do not match the columns present in the exported TSV file.",
+      "resolution": "Verify anki-mapping.ini configuration and ensure the note type exists with matching field names in Anki."
     }
   ]
 }

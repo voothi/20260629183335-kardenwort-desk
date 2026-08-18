@@ -3152,6 +3152,81 @@ def test_translation_exception_envelope():
     assert exc.envelope == env
 
 
+def test_cmd_export_and_detached_import_trace_propagation(monkeypatch, tmp_path):
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+export_selection_mode=selected
+save_to_favorites_on_export=true
+send_to_anki_after_export=true
+detach_import_on_send=true
+show_import_window=false
+""")
+    
+    workspace = tmp_path / "workspace"
+    workspace.mkdir()
+    (workspace / "config.ini").write_text("[project_structure]\ngenerated_results_dir=results\n")
+    results_dir = workspace / "results"
+    results_dir.mkdir()
+    
+    working_tsv = results_dir / "20260818190300-test.en.tsv"
+    working_tsv.write_text("DeskSelected\tSourceWord\tTranslation\n0\tword\ttranslation\n", encoding='utf-8')
+    
+    fav_dir = tmp_path / "favorites"
+    fav_dir.mkdir()
+    
+    resolved_paths = {
+        'kardenwort_workspace': workspace,
+        'favorites_output_dir': fav_dir,
+        'kardenwort_python': sys.executable,
+        'anki_mapping_file': tmp_path / "anki-mapping.ini"
+    }
+    
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(json.dumps({
+        "zid": "20260818190300",
+        "selected_row_ids": [0],
+        "tsv_path": str(working_tsv)
+    }))
+    
+    monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))
+    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
+    
+    import subprocess
+    captured_commands = []
+    def mock_popen(cmd, **kwargs):
+        captured_commands.append(cmd)
+        class MockProcess:
+            pid = 9999
+        return MockProcess()
+        
+    monkeypatch.setattr(desk.subprocess, 'Popen', mock_popen)
+    
+    class Args:
+        config = None
+        selection_manifest = str(manifest_path)
+        language = "en"
+        zid = "20260818190300"
+        trace_id = "20260818190300:export:selection"
+        
+    captured_payloads = []
+    monkeypatch.setattr(desk, 'emit_payload', lambda p: captured_payloads.append(p))
+    
+    desk.cmd_export(Args())
+    
+    assert len(captured_payloads) == 1
+    assert captured_payloads[0]["import_started"] is True
+    assert captured_payloads[0]["pid"] == 9999
+    
+    assert len(captured_commands) == 1
+    cmd = captured_commands[0]
+    assert "--import-only" in cmd
+    assert "--zid" in cmd
+    assert cmd[cmd.index("--zid") + 1] == "20260818190300"
+    assert "--trace-id" in cmd
+    assert cmd[cmd.index("--trace-id") + 1] == "20260818190300:export:selection"
+
+
 
 
 
