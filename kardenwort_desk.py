@@ -465,6 +465,62 @@ def query_translation_server(
     return None
 
 
+def query_intellifiller_server(
+    rows: List[Dict[str, Any]],
+    prompt: str,
+    language: str = "de",
+    server_url: str = "http://127.0.0.1:8083",
+    zid: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    field_mapping: Optional[dict] = None,
+    timeout: float = 30.0
+) -> Optional[dict]:
+    """
+    Queries the persistent IntelliFiller HTTP microservice.
+    Returns parsed JSON dictionary on success or structured error response, or None on connection refusal/offline.
+    """
+    if not server_url:
+        return None
+    url = f"{server_url.rstrip('/')}/enrich"
+    payload = {
+        "rows": rows,
+        "prompt": prompt,
+        "language": language,
+        "zid": zid,
+        "trace_id": trace_id,
+    }
+    if field_mapping:
+        payload["field_mapping"] = field_mapping
+    try:
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "X-ZID": str(zid or ""),
+                "X-Trace-ID": str(trace_id or "")
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                body = resp.read().decode('utf-8')
+                result = json.loads(body)
+                if result.get("status") == "success":
+                    return result
+    except urllib.error.HTTPError as he:
+        try:
+            body = he.read().decode('utf-8')
+            err_result = json.loads(body)
+            if isinstance(err_result, dict) and (err_result.get("status") == "error" or "code" in err_result):
+                return err_result
+        except Exception:
+            pass
+        logger.debug(f"IntelliFiller HTTP microservice HTTPError {he.code} at {server_url}")
+    except Exception as e:
+        logger.debug(f"IntelliFiller HTTP microservice unavailable at {server_url}: {e}")
+    return None
+
 
 def tokenize_text_with_fallback(
     text: str,
@@ -3178,15 +3234,103 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
 def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
     lock_target = Path(str(tsv_path) + ".intellifiller")
     with file_lock(lock_target):
+        # 1. Try HTTP microservice if configured
+        intellifiller_url = None
+        if config:
+            if config.has_section(SEC_SERVICES):
+                intellifiller_url = config.get(SEC_SERVICES, 'intellifiller_server_url', fallback=None)
+            elif config.has_section('services'):
+                intellifiller_url = config.get('services', 'intellifiller_server_url', fallback=None)
+
+        if intellifiller_url:
+            try:
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+                lang = "de"
+                for c in comments:
+                    if "language=" in c:
+                        lang = c.split("language=")[-1].strip().split()[0]
+                        break
+
+                mapping = None
+                try:
+                    mapping = load_anki_mapping(resolved_paths.get('anki_mapping_file'))
+                except Exception:
+                    pass
+
+                role_fields = get_role_fields(mapping, headers) if mapping else {}
+                target_field = role_fields.get('word_translation', 'WordDestination')
+
+                target_indices = []
+                for i, row in enumerate(data_rows):
+                    if selected_rows is not None and i not in selected_rows:
+                        continue
+                    if not reprocess:
+                        if target_field in headers:
+                            idx = headers.index(target_field)
+                            if idx < len(row) and row[idx].strip():
+                                continue
+                    target_indices.append(i)
+
+                if not target_indices:
+                    logger.info("No rows to enrich in TSV (all filled or excluded).")
+                    return True
+
+                batch_rows = []
+                for idx in target_indices:
+                    row_dict = {"row_id": idx}
+                    for c_idx, h in enumerate(headers):
+                        if c_idx < len(data_rows[idx]):
+                            row_dict[h] = data_rows[idx][c_idx]
+                    batch_rows.append(row_dict)
+
+                timeout = config.getint(SEC_TIMEOUTS, 'intellifiller_timeout', fallback=120) if config else 120
+                resp = query_intellifiller_server(
+                    rows=batch_rows,
+                    prompt=prompt_name,
+                    language=lang,
+                    server_url=intellifiller_url,
+                    zid=zid,
+                    trace_id=trace_id,
+                    timeout=float(timeout)
+                )
+
+                if resp is not None:
+                    if resp.get("status") == "error" or ("code" in resp and resp.get("status") != "success"):
+                        raise IntelliFillerError(resp.get("message", "IntelliFiller server returned error"), envelope=resp)
+
+                    if resp.get("status") == "success":
+                        for item in resp.get("enriched_rows", []):
+                            r_idx = item.get("row_id")
+                            if r_idx is not None and 0 <= r_idx < len(data_rows):
+                                for k, v in item.items():
+                                    if k in ("row_id", "status", "zid", "trace_id"):
+                                        continue
+                                    if k not in headers:
+                                        headers.append(k)
+                                        for r in data_rows:
+                                            r.append("")
+                                    col_idx = headers.index(k)
+                                    while len(data_rows[r_idx]) <= col_idx:
+                                        data_rows[r_idx].append("")
+                                    data_rows[r_idx][col_idx] = str(v)
+
+                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                        logger.info("Headless IntelliFiller (HTTP microservice) finished successfully.")
+                        return True
+            except IntelliFillerError:
+                raise
+            except Exception as e:
+                logger.warning(f"IntelliFiller HTTP microservice failed, falling back to CLI subprocess: {e}")
+
         python_exe = resolved_paths['kardenwort_python']
-    headless_script = resolved_paths['intellifiller_headless']
-    
-    cmd = [
-        str(python_exe),
-        str(headless_script),
-        "--tsv", str(tsv_path),
-        "--prompt", prompt_name,
-    ]
+        headless_script = resolved_paths['intellifiller_headless']
+        
+        cmd = [
+            str(python_exe),
+            str(headless_script),
+            "--tsv", str(tsv_path),
+            "--prompt", prompt_name,
+        ]
     if reprocess:
         cmd.append("--reprocess")
     if zid:
