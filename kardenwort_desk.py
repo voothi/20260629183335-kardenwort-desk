@@ -18,6 +18,8 @@ import socket
 import threading
 import time
 import traceback
+import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
@@ -354,8 +356,112 @@ SEC_AUDIO = "audio"
 SEC_GOLDENDICT = "goldendict"
 SEC_WORDFILL = "wordfill"
 SEC_SERVER = "server"
+SEC_SERVICES = "services"
 SEC_LANGUAGE_CHECK = "language_check"
 SINGLE_WORD_DELIMITERS = ('-', '.', '_')
+
+
+def query_spacy_server(
+    text: str,
+    language: str = "de",
+    server_url: str = "http://127.0.0.1:8081",
+    zid: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    options: Optional[dict] = None,
+    timeout: float = 3.0
+) -> Optional[dict]:
+    """
+    Queries the persistent SpaCy HTTP microservice for tokenization.
+    Returns parsed JSON dictionary on success, or None on failure/offline.
+    """
+    if not server_url:
+        return None
+    url = f"{server_url.rstrip('/')}/tokenize"
+    payload = {
+        "text": text,
+        "language": language,
+        "zid": zid,
+        "trace_id": trace_id,
+        "options": options or {}
+    }
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "X-ZID": str(zid or ""),
+                "X-Trace-ID": str(trace_id or "")
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                body = resp.read().decode('utf-8')
+                result = json.loads(body)
+                if result.get("status") == "success":
+                    return result
+    except Exception as e:
+        logger.debug(f"SpaCy HTTP microservice unavailable at {server_url}: {e}")
+    return None
+
+
+def tokenize_text_with_fallback(
+    text: str,
+    language: str,
+    config: Any,
+    resolved_paths: Dict[str, Any],
+    zid: Optional[str] = None,
+    trace_id: Optional[str] = None
+) -> List[Dict[str, Any]]:
+    """
+    Attempts high-speed in-memory tokenization via SpaCy HTTP server.
+    Falls back to invoking kardenwort.py via CLI subprocess if offline or unavailable.
+    """
+    spacy_url = None
+    if config:
+        if config.has_section(SEC_SERVICES):
+            spacy_url = config.get(SEC_SERVICES, 'spacy_server_url', fallback=None)
+        elif config.has_section('services'):
+            spacy_url = config.get('services', 'spacy_server_url', fallback=None)
+
+    if spacy_url:
+        resp = query_spacy_server(text, language, server_url=spacy_url, zid=zid, trace_id=trace_id)
+        if resp and "tokens" in resp:
+            return resp["tokens"]
+
+    # Fallback to CLI subprocess
+    python_exe = resolved_paths.get('kardenwort_python', sys.executable)
+    kardenwort_ws = resolved_paths.get('kardenwort_workspace', Path('.'))
+    kardenwort_script = Path(kardenwort_ws) / "src" / "kardenwort" / "core" / "kardenwort.py"
+
+    cmd = [
+        str(python_exe),
+        str(kardenwort_script),
+        "--language", language,
+        "--text", text,
+        "--structured-output"
+    ]
+    env = os.environ.copy()
+    env["PYTHONIOENCODING"] = "utf-8"
+    try:
+        proc = subprocess.run(cmd, check=True, capture_output=True, text=True, encoding='utf-8', timeout=15, env=env)
+        tokens = []
+        for line in proc.stdout.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                item = json.loads(line)
+                if isinstance(item, dict) and "word" in item:
+                    tokens.append(item)
+            except Exception:
+                pass
+        return tokens
+    except Exception as e:
+        logger.warning(f"CLI tokenization fallback failed: {e}")
+        return []
+
 
 
 @dataclass(frozen=True)
