@@ -893,6 +893,75 @@ def test_render_sample_llms_can_make(tmp_path):
         assert 'data-lower-clean="ll">LL</span>' not in html
 
 
+def test_inflected_column_fallback_hierarchy(tmp_path):
+    """Verify desk HTML table rendering falls back to WordSourceInflectedForm2, Quotation, or WordSource."""
+    from kardenwort_desk import run_render_flow
+    config, resolved_paths = _create_render_test_env(tmp_path)
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_path = res_dir / "20260819191000-test-fallback.en.tsv"
+
+    # Row 1: has WordSourceInflectedForm2 -> falls back to WordSourceInflectedForm2
+    # Row 2: has Quotation -> falls back to Quotation
+    # Row 3: has only WordSource -> falls back to WordSource
+    tsv_content = (
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordSourceInflectedForm2\tWordDestination\n"
+        "ignored_q\tgolden\t\tgoldens\tзолотой\n"
+        "running\trun\t\t\tбежать\n"
+        "\tdesk\t\t\tстол\n"
+    )
+    tsv_path.write_text(tsv_content, encoding='utf-8')
+
+    html = run_render_flow(
+        text="The goldens are running to the desk.",
+        language="en",
+        zid="20260819191000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    # Verify INFLECTED cells are populated from fallback columns
+    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">goldens</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">running</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">desk</div></td>' in html
+
+
+def test_single_text_path_decomposition_inflected_rendering(tmp_path):
+    """Verify single-text path decomposition displays non-empty INFLECTED cells and connects highlight tokens."""
+    from kardenwort_desk import run_render_flow
+    config, resolved_paths = _create_render_test_env(tmp_path)
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_path = res_dir / "20260819191100-test-path.en.tsv"
+
+    tsv_content = (
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "run\trun\trun\tзапускать\n"
+        "goldens\tgolden\tgoldens\tзолотой\n"
+    )
+    tsv_path.write_text(tsv_content, encoding='utf-8')
+
+    html = run_render_flow(
+        text=r"U:\voothi\20260629183335-kardenwort-desk\profiling\run_goldens.py",
+        language="en",
+        zid="20260819191100",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">run</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">goldens</div></td>' in html
+    assert 'data-lower-clean="run">run</span>' in html
+    assert 'data-lower-clean="goldens">goldens</span>' in html
+
+
+
 
 
 

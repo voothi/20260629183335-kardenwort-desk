@@ -4157,6 +4157,25 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     return deduped_rows
 
 
+def resolve_row_inflected_form(row, col_inflected, col_inflected2=-1, col_quotation=-1, col_lemma=-1):
+    """
+    Evaluate inflected form in order:
+      1. WordSourceInflectedForm (col_inflected)
+      2. WordSourceInflectedForm2 (col_inflected2)
+      3. Quotation (col_quotation)
+      4. WordSource / Lemma (col_lemma)
+    """
+    if col_inflected != -1 and len(row) > col_inflected and row[col_inflected].strip():
+        return row[col_inflected].strip()
+    if col_inflected2 != -1 and len(row) > col_inflected2 and row[col_inflected2].strip():
+        return row[col_inflected2].strip()
+    if col_quotation != -1 and len(row) > col_quotation and row[col_quotation].strip():
+        return row[col_quotation].strip()
+    if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+        return row[col_lemma].strip()
+    return ""
+
+
 SPLIT_GAP_LIMIT = 60
 
 
@@ -4522,6 +4541,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
         col_inflected = headers.index(role_fields.get('inflected', 'WordSourceInflectedForm')) if role_fields.get('inflected', 'WordSourceInflectedForm') in headers else -1
+        col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
+        col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
         
         dedup_scope_cfg = smc.deduplication_scope
         if col_word_source != -1 and dedup_scope_cfg != 'none':
@@ -4591,7 +4612,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         matches_sentence = (row_sent_idx == i)
                     else:
                         matches_sentence = False
-                        row_inf = row[col_inflected].strip() if col_inflected != -1 and len(row) > col_inflected else ""
+                        row_inf = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_word_source)
                         row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
                         forms = [f.strip() for f in row_inf.split(',')] if row_inf else []
                         clean_lemma = row_lem.strip() if row_lem else ""
@@ -4782,6 +4803,8 @@ html, body {{
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
+    col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
+    col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
     
     # --- Word-fill early pre-fill step ---
     if wordfill_cfg and wordfill_cfg.get('enabled', False):
@@ -5079,7 +5102,7 @@ html, body {{
             row[col_lemma] = re.sub(r'^\d{14}-', '', row[col_lemma])
             data_rows[row_id] = row
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
-        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         
         candidates = []
         candidates_seen = set()
@@ -5213,7 +5236,7 @@ html, body {{
     single_word_rows = set()
     anchored_positions = {}
     for row_id, row in enumerate(data_rows):
-        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
         
         has_single_word_form = False
@@ -5403,7 +5426,7 @@ html, body {{
             row[col_lemma] = re.sub(r'^\d{14}-', '', row[col_lemma])
             data_rows[row_id] = row
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
-        inflected_val = row[col_inflected] if col_inflected != -1 and len(row) > col_inflected else ""
+        inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
@@ -5498,7 +5521,7 @@ html, body {{
                                 if 0 <= r_idx < len(data_rows):
                                     r = data_rows[r_idx]
                                     lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
-                                    inf = r[col_inflected].strip().lower() if col_inflected != -1 and len(r) > col_inflected else ""
+                                    inf = resolve_row_inflected_form(r, col_inflected, col_inflected2, col_quotation, col_lemma).lower()
                                     forms = [f.strip() for f in inf.split(',') if f.strip()]
                                     r_words = set(forms)
                                     if lem:
@@ -11518,12 +11541,15 @@ def cmd_merge(args):
                     
                     prefer_lowercase_cfg = merge_config.prefer_lowercase
 
+                    col_inflected2 = first_headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in first_headers else -1
+                    col_quotation = first_headers.index('Quotation') if 'Quotation' in first_headers else -1
                     seen_pairs = []
                     grouped_rows = {}
                     for row in all_data_rows:
                         lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
-                        if len(row) > col_inflected:
-                            inf_parts = [p.strip() for p in row[col_inflected].strip().lower().split(',') if p.strip()]
+                        inf_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
+                        if inf_val:
+                            inf_parts = [p.strip() for p in inf_val.lower().split(',') if p.strip()]
                             inflected_key = tuple(sorted(inf_parts))
                         else:
                             inflected_key = ()
