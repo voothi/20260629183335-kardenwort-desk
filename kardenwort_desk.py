@@ -406,6 +406,66 @@ def query_spacy_server(
     return None
 
 
+def query_translation_server(
+    text: str,
+    source: str,
+    target: str,
+    provider: str = "google",
+    server_url: str = "http://127.0.0.1:8082",
+    zid: Optional[str] = None,
+    trace_id: Optional[str] = None,
+    deepl_api_key: Optional[str] = None,
+    timeout: float = 10.0
+) -> Optional[dict]:
+    """
+    Queries the persistent translation HTTP microservice.
+    Returns parsed JSON dictionary on success or structured error response, or None on connection refusal/offline.
+    """
+    if not server_url:
+        return None
+    url = f"{server_url.rstrip('/')}/translate"
+    payload = {
+        "text": text,
+        "source": source,
+        "target": target,
+        "provider": provider,
+        "zid": zid,
+        "trace_id": trace_id,
+    }
+    if deepl_api_key:
+        payload["deepl_api_key"] = deepl_api_key
+    try:
+        data = json.dumps(payload).encode('utf-8')
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Content-Type": "application/json",
+                "X-ZID": str(zid or ""),
+                "X-Trace-ID": str(trace_id or "")
+            }
+        )
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            if resp.status == 200:
+                body = resp.read().decode('utf-8')
+                result = json.loads(body)
+                if result.get("status") == "success":
+                    return result
+    except urllib.error.HTTPError as he:
+        try:
+            body = he.read().decode('utf-8')
+            err_result = json.loads(body)
+            if isinstance(err_result, dict) and (err_result.get("status") == "error" or "code" in err_result):
+                return err_result
+        except Exception:
+            pass
+        logger.debug(f"Translation HTTP microservice HTTPError {he.code} at {server_url}")
+    except Exception as e:
+        logger.debug(f"Translation HTTP microservice unavailable at {server_url}: {e}")
+    return None
+
+
+
 def tokenize_text_with_fallback(
     text: str,
     language: str,
@@ -2005,6 +2065,26 @@ def find_working_tsv(results_dir, zid, language):
     return None
 
 def run_google_translation(text, source, target, config, resolved_paths, zid=None, trace_id=None):
+    server_url = None
+    if config:
+        if config.has_section(SEC_SERVICES):
+            server_url = config.get(SEC_SERVICES, 'translation_server_url', fallback=None)
+        elif config.has_section('services'):
+            server_url = config.get('services', 'translation_server_url', fallback=None)
+
+    if server_url:
+        timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
+        resp = query_translation_server(text, source, target, provider="google", server_url=server_url, zid=zid, trace_id=trace_id, timeout=timeout)
+        if resp:
+            if resp.get("status") == "success":
+                return resp.get("translated_text", "")
+            elif resp.get("status") == "error":
+                results_dir = resolve_results_dir(resolved_paths, config)
+                if zid and results_dir:
+                    sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+                    sess_logger.error(f"[{resp.get('code')}] {resp.get('message')}")
+                raise TranslationException(resp.get("message", "Google translation failed"), envelope=resp)
+
     python_exe = resolved_paths['deep_translator_python']
     script_path = resolved_paths['translate_google_script']
     
@@ -2057,9 +2137,6 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
         raise TranslationException(err_envelope.get("message"), envelope=err_envelope)
 
 def run_deepl_translation(text, source, target, config, resolved_paths, zid=None, trace_id=None):
-    python_exe = resolved_paths['deep_translator_python']
-    script_path = resolved_paths['translate_deepl_script']
-    
     deepl_key = get_deepl_key(config, resolved_paths['base_dir'])
     if not deepl_key:
         err_envelope = {
@@ -2076,6 +2153,29 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"[{err_envelope['code']}] {err_envelope['message']}")
         raise TranslationException(err_envelope["message"], envelope=err_envelope)
+
+    server_url = None
+    if config:
+        if config.has_section(SEC_SERVICES):
+            server_url = config.get(SEC_SERVICES, 'translation_server_url', fallback=None)
+        elif config.has_section('services'):
+            server_url = config.get('services', 'translation_server_url', fallback=None)
+
+    if server_url:
+        timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
+        resp = query_translation_server(text, source, target, provider="deepl", server_url=server_url, zid=zid, trace_id=trace_id, deepl_api_key=deepl_key, timeout=timeout)
+        if resp:
+            if resp.get("status") == "success":
+                return resp.get("translated_text", "")
+            elif resp.get("status") == "error":
+                results_dir = resolve_results_dir(resolved_paths, config)
+                if zid and results_dir:
+                    sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+                    sess_logger.error(f"[{resp.get('code')}] {resp.get('message')}")
+                raise TranslationException(resp.get("message", "DeepL translation failed"), envelope=resp)
+
+    python_exe = resolved_paths['deep_translator_python']
+    script_path = resolved_paths['translate_deepl_script']
         
     cmd = [
         str(python_exe),
@@ -2133,6 +2233,26 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
         raise TranslationException(err_envelope.get("message"), envelope=err_envelope)
 
 def run_argos_translation(text, source, target, config, resolved_paths, zid=None, trace_id=None):
+    server_url = None
+    if config:
+        if config.has_section(SEC_SERVICES):
+            server_url = config.get(SEC_SERVICES, 'translation_server_url', fallback=None)
+        elif config.has_section('services'):
+            server_url = config.get('services', 'translation_server_url', fallback=None)
+
+    if server_url:
+        timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) * 2 if config else 120
+        resp = query_translation_server(text, source, target, provider="argos", server_url=server_url, zid=zid, trace_id=trace_id, timeout=timeout)
+        if resp:
+            if resp.get("status") == "success":
+                return resp.get("translated_text", "")
+            elif resp.get("status") == "error":
+                results_dir = resolve_results_dir(resolved_paths, config)
+                if zid and results_dir:
+                    sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+                    sess_logger.error(f"[{resp.get('code')}] {resp.get('message')}")
+                raise TranslationException(resp.get("message", "Argos translation failed"), envelope=resp)
+
     python_exe = resolved_paths.get('argotranslate_python')
     script_path = resolved_paths.get('argotranslate_script')
     

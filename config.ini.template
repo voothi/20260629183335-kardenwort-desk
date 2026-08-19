@@ -551,3 +551,6 @@ api_key = Hvo7l2VclhgcSEY5IOq3PjwaMuK2xa1cbpptYED6sPQ
 ; Persistent microservices for zero-cold-start acceleration
 ; SpaCy linguistic server (kardenwort-core --serve --port 8081)
 spacy_server_url = http://127.0.0.1:8081
+; Translation server (translate_server.py --port 8082)
+translation_server_url = http://127.0.0.1:8082
+
