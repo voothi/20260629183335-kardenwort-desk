@@ -238,7 +238,7 @@ def analyze():
             
             parsed_events = list(latest_events.values())
             
-            is_failed = any(p['phase'] == 'validation_failed' for p in parsed_events)
+            is_failed = any(p['phase'] == 'validation_failed' or p.get('status') in ('error', 'failed') for p in parsed_events)
             
             min_start_ts = min((p['start_t'] for p in parsed_events), default=0)
             max_end_ts = max((p['end_t'] for p in parsed_events), default=0)

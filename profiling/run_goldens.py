@@ -107,6 +107,7 @@ def main():
             supervisor = ProcessSupervisor(loaded_config, resolved_paths, enabled=True)
             supervisor.start()
     
+    suite_failed = False
     try:
         for i, run in enumerate(runs):
             if i > 0 and cleanup_delay > 0:
@@ -226,6 +227,7 @@ def main():
                         continue
                     
                     ahk_exe = kardenwort_desk.get_ahk_executable()
+                    ui_wait_passed = True
                             
                     if ahk_exe:
                         try:
@@ -235,13 +237,15 @@ def main():
                                 print(f"UI E2E Duration: {total_duration:.2f} seconds.")
                                 print(res.stdout.strip())
                             else:
+                                ui_wait_passed = False
                                 print(f"UI Wait FAILED: {res.stdout.strip()}")
                         except Exception as e:
+                            ui_wait_passed = False
                             print(f"Failed to run AHK wait script: {e}")
                     else:
                         print("Could not find AutoHotkey executable to run wait_for_windows.ahk")
 
-                    print(f"Validating completeness of generated TSV files (waiting up to {backend_timeout}s for background enrichment)...")
+                    print(f"Validating completeness of generated TSV files and trace logs (waiting up to {backend_timeout}s for background enrichment)...")
                     val_start = time.time()
                     validation_failed = True
                     missing_details = []
@@ -249,6 +253,37 @@ def main():
                     while time.time() - val_start < backend_timeout:
                         all_passed = True
                         missing_details = []
+                        
+                        if len(completed_zids) < expected_count:
+                            all_passed = False
+                            missing_details.append(f"    [TRACE PENDING] Only found {len(completed_zids)}/{expected_count} completed backend traces")
+                        
+                        if not ui_wait_passed:
+                            all_passed = False
+                            missing_details.append(f"    [UI WAIT FAILED] AHK window wait did not complete successfully")
+
+                        # Check for errors in speed_trace.jsonl
+                        if speed_trace.exists():
+                            try:
+                                with open(speed_trace, 'r', encoding='utf-8') as f:
+                                    f.seek(initial_size)
+                                    for line in f:
+                                        if not line.strip():
+                                            continue
+                                        try:
+                                            data = json.loads(line)
+                                            trace_zid = str(data.get('zid', ''))
+                                            if run['zid'] <= trace_zid <= end_zid:
+                                                phase = data.get('phase', 'unknown')
+                                                status = data.get('status', 'success')
+                                                if status in ('error', 'failed') or phase == 'validation_failed':
+                                                    all_passed = False
+                                                    missing_details.append(f"    [TRACE ERROR] Phase '{phase}' (ZID {trace_zid}) failed with status: {status}")
+                                        except Exception:
+                                            pass
+                            except Exception as e:
+                                pass
+
                         for existing_file in results_dir.rglob("*.tsv"):
                             if existing_file.is_file():
                                 m = re.match(r'^(\d{14})', existing_file.name)
@@ -282,9 +317,10 @@ def main():
                         time.sleep(1.0)
                     
                     if validation_failed:
+                        suite_failed = True
                         for msg in missing_details:
                             print(msg.replace("PENDING", "FAILED"))
-                        print(f"    WARNING: Test run {run['zid']} completed but generated corrupted/incomplete data.")
+                        print(f"    WARNING: Test run {run['zid']} completed but generated corrupted/incomplete data or trace errors.")
                         with open(speed_trace, 'a', encoding='utf-8') as f:
                             f.write(json.dumps({
                                 "zid": run['zid'],
@@ -294,11 +330,13 @@ def main():
                                 "timestamp": datetime.now(timezone.utc).isoformat()
                             }) + '\n')
                     else:
-                        print(f"    Validation PASSED. All expected fields populated.")
+                        print(f"    Validation PASSED. All expected fields populated and trace logs error-free.")
 
                 else:
+                    suite_failed = True
                     print(f"FAILED: {run['name']} could not be initiated.")
             except Exception as e:
+                suite_failed = True
                 print(f"ERROR: {e}")
 
         print(f"==================================================")
@@ -325,6 +363,10 @@ def main():
             shutil.copy2(config_backup, config_path)
             config_backup.unlink()
             print("Restored original config.ini\n")
+
+    if suite_failed:
+        print("ERROR: One or more golden fixture runs failed or encountered trace errors.")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

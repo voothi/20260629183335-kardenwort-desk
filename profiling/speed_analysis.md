@@ -1,7 +1,7 @@
 # Performance Dynamics Over Time (By Git Commit)
 
 ## Table of Contents
-- [[Commit: 3e682d7] 20260813143711](#commit-3e682d7-20260813143711)
+- [[Commit: d85ea0e] 20260813144027](#commit-d85ea0e-20260813144027)
 - [[Commit: 2544a7c] 20260819013716 to desk](#commit-2544a7c-20260819013716-to-desk)
 - [[Commit: 02907f0] 20260819025120 to desk](#commit-02907f0-20260819025120-to-desk)
 - [[Commit: 735d0c1] 20260819031636 to desk](#commit-735d0c1-20260819031636-to-desk)
@@ -12,10 +12,11 @@
 - [[Commit: cee003c] 20260819161016 to desk](#commit-cee003c-20260819161016-to-desk)
 - [[Commit: 72ae560] 20260819173612 to desk](#commit-72ae560-20260819173612-to-desk)
 - [[Commit: 6639a4d] 20260819180813 to desk](#commit-6639a4d-20260819180813-to-desk)
+- [[Commit: c3fff0d] 20260819184324 to desk](#commit-c3fff0d-20260819184324-to-desk)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
-## [Commit: 3e682d7] 20260813143711 (Avg wait between runs: 12.80s)
+## [Commit: d85ea0e] 20260813144027 (Avg wait between runs: 12.80s)
 ```text
 Run Session: 20260807230200 [Golden DE [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 45.939s)
 ---------------------------------------------------------------------------
@@ -438,7 +439,7 @@ background_text_translation (03)    |                                        █
 cross_pollinate_from_siblings (03)  |                                        █ | 0.003s
 cross_pollinate_from_siblings (00)  |                                        █ | 0.003s
 
-Run Session: 20260807220200 [Golden DE] (Total Batch E2E Duration: 19.000s)
+Run Session: 20260807220200 [Golden DE [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 19.000s)
 ---------------------------------------------------------------------------
 lemmatization (00)                  | ████                                     | 2.112s
 translate_text (00) [ERROR]         |          █                               | 0.015s
@@ -467,7 +468,7 @@ background_text_translation (08) [ERROR] |                                    �
 translate_text (08) [ERROR]         |                                        █ | 0.018s
 cross_pollinate_from_siblings (00)  |                                        █ | 0.019s
 
-Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 6.516s)
+Run Session: 20260807220100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 6.516s)
 ---------------------------------------------------------------------------
 lemmatization (00)                  | ████                                     | 0.654s
 translate_text (00) [ERROR]         |                  █                       | 0.005s
@@ -618,7 +619,7 @@ html_generation (01)                |                                        █
 
 ## [Commit: 6639a4d] 20260819180813 to desk (Avg wait between runs: 17.47s)
 ```text
-Run Session: 20260807220200 [Golden DE] (Total Batch E2E Duration: 20.911s)
+Run Session: 20260807220200 [Golden DE [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 20.911s)
 ---------------------------------------------------------------------------
 lemmatization (00)                  | ███                                      | 2.061s
 translate_text (00) [ERROR]         |         █                                | 0.015s
@@ -647,7 +648,7 @@ background_text_translation (08) [ERROR] |                                    �
 translate_text (08) [ERROR]         |                                        █ | 0.016s
 cross_pollinate_from_siblings (00)  |                                        █ | 0.021s
 
-Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 7.277s)
+Run Session: 20260807220100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 7.277s)
 ---------------------------------------------------------------------------
 lemmatization (00)                  | ███                                      | 0.677s
 translate_text (00) [ERROR]         |                █                         | 0.038s
@@ -662,6 +663,26 @@ cross_pollinate_from_siblings (02)  |                                       █ 
 background_text_translation (03)    |                                       █  | 0.280s
 cross_pollinate_from_siblings (03)  |                                        █ | 0.015s
 cross_pollinate_from_siblings (00)  |                                        █ | 0.018s
+
+```
+
+## [Commit: c3fff0d] 20260819184324 to desk
+```text
+Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 20.426s)
+---------------------------------------------------------------------------
+translate_text (00)                 | █████████                                | 5.073s
+lemmatization (00)                  | █                                        | 0.759s
+the_cut (00)                        |          █                               | 0.014s
+html_generation (00)                |           █                              | 0.004s
+background_text_translation (00)    |            ██████████████████████████    | 13.614s
+html_generation (03)                |            █                             | 0.004s
+html_generation (02)                |              █                           | 0.006s
+html_generation (01)                |                █                         | 0.003s
+background_text_translation (02)    |                                      █   | 0.013s
+cross_pollinate_from_siblings (02)  |                                      █   | 0.003s
+background_text_translation (03)    |                                        █ | 0.015s
+cross_pollinate_from_siblings (03)  |                                        █ | 0.004s
+cross_pollinate_from_siblings (00)  |                                        █ | 0.005s
 
 ```
 
@@ -730,22 +751,12 @@ cross_pollinate_from_siblings (00)  |                                        █
 ### 20260807220100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `background_text_translation` | 9 | 0.117 | 6.375 | 23.620 |
-| `translate_text` | 3 | 0.005 | 3.054 | 9.119 |
-| `lemmatization` | 3 | 0.654 | 1.859 | 4.247 |
-| `the_cut` | 3 | 0.009 | 0.012 | 0.013 |
-| `cross_pollinate_from_siblings` | 7 | 0.003 | 0.011 | 0.018 |
-| `html_generation` | 12 | 0.003 | 0.004 | 0.006 |
-
-### 20260807220200 [Golden DE]
-| Phase | Cnt | Min (s) | Avg (s) | Max (s) |
-| :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 2 | 2.061 | 2.086 | 2.112 |
-| `background_text_translation` | 14 | 0.097 | 0.531 | 2.179 |
-| `the_cut` | 2 | 0.027 | 0.028 | 0.029 |
-| `cross_pollinate_from_siblings` | 12 | 0.010 | 0.017 | 0.036 |
-| `translate_text` | 4 | 0.015 | 0.016 | 0.018 |
-| `html_generation` | 18 | 0.003 | 0.004 | 0.007 |
+| `background_text_translation` | 6 | 0.013 | 11.609 | 23.620 |
+| `translate_text` | 2 | 5.073 | 7.096 | 9.119 |
+| `lemmatization` | 2 | 0.759 | 2.503 | 4.247 |
+| `the_cut` | 2 | 0.013 | 0.013 | 0.014 |
+| `cross_pollinate_from_siblings` | 4 | 0.003 | 0.008 | 0.018 |
+| `html_generation` | 8 | 0.003 | 0.005 | 0.006 |
 
 ### 20260807230100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
