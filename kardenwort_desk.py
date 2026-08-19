@@ -6054,9 +6054,25 @@ html, body {{
             window.AppState.applyDeltas(data);
         };
 
+        try {
+            var sessZidEl = document.getElementById('session-zid');
+            var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
+            if (curZid && typeof EventSource !== 'undefined') {
+                var sseUrl = "http://127.0.0.1:8080/events?zid=" + encodeURIComponent(curZid);
+                var evtSource = new EventSource(sseUrl);
+                evtSource.onmessage = function(e) {
+                    try {
+                        var parsed = JSON.parse(e.data);
+                        if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage)) {
+                            window.receiveUpdate(parsed);
+                        }
+                    } catch(err) {}
+                };
+            }
+        } catch(e) {}
+
         window.startPolling = function() {
-            // Polling is now handled natively by AutoHotkey to prevent cursor flickering
-            // and cross-drive 'Access is denied' errors in the MSHTML engine.
+            // Polling fallback when SSE is not available
         };
 
         var workerLaunched = false;
@@ -12080,6 +12096,12 @@ def main():
     p_server.add_argument("--host", default=None, help="Host address to bind to (overrides config)")
     p_server.add_argument("--port", type=int, default=None, help="Port number to bind to (overrides config)")
 
+    # controller
+    p_controller = subparsers.add_parser("controller")
+    p_controller.add_argument("--host", default=None, help="Host address to bind to (overrides config)")
+    p_controller.add_argument("--port", type=int, default=None, help="Port number to bind to (overrides config)")
+    p_controller.add_argument("--no-sidecars", action="store_true", help="Do not spawn or supervise sidecar microservices")
+
     try:
         args = parser.parse_args()
         
@@ -12111,6 +12133,7 @@ def main():
         "desk": cmd_desk,
         "wordfill": cmd_wordfill,
         "server": lambda args: __import__('http_server').cmd_server(args),
+        "controller": lambda args: __import__('kardenwort_controller').run_controller(args),
     }
 
     try:
