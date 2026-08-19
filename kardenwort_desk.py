@@ -30,7 +30,7 @@ from enum import Enum, auto
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
 vendor_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
 if vendor_dir not in sys.path:
-    sys.path.insert(0, vendor_dir)
+    sys.path.append(vendor_dir)
 
 
 class ErrorCode(str, Enum):

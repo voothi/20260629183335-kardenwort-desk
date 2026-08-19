@@ -1082,10 +1082,10 @@ def test_cmd_merge_sort_frequency(monkeypatch, tmp_path):
     mock_index.write_text("the\nand\nuncommon\n", encoding='utf-8')
     config.set(SEC_LANGUAGES, 'en_lemma_index', str(mock_index))
     
-    import sys
+    spacy_python = Path("U:/voothi/20250825231214-spacy-env/Scripts/python.exe")
     resolved_paths = {
         'anki_mapping_file': str(Path("anki-mapping.ini").resolve()),
-        'kardenwort_python': sys.executable,
+        'kardenwort_python': str(spacy_python.resolve()) if spacy_python.exists() else sys.executable,
         'kardenwort_workspace': Path("U:/voothi/20241223170748-kardenwort").resolve()
     }
     monkeypatch.setattr(desk, 'load_config', lambda c: (config, resolved_paths, {}, {}))

@@ -17,6 +17,7 @@ openspec/
 AGENTS.md
 .kilocode/
 .pytest_cache/
+venv/
 
 # Local artifacts and outputs
 favorites/

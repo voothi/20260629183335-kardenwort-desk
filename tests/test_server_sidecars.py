@@ -237,3 +237,38 @@ def test_ahk_reload_lifecycle_simulation():
         server2.shutdown()
         server2.server_close()
         t2.join(timeout=2.0)
+
+
+# ---------------------------------------------------------------------------
+# 5. Interpreter Prioritization & Resolution Tests
+# ---------------------------------------------------------------------------
+def test_supervisor_interpreter_prioritization_intellifiller():
+    desk_dir = Path(__file__).resolve().parent.parent
+    config = configparser.ConfigParser()
+    
+    # 1. When intellifiller_python is provided, it must be prioritized over kardenwort_python
+    resolved_paths_priority = {
+        'intellifiller_python': Path('C:/Custom/PythonIntelli/python.exe'),
+        'kardenwort_python': Path('C:/Custom/PythonSpacy/python.exe'),
+        'deep_translator_python': Path('C:/Custom/PythonTrans/python.exe'),
+    }
+    sup_priority = ProcessSupervisor(config, resolved_paths_priority, enabled=False)
+    assert sup_priority.services["intellifiller"].launch_cmd[0] == str(Path('C:/Custom/PythonIntelli/python.exe'))
+    assert sup_priority.services["spacy"].launch_cmd[0] == str(Path('C:/Custom/PythonSpacy/python.exe'))
+    assert sup_priority.services["translation"].launch_cmd[0] == str(Path('C:/Custom/PythonTrans/python.exe'))
+
+    # 2. When intellifiller_python is omitted, fallback to kardenwort_python
+    resolved_paths_fallback = {
+        'kardenwort_python': Path('C:/Custom/PythonSpacy/python.exe'),
+    }
+    sup_fallback = ProcessSupervisor(config, resolved_paths_fallback, enabled=False)
+    assert sup_fallback.services["intellifiller"].launch_cmd[0] == str(Path('C:/Custom/PythonSpacy/python.exe'))
+    assert sup_fallback.services["spacy"].launch_cmd[0] == str(Path('C:/Custom/PythonSpacy/python.exe'))
+    assert sup_fallback.services["translation"].launch_cmd[0] == sys.executable
+
+    # 3. When no interpreter is configured, fallback to sys.executable
+    sup_empty = ProcessSupervisor(config, {}, enabled=False)
+    assert sup_empty.services["intellifiller"].launch_cmd[0] == sys.executable
+    assert sup_empty.services["spacy"].launch_cmd[0] == sys.executable
+    assert sup_empty.services["translation"].launch_cmd[0] == sys.executable
+

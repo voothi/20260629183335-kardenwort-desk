@@ -299,8 +299,11 @@ class ProcessSupervisor:
         parsed_intelli = urllib.parse.urlparse(intelli_url_str) if intelli_url_str else None
         intelli_host = (parsed_intelli.hostname if parsed_intelli and parsed_intelli.hostname else "127.0.0.1")
         intelli_port = (parsed_intelli.port if parsed_intelli and parsed_intelli.port else 8083)
-
-        intelli_python = self.resolved_paths.get('kardenwort_python', self.resolved_paths.get('intellifiller_python', sys.executable))
+        intelli_python = (
+            self.resolved_paths.get('intellifiller_python')
+            or self.resolved_paths.get('kardenwort_python')
+            or sys.executable
+        )
         intelli_script = self.resolved_paths.get('intellifiller_headless')
         if not intelli_script or not Path(intelli_script).exists():
             intelli_ws = workspace_parent / "20251206123938-intellifiller-ai-addon-for-anki"
