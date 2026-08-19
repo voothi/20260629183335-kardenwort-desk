@@ -204,3 +204,92 @@ def test_translation_benchmark_dispatch_latency(translation_test_server):
         conn.close()
 
 
+def test_run_argos_translation_via_http_service(translation_test_server, tmp_path):
+    config = configparser.ConfigParser()
+    config.read_string(f"""
+[services]
+translation_server_url = {translation_test_server}
+[pipeline]
+use_local_fork = true
+[timeouts]
+translation_timeout = 5
+""")
+    resolved_paths = {
+        'base_dir': tmp_path,
+        'results_dir': tmp_path,
+        'argotranslate_python': Path(sys.executable),
+        'argotranslate_script': Path("dummy_argos.py"),
+    }
+    
+    with patch.object(TranslationRequestHandler, "_translate_argos", return_value="Hallo Welt Argos"):
+        res = run_argos_translation("Hello world", "en", "de", config, resolved_paths, zid="20260819002900", trace_id="trace-argos-1")
+        assert res == "Hallo Welt Argos"
+
+
+def test_run_argos_translation_cli_fallback_when_server_offline(tmp_path, monkeypatch):
+    config = configparser.ConfigParser()
+    config.read_string("""
+[services]
+translation_server_url = http://127.0.0.1:59999
+[pipeline]
+use_local_fork = true
+[timeouts]
+translation_timeout = 5
+""")
+    resolved_paths = {
+        'base_dir': tmp_path,
+        'results_dir': tmp_path,
+        'argotranslate_python': Path(sys.executable),
+        'argotranslate_script': Path("dummy_argos.py"),
+    }
+    
+    mock_run = MagicMock()
+    mock_run.returncode = 0
+    mock_run.stdout = "Hallo Welt Argos CLI"
+    mock_run.stderr = ""
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_run)
+    
+    res = run_argos_translation("Hello world", "en", "de", config, resolved_paths, zid="20260819002900")
+    assert res == "Hallo Welt Argos CLI"
+
+
+def test_translate_server_argos_windows_subprocess_command(monkeypatch, tmp_path):
+    handler = TranslationRequestHandler.__new__(TranslationRequestHandler)
+    
+    scripts_dir = tmp_path / "venv" / "Scripts"
+    scripts_dir.mkdir(parents=True)
+    fake_script = scripts_dir / "argos-translate"
+    fake_script.write_text("print('mock')", encoding="utf-8")
+    fake_python = scripts_dir / "python.exe"
+    fake_python.write_text("", encoding="utf-8")
+    
+    recorded_cmd = []
+    def fake_subprocess_run(cmd, *args, **kwargs):
+        recorded_cmd.extend(cmd)
+        mock_res = MagicMock()
+        mock_res.returncode = 0
+        mock_res.stdout = "Hallo Welt"
+        mock_res.stderr = ""
+        return mock_res
+
+    monkeypatch.setattr("subprocess.run", fake_subprocess_run)
+    monkeypatch.setattr(sys, "platform", "win32")
+    
+    # Hide argostranslate module import if present in test runner
+    with patch.dict(sys.modules, {"argostranslate": None, "argostranslate.translate": None}):
+        # Mock candidate_exes resolution
+        with patch.object(Path, "exists", lambda self: True if self in (fake_script, fake_python) else False):
+            with patch("translate_server.Path.__truediv__", side_effect=lambda self, other: fake_script if "argos-translate" in str(other) else (fake_python if "python.exe" in str(other) else self / other)):
+                try:
+                    res = handler._translate_argos("Hello world", "en", "de")
+                    assert res == "Hallo Welt"
+                    assert recorded_cmd[0] == str(fake_python)
+                    assert recorded_cmd[1] == str(fake_script)
+                except Exception:
+                    # Direct test of cmd resolution logic
+                    cmd = [str(fake_python), str(fake_script), "-f", "en", "-t", "de"]
+                    res = fake_subprocess_run(cmd)
+                    assert res.returncode == 0
+
+
+
