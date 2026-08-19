@@ -660,6 +660,8 @@ def tokenize_text_with_fallback(
         "--text", text,
         "--structured-output"
     ]
+    if spacy_url:
+        cmd.extend(["--spacy-server-url", spacy_url])
     env = os.environ.copy()
     env["PYTHONIOENCODING"] = "utf-8"
     try:
@@ -3853,6 +3855,16 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
         if not desk_classification_enabled:
             cmd.append("--disable-classification")
+
+        # Forward SpaCy HTTP Microservice URL if configured in [services]
+        spacy_server_url = ""
+        if config and hasattr(config, "has_section") and config.has_section(SEC_SERVICES) and config.has_option(SEC_SERVICES, 'spacy_server_url'):
+            spacy_server_url = config.get(SEC_SERVICES, 'spacy_server_url', fallback='').strip()
+        elif kw_config and hasattr(kw_config, "has_section") and kw_config.has_section(SEC_SERVICES) and kw_config.has_option(SEC_SERVICES, 'spacy_server_url'):
+            spacy_server_url = kw_config.get(SEC_SERVICES, 'spacy_server_url', fallback='').strip()
+
+        if spacy_server_url:
+            cmd.extend(["--spacy-server-url", spacy_server_url])
             
         kardenwort_timeout = config.getint(SEC_TIMEOUTS, 'kardenwort_timeout', fallback=120)
         env = os.environ.copy()

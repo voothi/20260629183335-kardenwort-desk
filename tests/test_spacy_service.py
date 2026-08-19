@@ -125,3 +125,117 @@ def test_spacy_service_warm_latency_benchmark(background_spacy_server):
     print(f"\nAverage warm SpaCy HTTP server latency: {avg_latency:.2f}ms (min: {min(latencies):.2f}ms, max: {max(latencies):.2f}ms)")
     # Assert sub-50ms latency SLA
     assert avg_latency < 50.0, f"Expected sub-50ms latency, got {avg_latency:.2f}ms"
+
+
+def test_prepare_lookup_tsv_forwards_spacy_server_url(monkeypatch, tmp_path):
+    """
+    Verify that prepare_lookup_tsv forwards --spacy-server-url to kardenwort.py
+    when configured in [services] section.
+    """
+    import kardenwort_desk as desk
+
+    captured_cmd = None
+
+    def mock_run(cmd, *args, **kwargs):
+        nonlocal captured_cmd
+        captured_cmd = cmd
+        output_file = Path(cmd[cmd.index("--output-file") + 1])
+        output_file.write_text("SentenceSourceIndex\tWordSource\tWordSourceInflectedForm\n", encoding="utf-8")
+        return type("MockProcess", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.add_section("sentences_mode")
+    config.add_section("languages")
+    config.add_section("pipeline")
+    config.add_section(SEC_SERVICES)
+    config.set(SEC_SERVICES, "spacy_server_url", "http://127.0.0.1:8081")
+    config.set("languages", "de_lemma_index", "data/de_lemma_index.json")
+    config.set("languages", "de_lemma_override", "data/de_lemma_override.json")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "kardenwort_python": "python",
+        "anki_mapping_file": tmp_path / "anki_mapping.ini",
+    }
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "data" / "de_lemma_index.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "data" / "de_lemma_override.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "anki_mapping.ini").write_text("""[fields]
+WordSource =
+SentenceSourceIndex =
+
+[fields_mapping.word]
+WordSource = WordSource
+SentenceSourceIndex = SentenceSourceIndex
+
+[desk_columns]
+""", encoding="utf-8")
+
+    desk.prepare_lookup_tsv(
+        "Der Hund bellt.", "de", "ru",
+        config, resolved_paths, "20260819114305",
+        ttl_seconds=0, cache_key="test_spacy_url.tsv", text_mode="single"
+    )
+
+    assert captured_cmd is not None
+    assert "--spacy-server-url" in captured_cmd
+    idx = captured_cmd.index("--spacy-server-url")
+    assert captured_cmd[idx + 1] == "http://127.0.0.1:8081"
+
+
+def test_prepare_lookup_tsv_omits_spacy_server_url_when_missing(monkeypatch, tmp_path):
+    """
+    Verify that prepare_lookup_tsv does NOT pass --spacy-server-url when not in config.
+    """
+    import kardenwort_desk as desk
+
+    captured_cmd = None
+
+    def mock_run(cmd, *args, **kwargs):
+        nonlocal captured_cmd
+        captured_cmd = cmd
+        output_file = Path(cmd[cmd.index("--output-file") + 1])
+        output_file.write_text("SentenceSourceIndex\tWordSource\tWordSourceInflectedForm\n", encoding="utf-8")
+        return type("MockProcess", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.add_section("sentences_mode")
+    config.add_section("languages")
+    config.add_section("pipeline")
+    config.set("languages", "de_lemma_index", "data/de_lemma_index.json")
+    config.set("languages", "de_lemma_override", "data/de_lemma_override.json")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "kardenwort_python": "python",
+        "anki_mapping_file": tmp_path / "anki_mapping.ini",
+    }
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "data" / "de_lemma_index.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "data" / "de_lemma_override.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "anki_mapping.ini").write_text("""[fields]
+WordSource =
+SentenceSourceIndex =
+
+[fields_mapping.word]
+WordSource = WordSource
+SentenceSourceIndex = SentenceSourceIndex
+
+[desk_columns]
+""", encoding="utf-8")
+
+    desk.prepare_lookup_tsv(
+        "Der Hund bellt.", "de", "ru",
+        config, resolved_paths, "20260819114305",
+        ttl_seconds=0, cache_key="test_no_spacy_url.tsv", text_mode="single"
+    )
+
+    assert captured_cmd is not None
+    assert "--spacy-server-url" not in captured_cmd
+
