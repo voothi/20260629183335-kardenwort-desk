@@ -129,9 +129,6 @@ de_gcs_mask_unknown_parts = false
 ; Force capitalization of all German noun lemmas (NOUN, PROPN)
 de_force_noun_capitalization = false
 
-; Keep whole composite / hyphenated compound tokens in addition to decomposed constituent lemmas across all languages
-preserve_composite_tokens = true
-
 ; Maximum source-word index distance allowed between parts of a split/separable verb construct
 ; split_gap_limit = 60
 
@@ -143,9 +140,6 @@ multi_mode_remove_empty_lines = true
 
 ; If true, excessive whitespace and tabs are collapsed into a single space in multi mode
 multi_mode_clean_spaces = true
-
-; If true, normalize spacing around brackets: remove inner whitespace in (...), [...], {...}
-normalize_bracket_spacing = true
 
 ; Define when sentence context padding is applied ('single', 'multi', 'both')
 anki_context_mode = single
@@ -248,23 +242,6 @@ en_prompt = English Vocabulary Analysis and Translation (JSON)
 de_lemma_index = data/de/deu-mixed-typical-2011-1m-words.csv
 de_lemma_override = data/de/lemma_override_de.tsv
 de_prompt = German Vocabulary Analysis and Translation (JSON)
-
-[language_check]
-; Enable pre-flight language verification to avoid polluting results/ with wrong-language analysis
-enabled = true
-
-; Comma-separated list of supported language codes to restrict detection to (e.g. en, de).
-; If left empty, dynamically defaults to configured languages.
-languages = en, de
-
-; Minimum text character length required to trigger language verification (below this, verification passes)
-min_char_length = 4
-
-; Minimum confidence threshold (0.0 to 1.0) required to consider language detection definitive
-confidence_threshold = 0.60
-
-; Action on detected mismatch: 'prompt' (interactive confirmation / bypass), 'block' (halt with error), 'warn' (log warning only)
-action_on_mismatch = prompt
 
 [timeouts]
 ; Timeout values in seconds for subprocess calls
@@ -433,12 +410,8 @@ generated_results_dir = tests/fixtures/20260807200100-golden.en/results
 lmb_play = true
 ; What to play on LMB: 'lemma' (WordSource) or 'inflection' (WordSourceInflectedForm)
 lmb_source = lemma
-; Playback mode for multi-token LMB drag selections: 'joined' (default, single phrase) or 'separate' (individual word calls)
-lmb_chain_mode = separate
 ; Enable audio playback on RMB click (translation / reverse side of the word)
 rmb_play = false
-; Playback mode for multi-token RMB drag selections: 'separate' (default, individual word calls) or 'joined' (single phrase)
-rmb_chain_mode = separate
 
 [sentences_mode]
 ; Enable the sentences analysis mode. When enabled, a paragraph of multiple
@@ -536,23 +509,12 @@ combine_source_words_order = contractions_first
 apostrophe_chars = "', ’, ‘, `, ´, ʼ"
 
 [server]
-; Background HTTP server configuration for GoldenDict interactivity and REST API
-; Default host binds strictly to loopback (127.0.0.1) for local IPC security.
 host = 127.0.0.1
 port = 18335
+controller_port = 8080
 enabled = true
 
-; API Security Token (X-API-Token header or 'token' JSON body field).
-; Generate a key via: python -c "import secrets; print(secrets.token_urlsafe(32))"
-; Note: Binding to 127.0.0.1 + token authentication acts as a strong local deterrent, but is not a hardened network secret.
-api_key = Hvo7l2VclhgcSEY5IOq3PjwaMuK2xa1cbpptYED6sPQ
-
 [services]
-; Persistent microservices for zero-cold-start acceleration
-; SpaCy linguistic server (kardenwort-core --serve --port 8081)
 spacy_server_url = http://127.0.0.1:8081
-; Translation server (translate_server.py --port 8082)
 translation_server_url = http://127.0.0.1:8082
-; IntelliFiller enrichment server (headless_entrypoint.py --serve --port 8083)
 intellifiller_server_url = http://127.0.0.1:8083
-
