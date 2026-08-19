@@ -75,9 +75,21 @@ auto_inject_updates = true
 default_zoom = 100
 
 [settings]
+; ==============================================================================
+; PERFORMANCE NOTE (SPA-CY 3.8 NATIVE SPEED VS SIMPLEMMA):
+; Simplemma loads its compressed dictionaries lazily from disk on the first call,
+; introducing a ~1.0-second delay per process startup.
+;
+; To completely DISABLE (bypass) Simplemma and run pure, ultra-fast compiled SpaCy 3.8,
+; set ALL THREE mutually exclusive flags below to FALSE:
+;   use_simplemma_correction = false
+;   simplemma_smart_fallback = false
+;   simplemma_after_spacy = false
+; ==============================================================================
+
 ; Use simplemma to correct SpaCy lemmatization (unconditional override).
-; Note: This is mutually exclusive with simplemma_smart_fallback. Keep set to false when smart fallback is enabled.
-use_simplemma_correction = true
+; Note: Mutually exclusive with simplemma_smart_fallback and simplemma_after_spacy.
+use_simplemma_correction = false
 ;
 ; Evaluate Simplemma solely when SpaCy returns an unreduced inflected verb or an unverified dictionary lemma
 simplemma_smart_fallback = false
