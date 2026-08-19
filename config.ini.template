@@ -17,6 +17,7 @@ deepl_settings_file = ../20240411110510-autohotkey/translate-selection/settings.
 
 ; Path to the IntelliFiller headless entrypoint script
 intellifiller_headless = ../20251206123938-intellifiller-ai-addon-for-anki/IntelliFiller/headless_entrypoint.py
+intellifiller_python = ./venv/Scripts/python.exe
 
 ; Path to the anki-tts-cli script
 anki_tts_cli = ../20260119103526-anki-tts-cli/anki-tts-cli.py
