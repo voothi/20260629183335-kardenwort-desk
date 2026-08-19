@@ -204,6 +204,8 @@ class SidecarService:
         self.last_check: float = 0.0
         self.restart_count: int = 0
         self.managed_by_supervisor: bool = False
+        self.consecutive_failures: int = 0
+        self.spawn_time: float = 0.0
 
     def url(self) -> str:
         return f"http://{self.host}:{self.port}"
@@ -298,16 +300,22 @@ class ProcessSupervisor:
         intelli_host = (parsed_intelli.hostname if parsed_intelli and parsed_intelli.hostname else "127.0.0.1")
         intelli_port = (parsed_intelli.port if parsed_intelli and parsed_intelli.port else 8083)
 
-        intelli_python = self.resolved_paths.get('intellifiller_python', sys.executable)
-        intelli_ws = workspace_parent / "20251206123938-intellifiller-ai-addon-for-anki"
-        intelli_script = intelli_ws / "headless_entrypoint.py"
+        intelli_python = self.resolved_paths.get('kardenwort_python', self.resolved_paths.get('intellifiller_python', sys.executable))
+        intelli_script = self.resolved_paths.get('intellifiller_headless')
+        if not intelli_script or not Path(intelli_script).exists():
+            intelli_ws = workspace_parent / "20251206123938-intellifiller-ai-addon-for-anki"
+            intelli_script = intelli_ws / "IntelliFiller" / "headless_entrypoint.py"
+            if not intelli_script.exists():
+                intelli_script = intelli_ws / "headless_entrypoint.py"
+        else:
+            intelli_script = Path(intelli_script)
 
         intelli_cmd = [str(intelli_python), str(intelli_script), "--serve", "--port", str(intelli_port)]
         self.services["intellifiller"] = SidecarService(
             name="intellifiller",
             port=intelli_port,
             launch_cmd=intelli_cmd,
-            cwd=Path(intelli_ws) if Path(intelli_ws).exists() else desk_dir,
+            cwd=intelli_script.parent.parent if intelli_script.exists() else desk_dir,
             health_path="/health",
             host=intelli_host
         )
@@ -367,17 +375,22 @@ class ProcessSupervisor:
                 )
                 service.process = proc
                 service.managed_by_supervisor = True
+                service.spawn_time = time.time()
+                service.consecutive_failures = 0
                 self.job.assign_process(proc)
                 logger.info(f"Spawned sidecar '{service.name}' (PID: {proc.pid}) on port {service.port}")
 
-                # Wait up to 3 seconds for initial health probe
-                t_end = time.time() + 3.0
+                # Wait up to 15 seconds for initial health probe (accommodates heavy model loading)
+                t_end = time.time() + 15.0
                 while time.time() < t_end:
-                    if self.probe_health(service, timeout=0.3):
+                    if proc.poll() is not None:
+                        logger.warning(f"Sidecar '{service.name}' process exited unexpectedly with code {proc.poll()}.")
+                        return False
+                    if self.probe_health(service, timeout=0.5):
                         logger.info(f"Sidecar '{service.name}' is healthy on port {service.port}")
                         return True
-                    time.sleep(0.2)
-                logger.warning(f"Sidecar '{service.name}' spawned but health probe did not respond within 3s.")
+                    time.sleep(0.3)
+                logger.warning(f"Sidecar '{service.name}' spawned but health probe did not respond within 15s (process is still running with PID {proc.pid}).")
                 return False
             except Exception as e:
                 logger.error(f"Failed to spawn sidecar '{service.name}': {e}")
@@ -403,9 +416,31 @@ class ProcessSupervisor:
                 break
             for svc in list(self.services.values()):
                 healthy = self.probe_health(svc, timeout=1.5)
-                if not healthy and svc.managed_by_supervisor:
-                    logger.warning(f"Health probe failed for managed sidecar '{svc.name}' on port {svc.port}. Restarting...")
+                if healthy:
+                    svc.consecutive_failures = 0
+                    continue
+                if not svc.managed_by_supervisor:
+                    continue
+
+                # If process exited/crashed, restart immediately
+                if svc.process is None or svc.process.poll() is not None:
+                    exit_code = svc.process.poll() if svc.process else 'None'
+                    logger.warning(f"Managed sidecar '{svc.name}' process exited (exit code: {exit_code}). Restarting...")
                     svc.restart_count += 1
+                    svc.consecutive_failures = 0
+                    self.spawn_service(svc)
+                    continue
+
+                # If process was spawned recently, give it a grace period to finish heavy initialization
+                if time.time() - getattr(svc, 'spawn_time', 0.0) < 20.0:
+                    continue
+
+                # Require 3 consecutive probe failures before killing a running process
+                svc.consecutive_failures = getattr(svc, 'consecutive_failures', 0) + 1
+                if svc.consecutive_failures >= 3:
+                    logger.warning(f"Health probe failed {svc.consecutive_failures} consecutive times for managed sidecar '{svc.name}' on port {svc.port}. Restarting...")
+                    svc.restart_count += 1
+                    svc.consecutive_failures = 0
                     self.spawn_service(svc)
 
     def stop(self):
