@@ -1,22 +1,17 @@
 # Performance Dynamics Over Time (By Git Commit)
 
 ## Table of Contents
-- [[Commit: 9102d2b] 20260810023021](#commit-9102d2b-20260810023021)
-- [[Commit: 4b309b0] 20260810023417](#commit-4b309b0-20260810023417)
-- [[Commit: 0b5b68e] 20260810025229](#commit-0b5b68e-20260810025229)
-- [[Commit: fb1c04f] 20260810031306](#commit-fb1c04f-20260810031306)
-- [[Commit: ef35ad7] 20260810032615](#commit-ef35ad7-20260810032615)
-- [[Commit: c1bb194] 20260810035156](#commit-c1bb194-20260810035156)
 - [[Commit: 3165396] 20260810042138](#commit-3165396-20260810042138)
 - [[Commit: e418fa5] 20260810042316](#commit-e418fa5-20260810042316)
 - [[Commit: e793ea9] 20260810043126](#commit-e793ea9-20260810043126)
 - [[Commit: 5122804] 20260810152949](#commit-5122804-20260810152949)
 - [[Commit: 97cef48] 20260810163734](#commit-97cef48-20260810163734)
 - [[Commit: 2544a7c] 20260819013716 to desk](#commit-2544a7c-20260819013716-to-desk)
+- [[Commit: 02907f0] 20260819025120 to desk](#commit-02907f0-20260819025120-to-desk)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
-## [Commit: 9102d2b] 20260810023021 (Avg wait between runs: 3938.14s)
+## [Commit: 3165396] 20260810042138 (Avg wait between runs: 3491.80s)
 ```text
 Run Session: 20260807230200 [Golden DE] (Total Batch E2E Duration: 11.798s)
 ---------------------------------------------------------------------------
@@ -44,26 +39,46 @@ html_generation (01)                |                                       █ 
 background_text_translation (01)    |                                        █ | 0.003s
 cross_pollinate_from_siblings (00)  |                                        █ | 0.012s
 
-Run Session: 20260807230100 [Golden EN] (Total Batch E2E Duration: 7.545s)
+Run Session: 20260807230100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 1.000s)
 ---------------------------------------------------------------------------
-translate_text (00)                 | ██                                       | 0.544s
-lemmatization (00)                  | ███████████████                          | 2.857s
-the_cut (00)                        |                   █                      | 0.010s
-html_generation (00)                |                    █                     | 0.004s
-background_text_translation (00)    |                      ████████████        | 2.428s
-intellifiller_enrichment (00)       |                      ████████████        | 2.412s
-html_generation (03)                |                           █              | 0.003s
-background_text_translation (03)    |                             ███████████  | 2.121s
-intellifiller_enrichment (03)       |                             ███████████  | 2.106s
-html_generation (02)                |                               █          | 0.003s
-background_text_translation (02)    |                                 █        | 0.003s
-html_generation (01)                |                                   █      | 0.002s
-background_text_translation (01)    |                                     █    | 0.003s
-cross_pollinate_from_siblings (00)  |                                        █ | 0.004s
+validation_failed (00)              | █                                        | 0.000s
 
-Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 0.010s)
+Run Session: 20260807220200 [Golden DE [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 60.542s)
 ---------------------------------------------------------------------------
-html_generation (00)                | ███████████████████████████████████████  | 0.010s
+translate_text (00)                 | ██████                                   | 10.277s
+lemmatization (00)                  | ███                                      | 5.642s
+the_cut (00)                        |       █                                  | 0.054s
+html_generation (08)                |        █                                 | 0.004s
+background_text_translation (08)    |        ██████████████████████            | 34.237s
+html_generation (07)                |         █                                | 0.003s
+background_text_translation (07)    |         █████                            | 7.894s
+html_generation (06)                |         █                                | 0.003s
+html_generation (05)                |          █                               | 0.003s
+html_generation (00)                |          █                               | 0.009s
+background_text_translation (00)    |          ██████████████████████████████  | 46.235s
+html_generation (04)                |          █                               | 0.004s
+background_text_translation (04)    |           ██████                         | 9.817s
+html_generation (03)                |           █                              | 0.004s
+background_text_translation (03)    |           ██████                         | 10.443s
+html_generation (02)                |            █                             | 0.004s
+background_text_translation (02)    |            ██████                        | 9.987s
+html_generation (01)                |             █                            | 0.004s
+background_text_translation (01)    |             █████████████████████████    | 38.422s
+validation_failed (00)              |                                  █       | 0.000s
+
+Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 25.978s)
+---------------------------------------------------------------------------
+translate_text (00)                 | █████████████                            | 8.498s
+lemmatization (00)                  | ██████                                   | 4.258s
+the_cut (00)                        |              █                           | 0.014s
+html_generation (00)                |              █                           | 0.004s
+background_text_translation (00)    |               █████████████████████████  | 16.593s
+html_generation (03)                |               █                          | 0.003s
+background_text_translation (03)    |               █████████████████████████  | 16.279s
+html_generation (02)                |                █                         | 0.003s
+background_text_translation (02)    |                 █████████                | 6.082s
+html_generation (01)                |                  █                       | 0.004s
+cross_pollinate_from_siblings (00)  |                                        █ | 0.017s
 
 Run Session: 20260807210200 [Golden DE] (Total Batch E2E Duration: 12.042s)
 ---------------------------------------------------------------------------
@@ -154,162 +169,6 @@ html_generation (00)                |                          █              
 html_generation (03)                |                               █          | 0.007s
 html_generation (02)                |                                    █     | 0.003s
 html_generation (01)                |                                        █ | 0.004s
-
-```
-
-## [Commit: 4b309b0] 20260810023417 (Avg wait between runs: -232.22s)
-```text
-Run Session: 20260807220200 [Golden DE [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 60.542s)
----------------------------------------------------------------------------
-translate_text (00)                 | ██████                                   | 10.277s
-lemmatization (00)                  | ███                                      | 5.642s
-the_cut (00)                        |       █                                  | 0.054s
-html_generation (08)                |        █                                 | 0.004s
-background_text_translation (08)    |        ██████████████████████            | 34.237s
-html_generation (07)                |         █                                | 0.003s
-background_text_translation (07)    |         █████                            | 7.894s
-html_generation (06)                |         █                                | 0.003s
-html_generation (05)                |          █                               | 0.003s
-html_generation (00)                |          █                               | 0.009s
-background_text_translation (00)    |          ██████████████████████████████  | 46.235s
-html_generation (04)                |          █                               | 0.004s
-background_text_translation (04)    |           ██████                         | 9.817s
-html_generation (03)                |           █                              | 0.004s
-background_text_translation (03)    |           ██████                         | 10.443s
-html_generation (02)                |            █                             | 0.004s
-background_text_translation (02)    |            ██████                        | 9.987s
-html_generation (01)                |             █                            | 0.004s
-background_text_translation (01)    |             █████████████████████████    | 38.422s
-validation_failed (00)              |                                  █       | 0.000s
-
-Run Session: 20260807220100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 39.875s)
----------------------------------------------------------------------------
-translate_text (00)                 | ██████                                   | 6.161s
-lemmatization (00)                  | ███                                      | 3.698s
-the_cut (00)                        |       █                                  | 0.015s
-html_generation (00)                |       █                                  | 0.004s
-background_text_translation (00)    |       ███████████████████                | 19.607s
-html_generation (03)                |       █                                  | 0.004s
-background_text_translation (03)    |        ███████████████████               | 19.414s
-html_generation (02)                |        █                                 | 0.004s
-background_text_translation (02)    |         █████                            | 5.973s
-html_generation (01)                |         █                                | 0.003s
-validation_failed (00)              |                                         █ | 0.000s
-
-```
-
-## [Commit: 0b5b68e] 20260810025229 (Avg wait between runs: 989.99s)
-```text
-Run Session: 20260807230100 [Golden EN] (Total Batch E2E Duration: 7.867s)
----------------------------------------------------------------------------
-lemmatization (00)                  | ███████████████                          | 3.095s
-translate_text (00)                 | ██                                       | 0.571s
-the_cut (00)                        |                   █                      | 0.011s
-html_generation (00)                |                    █                     | 0.004s
-background_text_translation (00)    |                      ██████████████████  | 3.651s
-intellifiller_enrichment (00)       |                      ██████████████████  | 3.635s
-html_generation (03)                |                       █                  | 0.004s
-background_text_translation (03)    |                        ██████            | 1.359s
-intellifiller_enrichment (03)       |                        ██████            | 1.340s
-html_generation (02)                |                           █              | 0.003s
-background_text_translation (02)    |                            █             | 0.003s
-html_generation (01)                |                              █           | 0.002s
-background_text_translation (01)    |                                █████     | 1.166s
-intellifiller_enrichment (01)       |                                █████     | 1.160s
-
-Run Session: 20260807220100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 39.355s)
----------------------------------------------------------------------------
-translate_text (00)                 | █████                                    | 5.048s
-lemmatization (00)                  | ██                                       | 2.774s
-the_cut (00)                        |      █                                   | 0.013s
-html_generation (00)                |      █                                   | 0.004s
-background_text_translation (00)    |      ███████████████                     | 14.805s
-html_generation (03)                |       █                                  | 0.003s
-background_text_translation (03)    |        ███████████████                   | 14.902s
-html_generation (02)                |        █                                 | 0.003s
-background_text_translation (02)    |        █████                             | 5.606s
-html_generation (01)                |         █                                | 0.022s
-validation_failed (00)              |                                         █ | 0.000s
-
-```
-
-## [Commit: fb1c04f] 20260810031306
-```text
-Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 25.051s)
----------------------------------------------------------------------------
-translate_text (00)                 | █████████                                | 5.831s
-lemmatization (00)                  | █████                                    | 3.282s
-the_cut (00)                        |          █                               | 0.012s
-html_generation (00)                |          █                               | 0.004s
-background_text_translation (00)    |           ███████████████████████████    | 17.133s
-html_generation (03)                |           █                              | 0.004s
-background_text_translation (03)    |            ███████████████████████████   | 17.064s
-html_generation (02)                |            █                             | 0.003s
-background_text_translation (02)    |             █████████                    | 5.836s
-html_generation (01)                |              █                           | 0.003s
-cross_pollinate_from_siblings (00)  |                                       █  | 1.021s
-
-```
-
-## [Commit: ef35ad7] 20260810032615 (Avg wait between runs: 1407.68s)
-```text
-Run Session: 20260807230100 [Golden EN] (Total Batch E2E Duration: 6.895s)
----------------------------------------------------------------------------
-translate_text (00)                 | ███                                      | 0.520s
-lemmatization (00)                  | ██████████████                           | 2.584s
-the_cut (00)                        |                  █                       | 0.010s
-html_generation (00)                |                    █                     | 0.005s
-html_generation (03)                |                       █                  | 0.003s
-background_text_translation (03)    |                         ███████          | 1.250s
-intellifiller_enrichment (03)       |                         ███████          | 1.229s
-html_generation (02)                |                           █              | 0.003s
-background_text_translation (00)    |                            █████         | 0.989s
-intellifiller_enrichment (00)       |                            █████         | 0.969s
-background_text_translation (02)    |                             █            | 0.004s
-html_generation (01)                |                               █          | 0.003s
-background_text_translation (01)    |                                  ██████  | 1.177s
-intellifiller_enrichment (01)       |                                  ██████  | 1.170s
-cross_pollinate_from_siblings (00)  |                                        █ | 0.008s
-
-Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 21.398s)
----------------------------------------------------------------------------
-translate_text (00)                 | ██████████                               | 5.380s
-lemmatization (00)                  | █████                                    | 3.083s
-the_cut (00)                        |           █                              | 0.012s
-html_generation (00)                |           █                              | 0.004s
-background_text_translation (00)    |            ████████████████████████████  | 15.227s
-html_generation (03)                |            █                             | 0.003s
-background_text_translation (03)    |            ███████████████████████████   | 14.952s
-html_generation (02)                |             █                            | 0.003s
-background_text_translation (02)    |              ██████████                  | 5.483s
-html_generation (01)                |               █                          | 0.003s
-cross_pollinate_from_siblings (00)  |                                        █ | 0.030s
-
-```
-
-## [Commit: c1bb194] 20260810035156
-```text
-Run Session: 20260807220100 [Golden EN] (Total Batch E2E Duration: 25.978s)
----------------------------------------------------------------------------
-translate_text (00)                 | █████████████                            | 8.498s
-lemmatization (00)                  | ██████                                   | 4.258s
-the_cut (00)                        |              █                           | 0.014s
-html_generation (00)                |              █                           | 0.004s
-background_text_translation (00)    |               █████████████████████████  | 16.593s
-html_generation (03)                |               █                          | 0.003s
-background_text_translation (03)    |               █████████████████████████  | 16.279s
-html_generation (02)                |                █                         | 0.003s
-background_text_translation (02)    |                 █████████                | 6.082s
-html_generation (01)                |                  █                       | 0.004s
-cross_pollinate_from_siblings (00)  |                                        █ | 0.017s
-
-```
-
-## [Commit: 3165396] 20260810042138
-```text
-Run Session: 20260807230100 [Golden EN [FAILED - EXCLUDED FROM STATS]] (Total Batch E2E Duration: 1.000s)
----------------------------------------------------------------------------
-validation_failed (00)              | █                                        | 0.000s
 
 ```
 
@@ -582,6 +441,28 @@ cross_pollinate_from_siblings (00)  |                                        █
 
 ```
 
+## [Commit: 02907f0] 20260819025120 to desk
+```text
+Run Session: 20260807200100 [Golden EN] (Total Batch E2E Duration: 11.097s)
+---------------------------------------------------------------------------
+lemmatization (00)                  | ███████████                              | 3.064s
+translate_text (00)                 |            █                             | 0.537s
+the_cut (00)                        |              █                           | 0.009s
+html_generation (00)                |              █                           | 0.005s
+background_text_translation (00)    |               █████████████████          | 4.882s
+html_generation (03)                |                █                         | 0.005s
+html_generation (02)                |                   █                      | 0.004s
+html_generation (01)                |                       █                  | 0.004s
+background_text_translation (01)    |                                 █        | 0.009s
+cross_pollinate_from_siblings (01)  |                                 █        | 0.004s
+background_text_translation (02)    |                                     █    | 0.011s
+cross_pollinate_from_siblings (02)  |                                     █    | 0.003s
+background_text_translation (03)    |                                     █    | 0.010s
+cross_pollinate_from_siblings (03)  |                                        █ | 0.004s
+cross_pollinate_from_siblings (00)  |                                        █ | 0.004s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807190100 [Golden EN]
@@ -607,12 +488,12 @@ cross_pollinate_from_siblings (00)  |                                        █
 ### 20260807200100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 3 | 2.667 | 3.224 | 4.063 |
-| `background_text_translation` | 11 | 0.009 | 2.694 | 8.017 |
-| `translate_text` | 3 | 0.558 | 0.610 | 0.691 |
-| `the_cut` | 3 | 0.011 | 0.012 | 0.014 |
-| `cross_pollinate_from_siblings` | 5 | 0.003 | 0.006 | 0.015 |
-| `html_generation` | 12 | 0.003 | 0.004 | 0.005 |
+| `lemmatization` | 4 | 2.667 | 3.184 | 4.063 |
+| `background_text_translation` | 15 | 0.009 | 2.303 | 8.017 |
+| `translate_text` | 4 | 0.537 | 0.592 | 0.691 |
+| `the_cut` | 4 | 0.009 | 0.011 | 0.014 |
+| `cross_pollinate_from_siblings` | 9 | 0.003 | 0.005 | 0.015 |
+| `html_generation` | 16 | 0.003 | 0.004 | 0.005 |
 
 ### 20260807200200 [Golden DE]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
@@ -647,23 +528,23 @@ cross_pollinate_from_siblings (00)  |                                        █
 ### 20260807220100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `background_text_translation` | 18 | 5.236 | 14.666 | 24.795 |
-| `translate_text` | 6 | 4.912 | 7.757 | 12.801 |
-| `lemmatization` | 6 | 2.806 | 3.724 | 4.671 |
-| `cross_pollinate_from_siblings` | 6 | 0.014 | 0.187 | 1.021 |
-| `the_cut` | 6 | 0.009 | 0.012 | 0.014 |
-| `html_generation` | 25 | 0.003 | 0.004 | 0.010 |
+| `background_text_translation` | 12 | 5.236 | 15.691 | 24.795 |
+| `translate_text` | 4 | 4.912 | 8.833 | 12.801 |
+| `lemmatization` | 4 | 2.806 | 3.995 | 4.671 |
+| `cross_pollinate_from_siblings` | 4 | 0.014 | 0.017 | 0.020 |
+| `the_cut` | 4 | 0.009 | 0.013 | 0.014 |
+| `html_generation` | 16 | 0.003 | 0.004 | 0.006 |
 
 ### 20260807230100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 5 | 2.584 | 4.536 | 11.552 |
-| `intellifiller_enrichment` | 14 | 0.969 | 2.883 | 18.240 |
-| `background_text_translation` | 20 | 0.003 | 2.031 | 18.256 |
-| `translate_text` | 5 | 0.520 | 1.105 | 3.235 |
-| `the_cut` | 5 | 0.010 | 0.010 | 0.012 |
-| `cross_pollinate_from_siblings` | 4 | 0.003 | 0.005 | 0.008 |
-| `html_generation` | 20 | 0.002 | 0.004 | 0.006 |
+| `lemmatization` | 2 | 2.591 | 7.072 | 11.552 |
+| `intellifiller_enrichment` | 6 | 1.253 | 4.391 | 18.240 |
+| `background_text_translation` | 8 | 0.003 | 3.307 | 18.256 |
+| `translate_text` | 2 | 0.656 | 1.945 | 3.235 |
+| `the_cut` | 2 | 0.010 | 0.011 | 0.012 |
+| `html_generation` | 8 | 0.002 | 0.004 | 0.006 |
+| `cross_pollinate_from_siblings` | 2 | 0.003 | 0.004 | 0.004 |
 
 ## Phase Glossary
 - **`translate_text`**: (Network IO-Bound) Holistically translating the source paragraph/sentence via external APIs (e.g. DeepL).

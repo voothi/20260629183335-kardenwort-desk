@@ -16,6 +16,7 @@ from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
+from b64util import encode
 
 # Import core business logic primitives from kardenwort_desk
 from kardenwort_desk import (
@@ -509,6 +510,9 @@ class SessionArbiter:
             "rows": res["data_rows"],
             "fingerprint": res["fingerprint"]
         })
+
+        if "html" in res:
+            res["html_b64"] = encode(res["html"])
 
         return res
 
