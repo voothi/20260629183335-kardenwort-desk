@@ -6,7 +6,7 @@ kardenwort_python = ../20250825231214-spacy-env/Scripts/python.exe
 kardenwort_workspace = ../20241223170748-kardenwort
 
 ; Path to the python interpreter and translation scripts for deep-translator
-deep_translator_python = ../20241122093311-deep-translator/venv/Scripts/python.exe
+deep_translator_python = ./venv/Scripts/python.exe
 translate_google_script = ../20241122093311-deep-translator/translate_google.py
 translate_deepl_script = ../20241122093311-deep-translator/translate_deepl.py
 argotranslate_python = ../20241121100211-argotranslate/venv/Scripts/python.exe
