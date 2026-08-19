@@ -12,6 +12,7 @@ def main():
     repo_root = Path(__file__).parent.parent.resolve()
     sys.path.insert(0, str(repo_root))
     import kardenwort_desk
+    from kardenwort_controller import ProcessSupervisor
     
     fixtures_dir = repo_root / "tests" / "fixtures"
 
@@ -32,6 +33,7 @@ def main():
     parser.add_argument("--include", nargs="+", help="Only run fixtures matching these ZIDs or names")
     parser.add_argument("--exclude", nargs="+", help="Skip fixtures matching these ZIDs or names")
     parser.add_argument("--count", type=int, default=1, help="Number of times to repeat the suite")
+    parser.add_argument("--no-sidecars", action="store_true", help="Disable automatic microservice sidecar supervision (force fallback benchmarking)")
     args = parser.parse_args()
     
     includes = args.include if args.include else []
@@ -92,6 +94,18 @@ def main():
     if config_path.exists():
         shutil.copy2(config_path, config_backup)
         print(f"Backed up live config.ini to {config_backup.name}")
+    
+    supervisor = None
+    if not args.no_sidecars:
+        has_services = live_config.has_section("services") or any(
+            run['config'].exists() and "[services]" in run['config'].read_text(encoding="utf-8")
+            for run in runs
+        )
+        if has_services:
+            loaded_config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+            print("Initializing sidecar supervisor for persistent microservices...")
+            supervisor = ProcessSupervisor(loaded_config, resolved_paths, enabled=True)
+            supervisor.start()
     
     try:
         for i, run in enumerate(runs):
@@ -299,6 +313,10 @@ def main():
         close_all_kardenwort_windows()
                 
     finally:
+        if supervisor:
+            print("Stopping sidecar supervisor...")
+            supervisor.stop()
+            
         print("\nCleaning up remaining test windows...")
         close_all_kardenwort_windows()
         

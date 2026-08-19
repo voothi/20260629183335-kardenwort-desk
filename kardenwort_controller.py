@@ -391,6 +391,13 @@ class ProcessSupervisor:
                             pass
             self.job.close()
 
+    def __enter__(self):
+        self.start()
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self.stop()
+
     def get_status_report(self) -> Dict[str, Any]:
         report = {}
         for name, svc in self.services.items():

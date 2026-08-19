@@ -20,6 +20,7 @@ import time
 import traceback
 import urllib.request
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
@@ -361,6 +362,84 @@ SEC_LANGUAGE_CHECK = "language_check"
 SINGLE_WORD_DELIMITERS = ('-', '.', '_')
 
 
+# ---------------------------------------------------------------------------
+# HTTP Microservices Circuit Breaker & Connection Fast-Fail
+# ---------------------------------------------------------------------------
+_MICROSERVICE_CIRCUIT_BREAKER: Dict[str, float] = {}
+_MICROSERVICE_CB_LOCK = threading.Lock()
+MICROSERVICE_COOLDOWN_DEFAULT: float = 5.0
+MICROSERVICE_CONNECT_TIMEOUT_DEFAULT: float = 0.2  # 200ms connection probe
+
+
+def reset_microservice_circuit_breaker() -> None:
+    """Resets all cached offline microservice states. Primarily used in unit tests."""
+    with _MICROSERVICE_CB_LOCK:
+        _MICROSERVICE_CIRCUIT_BREAKER.clear()
+
+
+def _normalize_endpoint(server_url: str) -> str:
+    """Normalizes the server URL to scheme://hostname:port."""
+    if not server_url:
+        return ""
+    parsed = urllib.parse.urlparse(server_url)
+    scheme = parsed.scheme or "http"
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if scheme == "https" else 80)
+    return f"{scheme}://{host}:{port}"
+
+
+def is_endpoint_available(server_url: str, cooldown: float = MICROSERVICE_COOLDOWN_DEFAULT) -> bool:
+    """
+    Checks whether the endpoint is considered available or in offline cooldown.
+    """
+    if not server_url:
+        return False
+    endpoint = _normalize_endpoint(server_url)
+    with _MICROSERVICE_CB_LOCK:
+        last_failure = _MICROSERVICE_CIRCUIT_BREAKER.get(endpoint)
+        if last_failure is not None:
+            if time.time() - last_failure < cooldown:
+                return False
+            # Cooldown expired, clear and allow a probe
+            del _MICROSERVICE_CIRCUIT_BREAKER[endpoint]
+            return True
+        return True
+
+
+def record_endpoint_failure(server_url: str) -> None:
+    """Records that connection or communication with an endpoint failed."""
+    if not server_url:
+        return
+    endpoint = _normalize_endpoint(server_url)
+    with _MICROSERVICE_CB_LOCK:
+        _MICROSERVICE_CIRCUIT_BREAKER[endpoint] = time.time()
+
+
+def record_endpoint_success(server_url: str) -> None:
+    """Records that endpoint responded successfully, clearing any failure state."""
+    if not server_url:
+        return
+    endpoint = _normalize_endpoint(server_url)
+    with _MICROSERVICE_CB_LOCK:
+        _MICROSERVICE_CIRCUIT_BREAKER.pop(endpoint, None)
+
+
+def check_endpoint_reachable(server_url: str, connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT) -> bool:
+    """
+    Fast-probes TCP connectivity to the endpoint host:port within connect_timeout (<= 200ms).
+    """
+    if not server_url:
+        return False
+    parsed = urllib.parse.urlparse(server_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    try:
+        with socket.create_connection((host, port), timeout=connect_timeout):
+            return True
+    except Exception:
+        return False
+
+
 def query_spacy_server(
     text: str,
     language: str = "de",
@@ -368,13 +447,18 @@ def query_spacy_server(
     zid: Optional[str] = None,
     trace_id: Optional[str] = None,
     options: Optional[dict] = None,
-    timeout: float = 3.0
+    timeout: float = 3.0,
+    connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
 ) -> Optional[dict]:
     """
     Queries the persistent SpaCy HTTP microservice for tokenization.
     Returns parsed JSON dictionary on success, or None on failure/offline.
     """
-    if not server_url:
+    if not server_url or not is_endpoint_available(server_url):
+        return None
+    if not check_endpoint_reachable(server_url, connect_timeout=connect_timeout):
+        record_endpoint_failure(server_url)
+        logger.debug(f"SpaCy HTTP microservice connection probe failed at {server_url}")
         return None
     url = f"{server_url.rstrip('/')}/tokenize"
     payload = {
@@ -400,8 +484,10 @@ def query_spacy_server(
                 body = resp.read().decode('utf-8')
                 result = json.loads(body)
                 if result.get("status") == "success":
+                    record_endpoint_success(server_url)
                     return result
     except Exception as e:
+        record_endpoint_failure(server_url)
         logger.debug(f"SpaCy HTTP microservice unavailable at {server_url}: {e}")
     return None
 
@@ -415,13 +501,18 @@ def query_translation_server(
     zid: Optional[str] = None,
     trace_id: Optional[str] = None,
     deepl_api_key: Optional[str] = None,
-    timeout: float = 10.0
+    timeout: float = 10.0,
+    connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
 ) -> Optional[dict]:
     """
     Queries the persistent translation HTTP microservice.
     Returns parsed JSON dictionary on success or structured error response, or None on connection refusal/offline.
     """
-    if not server_url:
+    if not server_url or not is_endpoint_available(server_url):
+        return None
+    if not check_endpoint_reachable(server_url, connect_timeout=connect_timeout):
+        record_endpoint_failure(server_url)
+        logger.debug(f"Translation HTTP microservice connection probe failed at {server_url}")
         return None
     url = f"{server_url.rstrip('/')}/translate"
     payload = {
@@ -450,17 +541,20 @@ def query_translation_server(
                 body = resp.read().decode('utf-8')
                 result = json.loads(body)
                 if result.get("status") == "success":
+                    record_endpoint_success(server_url)
                     return result
     except urllib.error.HTTPError as he:
         try:
             body = he.read().decode('utf-8')
             err_result = json.loads(body)
             if isinstance(err_result, dict) and (err_result.get("status") == "error" or "code" in err_result):
+                record_endpoint_success(server_url)
                 return err_result
         except Exception:
             pass
         logger.debug(f"Translation HTTP microservice HTTPError {he.code} at {server_url}")
     except Exception as e:
+        record_endpoint_failure(server_url)
         logger.debug(f"Translation HTTP microservice unavailable at {server_url}: {e}")
     return None
 
@@ -473,13 +567,18 @@ def query_intellifiller_server(
     zid: Optional[str] = None,
     trace_id: Optional[str] = None,
     field_mapping: Optional[dict] = None,
-    timeout: float = 30.0
+    timeout: float = 30.0,
+    connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
 ) -> Optional[dict]:
     """
     Queries the persistent IntelliFiller HTTP microservice.
     Returns parsed JSON dictionary on success or structured error response, or None on connection refusal/offline.
     """
-    if not server_url:
+    if not server_url or not is_endpoint_available(server_url):
+        return None
+    if not check_endpoint_reachable(server_url, connect_timeout=connect_timeout):
+        record_endpoint_failure(server_url)
+        logger.debug(f"IntelliFiller HTTP microservice connection probe failed at {server_url}")
         return None
     url = f"{server_url.rstrip('/')}/enrich"
     payload = {
@@ -507,17 +606,20 @@ def query_intellifiller_server(
                 body = resp.read().decode('utf-8')
                 result = json.loads(body)
                 if result.get("status") == "success":
+                    record_endpoint_success(server_url)
                     return result
     except urllib.error.HTTPError as he:
         try:
             body = he.read().decode('utf-8')
             err_result = json.loads(body)
             if isinstance(err_result, dict) and (err_result.get("status") == "error" or "code" in err_result):
+                record_endpoint_success(server_url)
                 return err_result
         except Exception:
             pass
         logger.debug(f"IntelliFiller HTTP microservice HTTPError {he.code} at {server_url}")
     except Exception as e:
+        record_endpoint_failure(server_url)
         logger.debug(f"IntelliFiller HTTP microservice unavailable at {server_url}: {e}")
     return None
 

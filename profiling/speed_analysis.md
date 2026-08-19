@@ -1,17 +1,18 @@
 # Performance Dynamics Over Time (By Git Commit)
 
 ## Table of Contents
-- [[Commit: e418fa5] 20260810042316](#commit-e418fa5-20260810042316)
+- [[Commit: 786a4f3] 20260810042449](#commit-786a4f3-20260810042449)
 - [[Commit: e793ea9] 20260810043126](#commit-e793ea9-20260810043126)
 - [[Commit: 5122804] 20260810152949](#commit-5122804-20260810152949)
 - [[Commit: 97cef48] 20260810163734](#commit-97cef48-20260810163734)
 - [[Commit: 2544a7c] 20260819013716 to desk](#commit-2544a7c-20260819013716-to-desk)
 - [[Commit: 02907f0] 20260819025120 to desk](#commit-02907f0-20260819025120-to-desk)
 - [[Commit: 735d0c1] 20260819031636 to desk](#commit-735d0c1-20260819031636-to-desk)
+- [[Commit: 2123428] 20260819034156](#commit-2123428-20260819034156)
 - [Golden Run Aggregates](#golden-run-aggregates)
 - [Phase Glossary](#phase-glossary)
 
-## [Commit: e418fa5] 20260810042316 (Avg wait between runs: 3491.03s)
+## [Commit: 786a4f3] 20260810042449 (Avg wait between runs: 3491.03s)
 ```text
 Run Session: 20260807230200 [Golden DE] (Total Batch E2E Duration: 11.798s)
 ---------------------------------------------------------------------------
@@ -477,6 +478,28 @@ cross_pollinate_from_siblings (00)  |                                        █
 
 ```
 
+## [Commit: 2123428] 20260819034156
+```text
+Run Session: 20260807200100 [Golden EN] (Total Batch E2E Duration: 30.923s)
+---------------------------------------------------------------------------
+lemmatization (00)                  | ██████                                   | 4.851s
+translate_text (00)                 |       ███                                | 2.610s
+the_cut (00)                        |          █                               | 0.011s
+html_generation (00)                |          █                               | 0.006s
+background_text_translation (00)    |           ████████████████████████████   | 21.979s
+html_generation (03)                |           █                              | 0.005s
+html_generation (02)                |            █                             | 0.005s
+html_generation (01)                |              █                           | 0.004s
+background_text_translation (01)    |                                       █  | 0.013s
+cross_pollinate_from_siblings (01)  |                                       █  | 0.005s
+background_text_translation (02)    |                                       █  | 0.012s
+cross_pollinate_from_siblings (02)  |                                       █  | 0.006s
+background_text_translation (03)    |                                        █ | 0.011s
+cross_pollinate_from_siblings (03)  |                                        █ | 0.004s
+cross_pollinate_from_siblings (00)  |                                        █ | 0.005s
+
+```
+
 ## Golden Run Aggregates
 
 ### 20260807190100 [Golden EN]
@@ -502,12 +525,12 @@ cross_pollinate_from_siblings (00)  |                                        █
 ### 20260807200100 [Golden EN]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
 | :--- | :---: | :---: | :---: | :---: |
-| `lemmatization` | 5 | 2.667 | 3.155 | 4.063 |
-| `background_text_translation` | 19 | 0.009 | 2.925 | 21.001 |
-| `translate_text` | 5 | 0.537 | 1.002 | 2.645 |
-| `the_cut` | 5 | 0.009 | 0.011 | 0.014 |
-| `cross_pollinate_from_siblings` | 13 | 0.003 | 0.004 | 0.015 |
-| `html_generation` | 20 | 0.003 | 0.004 | 0.005 |
+| `lemmatization` | 6 | 2.667 | 3.438 | 4.851 |
+| `background_text_translation` | 23 | 0.009 | 3.373 | 21.979 |
+| `translate_text` | 6 | 0.537 | 1.270 | 2.645 |
+| `the_cut` | 6 | 0.009 | 0.011 | 0.014 |
+| `cross_pollinate_from_siblings` | 17 | 0.003 | 0.005 | 0.015 |
+| `html_generation` | 24 | 0.003 | 0.004 | 0.006 |
 
 ### 20260807200200 [Golden DE]
 | Phase | Cnt | Min (s) | Avg (s) | Max (s) |
