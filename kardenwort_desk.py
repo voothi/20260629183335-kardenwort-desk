@@ -12197,6 +12197,7 @@ def main():
     p_server = subparsers.add_parser("server")
     p_server.add_argument("--host", default=None, help="Host address to bind to (overrides config)")
     p_server.add_argument("--port", type=int, default=None, help="Port number to bind to (overrides config)")
+    p_server.add_argument("--no-sidecars", action="store_true", help="Do not spawn or supervise sidecar microservices")
 
     # controller
     p_controller = subparsers.add_parser("controller")

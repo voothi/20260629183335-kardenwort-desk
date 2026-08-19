@@ -23,6 +23,7 @@ from kardenwort_desk import (
     generate_unique_zid,
     find_working_tsv,
 )
+from kardenwort_controller import ProcessSupervisor
 
 logger = logging.getLogger("kardenwort.desk.http_server")
 
@@ -172,7 +173,14 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         if path == '/api/v1/health':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            self._send_json(200, {"ok": True})
+            services_status = {}
+            if hasattr(self.server, 'supervisor') and self.server.supervisor:
+                services_status = self.server.supervisor.get_service_status()
+            self._send_json(200, {
+                "ok": True,
+                "status": "running",
+                "services": services_status
+            })
             return
 
         # HTML Lookup endpoint
@@ -327,6 +335,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             def shutdown_server():
                 time.sleep(0.1)
                 try:
+                    if hasattr(self.server, 'supervisor') and self.server.supervisor:
+                        self.server.supervisor.stop()
                     self.server.shutdown()
                     self.server.server_close()
                 except Exception as e:
@@ -367,6 +377,12 @@ def cmd_server(args):
     server.seq_counter = 0
     server.seq_lock = threading.Lock()
 
+    # Initialize & start sidecar supervisor
+    enable_supervisor = not (getattr(args, 'no_sidecars', False) if args else False)
+    server.supervisor = ProcessSupervisor(config, resolved_paths, enabled=enable_supervisor)
+    if enable_supervisor:
+        server.supervisor.start()
+
     startup_zid = generate_unique_zid()
     logger.info(f"Kardenwort Desk HTTP Server started on {host}:{port}", extra={"zid": startup_zid})
 
@@ -376,6 +392,8 @@ def cmd_server(args):
         logger.info("HTTP Server stopped by KeyboardInterrupt.")
     finally:
         try:
+            if hasattr(server, 'supervisor') and server.supervisor:
+                server.supervisor.stop()
             server.server_close()
         except Exception:
             pass

@@ -192,8 +192,9 @@ class WindowsJobObject:
 # Sidecar Process Supervisor
 # ---------------------------------------------------------------------------
 class SidecarService:
-    def __init__(self, name: str, port: int, launch_cmd: List[str], cwd: Optional[Path] = None, health_path: str = "/health"):
+    def __init__(self, name: str, port: int, launch_cmd: List[str], cwd: Optional[Path] = None, health_path: str = "/health", host: str = "127.0.0.1"):
         self.name = name
+        self.host = host
         self.port = port
         self.launch_cmd = launch_cmd
         self.cwd = cwd
@@ -205,7 +206,7 @@ class SidecarService:
         self.managed_by_supervisor: bool = False
 
     def url(self) -> str:
-        return f"http://127.0.0.1:{self.port}"
+        return f"http://{self.host}:{self.port}"
 
 
 class ProcessSupervisor:
@@ -230,23 +231,44 @@ class ProcessSupervisor:
         workspace_parent = desk_dir.parent
 
         # 1. SpaCy Linguistic Server (Port 8081)
+        spacy_url_str = ""
+        if self.config:
+            try:
+                spacy_url_str = self.config.get(SEC_SERVICES, 'spacy_server_url', fallback='') or ''
+            except Exception:
+                spacy_url_str = ''
+        parsed_spacy = urllib.parse.urlparse(spacy_url_str) if spacy_url_str else None
+        spacy_host = (parsed_spacy.hostname if parsed_spacy and parsed_spacy.hostname else "127.0.0.1")
+        spacy_port = (parsed_spacy.port if parsed_spacy and parsed_spacy.port else 8081)
+
         spacy_python = self.resolved_paths.get('kardenwort_python', sys.executable)
         kardenwort_ws = self.resolved_paths.get('kardenwort_workspace', workspace_parent / "20241223170748-kardenwort")
         spacy_script = Path(kardenwort_ws) / "src" / "kardenwort" / "server" / "spacy_server.py"
         if not spacy_script.exists():
-            spacy_cmd = [str(spacy_python), "-m", "kardenwort.server.spacy_server", "--port", "8081"]
+            spacy_cmd = [str(spacy_python), "-m", "kardenwort.server.spacy_server", "--port", str(spacy_port)]
         else:
-            spacy_cmd = [str(spacy_python), str(spacy_script), "--port", "8081"]
+            spacy_cmd = [str(spacy_python), str(spacy_script), "--port", str(spacy_port)]
 
         self.services["spacy"] = SidecarService(
             name="spacy",
-            port=8081,
+            port=spacy_port,
             launch_cmd=spacy_cmd,
             cwd=Path(kardenwort_ws) if Path(kardenwort_ws).exists() else desk_dir,
-            health_path="/health"
+            health_path="/health",
+            host=spacy_host
         )
 
         # 2. Translation Server (Port 8082)
+        trans_url_str = ""
+        if self.config:
+            try:
+                trans_url_str = self.config.get(SEC_SERVICES, 'translation_server_url', fallback='') or ''
+            except Exception:
+                trans_url_str = ''
+        parsed_trans = urllib.parse.urlparse(trans_url_str) if trans_url_str else None
+        trans_host = (parsed_trans.hostname if parsed_trans and parsed_trans.hostname else "127.0.0.1")
+        trans_port = (parsed_trans.port if parsed_trans and parsed_trans.port else 8082)
+
         trans_python = self.resolved_paths.get('deep_translator_python', sys.executable)
         trans_ws = workspace_parent / "20241122093311-deep-translator"
         trans_script = trans_ws / "translate_server.py"
@@ -255,27 +277,39 @@ class ProcessSupervisor:
             if trans_fork.exists():
                 trans_script = trans_fork
 
-        trans_cmd = [str(trans_python), str(trans_script), "--port", "8082"]
+        trans_cmd = [str(trans_python), str(trans_script), "--port", str(trans_port)]
         self.services["translation"] = SidecarService(
             name="translation",
-            port=8082,
+            port=trans_port,
             launch_cmd=trans_cmd,
             cwd=trans_script.parent if trans_script.exists() else desk_dir,
-            health_path="/health"
+            health_path="/health",
+            host=trans_host
         )
 
         # 3. IntelliFiller Server (Port 8083)
+        intelli_url_str = ""
+        if self.config:
+            try:
+                intelli_url_str = self.config.get(SEC_SERVICES, 'intellifiller_server_url', fallback='') or ''
+            except Exception:
+                intelli_url_str = ''
+        parsed_intelli = urllib.parse.urlparse(intelli_url_str) if intelli_url_str else None
+        intelli_host = (parsed_intelli.hostname if parsed_intelli and parsed_intelli.hostname else "127.0.0.1")
+        intelli_port = (parsed_intelli.port if parsed_intelli and parsed_intelli.port else 8083)
+
         intelli_python = self.resolved_paths.get('intellifiller_python', sys.executable)
         intelli_ws = workspace_parent / "20251206123938-intellifiller-ai-addon-for-anki"
         intelli_script = intelli_ws / "headless_entrypoint.py"
 
-        intelli_cmd = [str(intelli_python), str(intelli_script), "--serve", "--port", "8083"]
+        intelli_cmd = [str(intelli_python), str(intelli_script), "--serve", "--port", str(intelli_port)]
         self.services["intellifiller"] = SidecarService(
             name="intellifiller",
-            port=8083,
+            port=intelli_port,
             launch_cmd=intelli_cmd,
             cwd=Path(intelli_ws) if Path(intelli_ws).exists() else desk_dir,
-            health_path="/health"
+            health_path="/health",
+            host=intelli_host
         )
 
     def probe_health(self, service: SidecarService, timeout: float = 1.0) -> bool:
@@ -411,6 +445,19 @@ class ProcessSupervisor:
                 "last_check": svc.last_check
             }
         return report
+
+    def get_service_status(self) -> Dict[str, Any]:
+        """
+        Returns a structured dictionary of sidecar health and ports.
+        """
+        status = {}
+        for name, svc in self.services.items():
+            status[name] = {
+                "port": svc.port,
+                "healthy": svc.is_healthy,
+                "managed": svc.managed_by_supervisor,
+            }
+        return status
 
 
 # ---------------------------------------------------------------------------
