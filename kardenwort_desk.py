@@ -362,7 +362,9 @@ SEC_WORDFILL = "wordfill"
 SEC_SERVER = "server"
 SEC_SERVICES = "services"
 SEC_LANGUAGE_CHECK = "language_check"
+SEC_STORAGE = "storage"
 SINGLE_WORD_DELIMITERS = ('-', '.', '_')
+
 
 
 # ---------------------------------------------------------------------------
@@ -1801,9 +1803,26 @@ def load_config(config_path=None):
         wordfill['target_quality'] = 'any'
         wordfill['target_fallback'] = True
 
+    # 4. Storage configuration
+    if SEC_STORAGE in config:
+        st = config[SEC_STORAGE]
+        backend = st.get('backend', 'tsv').strip().lower()
+        db_p = st.get('sqlite_db_path', 'data/kardenwort.db').strip()
+        if not Path(db_p).is_absolute():
+            resolved_paths['sqlite_db_path'] = (base_dir / db_p).resolve()
+        else:
+            resolved_paths['sqlite_db_path'] = Path(db_p).resolve()
+        resolved_paths['storage_backend'] = backend
+        resolved_paths['storage_fallback_to_tsv'] = st.getboolean('fallback_to_tsv', fallback=True)
+    else:
+        resolved_paths['storage_backend'] = 'tsv'
+        resolved_paths['sqlite_db_path'] = (base_dir / 'data' / 'kardenwort.db').resolve()
+        resolved_paths['storage_fallback_to_tsv'] = True
+
     _migrate_config(config)
     _validate_translation_config(config)
     return config, resolved_paths, goldendict, wordfill
+
 
 def load_kardenwort_config(kardenwort_workspace):
     kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
@@ -2035,130 +2054,497 @@ def get_deepl_key(config, base_dir):
         logger.warning(f"Error deobfuscating DeepL key: {e}. Using raw key.")
         return obfuscated_key
 
-@contextlib.contextmanager
-def file_lock(file_path):
-    lock_file_path = file_path.with_suffix('.lock')
-    lock_file_path.parent.mkdir(parents=True, exist_ok=True)
-    lock_file = open(lock_file_path, 'w')
-    try:
-        if sys.platform == 'win32':
-            import msvcrt
-            msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
-        else:
-            import fcntl
-            fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
-        yield
-    finally:
+# ---------------------------------------------------------------------------
+# Storage Backend Router & Adapters (TSV / SQLite)
+# ---------------------------------------------------------------------------
+class StorageAdapter:
+    """
+    Abstract base class for Kardenwort storage backends (TSV flat-files, SQLite database).
+    Encapsulates session persistence, caching, row loading/saving, and concurrency synchronization.
+    """
+    backend_name: str = "base"
+
+    def save_session(
+        self,
+        session_zid: str,
+        slug: str,
+        source_language: str,
+        target_language: str,
+        text_mode: str,
+        source_raw_text: str,
+        sentences: Optional[List[Dict[str, Any]]] = None,
+        words: Optional[List[Dict[str, Any]]] = None,
+        comments: Optional[List[str]] = None,
+        headers: Optional[List[str]] = None,
+        data_rows: Optional[List[List[str]]] = None,
+        working_tsv_path: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Any:
+        raise NotImplementedError
+
+    def load_session(
+        self,
+        session_zid: str,
+        working_tsv_path: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[Dict[str, Any]]:
+        raise NotImplementedError
+
+    def get_cached_session(
+        self,
+        slug: str,
+        source_language: str,
+        lookup_ttl_seconds: int,
+        results_dir: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[Any]:
+        raise NotImplementedError
+
+    def save_tsv_rows_safely(
+        self,
+        tsv_path: Path,
+        comments: List[str],
+        headers: List[str],
+        data_rows: List[List[str]],
+        **kwargs,
+    ) -> None:
+        raise NotImplementedError
+
+    def load_tsv_rows(
+        self,
+        tsv_path: Path,
+        **kwargs,
+    ) -> Tuple[List[str], List[str], List[List[str]]]:
+        raise NotImplementedError
+
+    @contextlib.contextmanager
+    def file_lock(self, file_path: Path):
+        raise NotImplementedError
+
+
+class TsvStorageAdapter(StorageAdapter):
+    """
+    Legacy flat-file TSV storage adapter preserving existing file I/O, file locks,
+    and results/*.tsv directory caching behavior.
+    """
+    backend_name: str = "tsv"
+
+    def __init__(self, config=None, resolved_paths=None):
+        self.config = config
+        self.resolved_paths = resolved_paths or {}
+
+    def save_session(
+        self,
+        session_zid: str,
+        slug: str,
+        source_language: str,
+        target_language: str,
+        text_mode: str,
+        source_raw_text: str,
+        sentences: Optional[List[Dict[str, Any]]] = None,
+        words: Optional[List[Dict[str, Any]]] = None,
+        comments: Optional[List[str]] = None,
+        headers: Optional[List[str]] = None,
+        data_rows: Optional[List[List[str]]] = None,
+        working_tsv_path: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Any:
+        if working_tsv_path and headers is not None and data_rows is not None:
+            self.save_tsv_rows_safely(working_tsv_path, comments or [], headers, data_rows)
+            return working_tsv_path
+        return None
+
+    def load_session(
+        self,
+        session_zid: str,
+        working_tsv_path: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[Dict[str, Any]]:
+        if working_tsv_path and working_tsv_path.exists():
+            comments, headers, data_rows = self.load_tsv_rows(working_tsv_path)
+            return {
+                "session_zid": session_zid,
+                "comments": comments,
+                "headers": headers,
+                "data_rows": data_rows,
+                "tsv_path": working_tsv_path,
+            }
+        return None
+
+    def get_cached_session(
+        self,
+        slug: str,
+        source_language: str,
+        lookup_ttl_seconds: int,
+        results_dir: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[Path]:
+        if lookup_ttl_seconds <= 0 or not results_dir or not results_dir.exists():
+            return None
+        now = time.time()
+        for cached_file in results_dir.glob(f"*-{slug}.{source_language}.tsv"):
+            if cached_file.is_file():
+                if (now - cached_file.stat().st_mtime) <= lookup_ttl_seconds:
+                    return cached_file
+        return None
+
+    def save_tsv_rows_safely(
+        self,
+        tsv_path: Path,
+        comments: List[str],
+        headers: List[str],
+        data_rows: List[List[str]],
+        **kwargs,
+    ) -> None:
+        temp_path = tsv_path.with_suffix('.tsv.tmp')
+        try:
+            with open(temp_path, 'w', encoding='utf-8', newline='') as f:
+                import csv
+                writer = csv.writer(f, delimiter='\t', lineterminator='\n')
+                for comment in comments:
+                    f.write(comment + '\n')
+                writer.writerow(headers)
+                for row in data_rows:
+                    sanitized_row = [str(cell).replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ') for cell in row]
+                    writer.writerow(sanitized_row)
+            os.replace(temp_path, tsv_path)
+        except Exception as e:
+            if temp_path.exists():
+                try:
+                    os.remove(temp_path)
+                except OSError:
+                    pass
+            raise e
+
+    def load_tsv_rows(
+        self,
+        tsv_path: Path,
+        **kwargs,
+    ) -> Tuple[List[str], List[str], List[List[str]]]:
+        import csv
+        comments = []
+        headers = []
+        data_rows = []
+        lines_to_parse = []
+        with open(tsv_path, 'r', encoding='utf-8') as f:
+            for line in f:
+                if not headers and not lines_to_parse and line.startswith('#'):
+                    comments.append(line.rstrip('\r\n'))
+                else:
+                    lines_to_parse.append(line)
+        reader = csv.reader(lines_to_parse, delimiter='\t')
+        for i, row in enumerate(reader):
+            if i == 0:
+                headers = row
+            else:
+                data_rows.append(row)
+        return comments, headers, data_rows
+
+    @contextlib.contextmanager
+    def file_lock(self, file_path: Path):
+        lock_file_path = file_path.with_suffix('.lock')
+        lock_file_path.parent.mkdir(parents=True, exist_ok=True)
+        lock_file = open(lock_file_path, 'w')
         try:
             if sys.platform == 'win32':
                 import msvcrt
-                msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                msvcrt.locking(lock_file.fileno(), msvcrt.LK_LOCK, 1)
             else:
                 import fcntl
-                fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
-        except Exception:
-            pass
-        lock_file.close()
-        try:
-            os.remove(lock_file_path)
-        except Exception:
-            pass
-
-def extract_zid(path):
-    name = path.name
-    match = re.match(r'^(\d{14})', name)
-    return match.group(1) if match else "00000000000000"
-
-GERMAN_UMLAUT_MAP = {
-    'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss', 'ẞ': 'ss',
-    'Ä': 'ae', 'Ö': 'oe', 'Ü': 'ue',
-}
-
-def generate_slug(text, max_words=4):
-    if not text:
-        return "untitled"
-    # Remove ASS and HTML tags
-    cleaned = re.sub(r'\{[^}]*\}', ' ', text)
-    cleaned = re.sub(r'<[^>]*>', ' ', cleaned)
-
-    # Normalize German umlauts matching zid_name.py
-    for src, dst in GERMAN_UMLAUT_MAP.items():
-        cleaned = cleaned.replace(src, dst)
-
-    tokens = tok.build_word_list_internal(cleaned, keep_spaces=False)
-    words = []
-    for t in tokens:
-        if not t.get("is_word"):
-            continue
-        raw_text = t.get("text", "")
-        sub_parts = tok.split_camel_case(raw_text) or [raw_text]
-        for p in sub_parts:
-            clean_p = tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum()))
-            if clean_p and not clean_p.isdigit():
-                words.append(clean_p)
-                if len(words) >= max_words:
-                    break
-        if len(words) >= max_words:
-            break
-
-    slug = '-'.join(words)
-    return slug if slug else "untitled"
-
-def normalize_bracket_spacing(text: str) -> str:
-    """Normalize spacing around brackets: remove inner whitespace in (...), [...], {...}."""
-    if not text:
-        return text
-    # Remove whitespace immediately after opening brackets
-    text = re.sub(r'([(\[{])\s+', r'\1', text)
-    # Remove whitespace immediately before closing brackets
-    text = re.sub(r'\s+([)\]}])', r'\1', text)
-    return text
-
-def load_tsv_rows(tsv_path):
-    import csv
-    comments = []
-    headers = []
-    data_rows = []
-    
-    lines_to_parse = []
-    with open(tsv_path, 'r', encoding='utf-8') as f:
-        for line in f:
-            if not headers and not lines_to_parse and line.startswith('#'):
-                comments.append(line.rstrip('\r\n'))
-            else:
-                lines_to_parse.append(line)
-                
-    reader = csv.reader(lines_to_parse, delimiter='\t')
-    for i, row in enumerate(reader):
-        if i == 0:
-            headers = row
-        else:
-            data_rows.append(row)
-            
-    return comments, headers, data_rows
-
-def save_tsv_rows_safely(tsv_path, comments, headers, data_rows):
-    temp_path = tsv_path.with_suffix('.tsv.tmp')
-    
-    try:
-        with open(temp_path, 'w', encoding='utf-8', newline='') as f:
-            import csv
-            writer = csv.writer(f, delimiter='\t', lineterminator='\n')
-            for comment in comments:
-                f.write(comment + '\n')
-            writer.writerow(headers)
-            for row in data_rows:
-                sanitized_row = [str(cell).replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ') for cell in row]
-                writer.writerow(sanitized_row)
-                
-        os.replace(temp_path, tsv_path)
-    except Exception as e:
-        if temp_path.exists():
+                fcntl.flock(lock_file.fileno(), fcntl.LOCK_EX)
+            yield
+        finally:
             try:
-                os.remove(temp_path)
-            except OSError:
+                if sys.platform == 'win32':
+                    import msvcrt
+                    msvcrt.locking(lock_file.fileno(), msvcrt.LK_UNLCK, 1)
+                else:
+                    import fcntl
+                    fcntl.flock(lock_file.fileno(), fcntl.LOCK_UN)
+            except Exception:
                 pass
-        raise e
+            lock_file.close()
+            try:
+                os.remove(lock_file_path)
+            except Exception:
+                pass
+
+
+class SqliteStorageAdapter(StorageAdapter):
+    """
+    Relational SQLite storage adapter backed by KardenwortDB (WAL mode, transactions).
+    Persists normalized session metadata, single-copy sentences, and word tokens.
+    """
+    backend_name: str = "sqlite"
+
+    def __init__(self, config=None, resolved_paths=None, db_path=None):
+        self.config = config
+        self.resolved_paths = resolved_paths or {}
+        from kardenwort_db import KardenwortDB
+        self.db = KardenwortDB(
+            db_path=db_path or self.resolved_paths.get("sqlite_db_path"),
+            config=config,
+            resolved_paths=self.resolved_paths,
+        )
+        self.db.run_migrations()
+        self._tsv_fallback = TsvStorageAdapter(config=config, resolved_paths=resolved_paths)
+
+    def save_session(
+        self,
+        session_zid: str,
+        slug: str,
+        source_language: str,
+        target_language: str,
+        text_mode: str,
+        source_raw_text: str,
+        sentences: Optional[List[Dict[str, Any]]] = None,
+        words: Optional[List[Dict[str, Any]]] = None,
+        comments: Optional[List[str]] = None,
+        headers: Optional[List[str]] = None,
+        data_rows: Optional[List[List[str]]] = None,
+        working_tsv_path: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Any:
+        if not session_zid or str(session_zid).strip() in ("", "00000000000000"):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid session ZID '{session_zid}' for SQLite storage persistence.",
+            )
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        session_record = {
+            "zid": session_zid,
+            "slug": slug or "",
+            "source_language": source_language or "",
+            "target_language": target_language or "",
+            "text_mode": text_mode or "single",
+            "source_raw_text": source_raw_text or "",
+            "created_at": now_iso,
+            "updated_at": now_iso,
+        }
+
+        # If sentences and words are provided directly
+        norm_sentences = list(sentences) if sentences is not None else []
+        norm_words = list(words) if words is not None else []
+
+        # If headers and data_rows are provided, normalize into sentences and words
+        if headers is not None and data_rows is not None and not (sentences and words):
+            headers_lower = {h.lower(): idx for idx, h in enumerate(headers)}
+
+            def get_col_val(r: List[str], col_name: str, default: str = "") -> str:
+                idx = headers_lower.get(col_name.lower())
+                return r[idx] if idx is not None and idx < len(r) else default
+
+            col_sent_idx = headers_lower.get("sentencesourceindex")
+            col_sent_src = headers_lower.get("sentencesource")
+            col_sent_dst = headers_lower.get("sentencedestination")
+            col_sent_dst2 = headers_lower.get("sentencedestination2")
+            col_sent_ipa = headers_lower.get("sentencesourceipa")
+            col_sent_aud = headers_lower.get("sentencesourceaudio")
+
+            known_word_cols = {
+                "quotation", "wordsource", "wordsource2", "wordsourceinflectedform",
+                "wordsourceinflectedform2", "worddestination", "worddestinationinflectedform",
+                "wordsourcemorphologyai", "wordsourceipa", "deskselected", "leitnerbox",
+                "leitnerdue", "deck", "classificationoxford", "classificationgoethe",
+                "sentencesourceindex", "sentencesource", "sentencedestination",
+                "sentencedestination2", "sentencesourceipa", "sentencesourceaudio",
+            }
+
+            sent_map: Dict[int, Dict[str, Any]] = {}
+            word_list: List[Dict[str, Any]] = []
+
+            for row_idx, row in enumerate(data_rows):
+                # Extract sentence index
+                s_idx = 0
+                if col_sent_idx is not None and col_sent_idx < len(row):
+                    raw_s_idx = str(row[col_sent_idx]).strip()
+                    if raw_s_idx.isdigit():
+                        s_idx = int(raw_s_idx)
+                    else:
+                        s_idx = row_idx
+
+                if s_idx not in sent_map:
+                    sent_map[s_idx] = {
+                        "session_zid": session_zid,
+                        "sentence_index": s_idx,
+                        "sentence_source": row[col_sent_src] if col_sent_src is not None and col_sent_src < len(row) else "",
+                        "sentence_destination": row[col_sent_dst] if col_sent_dst is not None and col_sent_dst < len(row) else None,
+                        "sentence_destination2": row[col_sent_dst2] if col_sent_dst2 is not None and col_sent_dst2 < len(row) else None,
+                        "sentence_source_ipa": row[col_sent_ipa] if col_sent_ipa is not None and col_sent_ipa < len(row) else None,
+                        "sentence_source_audio": row[col_sent_aud] if col_sent_aud is not None and col_sent_aud < len(row) else None,
+                    }
+
+                # Extract word fields
+                quotation = get_col_val(row, "quotation") or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, "wordsource") or ""
+                lemma = get_col_val(row, "wordsource")
+                inflected = get_col_val(row, "wordsourceinflectedform")
+                morph = get_col_val(row, "wordsourcemorphologyai")
+                ipa = get_col_val(row, "wordsourceipa")
+                w_dest = get_col_val(row, "worddestination")
+                w_dest_inf = get_col_val(row, "worddestinationinflectedform")
+                sel_raw = get_col_val(row, "deskselected")
+                selected = 1 if str(sel_raw).strip() in ("1", "true", "True") else 0
+                box_raw = get_col_val(row, "leitnerbox")
+                box = int(box_raw) if box_raw.isdigit() else 1
+                due = get_col_val(row, "leitnerdue") or None
+                deck = get_col_val(row, "deck") or None
+                oxford = get_col_val(row, "classificationoxford") or None
+                goethe = get_col_val(row, "classificationgoethe") or None
+
+                # Collect extra fields
+                extra: Dict[str, Any] = {}
+                for h_idx, h_name in enumerate(headers):
+                    if h_name.lower() not in known_word_cols and h_idx < len(row):
+                        val = row[h_idx]
+                        if val:
+                            extra[h_name] = val
+
+                word_entry = {
+                    "session_zid": session_zid,
+                    "sentence_index": s_idx,
+                    "token_order": row_idx,
+                    "quotation": quotation,
+                    "inflected_form": inflected or None,
+                    "lemma": lemma,
+                    "pos": None,
+                    "morphology": morph or None,
+                    "ipa": ipa or None,
+                    "word_destination": w_dest or None,
+                    "word_destination_inflected": w_dest_inf or None,
+                    "selected": selected,
+                    "leitner_box": box,
+                    "leitner_due": due,
+                    "deck": deck,
+                    "classification_oxford": oxford,
+                    "classification_goethe": goethe,
+                    "extra_fields": extra if extra else None,
+                }
+                word_list.append(word_entry)
+
+            norm_sentences = list(sent_map.values())
+            norm_words = word_list
+
+        self.db.save_session_bundle(
+            session=session_record,
+            sentences=norm_sentences,
+            words=norm_words,
+            zid=zid or session_zid,
+        )
+
+        # Also write TSV file for flat-file parity / tooling compatibility
+        if working_tsv_path and headers is not None and data_rows is not None:
+            self._tsv_fallback.save_tsv_rows_safely(working_tsv_path, comments or [], headers, data_rows)
+
+        return session_zid
+
+    def load_session(
+        self,
+        session_zid: str,
+        working_tsv_path: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[Dict[str, Any]]:
+        bundle = self.db.get_session_bundle(session_zid, zid=zid)
+        if bundle:
+            return bundle
+        if working_tsv_path and working_tsv_path.exists():
+            return self._tsv_fallback.load_session(session_zid, working_tsv_path=working_tsv_path, zid=zid)
+        return None
+
+    def get_cached_session(
+        self,
+        slug: str,
+        source_language: str,
+        lookup_ttl_seconds: int,
+        results_dir: Optional[Path] = None,
+        zid: Optional[str] = None,
+        **kwargs,
+    ) -> Optional[Any]:
+        if lookup_ttl_seconds <= 0:
+            return None
+        sql = """
+            SELECT zid, slug, source_language, target_language, text_mode, source_raw_text, created_at, updated_at
+            FROM sessions
+            WHERE slug = ? AND source_language = ?
+              AND (julianday('now') - julianday(created_at)) * 86400 <= ?
+            ORDER BY created_at DESC LIMIT 1;
+        """
+        rows = self.db.query_readonly(sql, (slug, source_language, lookup_ttl_seconds), zid=zid)
+        if rows:
+            cached_zid = rows[0]["zid"]
+            return self.db.get_session_bundle(cached_zid, zid=zid)
+        return None
+
+    def save_tsv_rows_safely(
+        self,
+        tsv_path: Path,
+        comments: List[str],
+        headers: List[str],
+        data_rows: List[List[str]],
+        **kwargs,
+    ) -> None:
+        self._tsv_fallback.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+
+    def load_tsv_rows(
+        self,
+        tsv_path: Path,
+        **kwargs,
+    ) -> Tuple[List[str], List[str], List[List[str]]]:
+        return self._tsv_fallback.load_tsv_rows(tsv_path)
+
+    @contextlib.contextmanager
+    def file_lock(self, file_path: Path):
+        with self._tsv_fallback.file_lock(file_path):
+            yield
+
+
+_DEFAULT_TSV_ADAPTER = TsvStorageAdapter()
+
+
+def get_storage_adapter(config=None, resolved_paths=None, storage_override=None) -> StorageAdapter:
+    """
+    Factory function returning the active StorageAdapter (TsvStorageAdapter or SqliteStorageAdapter)
+    based on CLI override, config.ini [storage] section, or defaults.
+    """
+    backend = storage_override
+    if not backend:
+        if resolved_paths and "storage_backend" in resolved_paths:
+            backend = resolved_paths["storage_backend"]
+        elif config and hasattr(config, "get"):
+            backend = config.get(SEC_STORAGE, "backend", fallback="tsv").strip().lower()
+        else:
+            backend = "tsv"
+
+    backend = (backend or "tsv").strip().lower()
+    if backend == "sqlite":
+        return SqliteStorageAdapter(config=config, resolved_paths=resolved_paths)
+    return TsvStorageAdapter(config=config, resolved_paths=resolved_paths)
+
+
+@contextlib.contextmanager
+def file_lock(file_path: Path, adapter: Optional[StorageAdapter] = None):
+    act_adapter = adapter or _DEFAULT_TSV_ADAPTER
+    with act_adapter.file_lock(file_path):
+        yield
+
+
+def load_tsv_rows(tsv_path: Path, adapter: Optional[StorageAdapter] = None) -> Tuple[List[str], List[str], List[List[str]]]:
+    act_adapter = adapter or _DEFAULT_TSV_ADAPTER
+    return act_adapter.load_tsv_rows(tsv_path)
+
+
+def save_tsv_rows_safely(tsv_path: Path, comments: List[str], headers: List[str], data_rows: List[List[str]], adapter: Optional[StorageAdapter] = None) -> None:
+    act_adapter = adapter or _DEFAULT_TSV_ADAPTER
+    act_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+
 
 def is_tsv_llm_filled(headers, data_rows, mapping):
     role_fields = get_role_fields(mapping, headers)
@@ -12167,6 +12553,7 @@ def cmd_db_reset(args):
 def main():
     parser = argparse.ArgumentParser(description="Kardenwort Desk Orchestration Core")
     parser.add_argument("--config", default=None, help="Path to config.ini")
+    parser.add_argument("--storage", choices=["tsv", "sqlite"], default=None, help="Storage backend (tsv or sqlite, overrides config)")
     parser.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
     parser.add_argument("--verbose", action="store_true", help="Verbose logging")
     parser.add_argument("--debug", action="store_true", help="Debug logging")
@@ -12203,6 +12590,7 @@ def main():
     p_lookup.add_argument("--target-lang", help="Target language code")
     p_lookup.add_argument("--format", choices=["html", "text", "combined"], help="Output format")
     p_lookup.add_argument("--text-mode", choices=["single", "multi", "auto", "sentence"], default="single", help="Text translation mode")
+    p_lookup.add_argument("--storage", choices=["tsv", "sqlite"], default=None, help="Storage backend override")
     p_lookup.add_argument("--sections", help="Comma-separated sections to render")
     p_lookup.add_argument("--lemma-columns", help="Comma-separated columns for the lemmas table")
     p_lookup.add_argument("--no-headings", action="store_true", help="Disable headings")
@@ -12211,6 +12599,7 @@ def main():
     p_lookup.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
     p_lookup.add_argument("--zid", default=None, help="Session ZID")
     p_lookup.add_argument("--trace-id", default=None, help="Trace correlation ID")
+
 
     # render
     p_render = subparsers.add_parser("render")
