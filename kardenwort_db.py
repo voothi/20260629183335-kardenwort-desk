@@ -158,13 +158,14 @@ class KardenwortDB:
 
         # Resolve workspace / data root
         workspace_dir = Path(__file__).resolve().parent
-        if resolved_paths and "kardenwort_workspace" in resolved_paths:
-            kw_ws = resolved_paths.get("kardenwort_workspace")
-            if kw_ws:
-                workspace_dir = Path(kw_ws)
 
         if db_path:
             self.db_path = Path(db_path).resolve()
+        elif resolved_paths and "sqlite_db_path" in resolved_paths and resolved_paths["sqlite_db_path"]:
+            self.db_path = Path(resolved_paths["sqlite_db_path"]).resolve()
+        elif config and hasattr(config, "get") and config.has_option("storage", "sqlite_db_path"):
+            raw_p = config.get("storage", "sqlite_db_path")
+            self.db_path = (workspace_dir / raw_p).resolve() if not Path(raw_p).is_absolute() else Path(raw_p).resolve()
         else:
             self.db_path = (workspace_dir / "data" / "kardenwort.db").resolve()
 
@@ -185,10 +186,15 @@ class KardenwortDB:
             r_dir = resolved_paths.get("results_dir")
             if r_dir:
                 results_dir = Path(r_dir)
+        elif resolved_paths and "generated_results_dir" in resolved_paths:
+            r_dir = resolved_paths.get("generated_results_dir")
+            if r_dir:
+                results_dir = Path(r_dir)
         elif config and hasattr(config, "get"):
             r_dir = config.get("settings", "results_dir", fallback=None)
             if r_dir:
                 results_dir = Path(r_dir)
+
 
         max_mb = 5.0
         if config and hasattr(config, "getfloat"):

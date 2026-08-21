@@ -9628,7 +9628,7 @@ def cmd_wordfill(args):
     sys.exit(0)
 
 
-def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, text_mode='single', sections=None, lemma_columns=None, theme=None, no_headings=False, disable_css=False, zid=None, wordfill_cfg=None, config=None, resolved_paths=None, goldendict=None, bypass_lang_check=False):
+def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, text_mode='single', sections=None, lemma_columns=None, theme=None, no_headings=False, disable_css=False, zid=None, wordfill_cfg=None, config=None, resolved_paths=None, goldendict=None, bypass_lang_check=False, storage=None):
     if zid is None:
         zid = generate_unique_zid()
 
@@ -9638,7 +9638,12 @@ def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, te
         if wordfill_cfg is None:
             wordfill_cfg = c_tuple[3]
 
+    if storage:
+        resolved_paths = dict(resolved_paths)
+        resolved_paths['storage_backend'] = storage
+
     if not bypass_lang_check:
+
         lang_res = verify_language(text, language, config, bypass=False)
         if not lang_res.is_match:
             if lang_res.action in ("block", "prompt"):
@@ -9758,8 +9763,10 @@ def cmd_lookup(args):
             disable_css=getattr(args, 'disable_css', False),
             zid=zid,
             bypass_lang_check=getattr(args, 'bypass_lang_check', False),
+            storage=getattr(args, 'storage', None),
         )
         emit_payload(res["html"], raw=True)
+
         sys.exit(0)
     except StructuredError as se:
         print_structured_error(se.error_code, se.message, se.details)
