@@ -844,15 +844,111 @@ class KardenwortDB:
 
     def vacuum(self, zid: Optional[str] = None) -> bool:
         """
-        Executes VACUUM on the database to defragment and reclaim free pages.
+        Executes VACUUM and PRAGMA optimize on the database to defragment,
+        reclaim free pages, and optimize SQLite query planner statistics.
         """
+        t0 = time.perf_counter()
         conn = self.get_connection(read_only=False, zid=zid)
         try:
             conn.isolation_level = None
             conn.execute("VACUUM;")
+            conn.execute("PRAGMA optimize;")
+            dur_ms = (time.perf_counter() - t0) * 1000.0
+            get_db_logger().log("INFO", "Database VACUUM and PRAGMA optimize completed", zid=zid, duration_ms=dur_ms)
             return True
         finally:
             conn.close()
+
+    def backup_snapshot(
+        self, backup_dir: Optional[Path] = None, zid: Optional[str] = None
+    ) -> Path:
+        """
+        Creates a consistent, non-blocking physical binary snapshot of the database
+        into backup_dir/kardenwort-YYYYMMDDHHMMSS.db using SQLite's native backup API.
+        """
+        if not backup_dir:
+            backup_dir = self.db_path.parent / "backup"
+        backup_dir.mkdir(parents=True, exist_ok=True)
+
+        snapshot_zid = zid or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
+        target_path = backup_dir / f"kardenwort-{snapshot_zid}.db"
+
+        t0 = time.perf_counter()
+        source_conn = self.get_connection(read_only=True, zid=zid)
+        try:
+            target_conn = sqlite3.connect(str(target_path))
+            try:
+                source_conn.backup(target_conn)
+            finally:
+                target_conn.close()
+        finally:
+            source_conn.close()
+
+        dur_ms = (time.perf_counter() - t0) * 1000.0
+        size_bytes = target_path.stat().st_size if target_path.exists() else 0
+        get_db_logger().log(
+            "INFO",
+            f"Physical backup snapshot created at {target_path.name}",
+            zid=zid,
+            duration_ms=dur_ms,
+            details={"path": str(target_path), "bytes": size_bytes}
+        )
+        return target_path
+
+    def get_sql_dump(self, zid: Optional[str] = None) -> str:
+        """
+        Generates a logical SQL dump (DDL + INSERT statements) of the database.
+        """
+        source_conn = self.get_connection(read_only=True, zid=zid)
+        try:
+            return "\n".join(source_conn.iterdump()) + "\n"
+        finally:
+            source_conn.close()
+
+    def get_telemetry(self, zid: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Collects comprehensive health and storage telemetry metrics.
+        """
+        db_stat = self.get_status(zid=zid)
+        integrity = self.check_integrity(zid=zid)
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT COUNT(*) FROM sessions WHERE deleted_at IS NULL;")
+            active_sessions = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM sessions WHERE deleted_at IS NOT NULL;")
+            deleted_sessions = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM projects WHERE deleted_at IS NULL;")
+            total_projects = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM projects WHERE parent_id IS NULL AND deleted_at IS NULL;")
+            root_projects = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM projects WHERE deleted_at IS NOT NULL;")
+            deleted_projects = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM sentences;")
+            total_sentences = cursor.fetchone()[0]
+
+            cursor.execute("SELECT COUNT(*) FROM words;")
+            total_words = cursor.fetchone()[0]
+
+        return {
+            "size_bytes": db_stat.get("size_bytes", 0),
+            "wal_size_bytes": db_stat.get("wal_size_bytes", 0),
+            "shm_size_bytes": db_stat.get("shm_size_bytes", 0),
+            "schema_version": db_stat.get("schema_version", 0),
+            "integrity_ok": integrity.get("ok", False),
+            "active_sessions": active_sessions,
+            "deleted_sessions": deleted_sessions,
+            "total_projects": total_projects,
+            "root_projects": root_projects,
+            "deleted_projects": deleted_projects,
+            "total_sentences": total_sentences,
+            "total_words": total_words,
+        }
 
     # ---------------------------------------------------------------------------
     # Normalized CRUD & Tree Primitives: Projects & Hierarchies

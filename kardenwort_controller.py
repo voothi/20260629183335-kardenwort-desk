@@ -1421,7 +1421,97 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # 8. Shutdown Endpoint
+        # 8. Admin Database Maintenance & Telemetry Endpoints
+        if path == '/api/v1/admin/backup/snapshot':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            req_zid = generate_server_zid(self.server)
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            target_path = db.backup_snapshot(zid=req_zid)
+            self._send_json(200, {
+                "ok": True,
+                "filename": target_path.name,
+                "path": str(target_path),
+                "bytes": target_path.stat().st_size if target_path.exists() else 0,
+                "zid": req_zid
+            })
+            return
+
+        if path == '/api/v1/admin/backup/dump.sql':
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token(query_params=qs)
+            req_zid = generate_server_zid(self.server)
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            sql_dump = db.get_sql_dump(zid=req_zid).encode('utf-8')
+
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header('Content-Type', 'text/plain; charset=utf-8')
+            self.send_header('Content-Disposition', 'attachment; filename="kardenwort-dump.sql"')
+            self.send_header('Content-Length', str(len(sql_dump)))
+            self.end_headers()
+            self.wfile.write(sql_dump)
+            return
+
+        if path == '/api/v1/admin/db/vacuum':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            req_zid = generate_server_zid(self.server)
+
+            def run_vacuum_worker(server_config, resolved_paths, req_zid):
+                try:
+                    from kardenwort_db import KardenwortDB
+                    db = KardenwortDB(config=server_config, resolved_paths=resolved_paths)
+                    db.vacuum(zid=req_zid)
+                except Exception as e:
+                    logger.error(f"Background vacuum worker failed (ZID: {req_zid}): {e}")
+
+            threading.Thread(
+                target=run_vacuum_worker,
+                args=(self.server.config, self.server.resolved_paths, req_zid),
+                daemon=True
+            ).start()
+
+            self._send_json(200, {
+                "ok": True,
+                "status": "dispatched",
+                "message": "Database VACUUM and PRAGMA optimize running asynchronously in background worker",
+                "zid": req_zid
+            })
+            return
+
+        if path == '/api/v1/admin/telemetry':
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token(query_params=qs)
+            req_zid = generate_server_zid(self.server)
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            db_telemetry = db.get_telemetry(zid=req_zid)
+
+            uptime = round(time.time() - getattr(self.server, 'start_time', time.time()), 2)
+            sidecar_report = self.server.supervisor.get_status_report() if hasattr(self.server, 'supervisor') else {}
+
+            self._send_json(200, {
+                "ok": True,
+                "database": db_telemetry,
+                "controller": {
+                    "port": self.server.server_port,
+                    "uptime_seconds": uptime
+                },
+                "sidecars": sidecar_report,
+                "zid": req_zid
+            })
+            return
+
+        # 9. Shutdown Endpoint
         if path in ('/api/v1/shutdown', '/admin/shutdown'):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")

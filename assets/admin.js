@@ -33,7 +33,7 @@ async function apiFetch(endpoint, options = {}) {
         if (!response.ok) {
             throw new Error(data.message || data.error || `HTTP ${response.status}`);
         }
-        return data;
+        return data.data !== undefined ? data.data : data;
     } catch (err) {
         showToast(err.message, 'error');
         throw err;
