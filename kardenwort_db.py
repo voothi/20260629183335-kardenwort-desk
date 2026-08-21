@@ -871,7 +871,7 @@ class KardenwortDB:
         backup_dir.mkdir(parents=True, exist_ok=True)
 
         snapshot_zid = zid or datetime.now(timezone.utc).strftime("%Y%m%d%H%M%S")
-        target_path = backup_dir / f"kardenwort-{snapshot_zid}.db"
+        target_path = backup_dir / f"{snapshot_zid}-kardenwort.db"
 
         t0 = time.perf_counter()
         source_conn = self.get_connection(read_only=True, zid=zid)

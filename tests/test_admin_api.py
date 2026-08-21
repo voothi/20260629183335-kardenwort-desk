@@ -239,8 +239,7 @@ def test_admin_database_maintenance_suite(admin_controller_server):
     status, resp = make_admin_request(url, "/api/v1/admin/backup/snapshot", method="POST", body={})
     assert status == 200
     assert resp["ok"] is True
-    assert resp["filename"].startswith("kardenwort-")
-    assert resp["filename"].endswith(".db")
+    assert resp["filename"].endswith("-kardenwort.db")
     assert resp["bytes"] > 0
     assert os.path.exists(resp["path"])
 

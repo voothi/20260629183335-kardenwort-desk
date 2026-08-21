@@ -25,6 +25,10 @@ results/
 data/*.db
 data/*.db-wal
 data/*.db-shm
+data/backup/
+data/**/*.db
+data/**/*.db-wal
+data/**/*.db-shm
 data/*.tmp
 *.tmp
 *.bak
