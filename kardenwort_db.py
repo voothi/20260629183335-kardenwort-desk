@@ -1,8 +1,9 @@
 """
-kardenwort_db.py - Foundational SQLite Connection Manager and Diagnostics for Kardenwort-Desk
+kardenwort_db.py - Foundational SQLite Connection Manager and Migrations for Kardenwort-Desk
 
 Provides zero-dependency database access, WAL mode management, structured logging to results/db.log,
-integrity diagnostics, safe sandboxed read-only querying, and test teardown facilities.
+deterministic SQL migrations (_migrations), integrity diagnostics, safe sandboxed read-only querying,
+normalized relational CRUD helpers (sessions, sentences, words), and test teardown facilities.
 """
 
 import os
@@ -12,11 +13,13 @@ import time
 import sqlite3
 import logging
 import threading
+from contextlib import contextmanager
 from pathlib import Path
 from datetime import datetime, timezone
-from typing import Dict, Any, List, Optional, Tuple, Union
+from typing import Dict, Any, List, Optional, Tuple, Union, Generator
 
 logger = logging.getLogger("kardenwort.desk.db")
+
 
 # ---------------------------------------------------------------------------
 # Structured Database Logger (results/db.log)
@@ -84,13 +87,61 @@ def get_db_logger() -> DBLogger:
 
 
 # ---------------------------------------------------------------------------
-# KardenwortDB Connection and Diagnostics Manager
+# Kardenwort SQLite Connection
+# ---------------------------------------------------------------------------
+class KardenwortConnection(sqlite3.Connection):
+    """
+    Custom SQLite connection supporting contextual transaction blocks with
+    immediate locking, automatic commit/rollback, and clean resource cleanup.
+    """
+
+    def __init__(self, *args, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.read_only: bool = False
+        self._in_context_block: bool = False
+
+    def __enter__(self) -> "KardenwortConnection":
+        self._in_context_block = True
+        if not self.read_only:
+            try:
+                self.execute("BEGIN IMMEDIATE;")
+            except (sqlite3.OperationalError, sqlite3.DatabaseError):
+                pass
+        return self
+
+    def __exit__(self, exc_type, exc_val, exc_tb) -> bool:
+        try:
+            if exc_type is not None:
+                try:
+                    self.rollback()
+                except Exception:
+                    pass
+                return False
+            else:
+                try:
+                    if not self.read_only:
+                        self.commit()
+                except Exception:
+                    try:
+                        self.rollback()
+                    except Exception:
+                        pass
+                    raise
+                return False
+        finally:
+            self._in_context_block = False
+            self.close()
+
+
+# ---------------------------------------------------------------------------
+# KardenwortDB Connection and Relational Engine
 # ---------------------------------------------------------------------------
 class KardenwortDB:
     """
-    Foundational connection manager for Kardenwort SQLite databases.
+    Foundational connection manager and relational engine for Kardenwort SQLite databases.
     Enforces WAL journal mode, busy timeouts, foreign key constraints,
-    and provides integrity checks and sandboxed query evaluation.
+    provides deterministic schema migrations (_migrations), normalized CRUD helpers,
+    integrity checks, and sandboxed query evaluation.
     """
 
     def __init__(
@@ -99,6 +150,7 @@ class KardenwortDB:
         config: Optional[Any] = None,
         resolved_paths: Optional[Dict[str, Any]] = None,
         busy_timeout_ms: int = 5000,
+        migrations_dir: Optional[Union[str, Path]] = None,
     ):
         self.config = config
         self.resolved_paths = resolved_paths
@@ -119,6 +171,14 @@ class KardenwortDB:
         # Ensure parent data directory exists
         self.db_path.parent.mkdir(parents=True, exist_ok=True)
 
+        # Resolve migrations directory
+        if migrations_dir:
+            self.migrations_dir = Path(migrations_dir).resolve()
+        elif resolved_paths and "migrations_dir" in resolved_paths:
+            self.migrations_dir = Path(resolved_paths["migrations_dir"]).resolve()
+        else:
+            self.migrations_dir = (workspace_dir / "schemas" / "migrations").resolve()
+
         # Configure db logger destination
         results_dir = workspace_dir / "results"
         if resolved_paths and "results_dir" in resolved_paths:
@@ -132,7 +192,11 @@ class KardenwortDB:
 
         max_mb = 5.0
         if config and hasattr(config, "getfloat"):
-            max_mb = config.getfloat("profiling", "trace_log_max_mb", fallback=config.getfloat("settings", "trace_log_max_mb", fallback=5.0))
+            max_mb = config.getfloat(
+                "profiling",
+                "trace_log_max_mb",
+                fallback=config.getfloat("settings", "trace_log_max_mb", fallback=5.0),
+            )
 
         _GLOBAL_DB_LOGGER.set_log_path(results_dir / "db.log", max_mb=max_mb)
         self.logger = _GLOBAL_DB_LOGGER
@@ -145,10 +209,12 @@ class KardenwortDB:
     def shm_path(self) -> Path:
         return Path(f"{self.db_path}-shm")
 
-    def get_connection(self, read_only: bool = False, zid: Optional[str] = None) -> sqlite3.Connection:
+    def get_connection(
+        self, read_only: bool = False, zid: Optional[str] = None
+    ) -> KardenwortConnection:
         """
         Creates and configures an optimized SQLite connection with WAL mode,
-        busy timeout, and foreign keys enabled.
+        busy timeout, and foreign keys enabled. Can be used directly or as a context manager.
         """
         start_t = time.perf_counter()
         try:
@@ -156,8 +222,10 @@ class KardenwortDB:
                 str(self.db_path),
                 timeout=self.busy_timeout_ms / 1000.0,
                 check_same_thread=False,
+                factory=KardenwortConnection,
             )
             conn.row_factory = sqlite3.Row
+            conn.read_only = read_only
 
             cursor = conn.cursor()
             if read_only:
@@ -190,6 +258,115 @@ class KardenwortDB:
             )
             raise
 
+    @contextmanager
+    def transaction(
+        self, read_only: bool = False, zid: Optional[str] = None
+    ) -> Generator[KardenwortConnection, None, None]:
+        """
+        Context manager helper providing atomic transaction blocks (BEGIN IMMEDIATE / COMMIT / ROLLBACK).
+        """
+        conn = self.get_connection(read_only=read_only, zid=zid)
+        with conn:
+            yield conn
+
+    # ---------------------------------------------------------------------------
+    # Deterministic Schema Migration Runner (_migrations)
+    # ---------------------------------------------------------------------------
+    def run_migrations(self, zid: Optional[str] = None) -> Dict[str, Any]:
+        """
+        Scans schemas/migrations/*.sql and executes unapplied migrations in alphabetical
+        order within individual atomic transactions, recording applied files into _migrations.
+        """
+        start_t = time.perf_counter()
+        if not self.migrations_dir.exists():
+            self.migrations_dir.mkdir(parents=True, exist_ok=True)
+
+        migration_files = sorted(self.migrations_dir.glob("*.sql"))
+        applied_now: List[str] = []
+        already_applied: List[str] = []
+
+        try:
+            # 1. Ensure _migrations table exists
+            with self.get_connection(zid=zid) as conn:
+                conn.execute(
+                    """
+                    CREATE TABLE IF NOT EXISTS _migrations (
+                        filename TEXT PRIMARY KEY,
+                        applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                    );
+                    """
+                )
+
+            # 2. Fetch list of already applied migrations
+            with self.get_connection(read_only=True, zid=zid) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT filename FROM _migrations ORDER BY filename ASC;")
+                already_applied = [row[0] for row in cursor.fetchall()]
+
+            applied_set = set(already_applied)
+
+            # 3. Apply pending migrations sequentially
+            for sql_file in migration_files:
+                if sql_file.name in applied_set:
+                    continue
+
+                sql_content = sql_file.read_text(encoding="utf-8")
+                mig_start = time.perf_counter()
+
+                with self.get_connection(zid=zid) as conn:
+                    cursor = conn.cursor()
+                    # Execute migration SQL statements individually within transaction
+                    # to ensure full transactional rollback of DDL statements on error
+                    for statement in sql_content.split(";"):
+                        stmt_clean = statement.strip()
+                        if stmt_clean:
+                            cursor.execute(stmt_clean)
+                    cursor.execute(
+                        "INSERT INTO _migrations (filename, applied_at) VALUES (?, ?);",
+                        (sql_file.name, datetime.now(timezone.utc).isoformat()),
+                    )
+
+                mig_dur = (time.perf_counter() - mig_start) * 1000.0
+                applied_now.append(sql_file.name)
+                self.logger.log(
+                    "INFO",
+                    f"Applied migration {sql_file.name}",
+                    zid=zid,
+                    duration_ms=mig_dur,
+                    details={"migration": sql_file.name},
+                )
+
+            total_dur = (time.perf_counter() - start_t) * 1000.0
+            result = {
+                "ok": True,
+                "applied": applied_now,
+                "already_applied": already_applied,
+                "total_available": len(migration_files),
+                "total_applied": len(already_applied) + len(applied_now),
+            }
+            self.logger.log(
+                "INFO",
+                f"Migrations complete: {len(applied_now)} applied, {len(already_applied)} existing",
+                zid=zid,
+                duration_ms=total_dur,
+                details=result,
+            )
+            return result
+
+        except Exception as e:
+            total_dur = (time.perf_counter() - start_t) * 1000.0
+            self.logger.log(
+                "ERROR",
+                f"Migration failed: {e}",
+                zid=zid,
+                duration_ms=total_dur,
+                details={"error": str(e)},
+            )
+            raise QueryExecutionError("MIGRATION_FAILED", f"Migration failed: {e}")
+
+    # ---------------------------------------------------------------------------
+    # Diagnostics & Status
+    # ---------------------------------------------------------------------------
     def get_status(self, zid: Optional[str] = None) -> Dict[str, Any]:
         """
         Returns structured database metrics including file size, WAL size,
@@ -218,12 +395,16 @@ class KardenwortDB:
 
                 # Check applied migrations if migration table exists
                 cursor.execute(
-                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('schema_migrations', '_migrations');"
+                    "SELECT name FROM sqlite_master WHERE type='table' AND name IN ('_migrations', 'schema_migrations');"
                 )
                 mig_table = cursor.fetchone()
                 if mig_table:
                     t_name = mig_table[0]
-                    cursor.execute(f"SELECT version FROM {t_name} ORDER BY version ASC;")
+                    # Check column names
+                    cursor.execute(f"PRAGMA table_info(\"{t_name}\");")
+                    cols = [c[1] for c in cursor.fetchall()]
+                    col_name = "filename" if "filename" in cols else "version"
+                    cursor.execute(f"SELECT {col_name} FROM \"{t_name}\" ORDER BY {col_name} ASC;")
                     status["migrations_applied"] = [row[0] for row in cursor.fetchall()]
 
                 # Count rows per user table
@@ -340,7 +521,6 @@ class KardenwortDB:
             raise QuerySecurityError("MUTATION_NOT_ALLOWED", f"Statement type '{first_token}' is not permitted in read-only runner.")
 
         def authorizer(action: int, arg1: Optional[str], arg2: Optional[str], db_name: Optional[str], trigger_name: Optional[str]) -> int:
-            # Strictly allow only read operations
             allowed_actions = {
                 sqlite3.SQLITE_SELECT,
                 sqlite3.SQLITE_READ,
@@ -392,7 +572,6 @@ class KardenwortDB:
                 duration_ms=duration_ms,
                 details={"sql": clean_sql, "error": err_msg},
             )
-            # Map SQLite denial or query_only write violations to MUTATION_NOT_ALLOWED
             if "not authorized" in err_msg.lower() or "attempt to write a readonly database" in err_msg.lower() or "readonly" in err_msg.lower():
                 raise QuerySecurityError("MUTATION_NOT_ALLOWED", f"SQL operation not permitted in read-only runner: {err_msg}")
             raise QueryExecutionError("QUERY_FAILED", f"Query execution failed: {err_msg}")
@@ -434,6 +613,515 @@ class KardenwortDB:
             "ok": True,
             "message": f"Database at {self.db_path} has been reset.",
             "unlinked": unlinked,
+        }
+
+    # ---------------------------------------------------------------------------
+    # Normalized CRUD Helpers: Sessions
+    # ---------------------------------------------------------------------------
+    def insert_session(self, session: Dict[str, Any], zid: Optional[str] = None) -> str:
+        """
+        Inserts or replaces a session record in the sessions table.
+        """
+        session_zid = session["zid"]
+        slug = session.get("slug", "")
+        source_lang = session.get("source_language", "")
+        target_lang = session.get("target_language", "")
+        text_mode = session.get("text_mode", "single")
+        source_raw_text = session.get("source_raw_text", "")
+        created_at = session.get("created_at") or datetime.now(timezone.utc).isoformat()
+        updated_at = session.get("updated_at") or datetime.now(timezone.utc).isoformat()
+
+        with self.get_connection(zid=zid) as conn:
+            conn.execute(
+                """
+                INSERT INTO sessions (
+                    zid, slug, source_language, target_language, text_mode,
+                    source_raw_text, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(zid) DO UPDATE SET
+                    slug = excluded.slug,
+                    source_language = excluded.source_language,
+                    target_language = excluded.target_language,
+                    text_mode = excluded.text_mode,
+                    source_raw_text = excluded.source_raw_text,
+                    updated_at = excluded.updated_at;
+                """,
+                (session_zid, slug, source_lang, target_lang, text_mode, source_raw_text, created_at, updated_at),
+            )
+        return session_zid
+
+    def get_session(self, session_zid: str, zid: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Fetches a single session record by ZID.
+        """
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM sessions WHERE zid = ?;", (session_zid,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def list_sessions(
+        self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns a list of sessions ordered by created_at DESC.
+        """
+        sql = "SELECT * FROM sessions ORDER BY created_at DESC"
+        params: List[Any] = []
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+
+    def update_session(self, session_zid: str, updates: Dict[str, Any], zid: Optional[str] = None) -> bool:
+        """
+        Updates fields of an existing session record.
+        """
+        if not updates:
+            return False
+
+        allowed_cols = {"slug", "source_language", "target_language", "text_mode", "source_raw_text", "updated_at"}
+        valid_updates = {k: v for k, v in updates.items() if k in allowed_cols}
+        if "updated_at" not in valid_updates:
+            valid_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        set_clauses = [f"{col} = ?" for col in valid_updates.keys()]
+        values = list(valid_updates.values())
+        values.append(session_zid)
+
+        sql = f"UPDATE sessions SET {', '.join(set_clauses)} WHERE zid = ?;"
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, values)
+            return cursor.rowcount > 0
+
+    def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
+        """
+        Deletes a session by ZID. Associated sentences and words are cascade deleted.
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM sessions WHERE zid = ?;", (session_zid,))
+            return cursor.rowcount > 0
+
+    # ---------------------------------------------------------------------------
+    # Normalized CRUD Helpers: Sentences
+    # ---------------------------------------------------------------------------
+    def insert_sentence(self, sentence: Dict[str, Any], zid: Optional[str] = None):
+        """
+        Inserts or updates a single sentence record.
+        """
+        self.insert_sentences([sentence], zid=zid)
+
+    def insert_sentences(self, sentences: List[Dict[str, Any]], zid: Optional[str] = None):
+        """
+        Batch inserts or updates sentences for a session.
+        """
+        if not sentences:
+            return
+
+        sql = """
+            INSERT INTO sentences (
+                session_zid, sentence_index, sentence_source, sentence_destination,
+                sentence_destination2, sentence_source_ipa, sentence_source_audio
+            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+            ON CONFLICT(session_zid, sentence_index) DO UPDATE SET
+                sentence_source = excluded.sentence_source,
+                sentence_destination = excluded.sentence_destination,
+                sentence_destination2 = excluded.sentence_destination2,
+                sentence_source_ipa = excluded.sentence_source_ipa,
+                sentence_source_audio = excluded.sentence_source_audio;
+        """
+        records = [
+            (
+                s["session_zid"],
+                s["sentence_index"],
+                s["sentence_source"],
+                s.get("sentence_destination"),
+                s.get("sentence_destination2"),
+                s.get("sentence_source_ipa"),
+                s.get("sentence_source_audio"),
+            )
+            for s in sentences
+        ]
+
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.executemany(sql, records)
+
+    def get_sentences_by_session(self, session_zid: str, zid: Optional[str] = None) -> List[Dict[str, Any]]:
+        """
+        Returns all sentences for a session ordered by sentence_index ASC.
+        """
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM sentences WHERE session_zid = ? ORDER BY sentence_index ASC;",
+                (session_zid,),
+            )
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_sentence(self, session_zid: str, sentence_index: int, zid: Optional[str] = None) -> Optional[Dict[str, Any]]:
+        """
+        Fetches a single sentence record by session_zid and sentence_index.
+        """
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT * FROM sentences WHERE session_zid = ? AND sentence_index = ?;",
+                (session_zid, sentence_index),
+            )
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def delete_sentence(self, session_zid: str, sentence_index: int, zid: Optional[str] = None) -> bool:
+        """
+        Deletes a specific sentence. Associated words are cascade deleted.
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM sentences WHERE session_zid = ? AND sentence_index = ?;",
+                (session_zid, sentence_index),
+            )
+            return cursor.rowcount > 0
+
+    # ---------------------------------------------------------------------------
+    # Normalized CRUD Helpers: Words
+    # ---------------------------------------------------------------------------
+    def _serialize_extra_fields(self, extra_fields: Any) -> Optional[str]:
+        if extra_fields is None:
+            return None
+        if isinstance(extra_fields, (dict, list)):
+            return json.dumps(extra_fields, ensure_ascii=False)
+        return str(extra_fields)
+
+    def _deserialize_extra_fields(self, record: Dict[str, Any]) -> Dict[str, Any]:
+        raw = record.get("extra_fields")
+        if raw and isinstance(raw, str):
+            try:
+                record["extra_fields"] = json.loads(raw)
+            except Exception:
+                pass
+        return record
+
+    def insert_word(self, word: Dict[str, Any], zid: Optional[str] = None) -> int:
+        """
+        Inserts a single word token record and returns its autoincrement ID.
+        """
+        ids = self.insert_words([word], zid=zid)
+        return ids[0] if ids else -1
+
+    def insert_words(self, words: List[Dict[str, Any]], zid: Optional[str] = None) -> List[int]:
+        """
+        Batch inserts word token records and returns their autoincrement IDs.
+        """
+        if not words:
+            return []
+
+        sql = """
+            INSERT INTO words (
+                session_zid, sentence_index, token_order, quotation, inflected_form,
+                lemma, pos, morphology, ipa, word_destination, word_destination_inflected,
+                selected, leitner_box, leitner_due, deck, classification_oxford,
+                classification_goethe, extra_fields
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+        """
+        inserted_ids: List[int] = []
+
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            for w in words:
+                cursor.execute(
+                    sql,
+                    (
+                        w["session_zid"],
+                        w["sentence_index"],
+                        w.get("token_order", 0),
+                        w["quotation"],
+                        w.get("inflected_form"),
+                        w["lemma"],
+                        w.get("pos"),
+                        w.get("morphology"),
+                        w.get("ipa"),
+                        w.get("word_destination"),
+                        w.get("word_destination_inflected"),
+                        w.get("selected", 0),
+                        w.get("leitner_box", 1),
+                        w.get("leitner_due"),
+                        w.get("deck"),
+                        w.get("classification_oxford"),
+                        w.get("classification_goethe"),
+                        self._serialize_extra_fields(w.get("extra_fields")),
+                    ),
+                )
+                inserted_ids.append(cursor.lastrowid)
+
+        return inserted_ids
+
+    def get_words_by_session(
+        self,
+        session_zid: str,
+        sentence_index: Optional[int] = None,
+        parse_json: bool = True,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns words for a session (optionally filtered by sentence_index)
+        ordered by sentence_index ASC, token_order ASC.
+        """
+        sql = "SELECT * FROM words WHERE session_zid = ?"
+        params: List[Any] = [session_zid]
+        if sentence_index is not None:
+            sql += " AND sentence_index = ?"
+            params.append(sentence_index)
+        sql += " ORDER BY sentence_index ASC, token_order ASC;"
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = [dict(r) for r in cursor.fetchall()]
+            if parse_json:
+                rows = [self._deserialize_extra_fields(r) for r in rows]
+            return rows
+
+    def get_word(
+        self, word_id: int, parse_json: bool = True, zid: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetches a word token record by primary key ID.
+        """
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT * FROM words WHERE id = ?;", (word_id,))
+            row = cursor.fetchone()
+            if not row:
+                return None
+            res = dict(row)
+            return self._deserialize_extra_fields(res) if parse_json else res
+
+    def find_words_by_lemma(
+        self,
+        lemma: str,
+        session_zid: Optional[str] = None,
+        parse_json: bool = True,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Index-backed case-insensitive search on words by lemma (COLLATE NOCASE).
+        """
+        sql = "SELECT * FROM words WHERE lemma = ?"
+        params: List[Any] = [lemma]
+        if session_zid:
+            sql += " AND session_zid = ?"
+            params.append(session_zid)
+        sql += " ORDER BY id ASC;"
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = [dict(r) for r in cursor.fetchall()]
+            if parse_json:
+                rows = [self._deserialize_extra_fields(r) for r in rows]
+            return rows
+
+    def find_words_by_quotation(
+        self,
+        quotation: str,
+        session_zid: Optional[str] = None,
+        parse_json: bool = True,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Index-backed case-insensitive search on words by quotation token (COLLATE NOCASE).
+        """
+        sql = "SELECT * FROM words WHERE quotation = ?"
+        params: List[Any] = [quotation]
+        if session_zid:
+            sql += " AND session_zid = ?"
+            params.append(session_zid)
+        sql += " ORDER BY id ASC;"
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = [dict(r) for r in cursor.fetchall()]
+            if parse_json:
+                rows = [self._deserialize_extra_fields(r) for r in rows]
+            return rows
+
+    def update_word(
+        self, word_id: int, updates: Dict[str, Any], zid: Optional[str] = None
+    ) -> bool:
+        """
+        Updates fields of a word token record.
+        """
+        if not updates:
+            return False
+
+        allowed_cols = {
+            "sentence_index", "token_order", "quotation", "inflected_form",
+            "lemma", "pos", "morphology", "ipa", "word_destination",
+            "word_destination_inflected", "selected", "leitner_box", "leitner_due",
+            "deck", "classification_oxford", "classification_goethe", "extra_fields",
+        }
+        valid_updates: Dict[str, Any] = {}
+        for k, v in updates.items():
+            if k in allowed_cols:
+                if k == "extra_fields":
+                    valid_updates[k] = self._serialize_extra_fields(v)
+                else:
+                    valid_updates[k] = v
+
+        if not valid_updates:
+            return False
+
+        set_clauses = [f"{col} = ?" for col in valid_updates.keys()]
+        values = list(valid_updates.values())
+        values.append(word_id)
+
+        sql = f"UPDATE words SET {', '.join(set_clauses)} WHERE id = ?;"
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, values)
+            return cursor.rowcount > 0
+
+    def delete_word(self, word_id: int, zid: Optional[str] = None) -> bool:
+        """
+        Deletes a word token record by primary key ID.
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM words WHERE id = ?;", (word_id,))
+            return cursor.rowcount > 0
+
+    # ---------------------------------------------------------------------------
+    # Atomic Session Bundle Operations
+    # ---------------------------------------------------------------------------
+    def save_session_bundle(
+        self,
+        session: Dict[str, Any],
+        sentences: List[Dict[str, Any]],
+        words: List[Dict[str, Any]],
+        zid: Optional[str] = None,
+    ) -> str:
+        """
+        Saves a session, its deduplicated sentences, and words inside a single atomic transaction.
+        """
+        session_zid = session["zid"]
+        slug = session.get("slug", "")
+        source_lang = session.get("source_language", "")
+        target_lang = session.get("target_language", "")
+        text_mode = session.get("text_mode", "single")
+        source_raw_text = session.get("source_raw_text", "")
+        created_at = session.get("created_at") or datetime.now(timezone.utc).isoformat()
+        updated_at = session.get("updated_at") or datetime.now(timezone.utc).isoformat()
+
+        with self.get_connection(zid=zid) as conn:
+            # 1. Insert/update session
+            conn.execute(
+                """
+                INSERT INTO sessions (
+                    zid, slug, source_language, target_language, text_mode,
+                    source_raw_text, created_at, updated_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(zid) DO UPDATE SET
+                    slug = excluded.slug,
+                    source_language = excluded.source_language,
+                    target_language = excluded.target_language,
+                    text_mode = excluded.text_mode,
+                    source_raw_text = excluded.source_raw_text,
+                    updated_at = excluded.updated_at;
+                """,
+                (session_zid, slug, source_lang, target_lang, text_mode, source_raw_text, created_at, updated_at),
+            )
+
+            # 2. Insert sentences
+            if sentences:
+                sent_sql = """
+                    INSERT INTO sentences (
+                        session_zid, sentence_index, sentence_source, sentence_destination,
+                        sentence_destination2, sentence_source_ipa, sentence_source_audio
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(session_zid, sentence_index) DO UPDATE SET
+                        sentence_source = excluded.sentence_source,
+                        sentence_destination = excluded.sentence_destination,
+                        sentence_destination2 = excluded.sentence_destination2,
+                        sentence_source_ipa = excluded.sentence_source_ipa,
+                        sentence_source_audio = excluded.sentence_source_audio;
+                """
+                sent_records = [
+                    (
+                        s.get("session_zid", session_zid),
+                        s["sentence_index"],
+                        s["sentence_source"],
+                        s.get("sentence_destination"),
+                        s.get("sentence_destination2"),
+                        s.get("sentence_source_ipa"),
+                        s.get("sentence_source_audio"),
+                    )
+                    for s in sentences
+                ]
+                conn.executemany(sent_sql, sent_records)
+
+            # 3. Insert words
+            if words:
+                word_sql = """
+                    INSERT INTO words (
+                        session_zid, sentence_index, token_order, quotation, inflected_form,
+                        lemma, pos, morphology, ipa, word_destination, word_destination_inflected,
+                        selected, leitner_box, leitner_due, deck, classification_oxford,
+                        classification_goethe, extra_fields
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                """
+                word_records = [
+                    (
+                        w.get("session_zid", session_zid),
+                        w["sentence_index"],
+                        w.get("token_order", 0),
+                        w["quotation"],
+                        w.get("inflected_form"),
+                        w["lemma"],
+                        w.get("pos"),
+                        w.get("morphology"),
+                        w.get("ipa"),
+                        w.get("word_destination"),
+                        w.get("word_destination_inflected"),
+                        w.get("selected", 0),
+                        w.get("leitner_box", 1),
+                        w.get("leitner_due"),
+                        w.get("deck"),
+                        w.get("classification_oxford"),
+                        w.get("classification_goethe"),
+                        self._serialize_extra_fields(w.get("extra_fields")),
+                    )
+                    for w in words
+                ]
+                conn.executemany(word_sql, word_records)
+
+        return session_zid
+
+    def get_session_bundle(
+        self, session_zid: str, parse_json: bool = True, zid: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Retrieves the complete bundle for a session: session record, sentences, and words.
+        """
+        session = self.get_session(session_zid, zid=zid)
+        if not session:
+            return None
+
+        sentences = self.get_sentences_by_session(session_zid, zid=zid)
+        words = self.get_words_by_session(session_zid, parse_json=parse_json, zid=zid)
+
+        return {
+            "session": session,
+            "sentences": sentences,
+            "words": words,
         }
 
 
