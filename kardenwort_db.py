@@ -1045,6 +1045,41 @@ class KardenwortDB:
             cursor.execute("DELETE FROM projects WHERE id = ?;", (project_id,))
             return cursor.rowcount > 0
 
+    def get_deleted_projects(
+        self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves all soft-deleted projects.
+        """
+        sql = "SELECT * FROM projects WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        params: List[Any] = []
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+
+    def purge_deleted_projects(
+        self, older_than_days: Optional[float] = None, zid: Optional[str] = None
+    ) -> int:
+        """
+        Permanently hard-deletes soft-deleted projects.
+        """
+        sql = "DELETE FROM projects WHERE deleted_at IS NOT NULL"
+        params: List[Any] = []
+        if older_than_days is not None:
+            sql += " AND (julianday('now') - julianday(deleted_at)) > ?"
+            params.append(older_than_days)
+        sql += ";"
+
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return cursor.rowcount
+
     def get_project_path(
         self, project_id: int, include_deleted: bool = False, zid: Optional[str] = None
     ) -> List[Dict[str, Any]]:

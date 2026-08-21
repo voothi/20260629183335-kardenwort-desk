@@ -1361,7 +1361,67 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": True, "sessions": sessions})
             return
 
-        # 7. Shutdown Endpoint
+        # 7. Admin Trash & Soft Deletion Endpoints
+        if path == '/api/v1/admin/trash':
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token(query_params=qs)
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            del_sessions = db.get_deleted_sessions()
+            del_projects = db.get_deleted_projects()
+            self._send_json(200, {
+                "ok": True,
+                "sessions": del_sessions,
+                "projects": del_projects,
+            })
+            return
+
+        if path == '/api/v1/admin/trash/restore':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+
+            if 'zid' in body and body['zid']:
+                session_zid = str(body['zid']).strip()
+                ok = db.restore_session(session_zid)
+                self._send_json(200, {"ok": ok, "restored_type": "session", "zid": session_zid})
+                return
+            elif 'project_id' in body and body['project_id'] is not None:
+                project_id = int(body['project_id'])
+                ok = db.restore_project(project_id)
+                self._send_json(200, {"ok": ok, "restored_type": "project", "project_id": project_id})
+                return
+            else:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'zid' or 'project_id' in restore payload")
+
+        if path == '/api/v1/admin/trash/purge':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            older_than_days = body.get('older_than_days')
+            if older_than_days is not None:
+                try:
+                    older_than_days = float(older_than_days)
+                except ValueError:
+                    raise StructuredError(ErrorCode.INVALID_PAYLOAD, "'older_than_days' must be a numeric value")
+
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            purged_sessions = db.purge_deleted_sessions(older_than_days=older_than_days)
+            purged_projects = db.purge_deleted_projects(older_than_days=older_than_days)
+            self._send_json(200, {
+                "ok": True,
+                "purged_sessions": purged_sessions,
+                "purged_projects": purged_projects
+            })
+            return
+
+        # 8. Shutdown Endpoint
         if path in ('/api/v1/shutdown', '/admin/shutdown'):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
