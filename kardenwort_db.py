@@ -8,6 +8,7 @@ normalized relational CRUD helpers (sessions, sentences, words), and test teardo
 
 import os
 import sys
+import re
 import json
 import time
 import sqlite3
@@ -287,7 +288,18 @@ class KardenwortDB:
         if not self.migrations_dir.exists():
             self.migrations_dir.mkdir(parents=True, exist_ok=True)
 
-        migration_files = sorted(self.migrations_dir.glob("*.sql"))
+        def _migration_sort_key(p: Path):
+            name = p.name
+            m = re.match(r"^(\d+)", name)
+            if m:
+                num_str = m.group(1)
+                if len(num_str) <= 4:
+                    return (1, int(num_str), name)
+                else:
+                    return (0, int(num_str), name)
+            return (2, 0, name)
+
+        migration_files = sorted(self.migrations_dir.glob("*.sql"), key=_migration_sort_key)
         applied_now: List[str] = []
         already_applied: List[str] = []
 
@@ -656,23 +668,32 @@ class KardenwortDB:
             )
         return session_zid
 
-    def get_session(self, session_zid: str, zid: Optional[str] = None) -> Optional[Dict[str, Any]]:
+    def get_session(
+        self, session_zid: str, include_deleted: bool = False, zid: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
         """
-        Fetches a single session record by ZID.
+        Fetches a single session record by ZID. Excludes soft-deleted sessions unless include_deleted=True.
         """
+        sql = "SELECT * FROM sessions WHERE zid = ?"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        sql += ";"
         with self.get_connection(read_only=True, zid=zid) as conn:
             cursor = conn.cursor()
-            cursor.execute("SELECT * FROM sessions WHERE zid = ?;", (session_zid,))
+            cursor.execute(sql, (session_zid,))
             row = cursor.fetchone()
             return dict(row) if row else None
 
     def list_sessions(
-        self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None
+        self, limit: Optional[int] = None, offset: int = 0, include_deleted: bool = False, zid: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Returns a list of sessions ordered by created_at DESC.
         """
-        sql = "SELECT * FROM sessions ORDER BY created_at DESC"
+        sql = "SELECT * FROM sessions"
+        if not include_deleted:
+            sql += " WHERE deleted_at IS NULL"
+        sql += " ORDER BY created_at DESC"
         params: List[Any] = []
         if limit is not None:
             sql += " LIMIT ? OFFSET ?"
@@ -690,7 +711,7 @@ class KardenwortDB:
         if not updates:
             return False
 
-        allowed_cols = {"slug", "source_language", "target_language", "text_mode", "source_raw_text", "updated_at"}
+        allowed_cols = {"slug", "source_language", "target_language", "text_mode", "source_raw_text", "updated_at", "deleted_at"}
         valid_updates = {k: v for k, v in updates.items() if k in allowed_cols}
         if "updated_at" not in valid_updates:
             valid_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
@@ -706,12 +727,13 @@ class KardenwortDB:
             return cursor.rowcount > 0
 
     def list_sessions_with_counts(
-        self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None
+        self, limit: Optional[int] = None, offset: int = 0, include_deleted: bool = False, zid: Optional[str] = None
     ) -> List[Dict[str, Any]]:
         """
         Returns a list of sessions with token count and sentence count ordered by created_at DESC.
         """
-        sql = """
+        filter_clause = "WHERE s.deleted_at IS NULL" if not include_deleted else ""
+        sql = f"""
             SELECT 
                 s.zid, 
                 s.slug, 
@@ -721,11 +743,13 @@ class KardenwortDB:
                 s.source_raw_text,
                 s.created_at, 
                 s.updated_at,
+                s.deleted_at,
                 COUNT(w.id) as token_count,
                 COUNT(DISTINCT sn.sentence_index) as sentence_count
             FROM sessions s
             LEFT JOIN sentences sn ON sn.session_zid = s.zid
             LEFT JOIN words w ON w.session_zid = s.zid
+            {filter_clause}
             GROUP BY s.zid
             ORDER BY s.created_at DESC
         """
@@ -738,6 +762,66 @@ class KardenwortDB:
             cursor = conn.cursor()
             cursor.execute(sql, params)
             return [dict(r) for r in cursor.fetchall()]
+
+    def soft_delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
+        """
+        Soft-deletes a session by setting deleted_at to current timestamp.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE sessions SET deleted_at = ? WHERE zid = ? AND deleted_at IS NULL;",
+                (now_iso, session_zid),
+            )
+            return cursor.rowcount > 0
+
+    def restore_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
+        """
+        Restores a soft-deleted session by resetting deleted_at to NULL.
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "UPDATE sessions SET deleted_at = NULL WHERE zid = ? AND deleted_at IS NOT NULL;",
+                (session_zid,),
+            )
+            return cursor.rowcount > 0
+
+    def get_deleted_sessions(
+        self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Retrieves all soft-deleted sessions.
+        """
+        sql = "SELECT * FROM sessions WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC"
+        params: List[Any] = []
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+
+    def purge_deleted_sessions(
+        self, older_than_days: Optional[float] = None, zid: Optional[str] = None
+    ) -> int:
+        """
+        Permanently hard-deletes soft-deleted sessions (and cascades to sentences/words).
+        """
+        sql = "DELETE FROM sessions WHERE deleted_at IS NOT NULL"
+        params: List[Any] = []
+        if older_than_days is not None:
+            sql += " AND (julianday('now') - julianday(deleted_at)) > ?"
+            params.append(older_than_days)
+        sql += ";"
+
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return cursor.rowcount
 
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
@@ -769,6 +853,396 @@ class KardenwortDB:
             return True
         finally:
             conn.close()
+
+    # ---------------------------------------------------------------------------
+    # Normalized CRUD & Tree Primitives: Projects & Hierarchies
+    # ---------------------------------------------------------------------------
+    def create_project(
+        self,
+        title: str,
+        slug: Optional[str] = None,
+        parent_id: Optional[int] = None,
+        description: str = "",
+        order_index: Optional[int] = None,
+        zid: Optional[str] = None,
+    ) -> int:
+        """
+        Creates a new project node in the hierarchy.
+        """
+        clean_title = (title or "").strip()
+        if not clean_title:
+            raise QuerySecurityError("INVALID_STATE", "Project title cannot be empty.")
+
+        if not slug:
+            clean_slug = re.sub(r"[^a-zA-Z0-9_\-]+", "-", clean_title.lower()).strip("-") or "project"
+        else:
+            clean_slug = slug.strip()
+
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            if order_index is None:
+                if parent_id is None:
+                    cursor.execute("SELECT COALESCE(MAX(order_index) + 1, 0) FROM projects WHERE parent_id IS NULL AND deleted_at IS NULL;")
+                else:
+                    cursor.execute("SELECT COALESCE(MAX(order_index) + 1, 0) FROM projects WHERE parent_id = ? AND deleted_at IS NULL;", (parent_id,))
+                calc_order = cursor.fetchone()[0]
+            else:
+                calc_order = int(order_index)
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            cursor.execute(
+                """
+                INSERT INTO projects (parent_id, title, slug, description, order_index, created_at, updated_at)
+                VALUES (?, ?, ?, ?, ?, ?, ?);
+                """,
+                (parent_id, clean_title, clean_slug, description or "", calc_order, now_iso, now_iso),
+            )
+            return cursor.lastrowid
+
+    def get_project(
+        self, project_id: int, include_deleted: bool = False, zid: Optional[str] = None
+    ) -> Optional[Dict[str, Any]]:
+        """
+        Fetches a project record by ID.
+        """
+        sql = "SELECT * FROM projects WHERE id = ?"
+        if not include_deleted:
+            sql += " AND deleted_at IS NULL"
+        sql += ";"
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (project_id,))
+            row = cursor.fetchone()
+            return dict(row) if row else None
+
+    def list_projects(
+        self,
+        parent_id: Optional[Union[int, str]] = "all",
+        include_deleted: bool = False,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Lists projects filtered by parent_id and soft-deletion status.
+        parent_id="all" returns all projects.
+        parent_id=None returns only root projects.
+        parent_id=int returns children of specified project.
+        """
+        conditions = []
+        params: List[Any] = []
+
+        if not include_deleted:
+            conditions.append("deleted_at IS NULL")
+
+        if parent_id != "all":
+            if parent_id is None:
+                conditions.append("parent_id IS NULL")
+            else:
+                conditions.append("parent_id = ?")
+                params.append(parent_id)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+        sql = f"SELECT * FROM projects {where_clause} ORDER BY order_index ASC, id ASC;"
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+
+    def update_project(
+        self, project_id: int, updates: Dict[str, Any], zid: Optional[str] = None
+    ) -> bool:
+        """
+        Updates fields of an existing project record.
+        """
+        if not updates:
+            return False
+
+        allowed_cols = {"parent_id", "title", "slug", "description", "order_index", "updated_at", "deleted_at"}
+        valid_updates = {k: v for k, v in updates.items() if k in allowed_cols}
+        if "updated_at" not in valid_updates:
+            valid_updates["updated_at"] = datetime.now(timezone.utc).isoformat()
+
+        set_clauses = [f"{col} = ?" for col in valid_updates.keys()]
+        values = list(valid_updates.values())
+        values.append(project_id)
+
+        sql = f"UPDATE projects SET {', '.join(set_clauses)} WHERE id = ?;"
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, values)
+            return cursor.rowcount > 0
+
+    def soft_delete_project(self, project_id: int, zid: Optional[str] = None) -> bool:
+        """
+        Soft-deletes a project and its entire descendant subtree (depth < 100).
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE projects SET deleted_at = ?
+                WHERE id IN (
+                    WITH RECURSIVE project_subtree(id, depth) AS (
+                        SELECT id, 0 FROM projects WHERE id = ?
+                        UNION ALL
+                        SELECT p.id, ps.depth + 1 FROM projects p JOIN project_subtree ps ON p.parent_id = ps.id WHERE ps.depth < 100
+                    )
+                    SELECT id FROM project_subtree
+                ) AND deleted_at IS NULL;
+                """,
+                (now_iso, project_id),
+            )
+            return cursor.rowcount > 0
+
+    def restore_project(
+        self, project_id: int, restore_parents: bool = True, zid: Optional[str] = None
+    ) -> bool:
+        """
+        Restores a soft-deleted project and its descendants, and optionally restores parent chain.
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                UPDATE projects SET deleted_at = NULL
+                WHERE id IN (
+                    WITH RECURSIVE project_subtree(id, depth) AS (
+                        SELECT id, 0 FROM projects WHERE id = ?
+                        UNION ALL
+                        SELECT p.id, ps.depth + 1 FROM projects p JOIN project_subtree ps ON p.parent_id = ps.id WHERE ps.depth < 100
+                    )
+                    SELECT id FROM project_subtree
+                ) AND deleted_at IS NOT NULL;
+                """,
+                (project_id,),
+            )
+            count = cursor.rowcount
+
+            if restore_parents:
+                cursor.execute(
+                    """
+                    UPDATE projects SET deleted_at = NULL
+                    WHERE id IN (
+                        WITH RECURSIVE project_ancestors(parent_id, depth) AS (
+                            SELECT parent_id, 0 FROM projects WHERE id = ?
+                            UNION ALL
+                            SELECT p.parent_id, pa.depth + 1 FROM projects p JOIN project_ancestors pa ON p.id = pa.parent_id WHERE pa.depth < 100 AND p.parent_id IS NOT NULL
+                        )
+                        SELECT parent_id FROM project_ancestors WHERE parent_id IS NOT NULL
+                    ) AND deleted_at IS NOT NULL;
+                    """,
+                    (project_id,),
+                )
+            return count > 0
+
+    def delete_project(self, project_id: int, zid: Optional[str] = None) -> bool:
+        """
+        Hard-deletes a project by ID (cascading to children and project_sessions).
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute("DELETE FROM projects WHERE id = ?;", (project_id,))
+            return cursor.rowcount > 0
+
+    def get_project_path(
+        self, project_id: int, include_deleted: bool = False, zid: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Resolves ancestral path from root to current project node using recursive CTE.
+        Bounded by depth < 100.
+        """
+        del_filter_base = "" if include_deleted else "AND deleted_at IS NULL"
+        del_filter_join = "" if include_deleted else "AND p.deleted_at IS NULL"
+        sql = f"""
+            WITH RECURSIVE project_path(id, parent_id, title, slug, description, order_index, created_at, updated_at, deleted_at, depth) AS (
+                SELECT id, parent_id, title, slug, description, order_index, created_at, updated_at, deleted_at, 0
+                FROM projects
+                WHERE id = ? {del_filter_base}
+                UNION ALL
+                SELECT p.id, p.parent_id, p.title, p.slug, p.description, p.order_index, p.created_at, p.updated_at, p.deleted_at, pp.depth + 1
+                FROM projects p
+                JOIN project_path pp ON p.id = pp.parent_id
+                WHERE pp.depth < 100 {del_filter_join}
+            )
+            SELECT id, parent_id, title, slug, description, order_index, created_at, updated_at, deleted_at
+            FROM project_path
+            ORDER BY depth DESC;
+        """
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (project_id,))
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_project_tree(
+        self,
+        project_id: Optional[int] = None,
+        include_deleted: bool = False,
+        max_depth: int = 100,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns a hierarchical project tree with nested 'children' and linked 'sessions'.
+        If project_id is None, returns all root projects with their nested trees.
+        """
+        del_clause = "" if include_deleted else "WHERE deleted_at IS NULL"
+        sql = f"SELECT * FROM projects {del_clause} ORDER BY order_index ASC, id ASC;"
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql)
+            all_projects = [dict(r) for r in cursor.fetchall()]
+
+            sess_del_join = "" if include_deleted else "AND s.deleted_at IS NULL"
+            ps_sql = f"""
+                SELECT ps.project_id, ps.session_zid, ps.order_index, ps.added_at,
+                       s.slug, s.source_language, s.target_language, s.text_mode, s.created_at
+                FROM project_sessions ps
+                JOIN sessions s ON ps.session_zid = s.zid {sess_del_join}
+                ORDER BY ps.order_index ASC, ps.added_at ASC;
+            """
+            cursor.execute(ps_sql)
+            all_links = [dict(r) for r in cursor.fetchall()]
+
+        project_sessions_map: Dict[int, List[Dict[str, Any]]] = {}
+        for link in all_links:
+            p_id = link["project_id"]
+            project_sessions_map.setdefault(p_id, []).append(link)
+
+        node_map: Dict[int, Dict[str, Any]] = {}
+        for p in all_projects:
+            node = dict(p)
+            node["children"] = []
+            node["sessions"] = project_sessions_map.get(p["id"], [])
+            node_map[p["id"]] = node
+
+        roots: List[Dict[str, Any]] = []
+        for p in all_projects:
+            node = node_map[p["id"]]
+            p_id = p.get("parent_id")
+            if p_id and p_id in node_map:
+                node_map[p_id]["children"].append(node)
+            else:
+                roots.append(node)
+
+        if project_id is not None:
+            if project_id in node_map:
+                return [node_map[project_id]]
+            return []
+
+        return roots
+
+    # ---------------------------------------------------------------------------
+    # Session Linking & Reordering Methods
+    # ---------------------------------------------------------------------------
+    def link_session_to_project(
+        self,
+        project_id: int,
+        session_zid: str,
+        order_index: Optional[int] = None,
+        zid: Optional[str] = None,
+    ) -> bool:
+        """
+        Links a session to a project node with ordered sequencing.
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            if order_index is None:
+                cursor.execute(
+                    "SELECT COALESCE(MAX(order_index) + 1, 0) FROM project_sessions WHERE project_id = ?;",
+                    (project_id,),
+                )
+                calc_order = cursor.fetchone()[0]
+            else:
+                calc_order = int(order_index)
+
+            now_iso = datetime.now(timezone.utc).isoformat()
+            cursor.execute(
+                """
+                INSERT INTO project_sessions (project_id, session_zid, order_index, added_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(project_id, session_zid) DO UPDATE SET
+                    order_index = excluded.order_index;
+                """,
+                (project_id, session_zid, calc_order, now_iso),
+            )
+            return cursor.rowcount > 0
+
+    def unlink_session_from_project(
+        self, project_id: int, session_zid: str, zid: Optional[str] = None
+    ) -> bool:
+        """
+        Unlinks a session from a project node.
+        """
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "DELETE FROM project_sessions WHERE project_id = ? AND session_zid = ?;",
+                (project_id, session_zid),
+            )
+            return cursor.rowcount > 0
+
+    def reorder_project_sessions(
+        self, project_id: int, session_zids: List[str], zid: Optional[str] = None
+    ) -> bool:
+        """
+        Atomically updates the order_index of sessions linked to a project.
+        """
+        if not session_zids:
+            return False
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            for idx, szid in enumerate(session_zids):
+                cursor.execute(
+                    "UPDATE project_sessions SET order_index = ? WHERE project_id = ? AND session_zid = ?;",
+                    (idx, project_id, szid),
+                )
+            return True
+
+    def get_project_sessions(
+        self,
+        project_id: int,
+        include_deleted_sessions: bool = False,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns all sessions linked to a project ordered by order_index ASC, added_at ASC.
+        """
+        del_join = "" if include_deleted_sessions else "AND s.deleted_at IS NULL"
+        sql = f"""
+            SELECT ps.project_id, ps.session_zid, ps.order_index, ps.added_at,
+                   s.slug, s.source_language, s.target_language, s.text_mode, s.source_raw_text,
+                   s.created_at, s.updated_at, s.deleted_at
+            FROM project_sessions ps
+            JOIN sessions s ON ps.session_zid = s.zid {del_join}
+            WHERE ps.project_id = ?
+            ORDER BY ps.order_index ASC, ps.added_at ASC;
+        """
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (project_id,))
+            return [dict(r) for r in cursor.fetchall()]
+
+    def get_session_projects(
+        self,
+        session_zid: str,
+        include_deleted_projects: bool = False,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns all projects linked to a session ordered by p.order_index ASC, p.id ASC.
+        """
+        del_join = "" if include_deleted_projects else "AND p.deleted_at IS NULL"
+        sql = f"""
+            SELECT p.*, ps.order_index as session_order_index, ps.added_at as linked_at
+            FROM project_sessions ps
+            JOIN projects p ON ps.project_id = p.id {del_join}
+            WHERE ps.session_zid = ?
+            ORDER BY p.order_index ASC, p.id ASC;
+        """
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (session_zid,))
+            return [dict(r) for r in cursor.fetchall()]
 
     # ---------------------------------------------------------------------------
     # Normalized CRUD Helpers: Sentences
@@ -1041,6 +1515,7 @@ class KardenwortDB:
             FROM words w
             JOIN sessions s ON w.session_zid = s.zid
             WHERE (w.lemma = ? OR w.quotation = ? OR w.inflected_form = ?)
+              AND s.deleted_at IS NULL
         """
         params: List[Any] = [clean_word, clean_word, clean_word]
 

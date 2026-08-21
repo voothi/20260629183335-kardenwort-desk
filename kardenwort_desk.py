@@ -3237,6 +3237,24 @@ class SqliteStorageAdapter(StorageAdapter):
         except Exception as e:
             logger.warning(f"Failed to auto-save selected state to SQLite: {e}")
 
+        # Check if session belongs to any project hierarchy and resolve deck path
+        try:
+            linked_projects = self.db.get_session_projects(session_zid)
+            if linked_projects:
+                primary_project = linked_projects[0]
+                lang_for_deck = session.get("source_language") or language or "en"
+                hierarchical_deck = resolve_project_deck_path(primary_project["id"], self.db, language=lang_for_deck)
+                deck_col_idx = headers.index("Deck") if "Deck" in headers else -1
+                if deck_col_idx != -1:
+                    for row_copy in exported_rows:
+                        if len(row_copy) > deck_col_idx:
+                            row_copy[deck_col_idx] = hierarchical_deck
+                        else:
+                            row_copy.extend([""] * (deck_col_idx - len(row_copy) + 1))
+                            row_copy[deck_col_idx] = hierarchical_deck
+        except Exception as e:
+            logger.warning(f"Failed to resolve project hierarchical deck: {e}")
+
         # Resolve destination path
         fav_dir = Path(self.resolved_paths.get("favorites_output_dir") or "favorites")
         fav_dir.mkdir(parents=True, exist_ok=True)
@@ -3318,6 +3336,215 @@ class SqliteStorageAdapter(StorageAdapter):
                     "status": "success",
                     "message": "SUCCESS: Ready for Anki (no favorites file created)",
                 }
+
+
+# ---------------------------------------------------------------------------
+# Project Hierarchy & Material Synthesis Helpers
+# ---------------------------------------------------------------------------
+LANGUAGE_NAMES: Dict[str, str] = {
+    "de": "German",
+    "en": "English",
+    "ru": "Russian",
+    "uk": "Ukrainian",
+    "es": "Spanish",
+    "fr": "French",
+    "it": "Italian",
+    "zh": "Chinese",
+    "ja": "Japanese",
+}
+
+
+def resolve_project_deck_path(
+    project_id: int,
+    db: Any,
+    language: Optional[str] = None,
+) -> str:
+    """
+    Resolves recursive project ancestral path from root to node and formats
+    hierarchical deck name (e.g. Language::Book::Volume::Chapter).
+    """
+    path_nodes = db.get_project_path(project_id)
+    titles = [n["title"] for n in path_nodes if n.get("title")]
+
+    parts = []
+    if language:
+        lang_name = LANGUAGE_NAMES.get(language.lower(), language.capitalize())
+        parts.append(lang_name)
+    parts.extend(titles)
+
+    return "::".join(parts) if parts else (language or "Default")
+
+
+def synthesize_project_deck_descriptions(
+    project_id: int,
+    db: Any,
+    language: Optional[str] = None,
+) -> Dict[str, str]:
+    """
+    Traverses project subtree and maps hierarchical deck paths to node descriptions
+    for companion anki-csv-importer metadata JSON.
+    """
+    descriptions: Dict[str, str] = {}
+    trees = db.get_project_tree(project_id)
+
+    def _traverse(node: Dict[str, Any]):
+        p_id = node["id"]
+        deck_path = resolve_project_deck_path(p_id, db, language=language)
+        desc = node.get("description")
+        if desc:
+            descriptions[deck_path] = desc
+        for child in node.get("children", []):
+            _traverse(child)
+
+    for root_node in trees:
+        _traverse(root_node)
+
+    return descriptions
+
+
+def aggregate_project_materials(
+    project_id: int,
+    config: Optional[Any] = None,
+    resolved_paths: Optional[Dict[str, Any]] = None,
+    language: Optional[str] = None,
+    export_all: bool = False,
+    zid: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Bottom-up material aggregator collecting selected words across all sessions
+    in a project and its subprojects ordered sequentially by order_index.
+    Synthesizes both a consolidated hierarchical TSV and deck description JSON.
+    """
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths)
+
+    project = db.get_project(project_id)
+    if not project:
+        raise StructuredError(ErrorCode.NOT_FOUND, f"Project with ID '{project_id}' not found.")
+
+    trees = db.get_project_tree(project_id)
+    if not trees:
+        raise StructuredError(ErrorCode.NOT_FOUND, f"No project tree found for ID '{project_id}'.")
+
+    lang = language or (config.get(SEC_SETTINGS, "default_language", fallback="en") if config and hasattr(config, "get") else "en")
+
+    all_data_rows: List[List[str]] = []
+    headers: List[str] = []
+    total_sessions = 0
+
+    def _collect(node: Dict[str, Any]):
+        nonlocal headers, total_sessions
+        p_id = node["id"]
+        deck_path = resolve_project_deck_path(p_id, db, language=lang)
+        sessions = db.get_project_sessions(p_id)
+
+        for sess in sessions:
+            s_zid = sess["session_zid"]
+            restored = adapter.restore_session(s_zid)
+            if not headers and restored.get("headers"):
+                headers = list(restored["headers"])
+
+            sess_rows = restored.get("data_rows", [])
+            sel_idx = headers.index("DeskSelected") if "DeskSelected" in headers else -1
+            deck_idx = headers.index("Deck") if "Deck" in headers else -1
+
+            for row in sess_rows:
+                is_selected = (
+                    sel_idx != -1
+                    and len(row) > sel_idx
+                    and str(row[sel_idx]).strip() in ("1", "true", "True")
+                )
+                if export_all or is_selected:
+                    row_copy = list(row)
+                    if sel_idx != -1:
+                        if len(row_copy) > sel_idx:
+                            row_copy[sel_idx] = "1"
+                        else:
+                            row_copy.extend([""] * (sel_idx - len(row_copy) + 1))
+                            row_copy[sel_idx] = "1"
+                    if deck_idx != -1:
+                        if len(row_copy) > deck_idx:
+                            row_copy[deck_idx] = deck_path
+                        else:
+                            row_copy.extend([""] * (deck_idx - len(row_copy) + 1))
+                            row_copy[deck_idx] = deck_path
+                    all_data_rows.append(row_copy)
+
+            total_sessions += 1
+
+        for child in node.get("children", []):
+            _collect(child)
+
+    for root_node in trees:
+        _collect(root_node)
+
+    if not headers:
+        headers = [
+            "Quotation", "WordSource", "WordSource2", "WordSourceInflectedForm", "WordSourceInflectedForm2",
+            "WordDestination", "WordDestinationInflectedForm", "WordSourceContext", "SentenceSourceContextLeft",
+            "SentenceSource", "SentenceSourceContextRight", "SentenceDestinationContextLeft", "SentenceDestination",
+            "SentenceDestinationContextRight", "SentenceDestination2ContextLeft", "SentenceDestination2",
+            "SentenceDestination2ContextRight", "SentenceSourceWordlist", "SentenceSourceCloze",
+            "SentenceSourceRewriteAISentenceSource", "SentenceSourceRewriteAISentenceDestination",
+            "WordSourceMorphologyAI", "Note", "WordRussian", "WordUkrainian", "WordEnglish", "WordGerman",
+            "WordSourceMorphemeFirst", "WordSourceMorphemeFirstDefinition", "WordSourceMorphemeSecond",
+            "WordSourceMorphemeSecondDefinition", "WordSourceMorphemeThird", "WordSourceMorphemeThirdDefinition",
+            "WordSourceMorphemeFourth", "WordSourceMorphemeFourthDefinition", "WordSourceMorphemeFifth",
+            "WordSourceMorphemeFifthDefinition", "WordSourceIPA", "WordSourceSynonymAI",
+            "WordSourceDefinitionAISentenceSource", "WordSourceDefinitionAISentenceDestination",
+            "WordSourceDefinitionFirst", "WordSourceDefinitionFirstClipping", "WordSourceDefinitionSecond",
+            "WordDestinationDefinitionFirst", "WordDestinationDefinitionSecond", "WordSourceAudio",
+            "SentenceSourceIPA", "SentenceSourceAudio", "Image", "WordSourceCloze", "WordSourceContextAI",
+            "TextSource", "TextDestination", "TextSourceURL", "SentenceEnglish", "SentenceGerman",
+            "SentenceUkrainian", "SentenceRussian", "Source", "SourceURL", "SeparatorAudio",
+            "Source-en-GB", "Source-en-US", "Source-de-DE", "Source-uk-UA", "Source-ru-RU",
+            "Destination-en-GB", "Destination-en-US", "Destination-de-DE", "Destination-uk-UA",
+            "Destination-ru-RU", "Overlapping", "ToggleAlwaysEmptyField", "Note ID",
+            "am-all-morphs", "am-all-morphs-count", "am-unknown-morphs", "am-unknown-morphs-count",
+            "am-highlighted", "am-score", "am-score-terms", "am-study-morphs",
+            "SentenceSourceIndex", "Deck", "LeitnerBox", "LeitnerDue", "DeskSelected",
+            "ClassificationOxford", "ClassificationGoethe",
+        ]
+
+    # Destination directories
+    fav_dir = Path(resolved_paths.get("favorites_output_dir") if resolved_paths else "favorites")
+    fav_dir.mkdir(parents=True, exist_ok=True)
+
+    slug = project.get("slug") or f"project_{project_id}"
+    base_filename = f"{project_id}-{slug}.{lang}"
+    tsv_dest = fav_dir / f"{base_filename}.tsv"
+    json_dest = fav_dir / f"{base_filename}.json"
+
+    # 1. Save TSV
+    comments = [f"# Aggregated Project Deck: {project.get('title')} (ID: {project_id})"]
+    save_tsv_rows_safely(tsv_dest, comments, headers, all_data_rows)
+
+    # 2. Synthesize Deck Descriptions JSON
+    deck_descriptions = synthesize_project_deck_descriptions(project_id, db, language=lang)
+    metadata = {
+        "deck_descriptions": deck_descriptions,
+        "project_id": project_id,
+        "project_title": project.get("title"),
+        "project_slug": slug,
+        "language": lang,
+        "total_sessions": total_sessions,
+        "total_words": len(all_data_rows),
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    json_dest.write_text(json.dumps(metadata, indent=2, ensure_ascii=False), encoding="utf-8")
+
+    return {
+        "ok": True,
+        "project_id": project_id,
+        "project_title": project.get("title"),
+        "language": lang,
+        "tsv_path": str(tsv_dest),
+        "json_path": str(json_dest),
+        "total_sessions": total_sessions,
+        "total_words": len(all_data_rows),
+        "deck_descriptions": deck_descriptions,
+    }
 
 
 class StorageRouter:
@@ -14036,29 +14263,253 @@ def migrate_tsvs_to_db(results_dir: Path, config=None, resolved_paths=None, zid:
     }
 
 
-def cmd_migrate_tsvs_to_db(args):
+def cmd_create_project(args):
     config_path = getattr(args, 'config', None)
     config, resolved_paths, _, _ = load_config(config_path)
-    kardenwort_workspace = resolved_paths.get('kardenwort_workspace')
-    kw_config = load_kardenwort_config(kardenwort_workspace) if kardenwort_workspace else None
-    results_dir = resolve_results_dir(resolved_paths, kw_config)
+    from kardenwort_db import KardenwortDB, QuerySecurityError
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
 
+    title = getattr(args, 'title', None)
+    if not title:
+        print_structured_error("INVALID_STATE", "Missing required --title for project creation")
+        sys.exit(1)
+
+    slug = getattr(args, 'slug', None)
+    parent_id = getattr(args, 'parent_id', None)
+    description = getattr(args, 'description', '') or ''
+    order_index = getattr(args, 'order_index', None)
     zid = getattr(args, 'zid', None)
-    res = migrate_tsvs_to_db(results_dir, config=config, resolved_paths=resolved_paths, zid=zid)
+
+    try:
+        project_id = db.create_project(
+            title=title,
+            slug=slug,
+            parent_id=parent_id,
+            description=description,
+            order_index=order_index,
+            zid=zid,
+        )
+        created_project = db.get_project(project_id)
+        res = {
+            "ok": True,
+            "project_id": project_id,
+            "project": created_project,
+            "message": f"Project '{title}' (ID: {project_id}) created successfully.",
+        }
+        if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+            out_str = json.dumps(res, indent=2, ensure_ascii=False)
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(out_str + "\n")
+                sys.__stdout__.flush()
+            else:
+                print(out_str)
+        else:
+            print(res["message"])
+        sys.exit(0)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to create project: {e}")
+        sys.exit(1)
+
+
+def cmd_list_projects(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+
+    parent_id = getattr(args, 'parent_id', "all")
+    include_deleted = getattr(args, 'include_deleted', False)
+    as_tree = getattr(args, 'tree', False)
+    zid = getattr(args, 'zid', None)
+
+    if as_tree:
+        p_id = int(parent_id) if parent_id not in ("all", None) else None
+        data = db.get_project_tree(project_id=p_id, include_deleted=include_deleted, zid=zid)
+    else:
+        p_id = int(parent_id) if parent_id not in ("all", None) else parent_id
+        data = db.list_projects(parent_id=p_id, include_deleted=include_deleted, zid=zid)
 
     if getattr(args, 'json_output', False) or getattr(args, 'json', False):
-        out_str = json.dumps(res, indent=2)
+        out_str = json.dumps(data, indent=2, ensure_ascii=False)
         if sys.__stdout__ is not None:
             sys.__stdout__.write(out_str + "\n")
             sys.__stdout__.flush()
         else:
             print(out_str)
     else:
-        print(f"Scanned {res['scanned_files']} files: {res['migrated_sessions']} migrated, {res['skipped_sessions']} skipped, {res['total_sentences']} sentences, {res['total_words']} words.")
-        if res.get('errors'):
-            for err in res['errors']:
-                print(f"Error migrating {err['file']}: {err['error']}")
-    sys.exit(0 if res["ok"] else 1)
+        if not data:
+            print("No projects found.")
+        else:
+            if as_tree:
+                def _print_node(node, level=0):
+                    indent = "  " * level
+                    print(f"{indent}- [{node['id']}] {node['title']} (slug: {node['slug']}, sessions: {len(node.get('sessions', []))})")
+                    for child in node.get("children", []):
+                        _print_node(child, level + 1)
+                for root in data:
+                    _print_node(root)
+            else:
+                header = f"{'ID':<6} {'PARENT':<8} {'ORDER':<6} {'SLUG':<20} {'TITLE'}"
+                print(header)
+                print("-" * len(header))
+                for p in data:
+                    parent_str = str(p.get('parent_id') or '-')
+                    print(f"{p.get('id', ''):<6} {parent_str:<8} {p.get('order_index', 0):<6} {p.get('slug', ''):<20} {p.get('title', '')}")
+    sys.exit(0)
+
+
+def cmd_link_session(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+
+    project_id = getattr(args, 'project_id', None)
+    session_zid = getattr(args, 'session_zid', None) or getattr(args, 'zid', None)
+
+    if project_id is None:
+        print_structured_error("INVALID_STATE", "Missing required --project-id for session linking")
+        sys.exit(1)
+    if not session_zid:
+        print_structured_error("INVALID_STATE", "Missing required --session-zid / --zid for session linking")
+        sys.exit(1)
+
+    order_index = getattr(args, 'order_index', None)
+    zid = getattr(args, 'zid', None)
+
+    try:
+        ok = db.link_session_to_project(
+            project_id=int(project_id),
+            session_zid=str(session_zid).strip(),
+            order_index=int(order_index) if order_index is not None else None,
+            zid=zid,
+        )
+        res = {
+            "ok": ok,
+            "project_id": int(project_id),
+            "session_zid": str(session_zid).strip(),
+            "message": f"Session '{session_zid}' linked to project {project_id} successfully." if ok else "Failed to link session.",
+        }
+        if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+            out_str = json.dumps(res, indent=2)
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(out_str + "\n")
+                sys.__stdout__.flush()
+            else:
+                print(out_str)
+        else:
+            print(res["message"])
+        sys.exit(0 if ok else 1)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to link session to project: {e}")
+        sys.exit(1)
+
+
+def cmd_reorder_session(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+
+    project_id = getattr(args, 'project_id', None)
+    if project_id is None:
+        print_structured_error("INVALID_STATE", "Missing required --project-id for session reordering")
+        sys.exit(1)
+
+    raw_zids = getattr(args, 'session_zids', None)
+    if not raw_zids:
+        print_structured_error("INVALID_STATE", "Missing required --session-zids for session reordering")
+        sys.exit(1)
+
+    if isinstance(raw_zids, str):
+        session_zids = [z.strip() for z in raw_zids.split(",") if z.strip()]
+    else:
+        session_zids = list(raw_zids)
+
+    zid = getattr(args, 'zid', None)
+
+    try:
+        ok = db.reorder_project_sessions(
+            project_id=int(project_id),
+            session_zids=session_zids,
+            zid=zid,
+        )
+        res = {
+            "ok": ok,
+            "project_id": int(project_id),
+            "session_zids": session_zids,
+            "message": f"Reordered {len(session_zids)} session(s) in project {project_id} successfully." if ok else "Failed to reorder sessions.",
+        }
+        if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+            out_str = json.dumps(res, indent=2)
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(out_str + "\n")
+                sys.__stdout__.flush()
+            else:
+                print(out_str)
+        else:
+            print(res["message"])
+        sys.exit(0 if ok else 1)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to reorder project sessions: {e}")
+        sys.exit(1)
+
+
+def cmd_export_project_deck(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+
+    project_id = getattr(args, 'project_id', None)
+    if project_id is None:
+        print_structured_error("INVALID_STATE", "Missing required --project-id for export-project-deck")
+        sys.exit(1)
+
+    lang = getattr(args, 'language', None)
+    send_to_anki = getattr(args, 'send_to_anki', False)
+    zid = getattr(args, 'zid', None)
+
+    try:
+        result = aggregate_project_materials(
+            project_id=int(project_id),
+            config=config,
+            resolved_paths=resolved_paths,
+            language=lang,
+            zid=zid,
+        )
+
+        if send_to_anki:
+            tsv_path = Path(result["tsv_path"])
+            json_path = Path(result["json_path"])
+            pid, log_path = run_detached_import(
+                tsv_path,
+                config,
+                resolved_paths,
+                zid=zid or f"project_{project_id}",
+                trace_id=f"project:{project_id}:export",
+            )
+            result["anki_import_started"] = True
+            result["pid"] = pid
+            result["log"] = log_path
+
+        if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+            out_str = json.dumps(result, indent=2, ensure_ascii=False)
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(out_str + "\n")
+                sys.__stdout__.flush()
+            else:
+                print(out_str)
+        else:
+            print(f"Exported project '{result['project_title']}' (ID: {project_id}) to:")
+            print(f"  TSV:  {result['tsv_path']}")
+            print(f"  JSON: {result['json_path']}")
+            print(f"  Total sessions: {result['total_sessions']}, Total words: {result['total_words']}")
+        sys.exit(0)
+    except StructuredError as se:
+        print_structured_error(se.error_code, se.message, se.details)
+        sys.exit(1)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Failed to export project deck: {e}")
+        sys.exit(1)
 
 
 def main():
@@ -14082,8 +14533,60 @@ def main():
     parser.add_argument("--older-than", type=float, default=None, help="Retention period in days for cleanup-db")
     parser.add_argument("--vacuum-db", action="store_true", help="Defragment and vacuum SQLite database")
     parser.add_argument("--migrate-tsvs-to-db", action="store_true", help="Migrate historical TSVs in results/ to SQLite DB")
+    parser.add_argument("--create-project", action="store_true", help="Create a project node")
+    parser.add_argument("--list-projects", action="store_true", help="List projects or project tree")
+    parser.add_argument("--link-session", action="store_true", help="Link session to project")
+    parser.add_argument("--reorder-session", action="store_true", help="Reorder sessions in project")
+    parser.add_argument("--export-project-deck", action="store_true", help="Export aggregated project deck")
+    parser.add_argument("--title", default=None, help="Project title")
+    parser.add_argument("--slug", default=None, help="Project slug")
+    parser.add_argument("--parent-id", type=int, default=None, help="Parent project ID")
+    parser.add_argument("--project-id", type=int, default=None, help="Target project ID")
+    parser.add_argument("--session-zid", default=None, help="Session ZID for project linking")
+    parser.add_argument("--session-zids", nargs="+", default=None, help="Session ZIDs for project reordering")
+    parser.add_argument("--description", default=None, help="Project description")
+    parser.add_argument("--order-index", type=int, default=None, help="Explicit order index")
+    parser.add_argument("--tree", action="store_true", help="Display projects as tree")
+    parser.add_argument("--include-deleted", action="store_true", help="Include soft-deleted records")
+    parser.add_argument("--send-to-anki", action="store_true", help="Send exported deck directly to Anki")
 
     subparsers = parser.add_subparsers(dest="command", required=False)
+
+    # create-project
+    p_create_proj = subparsers.add_parser("create-project")
+    p_create_proj.add_argument("--title", required=True, help="Project title")
+    p_create_proj.add_argument("--slug", default=None, help="Project slug")
+    p_create_proj.add_argument("--parent-id", type=int, default=None, help="Parent project ID")
+    p_create_proj.add_argument("--description", default="", help="Project description")
+    p_create_proj.add_argument("--order-index", type=int, default=None, help="Order index")
+    p_create_proj.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # list-projects
+    p_list_proj = subparsers.add_parser("list-projects")
+    p_list_proj.add_argument("--parent-id", type=int, default=None, help="Parent project ID filter")
+    p_list_proj.add_argument("--tree", action="store_true", help="Display as hierarchical tree")
+    p_list_proj.add_argument("--include-deleted", action="store_true", help="Include soft-deleted projects")
+    p_list_proj.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # link-session
+    p_link_sess = subparsers.add_parser("link-session")
+    p_link_sess.add_argument("--project-id", type=int, required=True, help="Project ID")
+    p_link_sess.add_argument("--session-zid", "--zid", dest="session_zid", required=True, help="Session ZID")
+    p_link_sess.add_argument("--order-index", type=int, default=None, help="Order index")
+    p_link_sess.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # reorder-session
+    p_reorder_sess = subparsers.add_parser("reorder-session")
+    p_reorder_sess.add_argument("--project-id", type=int, required=True, help="Project ID")
+    p_reorder_sess.add_argument("--session-zids", nargs="+", required=True, help="Ordered session ZIDs")
+    p_reorder_sess.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # export-project-deck
+    p_export_proj = subparsers.add_parser("export-project-deck")
+    p_export_proj.add_argument("--project-id", type=int, required=True, help="Project ID")
+    p_export_proj.add_argument("--language", default=None, help="Language code")
+    p_export_proj.add_argument("--send-to-anki", action="store_true", help="Send to Anki after export")
+    p_export_proj.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
     # db-status
     p_db_status = subparsers.add_parser("db-status")
@@ -14313,6 +14816,21 @@ def main():
     if getattr(args, 'migrate_tsvs_to_db', False):
         cmd_migrate_tsvs_to_db(args)
         return
+    if getattr(args, 'create_project', False):
+        cmd_create_project(args)
+        return
+    if getattr(args, 'list_projects', False):
+        cmd_list_projects(args)
+        return
+    if getattr(args, 'link_session', False):
+        cmd_link_session(args)
+        return
+    if getattr(args, 'reorder_session', False):
+        cmd_reorder_session(args)
+        return
+    if getattr(args, 'export_project_deck', False):
+        cmd_export_project_deck(args)
+        return
 
     commands = {
         "lookup": cmd_lookup,
@@ -14341,6 +14859,11 @@ def main():
         "cleanup-db": cmd_cleanup_db,
         "vacuum-db": cmd_vacuum_db,
         "migrate-tsvs-to-db": cmd_migrate_tsvs_to_db,
+        "create-project": cmd_create_project,
+        "list-projects": cmd_list_projects,
+        "link-session": cmd_link_session,
+        "reorder-session": cmd_reorder_session,
+        "export-project-deck": cmd_export_project_deck,
     }
 
     if not getattr(args, 'command', None):
