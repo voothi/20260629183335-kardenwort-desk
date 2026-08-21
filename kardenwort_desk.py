@@ -1827,7 +1827,10 @@ def load_config(config_path=None):
 
 def load_kardenwort_config(kardenwort_workspace):
     kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
-    kw_config.read(kardenwort_workspace / "config.ini", encoding='utf-8')
+    if kardenwort_workspace:
+        kw_config.read(Path(kardenwort_workspace) / "config.ini", encoding='utf-8')
+    return kw_config
+
 def resolve_results_dir(resolved_paths, kw_config):
     if not isinstance(resolved_paths, dict):
         return Path('results').resolve()
@@ -6176,7 +6179,7 @@ html, body {{
     dynamic_roles = []
     desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
     
-    if desk_classification_enabled and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
+    if desk_classification_enabled and kw_config is not None and hasattr(kw_config, 'has_section') and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
         if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{language}'):
             dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{language}', fallback='')
         else:
