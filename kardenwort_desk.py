@@ -14263,6 +14263,31 @@ def migrate_tsvs_to_db(results_dir: Path, config=None, resolved_paths=None, zid:
     }
 
 
+def cmd_migrate_tsvs_to_db(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    kardenwort_workspace = resolved_paths.get('kardenwort_workspace')
+    kw_config = load_kardenwort_config(kardenwort_workspace) if kardenwort_workspace else None
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
+
+    zid = getattr(args, 'zid', None)
+    res = migrate_tsvs_to_db(results_dir, config=config, resolved_paths=resolved_paths, zid=zid)
+
+    if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+        out_str = json.dumps(res, indent=2)
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(out_str + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(out_str)
+    else:
+        print(f"Scanned {res['scanned_files']} files: {res['migrated_sessions']} migrated, {res['skipped_sessions']} skipped, {res['total_sentences']} sentences, {res['total_words']} words.")
+        if res.get('errors'):
+            for err in res['errors']:
+                print(f"Error migrating {err['file']}: {err['error']}")
+    sys.exit(0 if res["ok"] else 1)
+
+
 def cmd_create_project(args):
     config_path = getattr(args, 'config', None)
     config, resolved_paths, _, _ = load_config(config_path)
