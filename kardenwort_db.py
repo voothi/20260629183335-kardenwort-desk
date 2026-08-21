@@ -878,14 +878,14 @@ class KardenwortDB:
     ) -> List[Dict[str, Any]]:
         """
         Returns words for a session (optionally filtered by sentence_index)
-        ordered by sentence_index ASC, token_order ASC.
+        ordered by token_order ASC, id ASC.
         """
         sql = "SELECT * FROM words WHERE session_zid = ?"
         params: List[Any] = [session_zid]
         if sentence_index is not None:
             sql += " AND sentence_index = ?"
             params.append(sentence_index)
-        sql += " ORDER BY sentence_index ASC, token_order ASC;"
+        sql += " ORDER BY token_order ASC, id ASC;"
 
         with self.get_connection(read_only=True, zid=zid) as conn:
             cursor = conn.cursor()

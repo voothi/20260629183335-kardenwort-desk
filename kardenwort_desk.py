@@ -17,6 +17,7 @@ import html
 import socket
 import threading
 import time
+import functools
 import traceback
 import urllib.request
 import urllib.error
@@ -1827,16 +1828,31 @@ def load_config(config_path=None):
 def load_kardenwort_config(kardenwort_workspace):
     kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     kw_config.read(kardenwort_workspace / "config.ini", encoding='utf-8')
-    return kw_config
-
 def resolve_results_dir(resolved_paths, kw_config):
-    if 'generated_results_dir' in resolved_paths:
-        return resolved_paths['generated_results_dir']
-    kardenwort_workspace = resolved_paths['kardenwort_workspace']
-    results_dir_name = kw_config.get(SEC_PROJECT_STRUCTURE, 'generated_results_dir', fallback='results')
-    return (kardenwort_workspace / results_dir_name).resolve()
+    if not isinstance(resolved_paths, dict):
+        return Path('results').resolve()
+    if 'generated_results_dir' in resolved_paths and resolved_paths['generated_results_dir']:
+        return Path(resolved_paths['generated_results_dir']).resolve()
+    if 'results_dir' in resolved_paths and resolved_paths['results_dir']:
+        return Path(resolved_paths['results_dir']).resolve()
+    if 'kardenwort_workspace' in resolved_paths and resolved_paths['kardenwort_workspace']:
+        kardenwort_workspace = Path(resolved_paths['kardenwort_workspace'])
+        results_dir_name = kw_config.get(SEC_PROJECT_STRUCTURE, 'generated_results_dir', fallback='results') if kw_config and hasattr(kw_config, 'get') else 'results'
+        return (kardenwort_workspace / results_dir_name).resolve()
+    if 'base_dir' in resolved_paths and resolved_paths['base_dir']:
+        return (Path(resolved_paths['base_dir']) / 'results').resolve()
+    return Path('results').resolve()
+
+@functools.lru_cache(maxsize=32)
+def _load_anki_mapping_cached(mapping_str: str):
+    mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
+    mapping.optionxform = str # Preserve case for Anki field names!
+    mapping.read(mapping_str, encoding='utf-8')
+    return mapping
 
 def load_anki_mapping(mapping_path):
+    if isinstance(mapping_path, (str, Path)):
+        return _load_anki_mapping_cached(str(mapping_path))
     mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     mapping.optionxform = str # Preserve case for Anki field names!
     mapping.read(mapping_path, encoding='utf-8')
@@ -2103,6 +2119,14 @@ class StorageAdapter:
     ) -> Optional[Any]:
         raise NotImplementedError
 
+    def restore_session(
+        self,
+        zid: str,
+        results_dir: Optional[Path] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        raise NotImplementedError
+
     def save_tsv_rows_safely(
         self,
         tsv_path: Path,
@@ -2175,6 +2199,62 @@ class TsvStorageAdapter(StorageAdapter):
                 "tsv_path": working_tsv_path,
             }
         return None
+
+    def restore_session(
+        self,
+        zid: str,
+        results_dir: Optional[Path] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if not zid or str(zid).strip() in ("", "00000000000000"):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid session ZID '{zid}' for session restoration.",
+            )
+
+        target_dir = results_dir
+        if not target_dir:
+            if self.resolved_paths and "results_dir" in self.resolved_paths:
+                target_dir = Path(self.resolved_paths["results_dir"])
+            elif self.resolved_paths and "base_dir" in self.resolved_paths:
+                target_dir = Path(self.resolved_paths["base_dir"]) / "results"
+            else:
+                target_dir = Path("results")
+
+        tsv_files = list(target_dir.glob(f"{zid}-*.tsv")) if target_dir.exists() else []
+        if not tsv_files and target_dir.exists():
+            tsv_files = list(target_dir.glob(f"{zid}*.tsv"))
+
+        if not tsv_files:
+            raise StructuredError(
+                ErrorCode.NOT_FOUND,
+                f"Legacy session TSV for ZID '{zid}' not found in {target_dir}.",
+            )
+
+        tsv_path = tsv_files[0]
+        comments, headers, data_rows = self.load_tsv_rows(tsv_path)
+
+        txt_files = list(target_dir.glob(f"{zid}-*.txt")) if target_dir.exists() else []
+        if not txt_files and target_dir.exists():
+            txt_files = list(target_dir.glob(f"{zid}*.txt"))
+        txt_path = txt_files[0] if txt_files else None
+
+        source_text = ""
+        if txt_path and txt_path.exists():
+            try:
+                source_text = txt_path.read_text(encoding="utf-8")
+            except Exception:
+                pass
+
+        return {
+            "session_zid": zid,
+            "source_text": source_text,
+            "comments": comments,
+            "headers": headers,
+            "data_rows": data_rows,
+            "tsv_path": tsv_path,
+            "txt_path": txt_path,
+        }
 
     def get_cached_session(
         self,
@@ -2350,12 +2430,15 @@ class SqliteStorageAdapter(StorageAdapter):
             col_sent_aud = headers_lower.get("sentencesourceaudio")
 
             known_word_cols = {
-                "quotation", "wordsource", "wordsource2", "wordsourceinflectedform",
-                "wordsourceinflectedform2", "worddestination", "worddestinationinflectedform",
+                "quotation", "wordsource", "wordsourceinflectedform",
+                "worddestination", "worddestinationinflectedform",
                 "wordsourcemorphologyai", "wordsourceipa", "deskselected", "leitnerbox",
                 "leitnerdue", "deck", "classificationoxford", "classificationgoethe",
                 "sentencesourceindex", "sentencesource", "sentencedestination",
                 "sentencedestination2", "sentencesourceipa", "sentencesourceaudio",
+                "sentencesourcecontextleft", "sentencesourcecontextright",
+                "sentencedestinationcontextleft", "sentencedestinationcontextright",
+                "sentencedestination2contextleft", "sentencedestination2contextright",
             }
 
             sent_map: Dict[int, Dict[str, Any]] = {}
@@ -2432,12 +2515,13 @@ class SqliteStorageAdapter(StorageAdapter):
             norm_sentences = list(sent_map.values())
             norm_words = word_list
 
-        self.db.save_session_bundle(
-            session=session_record,
-            sentences=norm_sentences,
-            words=norm_words,
-            zid=zid or session_zid,
-        )
+        with TraceTimer("sqlite_save", session_zid, self.config, self.resolved_paths):
+            self.db.save_session_bundle(
+                session=session_record,
+                sentences=norm_sentences,
+                words=norm_words,
+                zid=zid or session_zid,
+            )
 
         # Also write TSV file for flat-file parity / tooling compatibility
         if working_tsv_path and headers is not None and data_rows is not None:
@@ -2458,6 +2542,242 @@ class SqliteStorageAdapter(StorageAdapter):
         if working_tsv_path and working_tsv_path.exists():
             return self._tsv_fallback.load_session(session_zid, working_tsv_path=working_tsv_path, zid=zid)
         return None
+
+    def restore_session(
+        self,
+        zid: str,
+        results_dir: Optional[Path] = None,
+        **kwargs,
+    ) -> Dict[str, Any]:
+        if not zid or str(zid).strip() in ("", "00000000000000"):
+            raise StructuredError(
+                ErrorCode.INVALID_STATE,
+                f"Invalid session ZID '{zid}' for SQLite session restoration.",
+            )
+
+        with TraceTimer("sqlite_restore", zid, self.config, self.resolved_paths):
+            bundle = self.db.get_session_bundle(zid, parse_json=True, zid=zid)
+
+            if not bundle or not bundle.get("session"):
+                fallback = True
+                if self.resolved_paths and "storage_fallback_to_tsv" in self.resolved_paths:
+                    fallback = self.resolved_paths["storage_fallback_to_tsv"]
+                elif self.config and hasattr(self.config, "getboolean"):
+                    fallback = self.config.getboolean(SEC_STORAGE, "fallback_to_tsv", fallback=True)
+
+                if fallback:
+                    logger.info(f"Session ZID '{zid}' not found in SQLite. Falling back to legacy TSV.")
+                    return self._tsv_fallback.restore_session(zid, results_dir=results_dir, **kwargs)
+                else:
+                    raise StructuredError(
+                        ErrorCode.NOT_FOUND,
+                        f"Session with ZID '{zid}' not found in SQLite database.",
+                    )
+
+            session = bundle["session"]
+            db_sentences = bundle.get("sentences", [])
+            db_words = bundle.get("words", [])
+
+            source_text = session.get("source_raw_text", "")
+            comments = [f"# Restored from SQLite session {zid}"]
+
+            # Load headers from anki-mapping.ini [fields]
+            headers = []
+            mapping_path = None
+            if self.resolved_paths and "anki_mapping_file" in self.resolved_paths:
+                mapping_path = Path(self.resolved_paths["anki_mapping_file"])
+            elif self.config and hasattr(self.config, "get"):
+                raw_mp = self.config.get(SEC_SETTINGS, "anki_mapping_file", fallback="./anki-mapping.ini")
+                mapping_path = Path(raw_mp)
+
+            if mapping_path and mapping_path.exists():
+                try:
+                    mapping = load_anki_mapping(mapping_path)
+                    if "fields" in mapping:
+                        headers = list(mapping["fields"].keys())
+                except Exception:
+                    pass
+
+            if not headers:
+                headers = [
+                    "Quotation", "WordSource", "WordSource2", "WordSourceInflectedForm", "WordSourceInflectedForm2",
+                    "WordDestination", "WordDestinationInflectedForm", "WordSourceContext", "SentenceSourceContextLeft",
+                    "SentenceSource", "SentenceSourceContextRight", "SentenceDestinationContextLeft", "SentenceDestination",
+                    "SentenceDestinationContextRight", "SentenceDestination2ContextLeft", "SentenceDestination2",
+                    "SentenceDestination2ContextRight", "SentenceSourceWordlist", "SentenceSourceCloze",
+                    "SentenceSourceRewriteAISentenceSource", "SentenceSourceRewriteAISentenceDestination",
+                    "WordSourceMorphologyAI", "Note", "WordRussian", "WordUkrainian", "WordEnglish", "WordGerman",
+                    "WordSourceMorphemeFirst", "WordSourceMorphemeFirstDefinition", "WordSourceMorphemeSecond",
+                    "WordSourceMorphemeSecondDefinition", "WordSourceMorphemeThird", "WordSourceMorphemeThirdDefinition",
+                    "WordSourceMorphemeFourth", "WordSourceMorphemeFourthDefinition", "WordSourceMorphemeFifth",
+                    "WordSourceMorphemeFifthDefinition", "WordSourceIPA", "WordSourceSynonymAI",
+                    "WordSourceDefinitionAISentenceSource", "WordSourceDefinitionAISentenceDestination",
+                    "WordSourceDefinitionFirst", "WordSourceDefinitionFirstClipping", "WordSourceDefinitionSecond",
+                    "WordDestinationDefinitionFirst", "WordDestinationDefinitionSecond", "WordSourceAudio",
+                    "SentenceSourceIPA", "SentenceSourceAudio", "Image", "WordSourceCloze", "WordSourceContextAI",
+                    "TextSource", "TextDestination", "TextSourceURL", "SentenceEnglish", "SentenceGerman",
+                    "SentenceUkrainian", "SentenceRussian", "Source", "SourceURL", "SeparatorAudio",
+                    "Source-en-GB", "Source-en-US", "Source-de-DE", "Source-uk-UA", "Source-ru-RU",
+                    "Destination-en-GB", "Destination-en-US", "Destination-de-DE", "Destination-uk-UA",
+                    "Destination-ru-RU", "Overlapping", "ToggleAlwaysEmptyField", "Note ID",
+                    "am-all-morphs", "am-all-morphs-count", "am-unknown-morphs", "am-unknown-morphs-count",
+                    "am-highlighted", "am-score", "am-score-terms", "am-study-morphs",
+                    "SentenceSourceIndex", "Deck", "LeitnerBox", "LeitnerDue", "DeskSelected",
+                    "ClassificationOxford", "ClassificationGoethe",
+                ]
+
+            # Preserve and append any unmapped custom columns found in extra_fields
+            extra_headers = []
+            for word in db_words:
+                ef = word.get("extra_fields")
+                if isinstance(ef, str):
+                    try:
+                        ef = json.loads(ef)
+                    except Exception:
+                        ef = {}
+                if isinstance(ef, dict):
+                    for k in ef.keys():
+                        if not any(h.lower() == k.lower() for h in headers) and not any(eh.lower() == k.lower() for eh in extra_headers):
+                            extra_headers.append(k)
+            headers.extend(extra_headers)
+
+            # Dynamic Context Reconstruction
+            context_window_left = 1
+            context_window_right = 1
+            if self.config and hasattr(self.config, "getint"):
+                try:
+                    context_window_left = max(1, self.config.getint(SEC_SETTINGS, "context_window_left", fallback=1))
+                except Exception:
+                    context_window_left = 1
+                try:
+                    context_window_right = max(1, self.config.getint(SEC_SETTINGS, "context_window_right", fallback=1))
+                except Exception:
+                    context_window_right = 1
+
+            sentences_by_idx = {row["sentence_index"]: row for row in db_sentences}
+            sorted_sent_indices = sorted(sentences_by_idx.keys()) if sentences_by_idx else [1]
+            max_s_idx = sorted_sent_indices[-1] if sorted_sent_indices else 1
+            min_s_idx = sorted_sent_indices[0] if sorted_sent_indices else 1
+
+            data_rows = []
+            for word in db_words:
+                s_idx = word.get("sentence_index", 1)
+                sent_record = sentences_by_idx.get(s_idx, {})
+
+                left_indices = [j for j in range(max(min_s_idx, s_idx - context_window_left), s_idx) if j in sentences_by_idx]
+                right_indices = [j for j in range(s_idx + 1, min(max_s_idx + 1, s_idx + context_window_right + 1)) if j in sentences_by_idx]
+
+                src_left_parts = [sentences_by_idx[j]["sentence_source"] for j in left_indices if sentences_by_idx[j].get("sentence_source")]
+                src_right_parts = [sentences_by_idx[j]["sentence_source"] for j in right_indices if sentences_by_idx[j].get("sentence_source")]
+
+                dst_left_parts = [sentences_by_idx[j]["sentence_destination"] for j in left_indices if sentences_by_idx[j].get("sentence_destination")]
+                dst_right_parts = [sentences_by_idx[j]["sentence_destination"] for j in right_indices if sentences_by_idx[j].get("sentence_destination")]
+
+                dst2_left_parts = [sentences_by_idx[j]["sentence_destination2"] for j in left_indices if sentences_by_idx[j].get("sentence_destination2")]
+                dst2_right_parts = [sentences_by_idx[j]["sentence_destination2"] for j in right_indices if sentences_by_idx[j].get("sentence_destination2")]
+
+                src_left = " ".join(src_left_parts)
+                src_right = " ".join(src_right_parts)
+                src_curr = sent_record.get("sentence_source") or ""
+
+                dst_left = " ".join(dst_left_parts)
+                dst_right = " ".join(dst_right_parts)
+                dst_curr = sent_record.get("sentence_destination") or ""
+
+                dst2_left = " ".join(dst2_left_parts)
+                dst2_right = " ".join(dst2_right_parts)
+                dst2_curr = sent_record.get("sentence_destination2") or ""
+
+                sent_ipa = sent_record.get("sentence_source_ipa") or ""
+                sent_audio = sent_record.get("sentence_source_audio") or ""
+
+                extra_fields = word.get("extra_fields") or {}
+                if isinstance(extra_fields, str):
+                    try:
+                        extra_fields = json.loads(extra_fields)
+                    except Exception:
+                        extra_fields = {}
+
+                row_cells = []
+                for h in headers:
+                    h_lower = h.lower()
+                    if h_lower == "quotation":
+                        row_cells.append(str(word.get("quotation") or ""))
+                    elif h_lower == "wordsource":
+                        row_cells.append(str(word.get("lemma") or ""))
+                    elif h_lower == "wordsource2":
+                        val = extra_fields.get(h) if h in extra_fields else (word.get("lemma") or "")
+                        row_cells.append(str(val or ""))
+                    elif h_lower == "wordsourceinflectedform":
+                        row_cells.append(str(word.get("inflected_form") or ""))
+                    elif h_lower == "wordsourceinflectedform2":
+                        val = extra_fields.get(h) if h in extra_fields else (word.get("inflected_form") or "")
+                        row_cells.append(str(val or ""))
+                    elif h_lower == "worddestination":
+                        row_cells.append(str(word.get("word_destination") or ""))
+                    elif h_lower == "worddestinationinflectedform":
+                        row_cells.append(str(word.get("word_destination_inflected") or ""))
+                    elif h_lower == "wordsourcemorphologyai":
+                        row_cells.append(str(word.get("morphology") or ""))
+                    elif h_lower == "wordsourceipa":
+                        row_cells.append(str(word.get("ipa") or ""))
+                    elif h_lower == "deskselected":
+                        row_cells.append(str(word.get("selected", 0)))
+                    elif h_lower == "leitnerbox":
+                        row_cells.append(str(word.get("leitner_box", 1)))
+                    elif h_lower == "leitnerdue":
+                        row_cells.append(str(word.get("leitner_due") or ""))
+                    elif h_lower == "deck":
+                        row_cells.append(str(word.get("deck") or ""))
+                    elif h_lower == "classificationoxford":
+                        row_cells.append(str(word.get("classification_oxford") or ""))
+                    elif h_lower == "classificationgoethe":
+                        row_cells.append(str(word.get("classification_goethe") or ""))
+                    elif h_lower == "sentencesourceindex":
+                        row_cells.append(str(s_idx))
+                    elif h_lower == "sentencesourcecontextleft":
+                        row_cells.append(src_left)
+                    elif h_lower == "sentencesource":
+                        row_cells.append(src_curr)
+                    elif h_lower == "sentencesourcecontextright":
+                        row_cells.append(src_right)
+                    elif h_lower == "sentencedestinationcontextleft":
+                        row_cells.append(dst_left)
+                    elif h_lower == "sentencedestination":
+                        row_cells.append(dst_curr)
+                    elif h_lower == "sentencedestinationcontextright":
+                        row_cells.append(dst_right)
+                    elif h_lower == "sentencedestination2contextleft":
+                        row_cells.append(dst2_left)
+                    elif h_lower == "sentencedestination2":
+                        row_cells.append(dst2_curr)
+                    elif h_lower == "sentencedestination2contextright":
+                        row_cells.append(dst2_right)
+                    elif h_lower == "sentencesourceipa":
+                        row_cells.append(sent_ipa)
+                    elif h_lower == "sentencesourceaudio":
+                        row_cells.append(sent_audio)
+                    else:
+                        val = extra_fields.get(h)
+                        if val is None:
+                            for k, v in extra_fields.items():
+                                if k.lower() == h_lower:
+                                    val = v
+                                    break
+                        row_cells.append(str(val) if val is not None else "")
+
+                data_rows.append(row_cells)
+
+            return {
+                "session_zid": zid,
+                "source_text": source_text,
+                "comments": comments,
+                "headers": headers,
+                "data_rows": data_rows,
+                "session": session,
+                "sentences": db_sentences,
+                "words": db_words,
+            }
 
     def get_cached_session(
         self,
@@ -2503,6 +2823,46 @@ class SqliteStorageAdapter(StorageAdapter):
     @contextlib.contextmanager
     def file_lock(self, file_path: Path):
         with self._tsv_fallback.file_lock(file_path):
+            yield
+
+
+class StorageRouter:
+    """
+    Unified storage router coordinating SQLite and legacy TSV backends,
+    supporting automatic fallback and seamless restore operations.
+    """
+    def __init__(self, config=None, resolved_paths=None, storage_override=None):
+        self.config = config
+        self.resolved_paths = resolved_paths or {}
+        self.storage_override = storage_override
+        self.adapter = get_storage_adapter(config, resolved_paths, storage_override)
+        self.fallback_to_tsv = True
+        if resolved_paths and "storage_fallback_to_tsv" in resolved_paths:
+            self.fallback_to_tsv = resolved_paths["storage_fallback_to_tsv"]
+        elif config and hasattr(config, "getboolean"):
+            self.fallback_to_tsv = config.getboolean(SEC_STORAGE, "fallback_to_tsv", fallback=True)
+
+    def save_session(self, *args, **kwargs):
+        return self.adapter.save_session(*args, **kwargs)
+
+    def load_session(self, *args, **kwargs):
+        return self.adapter.load_session(*args, **kwargs)
+
+    def restore_session(self, zid: str, **kwargs) -> Dict[str, Any]:
+        return self.adapter.restore_session(zid, **kwargs)
+
+    def get_cached_session(self, *args, **kwargs):
+        return self.adapter.get_cached_session(*args, **kwargs)
+
+    def save_tsv_rows_safely(self, *args, **kwargs):
+        return self.adapter.save_tsv_rows_safely(*args, **kwargs)
+
+    def load_tsv_rows(self, *args, **kwargs):
+        return self.adapter.load_tsv_rows(*args, **kwargs)
+
+    @contextlib.contextmanager
+    def file_lock(self, file_path: Path):
+        with self.adapter.file_lock(file_path):
             yield
 
 
@@ -12302,140 +12662,97 @@ def spawn_ahk(args_list, base_dir):
 def cmd_restore(args):
     logger.info("Restore subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
-    
-    file_list = args.file if isinstance(args.file, list) else [args.file]
-    
+
+    file_list = args.file if isinstance(args.file, list) else ([args.file] if args.file else [])
+    target_zid = getattr(args, "zid", None)
+
+    if not file_list and not target_zid:
+        print_structured_error("INVALID_STATE", "Either --file or --zid must be provided for restore.")
+        sys.exit(1)
+
+    router = StorageRouter(config=config, resolved_paths=resolved_paths)
+
     if not args.no_gui:
         ahk_args = []
-        zid_groups = {}
-        non_zid_files = []
-        for file_val in file_list:
-            input_path = Path(file_val).resolve()
-            if input_path.exists():
-                match = re.match(r"^(\d{14})", input_path.name)
-                if match:
-                    zid = match.group(1)
-                    if zid not in zid_groups:
-                        zid_groups[zid] = []
-                    zid_groups[zid].append(input_path)
+        if target_zid:
+            ahk_args.extend(["--restore", str(target_zid)])
+        if file_list:
+            zid_groups = {}
+            non_zid_files = []
+            for file_val in file_list:
+                input_path = Path(file_val).resolve()
+                if input_path.exists():
+                    match = re.match(r"^(\d{14})", input_path.name)
+                    if match:
+                        zid = match.group(1)
+                        if zid not in zid_groups:
+                            zid_groups[zid] = []
+                        zid_groups[zid].append(input_path)
+                    else:
+                        non_zid_files.append(input_path)
+                elif re.match(r"^\d{14}$", str(file_val).strip()):
+                    ahk_args.extend(["--restore", str(file_val).strip()])
                 else:
-                    non_zid_files.append(input_path)
-            else:
-                print_structured_error("INVALID_STATE", f"File to restore not found: {input_path}")
-                
-        def priority(p):
-            ext = p.suffix.lower()
-            if ext == '.tsv': return 0
-            if ext == '.txt': return 1
-            return 2
+                    print_structured_error("INVALID_STATE", f"File to restore not found: {input_path}")
 
-        for zid, files in zid_groups.items():
-            best_file = sorted(files, key=priority)[0]
-            ahk_args.extend(["--restore", str(best_file)])
-            
-        for file_path in non_zid_files:
-            ahk_args.extend(["--restore", str(file_path)])
+            def priority(p):
+                ext = p.suffix.lower()
+                if ext == '.tsv': return 0
+                if ext == '.txt': return 1
+                return 2
+
+            for zid, files in zid_groups.items():
+                best_file = sorted(files, key=priority)[0]
+                ahk_args.extend(["--restore", str(best_file)])
+
+            for file_path in non_zid_files:
+                ahk_args.extend(["--restore", str(file_path)])
 
         if ahk_args:
             spawn_ahk(ahk_args, resolved_paths['base_dir'])
         return
 
-    input_path = Path(file_list[0]).resolve()
-    if not input_path.exists():
+    # In --no-gui mode
+    zid_to_restore = target_zid
+    input_path = None
+    if file_list:
+        first_file = file_list[0]
+        input_path = Path(first_file).resolve()
+        if input_path.exists():
+            zid_to_restore = extract_zid(input_path)
+        elif re.match(r"^\d{14}$", str(first_file).strip()):
+            zid_to_restore = str(first_file).strip()
+
+    if not zid_to_restore and input_path and not input_path.exists():
         print_structured_error("INVALID_STATE", f"File to restore not found: {input_path}")
         sys.exit(1)
-        
-    zid = extract_zid(input_path)
-    parent_dir = input_path.parent
-    
-    tsv_path = None
-    txt_path = None
-    warnings = []
-    
-    if input_path.suffix == '.tsv':
-        tsv_path = input_path
-        txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
-        if txt_files:
-            source_lang = None
-            if len(input_path.suffixes) >= 2:
-                source_lang = input_path.suffixes[-2].strip('.')
-            
-            def txt_priority(p):
-                sufs = p.suffixes
-                lang_code = sufs[-2].strip('.') if len(sufs) >= 2 else None
-                if source_lang and lang_code == source_lang:
-                    return 0
-                target_lang = goldendict.get('target_language', 'ru')
-                if lang_code == target_lang:
-                    return 2
-                return 1
 
-            txt_path = sorted(txt_files, key=txt_priority)[0]
-        else:
-            txt_path = input_path.with_suffix('.txt')
-            if not txt_path.exists():
-                txt_path = None
-                warnings.append("Sibling source text file not found.")
+    results_dir = None
+    if input_path and input_path.exists():
+        results_dir = input_path.parent
     else:
-        tsv_files = list(parent_dir.glob(f"{zid}-*.tsv"))
-        if tsv_files:
-            tsv_path = tsv_files[0]
-        else:
-            tsv_path = input_path.with_suffix('.tsv')
-            if not tsv_path.exists():
-                tsv_path = None
-                warnings.append("Sibling TSV file not found.")
-                
-        txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
-        if txt_files:
-            source_lang = None
-            if tsv_path and len(tsv_path.suffixes) >= 2:
-                source_lang = tsv_path.suffixes[-2].strip('.')
-            
-            def txt_priority(p):
-                sufs = p.suffixes
-                lang_code = sufs[-2].strip('.') if len(sufs) >= 2 else None
-                if source_lang and lang_code == source_lang:
-                    return 0
-                target_lang = goldendict.get('target_language', 'ru')
-                if lang_code == target_lang:
-                    return 2
-                return 1
+        try:
+            results_dir = resolve_results_dir(resolved_paths, config)
+        except Exception:
+            results_dir = None
 
-            txt_path = sorted(txt_files, key=txt_priority)[0]
-        else:
-            if input_path.suffix == '.txt':
-                txt_path = input_path
-            else:
-                txt_path = input_path.with_suffix('.txt')
-                if not txt_path.exists():
-                    txt_path = None
-                    warnings.append("Sibling source text file not found.")
-                    
-    source_text = ""
-    if txt_path and txt_path.exists():
-        try:
-            source_text = txt_path.read_text(encoding='utf-8')
-        except Exception as e:
-            warnings.append(f"Failed to read source text: {e}")
-            
-    headers = []
-    data_rows = []
-    if tsv_path and tsv_path.exists():
-        try:
-            _, headers, data_rows = load_tsv_rows(tsv_path)
-        except Exception as e:
-            warnings.append(f"Failed to read TSV: {e}")
-            
-    payload = {
-        "source_text": source_text,
-        "headers": headers,
-        "data_rows": data_rows,
-        "warnings": warnings,
-        "tsv_path": str(tsv_path) if tsv_path else "",
-        "txt_path": str(txt_path) if txt_path else ""
-    }
-    
+    try:
+        restored = router.restore_session(zid_to_restore, results_dir=results_dir)
+        payload = {
+            "source_text": restored.get("source_text", ""),
+            "headers": restored.get("headers", []),
+            "data_rows": restored.get("data_rows", []),
+            "warnings": [],
+            "tsv_path": str(restored.get("tsv_path", "")),
+            "txt_path": str(restored.get("txt_path", "")),
+        }
+    except StructuredError as se:
+        print_structured_error(se.error_code.name if hasattr(se.error_code, "name") else str(se.error_code), se.message)
+        sys.exit(1)
+    except Exception as e:
+        print_structured_error("INVALID_STATE", f"Session restore failed: {e}")
+        sys.exit(1)
+
     from b64util import encode
     response_str = json.dumps(payload)
     emit_payload(encode(response_str), raw=True)
@@ -12787,7 +13104,8 @@ def main():
 
     # restore
     p_restore = subparsers.add_parser("restore")
-    p_restore.add_argument("--file", nargs="+", required=True, help="Session file to restore")
+    p_restore.add_argument("--file", nargs="*", default=None, help="Session file to restore")
+    p_restore.add_argument("--zid", default=None, help="Session ZID to restore")
     p_restore.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
 
     # desk
