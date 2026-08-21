@@ -2546,7 +2546,62 @@ def save_tsv_rows_safely(tsv_path: Path, comments: List[str], headers: List[str]
     act_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
 
 
+def extract_zid(path):
+    name = path.name
+    match = re.match(r'^(\d{14})', name)
+    return match.group(1) if match else "00000000000000"
+
+
+GERMAN_UMLAUT_MAP = {
+    'ä': 'ae', 'ö': 'oe', 'ü': 'ue', 'ß': 'ss', 'ẞ': 'ss',
+    'Ä': 'ae', 'Ö': 'oe', 'Ü': 'ue',
+}
+
+
+def generate_slug(text, max_words=4):
+    if not text:
+        return "untitled"
+    # Remove ASS and HTML tags
+    cleaned = re.sub(r'\{[^}]*\}', ' ', text)
+    cleaned = re.sub(r'<[^>]*>', ' ', cleaned)
+
+    # Normalize German umlauts matching zid_name.py
+    for src, dst in GERMAN_UMLAUT_MAP.items():
+        cleaned = cleaned.replace(src, dst)
+
+    tokens = tok.build_word_list_internal(cleaned, keep_spaces=False)
+    words = []
+    for t in tokens:
+        if not t.get("is_word"):
+            continue
+        raw_text = t.get("text", "")
+        sub_parts = tok.split_camel_case(raw_text) or [raw_text]
+        for p in sub_parts:
+            clean_p = tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum()))
+            if clean_p and not clean_p.isdigit():
+                words.append(clean_p)
+                if len(words) >= max_words:
+                    break
+        if len(words) >= max_words:
+            break
+
+    slug = '-'.join(words)
+    return slug if slug else "untitled"
+
+
+def normalize_bracket_spacing(text: str) -> str:
+    """Normalize spacing around brackets: remove inner whitespace in (...), [...], {...}."""
+    if not text:
+        return text
+    # Remove whitespace immediately after opening brackets
+    text = re.sub(r'([(\[{])\s+', r'\1', text)
+    # Remove whitespace immediately before closing brackets
+    text = re.sub(r'\s+([)\]}])', r'\1', text)
+    return text
+
+
 def is_tsv_llm_filled(headers, data_rows, mapping):
+
     role_fields = get_role_fields(mapping, headers)
     col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
     col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
@@ -8570,21 +8625,28 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         logger.error(f"Lookup translation alignment error: {tae}")
         sentence_translations = tae.partial_dict
         
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+
     cached = False
-    import re
-    with file_lock(working_tsv_path):
+    with storage_adapter.file_lock(working_tsv_path):
         if ttl_seconds > 0:
-            for cached_file in results_dir.glob(f"*-{slug}.{language}.tsv"):
-                if cached_file.is_file():
-                    if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
-                        working_tsv_path = cached_file
-                        cached = True
-                        break
-            
+            cached_res = storage_adapter.get_cached_session(slug, language, ttl_seconds, results_dir=results_dir, zid=zid)
+            if cached_res is not None:
+                if isinstance(cached_res, Path):
+                    working_tsv_path = cached_res
+                    cached = True
+                elif isinstance(cached_res, dict):
+                    cached_zid = cached_res.get("session", {}).get("zid") or cached_res.get("zid")
+                    if cached_zid:
+                        c_tsv = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
+                        if c_tsv.exists():
+                            working_tsv_path = c_tsv
+                    cached = True
+
         if not cached:
             working_tsv_path = prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=0, cache_key=cache_key, text_mode=text_mode)
-        
-        comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
 
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
@@ -8617,8 +8679,8 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                             f"from corpus."
                         )
                 # Save the pre-filled rows back to the working TSV so they persist!
-                with file_lock(working_tsv_path):
-                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                with storage_adapter.file_lock(working_tsv_path):
+                    storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
         except Exception as wf_err:
             logger.warning(f"wordfill: early pre-fill step failed, continuing: {wf_err}")
     
@@ -8659,14 +8721,14 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                             row.append("")
                         row[col_word_dest] = trans
             
-            with file_lock(working_tsv_path):
-                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            with storage_adapter.file_lock(working_tsv_path):
+                storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
 
     if run_intellifiller:
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
         run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
         
-    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+    comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     
     if not run_intellifiller:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
@@ -8694,7 +8756,26 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                         if lemma_val not in filled_lemmas:
                             row[col_idx] = ""
 
+    # Persist session to active storage backend
+    try:
+        storage_adapter.save_session(
+            session_zid=zid,
+            slug=slug,
+            source_language=language,
+            target_language=target_lang,
+            text_mode=text_mode,
+            source_raw_text=text,
+            comments=comments,
+            headers=headers,
+            data_rows=data_rows,
+            working_tsv_path=working_tsv_path,
+            zid=zid,
+        )
+    except Exception as save_err:
+        logger.warning(f"Failed persisting session to storage adapter: {save_err}")
+
     return LookupResultTuple(comments, headers, data_rows, sentence_translation, working_tsv_path)
+
 
 def normalize_blank_lines(text):
     if not text:
