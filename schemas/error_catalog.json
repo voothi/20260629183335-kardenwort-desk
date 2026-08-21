@@ -186,6 +186,18 @@
       "category": "input",
       "description": "The requested note type or its fields do not match the columns present in the exported TSV file.",
       "resolution": "Verify anki-mapping.ini configuration and ensure the note type exists with matching field names in Anki."
+    },
+    {
+      "code": "MUTATION_NOT_ALLOWED",
+      "category": "system",
+      "description": "A mutating or unsafe SQL statement was attempted in a read-only query runner.",
+      "resolution": "Use only SELECT queries and read-only statements."
+    },
+    {
+      "code": "QUERY_FAILED",
+      "category": "runtime",
+      "description": "Database query failed to execute due to syntax or execution error.",
+      "resolution": "Check query syntax and schema validity."
     }
   ]
 }

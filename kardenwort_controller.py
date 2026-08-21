@@ -913,19 +913,29 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         path = parsed_url.path
         qs = urllib.parse.parse_qs(parsed_url.query)
 
-        # 1. Health Probe (Controller + Supervisor Sidecars)
+        # 1. Health Probe (Controller + Supervisor Sidecars + Database)
         if path in ('/health', '/api/v1/health'):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             uptime = round(time.time() - getattr(self.server, 'start_time', time.time()), 2)
             supervisor_report = self.server.supervisor.get_status_report() if hasattr(self.server, 'supervisor') else {}
+            
+            db_status = {}
+            try:
+                from kardenwort_db import KardenwortDB
+                db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+                db_status = db.get_status()
+            except Exception as e:
+                db_status = {"ok": False, "error": str(e)}
+
             self._send_json(200, {
                 "ok": True,
                 "controller": {
                     "port": self.server.server_port,
                     "uptime_seconds": uptime
                 },
-                "sidecars": supervisor_report
+                "sidecars": supervisor_report,
+                "database": db_status
             })
             return
 

@@ -22,6 +22,10 @@ venv/
 # Local artifacts and outputs
 favorites/
 results/
+data/*.db
+data/*.db-wal
+data/*.db-shm
+data/*.tmp
 *.tmp
 *.bak
 *.log

@@ -67,6 +67,9 @@ class ErrorCode(str, Enum):
     ERR_ANKICONNECT_DISABLED = "ERR_ANKICONNECT_DISABLED"
     ERR_DECK_NOT_FOUND = "ERR_DECK_NOT_FOUND"
     ERR_NOTE_TYPE_MISMATCH = "ERR_NOTE_TYPE_MISMATCH"
+    # Database diagnostics error codes
+    MUTATION_NOT_ALLOWED = "MUTATION_NOT_ALLOWED"
+    QUERY_FAILED = "QUERY_FAILED"
 
 
 # Frozen set of all valid catalog codes for O(1) membership checks.
@@ -12087,6 +12090,80 @@ def cmd_desk(args):
         print_structured_error("DESK_FAILED", f"Desk flow failed: {str(e)}")
         sys.exit(1)
 
+def cmd_db_status(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    status = db.get_status(zid=getattr(args, 'zid', None))
+    if sys.__stdout__ is not None:
+        sys.__stdout__.write(json.dumps(status, indent=2) + "\n")
+        sys.__stdout__.flush()
+    else:
+        print(json.dumps(status))
+    sys.exit(0 if status.get("ok", False) else 1)
+
+def cmd_db_check(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    check_result = db.check_integrity(zid=getattr(args, 'zid', None))
+    if sys.__stdout__ is not None:
+        sys.__stdout__.write(json.dumps(check_result, indent=2) + "\n")
+        sys.__stdout__.flush()
+    else:
+        print(json.dumps(check_result))
+    sys.exit(0 if check_result.get("ok", False) else 1)
+
+def cmd_db_query(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB, QuerySecurityError, QueryExecutionError
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    query_str = getattr(args, 'db_query', None) or getattr(args, 'query', '')
+    if not query_str:
+        print_structured_error("INVALID_STATE", "No SQL query provided for --db-query")
+        sys.exit(1)
+    try:
+        rows = db.query_readonly(query_str, zid=getattr(args, 'zid', None))
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(json.dumps(rows, indent=2, ensure_ascii=False) + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(json.dumps(rows, ensure_ascii=False))
+        sys.exit(0)
+    except QuerySecurityError as e:
+        print_structured_error("MUTATION_NOT_ALLOWED", e.message)
+        sys.exit(1)
+    except QueryExecutionError as e:
+        print_structured_error("QUERY_FAILED", e.message)
+        sys.exit(1)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Database query failed: {str(e)}")
+        sys.exit(1)
+
+def cmd_db_reset(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB, QuerySecurityError
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    force = getattr(args, 'force', False)
+    try:
+        result = db.reset(force=force, zid=getattr(args, 'zid', None))
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(json.dumps(result, indent=2) + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(json.dumps(result))
+        sys.exit(0)
+    except QuerySecurityError as e:
+        print_structured_error(e.error_code, e.message)
+        sys.exit(1)
+    except Exception as e:
+        print_structured_error("DESK_FAILED", f"Database reset failed: {str(e)}")
+        sys.exit(1)
+
 def main():
     parser = argparse.ArgumentParser(description="Kardenwort Desk Orchestration Core")
     parser.add_argument("--config", default=None, help="Path to config.ini")
@@ -12095,8 +12172,29 @@ def main():
     parser.add_argument("--debug", action="store_true", help="Debug logging")
     parser.add_argument("--zid", default=None, help="Session ZID")
     parser.add_argument("--trace-id", default=None, help="Trace correlation ID")
+    parser.add_argument("--db-status", action="store_true", help="Output database status")
+    parser.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+    parser.add_argument("--db-check", action="store_true", help="Run database integrity and foreign key checks")
+    parser.add_argument("--db-query", default=None, help="Execute safe read-only SQL query")
+    parser.add_argument("--db-reset", action="store_true", help="Reset database (requires --force)")
+    parser.add_argument("--force", action="store_true", help="Force flag for destructive operations")
 
-    subparsers = parser.add_subparsers(dest="command", required=True)
+    subparsers = parser.add_subparsers(dest="command", required=False)
+
+    # db-status
+    p_db_status = subparsers.add_parser("db-status")
+    p_db_status.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # db-check
+    p_db_check = subparsers.add_parser("db-check")
+
+    # db-query
+    p_db_query = subparsers.add_parser("db-query")
+    p_db_query.add_argument("--query", required=True, help="SQL query to execute")
+
+    # db-reset
+    p_db_reset = subparsers.add_parser("db-reset")
+    p_db_reset.add_argument("--force", action="store_true", help="Confirm database reset")
 
     # lookup
     p_lookup = subparsers.add_parser("lookup")
@@ -12257,6 +12355,20 @@ def main():
 
     setup_logging(verbose=args.verbose, debug=args.debug)
 
+    # Top-level DB diagnostics shortcuts
+    if getattr(args, 'db_status', False):
+        cmd_db_status(args)
+        return
+    if getattr(args, 'db_check', False):
+        cmd_db_check(args)
+        return
+    if getattr(args, 'db_query', None) is not None:
+        cmd_db_query(args)
+        return
+    if getattr(args, 'db_reset', False):
+        cmd_db_reset(args)
+        return
+
     commands = {
         "lookup": cmd_lookup,
         "render": cmd_render,
@@ -12275,7 +12387,15 @@ def main():
         "wordfill": cmd_wordfill,
         "server": lambda args: __import__('http_server').cmd_server(args),
         "controller": lambda args: __import__('kardenwort_controller').run_controller(args),
+        "db-status": cmd_db_status,
+        "db-check": cmd_db_check,
+        "db-query": cmd_db_query,
+        "db-reset": cmd_db_reset,
     }
+
+    if not getattr(args, 'command', None):
+        parser.print_help(sys.stderr)
+        sys.exit(1)
 
     try:
         commands[args.command](args)
