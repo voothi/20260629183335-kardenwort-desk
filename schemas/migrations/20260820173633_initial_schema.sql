@@ -55,6 +55,7 @@ CREATE TABLE IF NOT EXISTS words (
 CREATE INDEX IF NOT EXISTS idx_words_session_sentence ON words(session_zid, sentence_index);
 CREATE INDEX IF NOT EXISTS idx_words_lemma ON words(lemma);
 CREATE INDEX IF NOT EXISTS idx_words_quotation ON words(quotation);
+CREATE INDEX IF NOT EXISTS idx_words_inflected_form ON words(inflected_form);
 CREATE INDEX IF NOT EXISTS idx_sentences_session ON sentences(session_zid);
 CREATE INDEX IF NOT EXISTS idx_sessions_slug_lang ON sessions(slug, source_language, created_at);
 

@@ -1820,6 +1820,8 @@ def load_config(config_path=None):
         resolved_paths['sqlite_db_path'] = (base_dir / 'data' / 'kardenwort.db').resolve()
         resolved_paths['storage_fallback_to_tsv'] = True
 
+    wordfill['sqlite_db_path'] = resolved_paths.get('sqlite_db_path')
+
     _migrate_config(config)
     _validate_translation_config(config)
     return config, resolved_paths, goldendict, wordfill
@@ -3153,6 +3155,169 @@ class SqliteStorageAdapter(StorageAdapter):
 
     def vacuum(self, zid: Optional[str] = None) -> bool:
         return self.db.vacuum(zid=zid)
+
+    def export_favorites(
+        self,
+        session_zid: str,
+        selected_row_ids: Optional[List[int]] = None,
+        save_to_favorites_override: Optional[bool] = None,
+        send_to_anki_override: Optional[bool] = None,
+        language: Optional[str] = None,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        """
+        Dynamically exports selected rows from SQLite storage directly to standard favorites TSV.
+        Guarantees 100% column format and ordering equivalence with anki-mapping.ini.
+        """
+        zid = zid or session_zid or generate_unique_zid()
+        restored = self.restore_session(session_zid)
+        headers = restored["headers"]
+        data_rows = restored["data_rows"]
+        db_words = restored.get("words", [])
+        session = restored.get("session", {})
+
+        selected_col_idx = headers.index("DeskSelected") if "DeskSelected" in headers else -1
+
+        export_selection_mode = "selected"
+        if self.config and hasattr(self.config, "get"):
+            export_selection_mode = self.config.get(SEC_SETTINGS, "export_selection_mode", fallback="selected").lower()
+
+        if export_selection_mode == "all":
+            actual_export_rows = list(range(len(data_rows)))
+        elif export_selection_mode == "unselected":
+            if selected_row_ids is not None:
+                actual_export_rows = [i for i in range(len(data_rows)) if i not in selected_row_ids]
+            else:
+                actual_export_rows = [
+                    i for i, row in enumerate(data_rows)
+                    if not (len(row) > selected_col_idx and selected_col_idx != -1 and row[selected_col_idx] in ("1", "true", "True"))
+                ]
+        else:
+            # "selected"
+            if selected_row_ids is not None and len(selected_row_ids) > 0:
+                actual_export_rows = selected_row_ids
+            else:
+                actual_export_rows = [
+                    i for i, row in enumerate(data_rows)
+                    if len(row) > selected_col_idx and selected_col_idx != -1 and row[selected_col_idx] in ("1", "true", "True")
+                ]
+
+        if not actual_export_rows:
+            logger.warning("No rows to export based on selection mode.")
+            return {
+                "status": "skipped",
+                "message": "Warning: No rows to export based on selection mode. Export skipped.",
+            }
+
+        exported_rows = []
+        for row_id in actual_export_rows:
+            if 0 <= row_id < len(data_rows):
+                row_copy = list(data_rows[row_id])
+                if selected_col_idx != -1:
+                    if len(row_copy) > selected_col_idx:
+                        row_copy[selected_col_idx] = "1"
+                    else:
+                        row_copy.extend([""] * (selected_col_idx - len(row_copy) + 1))
+                        row_copy[selected_col_idx] = "1"
+                exported_rows.append(row_copy)
+
+        if not exported_rows:
+            return {
+                "status": "skipped",
+                "message": "Warning: None of the selected row indices were valid.",
+            }
+
+        # Auto-save selected=1 back into SQLite for the exported words
+        try:
+            selected_set = set(actual_export_rows)
+            for row_idx, word in enumerate(db_words):
+                if row_idx in selected_set and word.get("id"):
+                    self.db.update_word(word["id"], {"selected": 1}, zid=zid)
+        except Exception as e:
+            logger.warning(f"Failed to auto-save selected state to SQLite: {e}")
+
+        # Resolve destination path
+        fav_dir = Path(self.resolved_paths.get("favorites_output_dir") or "favorites")
+        fav_dir.mkdir(parents=True, exist_ok=True)
+
+        fav_prefix = ""
+        if self.config and hasattr(self.config, "get"):
+            fav_prefix = self.config.get(SEC_SETTINGS, "favorites_prefix", fallback="")
+
+        slug = session.get("slug", "")
+        lang = session.get("source_language") or language or "en"
+        filename_base = f"{session_zid}-{slug}.{lang}.tsv" if slug else f"{session_zid}.{lang}.tsv"
+        dest_filename = f"{fav_prefix}{filename_base}"
+        dest_path = fav_dir / dest_filename
+
+        save_to_favorites = True
+        if self.config and hasattr(self.config, "getboolean"):
+            save_to_favorites = self.config.getboolean(SEC_SETTINGS, "save_to_favorites_on_export", fallback=True)
+        if save_to_favorites_override is not None:
+            save_to_favorites = save_to_favorites_override
+
+        results_dir = Path(self.resolved_paths.get("results_dir") or "results")
+        import_path = dest_path if save_to_favorites else (results_dir / f"temp_import_{dest_filename}")
+
+        comments = [f"# Exported from SQLite session {session_zid}"]
+        with self._tsv_fallback.file_lock(import_path):
+            self._tsv_fallback.save_tsv_rows_safely(import_path, comments, headers, exported_rows)
+
+        if save_to_favorites:
+            logger.info(f"Exported favorites to {import_path}")
+        else:
+            logger.info(f"Exported temporary file for Anki import to {import_path}")
+
+        send_to_anki = False
+        if self.config and hasattr(self.config, "getboolean"):
+            send_to_anki = self.config.getboolean(SEC_SETTINGS, "send_to_anki_after_export", fallback=False)
+        if send_to_anki_override is not None:
+            send_to_anki = send_to_anki_override
+
+        if send_to_anki:
+            detach = True
+            show_window = False
+            if self.config and hasattr(self.config, "getboolean"):
+                detach = self.config.getboolean(SEC_SETTINGS, "detach_import_on_send", fallback=True)
+                show_window = self.config.getboolean(SEC_SETTINGS, "show_import_window", fallback=False)
+
+            if detach:
+                show_window = False
+                pid, log_path = run_detached_import(import_path, self.config, self.resolved_paths, zid, trace_id=trace_id)
+                return {
+                    "import_started": True,
+                    "show_window": show_window,
+                    "pid": pid,
+                    "log": log_path,
+                    "tsv": str(import_path),
+                    "note": "safe to close the window",
+                }
+            else:
+                success, output = run_synchronous_import(import_path, self.config, self.resolved_paths, zid=zid, trace_id=trace_id)
+                if success:
+                    return {
+                        "import_complete": True,
+                        "show_window": show_window,
+                        "output": output,
+                    }
+                else:
+                    raise StructuredError(ErrorCode.DESK_FAILED, "Anki import failed synchronously", {"details": output})
+        else:
+            if save_to_favorites:
+                show_window = False
+                if self.config and hasattr(self.config, "getboolean"):
+                    show_window = self.config.getboolean(SEC_SETTINGS, "show_import_window", fallback=False)
+                return {
+                    "import_complete": True,
+                    "show_window": show_window,
+                    "output": f"SUCCESS: Exported to {import_path}",
+                }
+            else:
+                return {
+                    "status": "success",
+                    "message": "SUCCESS: Ready for Anki (no favorites file created)",
+                }
 
 
 class StorageRouter:
@@ -10218,11 +10383,12 @@ def score_wordfill_row(row, headers):
 
 def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     """
-    Scan configured TSV corpus for the best matching row for *word* in *language*.
+    Scan configured SQLite DB and TSV corpus for the best matching row for *word* in *language*.
     Returns a dict {column: value} for non-empty eligible fields, or None.
-    Priority: newest ZID file first, then quality tier (full > partial > bare).
+    Priority: SQLite indexed match first (<1ms), then external candidate TSVs.
+    Within source: newest ZID file first, then quality tier (full > partial > bare).
     """
-    if not wordfill_cfg.get('enabled', False):
+    if not wordfill_cfg or not wordfill_cfg.get('enabled', False):
         return None
 
     scan_roots = wordfill_cfg.get('scan_roots', [])
@@ -10240,78 +10406,119 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     if not word_lower:
         return None
 
-    candidates = collect_candidate_files(
-        scan_roots, scan_depth, scan_scope, language,
-        scan_sort_order=scan_sort_order,
-        scan_max_files=scan_max_files,
-        scan_match_language=scan_match_language
-    )
-
     best_fallback_score = -1
     best_fallback_match = None
 
     exclude_zid = extract_zid(Path(exclude_path)) if exclude_path else None
 
-    for file_rank, tsv_path in enumerate(candidates):
-        if exclude_path and tsv_path.resolve() == Path(exclude_path).resolve():
-            continue
-        if exclude_zid and extract_zid(tsv_path) == exclude_zid and '-merged.' not in tsv_path.name:
-            continue
-            
-        try:
-            with file_lock(tsv_path):
-                _comments, headers, data_rows = load_tsv_rows(tsv_path)
-        except Exception as e:
-            logger.warning(f"Failed to load candidate {tsv_path}: {e}")
-            continue
+    # --- Phase 1: SQLite Indexed Search (< 1ms) ---
+    try:
+        db = wordfill_cfg.get('db')
+        db_path = wordfill_cfg.get('sqlite_db_path')
+        if not db and db_path:
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(db_path=db_path)
 
-        lemma_idx = headers.index('WordSource') if 'WordSource' in headers else -1
-        inflected_idx = headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in headers else -1
-        quotation_idx = headers.index('Quotation') if 'Quotation' in headers else -1
+        if db and db.db_path and db.db_path.exists():
+            search_lang = language if scan_match_language else None
+            candidates = db.find_wordfill_candidates(
+                word=word,
+                language=search_lang,
+                exclude_zid=exclude_zid,
+                limit=10,
+            )
+            for cand in candidates:
+                match_dict = {}
+                if cand.get('word_destination'):
+                    match_dict['WordDestination'] = str(cand['word_destination']).strip()
+                if cand.get('morphology'):
+                    match_dict['WordSourceMorphologyAI'] = str(cand['morphology']).strip()
+                if cand.get('ipa'):
+                    match_dict['WordSourceIPA'] = str(cand['ipa']).strip()
 
-        if lemma_idx == -1 and inflected_idx == -1 and quotation_idx == -1:
-            continue
+                extra = cand.get('extra_fields') or {}
+                if isinstance(extra, dict):
+                    for k, v in extra.items():
+                        if is_wordfill_eligible(k) and v and 'skeleton-loader' not in str(v):
+                            match_dict[k] = str(v).strip()
 
-        file_best_score = -1
-        file_best_match = None
+                if match_dict:
+                    has_ipa = bool(match_dict.get('WordSourceIPA', '').strip())
+                    has_morph = bool(match_dict.get('WordSourceMorphologyAI', '').strip())
+                    tier = 2 if (has_ipa and has_morph) else (1 if (has_ipa or has_morph) else 0)
 
-        for row in data_rows:
-            # Check lemma match
-            lemma_val = row[lemma_idx].strip().lower() if lemma_idx != -1 and len(row) > lemma_idx else ''
-            inflected_val = row[inflected_idx].strip().lower() if inflected_idx != -1 and len(row) > inflected_idx else ''
-            quotation_val = row[quotation_idx].strip().lower() if quotation_idx != -1 and len(row) > quotation_idx else ''
+                    if tier >= target_quality_tier:
+                        # Direct early exit on valid target quality match
+                        return match_dict
+                    elif tier > best_fallback_score:
+                        best_fallback_score = tier
+                        best_fallback_match = match_dict
+    except Exception as e:
+        logger.warning(f"Failed SQLite wordfill search for '{word}': {e}")
 
-            if word_lower not in (lemma_val, inflected_val, quotation_val):
+    # --- Phase 2: Hybrid Fallback to External TSV Scanning ---
+    if scan_roots:
+        candidates = collect_candidate_files(
+            scan_roots, scan_depth, scan_scope, language,
+            scan_sort_order=scan_sort_order,
+            scan_max_files=scan_max_files,
+            scan_match_language=scan_match_language
+        )
+
+        for file_rank, tsv_path in enumerate(candidates):
+            if exclude_path and tsv_path.resolve() == Path(exclude_path).resolve():
+                continue
+            if exclude_zid and extract_zid(tsv_path) == exclude_zid and '-merged.' not in tsv_path.name:
                 continue
 
-            tier = score_wordfill_row(row, headers)
+            try:
+                with file_lock(tsv_path):
+                    _comments, headers, data_rows = load_tsv_rows(tsv_path)
+            except Exception as e:
+                logger.warning(f"Failed to load candidate {tsv_path}: {e}")
+                continue
 
-            match_dict = {}
-            for col_idx, col in enumerate(headers):
-                if is_wordfill_eligible(col):
-                    if len(row) > col_idx:
-                        val = row[col_idx].strip()
-                        if val and 'skeleton-loader' not in val:
-                            match_dict[col] = val
-                            
-            # Maximize quality within this file
-            if file_best_match is None or tier > file_best_score:
-                file_best_score = tier
-                file_best_match = match_dict
+            lemma_idx = headers.index('WordSource') if 'WordSource' in headers else -1
+            inflected_idx = headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in headers else -1
+            quotation_idx = headers.index('Quotation') if 'Quotation' in headers else -1
 
-        if file_best_match is not None:
-            if file_best_score >= target_quality_tier:
-                # We found a match that satisfies our target quality!
-                # Since candidates are chronologically sorted, this is the most authoritative valid match.
-                # EXIT EARLY!
-                return file_best_match
-            else:
-                # This match does NOT satisfy target_quality, but it might be useful as a fallback.
-                # We want to maximize the fallback quality. Since files are chronologically sorted,
-                # we only update the fallback if the new tier is STRICTLY GREATER than the previous fallback tier.
-                if file_best_score > best_fallback_score:
-                    best_fallback_score = file_best_score
-                    best_fallback_match = file_best_match
+            if lemma_idx == -1 and inflected_idx == -1 and quotation_idx == -1:
+                continue
+
+            file_best_score = -1
+            file_best_match = None
+
+            for row in data_rows:
+                # Check lemma match
+                lemma_val = row[lemma_idx].strip().lower() if lemma_idx != -1 and len(row) > lemma_idx else ''
+                inflected_val = row[inflected_idx].strip().lower() if inflected_idx != -1 and len(row) > inflected_idx else ''
+                quotation_val = row[quotation_idx].strip().lower() if quotation_idx != -1 and len(row) > quotation_idx else ''
+
+                if word_lower not in (lemma_val, inflected_val, quotation_val):
+                    continue
+
+                tier = score_wordfill_row(row, headers)
+
+                match_dict = {}
+                for col_idx, col in enumerate(headers):
+                    if is_wordfill_eligible(col):
+                        if len(row) > col_idx:
+                            val = row[col_idx].strip()
+                            if val and 'skeleton-loader' not in val:
+                                match_dict[col] = val
+
+                # Maximize quality within this file
+                if file_best_match is None or tier > file_best_score:
+                    file_best_score = tier
+                    file_best_match = match_dict
+
+            if file_best_match is not None:
+                if file_best_score >= target_quality_tier:
+                    return file_best_match
+                else:
+                    if file_best_score > best_fallback_score:
+                        best_fallback_score = file_best_score
+                        best_fallback_match = file_best_match
 
     # Exhausted all candidates.
     if target_fallback:
@@ -10570,6 +10777,47 @@ def cmd_render(args):
 def core_export(tsv_path_or_session, selected_row_ids, config, resolved_paths, fingerprint=None, zid=None, language=None, trace_id=None):
     if zid is None:
         zid = generate_unique_zid()
+
+    storage_backend = "tsv"
+    if resolved_paths and "storage_backend" in resolved_paths:
+        storage_backend = resolved_paths["storage_backend"]
+    elif config and hasattr(config, "get"):
+        storage_backend = config.get(SEC_STORAGE, "backend", fallback="tsv")
+
+    if storage_backend == "sqlite":
+        if isinstance(tsv_path_or_session, Path):
+            sess_zid = extract_zid(tsv_path_or_session) or str(tsv_path_or_session.name)
+        elif isinstance(tsv_path_or_session, str):
+            if '/' in tsv_path_or_session or '\\' in tsv_path_or_session or tsv_path_or_session.endswith('.tsv'):
+                sess_zid = extract_zid(Path(tsv_path_or_session)) or tsv_path_or_session
+            else:
+                sess_zid = tsv_path_or_session
+        else:
+            sess_zid = zid
+
+        adapter = get_storage_adapter(config, resolved_paths)
+        if isinstance(adapter, SqliteStorageAdapter):
+            if fingerprint:
+                try:
+                    restored = adapter.restore_session(sess_zid)
+                    current_fp = compute_content_fingerprint(restored["data_rows"])
+                    if fingerprint != current_fp:
+                        raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
+                except StructuredError:
+                    raise
+                except Exception:
+                    pass
+
+            res = adapter.export_favorites(
+                session_zid=sess_zid,
+                selected_row_ids=selected_row_ids,
+                language=language,
+                zid=zid,
+                trace_id=trace_id,
+            )
+            if isinstance(res, dict):
+                res["zid"] = zid
+            return res
 
     if isinstance(tsv_path_or_session, Path):
         tsv_path = tsv_path_or_session
@@ -10831,15 +11079,44 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
     
     lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     
+    if not hasattr(args, 'files') or not args.files:
+        logger.warning("No files provided for selected pipeline.")
+        return
+
+    storage_backend = "tsv"
+    if resolved_paths and "storage_backend" in resolved_paths:
+        storage_backend = resolved_paths["storage_backend"]
+    elif config and hasattr(config, "get"):
+        storage_backend = config.get(SEC_STORAGE, "backend", fallback="tsv")
+
+    if storage_backend == "sqlite":
+        adapter = get_storage_adapter(config, resolved_paths)
+        if isinstance(adapter, SqliteStorageAdapter):
+            for file_or_zid in args.files:
+                p = Path(file_or_zid)
+                sess_zid = extract_zid(p) if (p.exists() or '/' in file_or_zid or '\\' in file_or_zid or file_or_zid.endswith('.tsv')) else file_or_zid
+                if not sess_zid:
+                    continue
+                trace_id = getattr(args, 'trace_id', None) or (f"{sess_zid}:export:selected" if sess_zid else None)
+                adapter.export_favorites(
+                    session_zid=sess_zid,
+                    selected_row_ids=None,
+                    save_to_favorites_override=True,
+                    send_to_anki_override=force_send_to_anki,
+                    language=lang,
+                    zid=sess_zid,
+                    trace_id=trace_id,
+                )
+            print("Selected pipeline execution complete.")
+            if getattr(args, 'pause', False):
+                input("\nPress Enter to exit...")
+            return
+
     mapping = None
     try:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     except Exception:
         pass
-
-    if not hasattr(args, 'files') or not args.files:
-        logger.warning("No files provided for selected pipeline.")
-        return
 
     for tsv_path_str in args.files:
         tsv_path = Path(tsv_path_str).resolve()
@@ -13544,6 +13821,246 @@ def cmd_vacuum_db(args):
     sys.exit(0 if ok else 1)
 
 
+def migrate_tsvs_to_db(results_dir: Path, config=None, resolved_paths=None, zid: Optional[str] = None) -> Dict[str, Any]:
+    """
+    Parses historical TSV files in results_dir, normalizes sentence indices to 1-based integers,
+    deduplicates single-copy sentences, serializes extra fields to JSON, and executes chunked
+    idempotent batch inserts into kardenwort.db.
+    """
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    db.run_migrations(zid=zid)
+
+    results_dir = Path(results_dir).resolve()
+    if not results_dir.exists():
+        return {
+            "ok": True,
+            "scanned_files": 0,
+            "migrated_sessions": 0,
+            "skipped_sessions": 0,
+            "total_sentences": 0,
+            "total_words": 0,
+            "errors": [],
+        }
+
+    tsv_files = sorted(results_dir.glob("*.tsv"))
+    session_files = [
+        f for f in tsv_files
+        if not f.name.endswith('.lock') and not f.name.startswith('temp_import_')
+    ]
+
+    with db.get_connection(read_only=True, zid=zid) as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT zid FROM sessions;")
+        existing_zids = set(r[0] for r in cursor.fetchall())
+
+    migrated_sessions = 0
+    skipped_sessions = 0
+    total_sentences = 0
+    total_words = 0
+    errors = []
+
+    for tsv_path in session_files:
+        try:
+            file_zid = extract_zid(tsv_path)
+            if not file_zid:
+                continue
+
+            if file_zid in existing_zids:
+                skipped_sessions += 1
+                continue
+
+            with file_lock(tsv_path):
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+
+            if not data_rows:
+                skipped_sessions += 1
+                continue
+
+            name_no_ext = tsv_path.stem
+            parts = name_no_ext.split('.')
+            lang = parts[-1] if len(parts) > 1 and len(parts[-1]) in (2, 3, 5) else (
+                config.get(SEC_SETTINGS, 'default_language', fallback='en') if config and hasattr(config, 'get') else 'en'
+            )
+
+            slug_part = parts[0]
+            if slug_part.startswith(f"{file_zid}-"):
+                slug = slug_part[len(file_zid) + 1:]
+            else:
+                slug = ""
+
+            source_raw_text = ""
+            txt_candidates = list(tsv_path.parent.glob(f"{file_zid}*.txt"))
+            if txt_candidates:
+                try:
+                    source_raw_text = txt_candidates[0].read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+
+            headers_lower = {h.lower(): idx for idx, h in enumerate(headers)}
+
+            def get_col_val(r: List[str], col_name: str, default: str = "") -> str:
+                idx = headers_lower.get(col_name.lower())
+                return r[idx] if idx is not None and idx < len(r) else default
+
+            known_cols = {
+                "quotation", "wordsource", "wordsourceinflectedform",
+                "worddestination", "worddestinationinflectedform",
+                "wordsourcemorphologyai", "wordsourceipa", "deskselected", "leitnerbox",
+                "leitnerdue", "deck", "classificationoxford", "classificationgoethe",
+                "sentencesourceindex", "sentencesource", "sentencedestination",
+                "sentencedestination2", "sentencesourceipa", "sentencesourceaudio",
+                "sentencesourcecontextleft", "sentencesourcecontextright",
+                "sentencedestinationcontextleft", "sentencedestinationcontextright",
+                "sentencedestination2contextleft", "sentencedestination2contextright",
+                "sentencesourcewordlist", "sentencesourcecloze",
+                "wordsource2", "wordsourceinflectedform2",
+            }
+
+            raw_sentence_index_map: Dict[Any, int] = {}
+            seq_counter = 1
+            sent_map: Dict[int, Dict[str, Any]] = {}
+            word_list: List[Dict[str, Any]] = []
+
+            for row_idx, row in enumerate(data_rows):
+                raw_s_val = get_col_val(row, "sentencesourceindex")
+                if raw_s_val:
+                    if raw_s_val not in raw_sentence_index_map:
+                        raw_sentence_index_map[raw_s_val] = seq_counter
+                        seq_counter += 1
+                    norm_s_idx = raw_sentence_index_map[raw_s_val]
+                else:
+                    sent_src_text = get_col_val(row, "sentencesource")
+                    if sent_src_text:
+                        if sent_src_text not in raw_sentence_index_map:
+                            raw_sentence_index_map[sent_src_text] = seq_counter
+                            seq_counter += 1
+                        norm_s_idx = raw_sentence_index_map[sent_src_text]
+                    else:
+                        norm_s_idx = 1
+
+                if norm_s_idx not in sent_map:
+                    sent_map[norm_s_idx] = {
+                        "session_zid": file_zid,
+                        "sentence_index": norm_s_idx,
+                        "sentence_source": get_col_val(row, "sentencesource"),
+                        "sentence_destination": get_col_val(row, "sentencedestination") or None,
+                        "sentence_destination2": get_col_val(row, "sentencedestination2") or None,
+                        "sentence_source_ipa": get_col_val(row, "sentencesourceipa") or None,
+                        "sentence_source_audio": get_col_val(row, "sentencesourceaudio") or None,
+                    }
+
+                quotation = get_col_val(row, "quotation") or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, "wordsource") or ""
+                lemma = get_col_val(row, "wordsource") or quotation
+                inflected = get_col_val(row, "wordsourceinflectedform")
+                morph = get_col_val(row, "wordsourcemorphologyai")
+                ipa = get_col_val(row, "wordsourceipa")
+                w_dest = get_col_val(row, "worddestination")
+                w_dest_inf = get_col_val(row, "worddestinationinflectedform")
+                sel_raw = get_col_val(row, "deskselected")
+                selected = 1 if str(sel_raw).strip() in ("1", "true", "True") else 0
+                box_raw = get_col_val(row, "leitnerbox")
+                box = int(box_raw) if box_raw.isdigit() else 1
+                due = get_col_val(row, "leitnerdue") or None
+                deck = get_col_val(row, "deck") or None
+                oxford = get_col_val(row, "classificationoxford") or None
+                goethe = get_col_val(row, "classificationgoethe") or None
+
+                extra: Dict[str, Any] = {}
+                for h_idx, h_name in enumerate(headers):
+                    if h_name.lower() not in known_cols and h_idx < len(row):
+                        val = row[h_idx]
+                        if val:
+                            extra[h_name] = val
+
+                word_entry = {
+                    "session_zid": file_zid,
+                    "sentence_index": norm_s_idx,
+                    "token_order": row_idx,
+                    "quotation": quotation,
+                    "inflected_form": inflected or None,
+                    "lemma": lemma,
+                    "pos": None,
+                    "morphology": morph or None,
+                    "ipa": ipa or None,
+                    "word_destination": w_dest or None,
+                    "word_destination_inflected": w_dest_inf or None,
+                    "selected": selected,
+                    "leitner_box": box,
+                    "leitner_due": due,
+                    "deck": deck,
+                    "classification_oxford": oxford,
+                    "classification_goethe": goethe,
+                    "extra_fields": extra if extra else None,
+                }
+                word_list.append(word_entry)
+
+            text_mode = "multi" if len(sent_map) > 1 else "single"
+            if not source_raw_text:
+                source_raw_text = "\n".join(s["sentence_source"] for s in sent_map.values() if s.get("sentence_source"))
+
+            session_record = {
+                "zid": file_zid,
+                "slug": slug,
+                "source_language": lang,
+                "target_language": config.get(SEC_SETTINGS, 'default_target_language', fallback='ru') if config and hasattr(config, 'get') else 'ru',
+                "text_mode": text_mode,
+                "source_raw_text": source_raw_text,
+            }
+
+            db.save_session_bundle(
+                session=session_record,
+                sentences=list(sent_map.values()),
+                words=word_list,
+                zid=zid or file_zid,
+            )
+
+            existing_zids.add(file_zid)
+            migrated_sessions += 1
+            total_sentences += len(sent_map)
+            total_words += len(word_list)
+            logger.info(f"Migrated session {file_zid} ({len(sent_map)} sentences, {len(word_list)} words)")
+
+        except Exception as e:
+            logger.error(f"Failed to migrate TSV {tsv_path}: {e}")
+            errors.append({"file": str(tsv_path), "error": str(e)})
+
+    return {
+        "ok": len(errors) == 0,
+        "scanned_files": len(session_files),
+        "migrated_sessions": migrated_sessions,
+        "skipped_sessions": skipped_sessions,
+        "total_sentences": total_sentences,
+        "total_words": total_words,
+        "errors": errors,
+    }
+
+
+def cmd_migrate_tsvs_to_db(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    kardenwort_workspace = resolved_paths.get('kardenwort_workspace')
+    kw_config = load_kardenwort_config(kardenwort_workspace) if kardenwort_workspace else None
+    results_dir = resolve_results_dir(resolved_paths, kw_config)
+
+    zid = getattr(args, 'zid', None)
+    res = migrate_tsvs_to_db(results_dir, config=config, resolved_paths=resolved_paths, zid=zid)
+
+    if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+        out_str = json.dumps(res, indent=2)
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(out_str + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(out_str)
+    else:
+        print(f"Scanned {res['scanned_files']} files: {res['migrated_sessions']} migrated, {res['skipped_sessions']} skipped, {res['total_sentences']} sentences, {res['total_words']} words.")
+        if res.get('errors'):
+            for err in res['errors']:
+                print(f"Error migrating {err['file']}: {err['error']}")
+    sys.exit(0 if res["ok"] else 1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kardenwort Desk Orchestration Core")
     parser.add_argument("--config", default=None, help="Path to config.ini")
@@ -13564,6 +14081,7 @@ def main():
     parser.add_argument("--cleanup-db", action="store_true", help="Purge old sessions (requires --older-than)")
     parser.add_argument("--older-than", type=float, default=None, help="Retention period in days for cleanup-db")
     parser.add_argument("--vacuum-db", action="store_true", help="Defragment and vacuum SQLite database")
+    parser.add_argument("--migrate-tsvs-to-db", action="store_true", help="Migrate historical TSVs in results/ to SQLite DB")
 
     subparsers = parser.add_subparsers(dest="command", required=False)
 
@@ -13600,6 +14118,10 @@ def main():
     # vacuum-db
     p_vacuum = subparsers.add_parser("vacuum-db")
     p_vacuum.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # migrate-tsvs-to-db
+    p_migrate = subparsers.add_parser("migrate-tsvs-to-db")
+    p_migrate.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
     # lookup
     p_lookup = subparsers.add_parser("lookup")
@@ -13788,6 +14310,9 @@ def main():
     if getattr(args, 'vacuum_db', False):
         cmd_vacuum_db(args)
         return
+    if getattr(args, 'migrate_tsvs_to_db', False):
+        cmd_migrate_tsvs_to_db(args)
+        return
 
     commands = {
         "lookup": cmd_lookup,
@@ -13815,6 +14340,7 @@ def main():
         "delete-session": cmd_delete_session,
         "cleanup-db": cmd_cleanup_db,
         "vacuum-db": cmd_vacuum_db,
+        "migrate-tsvs-to-db": cmd_migrate_tsvs_to_db,
     }
 
     if not getattr(args, 'command', None):

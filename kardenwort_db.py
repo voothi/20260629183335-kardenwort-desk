@@ -941,7 +941,7 @@ class KardenwortDB:
         if sentence_index is not None:
             sql += " AND sentence_index = ?"
             params.append(sentence_index)
-        sql += " ORDER BY token_order ASC, id ASC;"
+        sql += " ORDER BY sentence_index ASC, token_order ASC, id ASC;"
 
         with self.get_connection(read_only=True, zid=zid) as conn:
             cursor = conn.cursor()
@@ -1015,6 +1015,57 @@ class KardenwortDB:
             if parse_json:
                 rows = [self._deserialize_extra_fields(r) for r in rows]
             return rows
+
+    def find_wordfill_candidates(
+        self,
+        word: str,
+        language: Optional[str] = None,
+        exclude_zid: Optional[str] = None,
+        limit: int = 10,
+        zid: Optional[str] = None,
+        conn: Optional[Any] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Fast indexed search for wordfill candidates querying words and sessions.
+        Matches lemma, quotation, or inflected_form (case-insensitively).
+        """
+        if not word or not word.strip():
+            return []
+
+        clean_word = word.strip()
+        sql = """
+            SELECT 
+                w.lemma, w.quotation, w.inflected_form, w.word_destination,
+                w.pos, w.morphology, w.ipa, w.extra_fields,
+                s.created_at, s.zid as session_zid, s.source_language
+            FROM words w
+            JOIN sessions s ON w.session_zid = s.zid
+            WHERE (w.lemma = ? OR w.quotation = ? OR w.inflected_form = ?)
+        """
+        params: List[Any] = [clean_word, clean_word, clean_word]
+
+        if language:
+            sql += " AND s.source_language = ?"
+            params.append(language)
+
+        if exclude_zid:
+            sql += " AND s.zid != ?"
+            params.append(exclude_zid)
+
+        sql += " ORDER BY s.created_at DESC LIMIT ?;"
+        params.append(limit)
+
+        if conn is not None:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            rows = [dict(r) for r in cursor.fetchall()]
+            return [self._deserialize_extra_fields(r) for r in rows]
+
+        with self.get_connection(read_only=True, zid=zid) as c:
+            cursor = c.cursor()
+            cursor.execute(sql, params)
+            rows = [dict(r) for r in cursor.fetchall()]
+            return [self._deserialize_extra_fields(r) for r in rows]
 
     def update_word(
         self, word_id: int, updates: Dict[str, Any], zid: Optional[str] = None
