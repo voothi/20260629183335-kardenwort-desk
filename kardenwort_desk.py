@@ -2878,6 +2878,11 @@ class SqliteStorageAdapter(StorageAdapter):
     ) -> Tuple[List[str], List[str], List[List[str]]]:
         return self._tsv_fallback.load_tsv_rows(tsv_path)
 
+    @contextlib.contextmanager
+    def file_lock(self, file_path: Path):
+        with self._tsv_fallback.file_lock(file_path):
+            yield
+
     def update_word(
         self,
         session_zid: str,
@@ -14873,7 +14878,7 @@ def main():
         "restore": cmd_restore,
         "desk": cmd_desk,
         "wordfill": cmd_wordfill,
-        "server": lambda args: __import__('http_server').cmd_server(args),
+        "server": lambda args: __import__('kardenwort_controller').run_controller(args),
         "controller": lambda args: __import__('kardenwort_controller').run_controller(args),
         "db-status": cmd_db_status,
         "db-check": cmd_db_check,
