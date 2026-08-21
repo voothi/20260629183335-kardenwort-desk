@@ -1,0 +1,242 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Kardenwort Admin Panel</title>
+    <link rel="stylesheet" href="/assets/admin.css">
+</head>
+<body class="theme-dark">
+    <header class="admin-header">
+        <div class="header-brand">
+            <div class="brand-icon">📚</div>
+            <div class="brand-title">
+                <h1>Kardenwort Desk Admin</h1>
+                <span class="brand-subtitle">Project Tree, Storage &amp; Database Maintenance</span>
+            </div>
+        </div>
+        <div class="header-controls">
+            <div class="token-container">
+                <input type="password" id="api-token-input" placeholder="X-API-Token" title="API Authentication Token" autocomplete="off" />
+                <button id="save-token-btn" class="btn btn-secondary btn-sm">Save Token</button>
+            </div>
+            <div class="status-pill" id="server-status-pill">
+                <span class="status-dot"></span>
+                <span id="server-status-text">Checking...</span>
+            </div>
+        </div>
+    </header>
+
+    <nav class="admin-nav">
+        <button class="nav-tab active" data-tab="tab-tree">🌳 Project Tree &amp; Chapters</button>
+        <button class="nav-tab" data-tab="tab-trash">🗑️ Recycle Bin (<span id="trash-count-badge">0</span>)</button>
+        <button class="nav-tab" data-tab="tab-maintenance">🛠️ Database Maintenance</button>
+        <button class="nav-tab" data-tab="tab-telemetry">📊 Telemetry &amp; Stats</button>
+    </nav>
+
+    <main class="admin-content">
+        <!-- Notification Banner -->
+        <div id="toast-container" class="toast-container"></div>
+
+        <!-- TAB 1: Project Tree -->
+        <section id="tab-tree" class="tab-pane active">
+            <div class="section-toolbar">
+                <div class="toolbar-left">
+                    <h2>Project Hierarchy &amp; Books</h2>
+                    <span class="text-muted">Organize books, chapters, and nested reading sessions.</span>
+                </div>
+                <div class="toolbar-right">
+                    <button id="btn-new-root-project" class="btn btn-primary">+ New Root Project</button>
+                    <button id="btn-refresh-tree" class="btn btn-secondary">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <div class="tree-container" id="project-tree-container">
+                <div class="loading-spinner">Loading project tree...</div>
+            </div>
+        </section>
+
+        <!-- TAB 2: Recycle Bin -->
+        <section id="tab-trash" class="tab-pane">
+            <div class="section-toolbar">
+                <div class="toolbar-left">
+                    <h2>Recycle Bin</h2>
+                    <span class="text-muted">Soft-deleted sessions and projects. Items can be restored or permanently purged.</span>
+                </div>
+                <div class="toolbar-right">
+                    <button id="btn-purge-trash" class="btn btn-danger">⚠️ Purge All Deleted Records</button>
+                    <button id="btn-refresh-trash" class="btn btn-secondary">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <div class="trash-grid">
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Deleted Sessions</h3>
+                    </div>
+                    <div class="card-body" id="deleted-sessions-list">
+                        <div class="empty-state">No deleted sessions</div>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-header">
+                        <h3>Deleted Projects</h3>
+                    </div>
+                    <div class="card-body" id="deleted-projects-list">
+                        <div class="empty-state">No deleted projects</div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 3: Database Maintenance -->
+        <section id="tab-maintenance" class="tab-pane">
+            <div class="section-toolbar">
+                <div class="toolbar-left">
+                    <h2>Database Operations &amp; Backups</h2>
+                    <span class="text-muted">Perform zero-locking physical snapshots, streaming logical SQL dumps, and background vacuuming.</span>
+                </div>
+            </div>
+
+            <div class="maintenance-cards">
+                <div class="maintenance-card">
+                    <div class="m-icon">💾</div>
+                    <div class="m-info">
+                        <h3>Physical SQLite Snapshot</h3>
+                        <p>Creates a non-blocking, online binary backup of <code>kardenwort.db</code> into the <code>backup/</code> directory using SQLite's native backup API.</p>
+                        <div class="m-action">
+                            <button id="btn-snapshot-backup" class="btn btn-primary">Take Snapshot</button>
+                            <span id="snapshot-status" class="status-msg"></span>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="maintenance-card">
+                    <div class="m-icon">📜</div>
+                    <div class="m-info">
+                        <h3>Logical SQL Dump</h3>
+                        <p>Streams a complete SQL dump (DDL schemas + INSERT statements) directly to your browser for export and archiving.</p>
+                        <div class="m-action">
+                            <button id="btn-sql-dump" class="btn btn-secondary">Download dump.sql</button>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="maintenance-card">
+                    <div class="m-icon">🧹</div>
+                    <div class="m-info">
+                        <h3>Vacuum &amp; Query Optimization</h3>
+                        <p>Reclaims unused disk pages and runs <code>PRAGMA optimize;</code> asynchronously in a background worker thread without blocking active reads/writes.</p>
+                        <div class="m-action">
+                            <button id="btn-vacuum-db" class="btn btn-secondary">Run VACUUM &amp; Optimize</button>
+                            <span id="vacuum-status" class="status-msg"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- TAB 4: Telemetry -->
+        <section id="tab-telemetry" class="tab-pane">
+            <div class="section-toolbar">
+                <div class="toolbar-left">
+                    <h2>System Telemetry &amp; Storage Metrics</h2>
+                    <span class="text-muted">Real-time health status, database size, and session counters.</span>
+                </div>
+                <div class="toolbar-right">
+                    <button id="btn-refresh-telemetry" class="btn btn-secondary">🔄 Refresh</button>
+                </div>
+            </div>
+
+            <div class="telemetry-grid" id="telemetry-cards">
+                <div class="metric-card">
+                    <div class="metric-title">Database Size</div>
+                    <div class="metric-value" id="metric-db-size">--</div>
+                    <div class="metric-sub" id="metric-wal-size">WAL: --</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Active Sessions</div>
+                    <div class="metric-value" id="metric-active-sessions">--</div>
+                    <div class="metric-sub" id="metric-deleted-sessions">Deleted: --</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Total Projects</div>
+                    <div class="metric-value" id="metric-total-projects">--</div>
+                    <div class="metric-sub" id="metric-root-projects">Root projects: --</div>
+                </div>
+                <div class="metric-card">
+                    <div class="metric-title">Stored Sentences / Words</div>
+                    <div class="metric-value" id="metric-total-sentences">--</div>
+                    <div class="metric-sub" id="metric-total-words">Words: --</div>
+                </div>
+            </div>
+
+            <div class="card mt-4">
+                <div class="card-header">
+                    <h3>Raw Telemetry Payload</h3>
+                </div>
+                <div class="card-body">
+                    <pre id="raw-telemetry-json" class="code-block">Loading telemetry...</pre>
+                </div>
+            </div>
+        </section>
+    </main>
+
+    <!-- Modal for Project Creation / Edit -->
+    <div id="project-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3 id="modal-project-title">Create Project</h3>
+                <button class="modal-close" id="btn-modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="modal-project-id" />
+                <input type="hidden" id="modal-parent-id" />
+                
+                <div class="form-group">
+                    <label for="project-title-input">Title <span class="req">*</span></label>
+                    <input type="text" id="project-title-input" class="form-input" placeholder="e.g. Harry Potter and the Sorcerer's Stone" required />
+                </div>
+                <div class="form-group">
+                    <label for="project-slug-input">Slug (optional)</label>
+                    <input type="text" id="project-slug-input" class="form-input" placeholder="e.g. harry-potter-1" />
+                </div>
+                <div class="form-group">
+                    <label for="project-desc-input">Description</label>
+                    <textarea id="project-desc-input" class="form-input" rows="3" placeholder="Book synopsis or chapter notes..."></textarea>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-modal-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="btn-modal-save" class="btn btn-primary">Save Project</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Linking Session -->
+    <div id="link-session-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Link Session to Chapter</h3>
+                <button class="modal-close" id="btn-link-modal-close">&times;</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="link-modal-project-id" />
+                <div class="form-group">
+                    <label for="link-session-select">Select Active Session <span class="req">*</span></label>
+                    <select id="link-session-select" class="form-input">
+                        <option value="">Loading sessions...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-link-modal-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="btn-link-modal-save" class="btn btn-primary">Link Session</button>
+            </div>
+        </div>
+    </div>
+
+    <script src="/assets/admin.js"></script>
+</body>
+</html>

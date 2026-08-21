@@ -842,7 +842,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         except Exception as e:
             raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Malformed JSON payload: {e}")
 
-    def _authenticate_token(self, body_data=None):
+    def _authenticate_token(self, body_data=None, query_params=None):
         api_key = getattr(self.server, 'api_key', '')
         if not api_key:
             return
@@ -850,10 +850,46 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         provided_token = self.headers.get('X-API-Token')
         if not provided_token and body_data and isinstance(body_data, dict):
             provided_token = body_data.get('token')
+        if not provided_token and query_params and isinstance(query_params, dict):
+            token_list = query_params.get('token', [])
+            if token_list:
+                provided_token = token_list[0]
 
         import hmac
         if not provided_token or not hmac.compare_digest(str(provided_token).strip(), str(api_key).strip()):
             raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
+
+    def _serve_static_file(self, file_path: Path):
+        if not file_path.is_file():
+            raise StructuredError(ErrorCode.NOT_FOUND, f"File not found: {file_path.name}")
+
+        ext = file_path.suffix.lower()
+        content_types = {
+            ".html": "text/html; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".js": "application/javascript; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".svg": "image/svg+xml",
+            ".ico": "image/x-icon",
+            ".sql": "text/plain; charset=utf-8",
+        }
+        content_type = content_types.get(ext, "application/octet-stream")
+
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+        except Exception as e:
+            raise StructuredError(ErrorCode.SERVER_ERROR, f"Failed to read file: {e}")
+
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
 
     def do_GET(self):
         try:
@@ -1177,7 +1213,155 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, res)
             return
 
-        # 5. Shutdown Endpoint
+        # 5. Admin Panel UI & Static Assets
+        if path in ('/admin', '/admin/'):
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token(query_params=qs)
+            desk_dir = Path(__file__).resolve().parent
+            admin_html = desk_dir / "assets" / "admin.html"
+            self._serve_static_file(admin_html)
+            return
+
+        if path.startswith('/assets/') or path in ('/admin.css', '/admin.js'):
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            desk_dir = Path(__file__).resolve().parent
+            assets_dir = (desk_dir / "assets").resolve()
+            if path in ('/admin.css', '/admin.js'):
+                req_rel = path.lstrip('/')
+            else:
+                req_rel = path[len('/assets/'):]
+
+            target_path = (assets_dir / req_rel).resolve()
+            try:
+                target_path.relative_to(assets_dir)
+            except ValueError:
+                raise StructuredError(ErrorCode.UNAUTHORIZED, "Path traversal forbidden")
+
+            self._serve_static_file(target_path)
+            return
+
+        # 6. Admin Project Tree REST API Endpoints
+        if path == '/api/v1/admin/projects':
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            if method == 'GET':
+                self._authenticate_token(query_params=qs)
+                tree = db.get_project_tree()
+                self._send_json(200, {"ok": True, "projects": tree})
+                return
+            elif method == 'POST':
+                body = self._read_json_body()
+                self._authenticate_token(body)
+                title = body.get('title')
+                if not title:
+                    raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'title' in project payload")
+                slug = body.get('slug')
+                parent_id = body.get('parent_id')
+                description = body.get('description', '')
+                project_id = db.create_project(
+                    title=title,
+                    slug=slug,
+                    parent_id=int(parent_id) if parent_id is not None else None,
+                    description=description
+                )
+                self._send_json(200, {"ok": True, "project_id": project_id})
+                return
+            else:
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+
+        if path == '/api/v1/admin/projects/update':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            project_id = body.get('project_id')
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            updates = {k: v for k, v in body.items() if k in ('title', 'slug', 'description', 'parent_id', 'order_index')}
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            ok = db.update_project(int(project_id), updates)
+            self._send_json(200, {"ok": ok, "project_id": project_id})
+            return
+
+        if path == '/api/v1/admin/projects/delete':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            project_id = body.get('project_id')
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            ok = db.soft_delete_project(int(project_id))
+            self._send_json(200, {"ok": ok, "project_id": project_id})
+            return
+
+        if path == '/api/v1/admin/projects/link':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            project_id = body.get('project_id')
+            session_zid = body.get('session_zid')
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            if not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            ok = db.link_session_to_project(int(project_id), str(session_zid))
+            self._send_json(200, {"ok": ok, "project_id": project_id, "session_zid": session_zid})
+            return
+
+        if path == '/api/v1/admin/projects/unlink':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            project_id = body.get('project_id')
+            session_zid = body.get('session_zid')
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            if not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            ok = db.unlink_session_from_project(int(project_id), str(session_zid))
+            self._send_json(200, {"ok": ok, "project_id": project_id, "session_zid": session_zid})
+            return
+
+        if path == '/api/v1/admin/projects/reorder':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            project_id = body.get('project_id')
+            session_zids = body.get('session_zids', [])
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            if not isinstance(session_zids, list):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, "'session_zids' must be a list")
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            ok = db.reorder_project_sessions(int(project_id), session_zids)
+            self._send_json(200, {"ok": ok, "project_id": project_id, "session_zids": session_zids})
+            return
+
+        if path == '/api/v1/admin/sessions':
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token(query_params=qs)
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            sessions = db.list_sessions(include_deleted=False)
+            self._send_json(200, {"ok": True, "sessions": sessions})
+            return
+
+        # 7. Shutdown Endpoint
         if path in ('/api/v1/shutdown', '/admin/shutdown'):
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
