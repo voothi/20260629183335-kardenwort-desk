@@ -2151,6 +2151,59 @@ class StorageAdapter:
     def file_lock(self, file_path: Path):
         raise NotImplementedError
 
+    def update_word(
+        self,
+        session_zid: str,
+        sentence_idx: Optional[int],
+        token_order: int,
+        field: str,
+        value: Any,
+        zid: Optional[str] = None,
+    ) -> bool:
+        return False
+
+    def update_word_selection(
+        self,
+        session_zid: str,
+        sentence_idx: Optional[int],
+        token_order: int,
+        selected: Union[int, bool, str],
+        zid: Optional[str] = None,
+    ) -> bool:
+        return False
+
+    def update_sentence_translation(
+        self,
+        session_zid: str,
+        sentence_index: int,
+        text: str,
+        target_field: str = "sentence_destination",
+        zid: Optional[str] = None,
+    ) -> bool:
+        return False
+
+    def batch_update_words(
+        self,
+        session_zid: str,
+        updates_list: List[Dict[str, Any]],
+        zid: Optional[str] = None,
+    ) -> int:
+        return 0
+
+    def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
+        return False
+
+    def list_sessions(
+        self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        return []
+
+    def cleanup_db(self, older_than_days: float, zid: Optional[str] = None) -> int:
+        return 0
+
+    def vacuum(self, zid: Optional[str] = None) -> bool:
+        return False
+
 
 class TsvStorageAdapter(StorageAdapter):
     """
@@ -2823,10 +2876,283 @@ class SqliteStorageAdapter(StorageAdapter):
     ) -> Tuple[List[str], List[str], List[List[str]]]:
         return self._tsv_fallback.load_tsv_rows(tsv_path)
 
-    @contextlib.contextmanager
-    def file_lock(self, file_path: Path):
-        with self._tsv_fallback.file_lock(file_path):
-            yield
+    def update_word(
+        self,
+        session_zid: str,
+        sentence_idx: Optional[int],
+        token_order: int,
+        field: str,
+        value: Any,
+        zid: Optional[str] = None,
+    ) -> bool:
+        """
+        Pinpoint atomic SQL update for a single word token cell.
+        """
+        field_mapping = {
+            "quotation": "quotation",
+            "wordsource": "lemma",
+            "lemma": "lemma",
+            "wordsource2": "wordsource2",
+            "wordsourceinflectedform": "inflected_form",
+            "wordsourceinflectedform2": "wordsourceinflectedform2",
+            "inflectedform": "inflected_form",
+            "inflected_form": "inflected_form",
+            "worddestination": "word_destination",
+            "word_destination": "word_destination",
+            "worddestinationinflectedform": "word_destination_inflected",
+            "word_destination_inflected": "word_destination_inflected",
+            "wordsourcemorphologyai": "morphology",
+            "morphology": "morphology",
+            "wordsourceipa": "ipa",
+            "ipa": "ipa",
+            "deskselected": "selected",
+            "selected": "selected",
+            "leitnerbox": "leitner_box",
+            "leitner_box": "leitner_box",
+            "leitnerdue": "leitner_due",
+            "leitner_due": "leitner_due",
+            "deck": "deck",
+            "classificationoxford": "classification_oxford",
+            "classification_oxford": "classification_oxford",
+            "classificationgoethe": "classification_goethe",
+            "classification_goethe": "classification_goethe",
+            "pos": "pos",
+        }
+        f_norm = field.strip().lower().replace("_", "")
+        db_col = field_mapping.get(f_norm)
+
+        with self.db.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            if db_col and db_col not in ("wordsource2", "wordsourceinflectedform2"):
+                cast_val = value
+                if db_col == "selected":
+                    cast_val = 1 if str(value).strip() in ("1", "true", "True") else 0
+                elif db_col == "leitner_box":
+                    try:
+                        cast_val = int(value)
+                    except (ValueError, TypeError):
+                        cast_val = 1
+
+                if sentence_idx is not None:
+                    cursor.execute(
+                        f"UPDATE words SET {db_col} = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;",
+                        (cast_val, session_zid, sentence_idx, token_order),
+                    )
+                else:
+                    cursor.execute(
+                        f"UPDATE words SET {db_col} = ? WHERE session_zid = ? AND token_order = ?;",
+                        (cast_val, session_zid, token_order),
+                    )
+                return cursor.rowcount > 0
+            else:
+                # Custom / unmapped field stored inside extra_fields JSON
+                if sentence_idx is not None:
+                    cursor.execute(
+                        "SELECT id, extra_fields FROM words WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;",
+                        (session_zid, sentence_idx, token_order),
+                    )
+                else:
+                    cursor.execute(
+                        "SELECT id, extra_fields FROM words WHERE session_zid = ? AND token_order = ?;",
+                        (session_zid, token_order),
+                    )
+                row = cursor.fetchone()
+                if not row:
+                    return False
+                word_id = row["id"]
+                raw_ef = row["extra_fields"]
+                ef_dict = {}
+                if raw_ef:
+                    try:
+                        ef_dict = json.loads(raw_ef)
+                    except Exception:
+                        ef_dict = {}
+                ef_dict[field] = value
+                cursor.execute(
+                    "UPDATE words SET extra_fields = ? WHERE id = ?;",
+                    (json.dumps(ef_dict, ensure_ascii=False), word_id),
+                )
+                return cursor.rowcount > 0
+
+    def update_word_selection(
+        self,
+        session_zid: str,
+        sentence_idx: Optional[int],
+        token_order: int,
+        selected: Union[int, bool, str],
+        zid: Optional[str] = None,
+    ) -> bool:
+        """
+        Updates the 'selected' state (0 or 1) for a word row atomically in SQLite.
+        """
+        sel_val = 1 if str(selected).strip() in ("1", "true", "True") else 0
+        with self.db.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            if sentence_idx is not None:
+                cursor.execute(
+                    "UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;",
+                    (sel_val, session_zid, sentence_idx, token_order),
+                )
+            else:
+                cursor.execute(
+                    "UPDATE words SET selected = ? WHERE session_zid = ? AND token_order = ?;",
+                    (sel_val, session_zid, token_order),
+                )
+            return cursor.rowcount > 0
+
+    def update_sentence_translation(
+        self,
+        session_zid: str,
+        sentence_index: int,
+        text: str,
+        target_field: str = "sentence_destination",
+        zid: Optional[str] = None,
+    ) -> bool:
+        """
+        Pinpoint atomic SQL update for a sentence translation in the sentences table.
+        """
+        allowed_cols = {
+            "sentence_destination", "sentence_destination2", "sentence_source_ipa", "sentence_source_audio", "sentence_source"
+        }
+        col = target_field if target_field in allowed_cols else "sentence_destination"
+        with self.db.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                f"UPDATE sentences SET {col} = ? WHERE session_zid = ? AND sentence_index = ?;",
+                (text, session_zid, sentence_index),
+            )
+            return cursor.rowcount > 0
+
+    def batch_update_words(
+        self,
+        session_zid: str,
+        updates_list: List[Dict[str, Any]],
+        zid: Optional[str] = None,
+    ) -> int:
+        """
+        Batch update word fields across multiple rows in a single atomic SQL transaction.
+        """
+        if not updates_list:
+            return 0
+
+        field_mapping = {
+            "quotation": "quotation",
+            "wordsource": "lemma",
+            "lemma": "lemma",
+            "wordsourceinflectedform": "inflected_form",
+            "inflectedform": "inflected_form",
+            "inflected_form": "inflected_form",
+            "worddestination": "word_destination",
+            "word_destination": "word_destination",
+            "worddestinationinflectedform": "word_destination_inflected",
+            "word_destination_inflected": "word_destination_inflected",
+            "wordsourcemorphologyai": "morphology",
+            "morphology": "morphology",
+            "wordsourceipa": "ipa",
+            "ipa": "ipa",
+            "deskselected": "selected",
+            "selected": "selected",
+            "leitnerbox": "leitner_box",
+            "leitner_box": "leitner_box",
+            "leitnerdue": "leitner_due",
+            "leitner_due": "leitner_due",
+            "deck": "deck",
+            "classificationoxford": "classification_oxford",
+            "classification_oxford": "classification_oxford",
+            "classificationgoethe": "classification_goethe",
+            "classification_goethe": "classification_goethe",
+            "pos": "pos",
+        }
+
+        updated_count = 0
+        with self.db.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            for item in updates_list:
+                token_order = item.get("token_order")
+                sentence_idx = item.get("sentence_index")
+                word_id = item.get("id")
+
+                field_updates = {}
+                if "updates" in item and isinstance(item["updates"], dict):
+                    field_updates = item["updates"]
+                elif "field" in item and "value" in item:
+                    field_updates = {item["field"]: item["value"]}
+
+                if not field_updates:
+                    continue
+
+                direct_cols: Dict[str, Any] = {}
+                custom_fields: Dict[str, Any] = {}
+
+                for f_k, f_v in field_updates.items():
+                    f_norm = f_k.strip().lower().replace("_", "")
+                    if f_norm in field_mapping and f_norm not in ("wordsource2", "wordsourceinflectedform2"):
+                        col_name = field_mapping[f_norm]
+                        if col_name == "selected":
+                            direct_cols[col_name] = 1 if str(f_v).strip() in ("1", "true", "True") else 0
+                        elif col_name == "leitner_box":
+                            try:
+                                direct_cols[col_name] = int(f_v)
+                            except (ValueError, TypeError):
+                                direct_cols[col_name] = 1
+                        else:
+                            direct_cols[col_name] = f_v
+                    else:
+                        custom_fields[f_k] = f_v
+
+                if direct_cols:
+                    set_clauses = [f"{c} = ?" for c in direct_cols.keys()]
+                    params = list(direct_cols.values())
+                    if word_id is not None:
+                        params.append(word_id)
+                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE id = ?;", params)
+                    elif sentence_idx is not None and token_order is not None:
+                        params.extend([session_zid, sentence_idx, token_order])
+                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;", params)
+                    elif token_order is not None:
+                        params.extend([session_zid, token_order])
+                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE session_zid = ? AND token_order = ?;", params)
+                    if cursor.rowcount > 0:
+                        updated_count += cursor.rowcount
+
+                if custom_fields:
+                    if word_id is not None:
+                        cursor.execute("SELECT id, extra_fields FROM words WHERE id = ?;", (word_id,))
+                    elif sentence_idx is not None and token_order is not None:
+                        cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;", (session_zid, sentence_idx, token_order))
+                    elif token_order is not None:
+                        cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, token_order))
+                    row = cursor.fetchone()
+                    if row:
+                        w_id = row["id"]
+                        raw_ef = row["extra_fields"]
+                        ef_dict = {}
+                        if raw_ef:
+                            try:
+                                ef_dict = json.loads(raw_ef)
+                            except Exception:
+                                ef_dict = {}
+                        ef_dict.update(custom_fields)
+                        cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (json.dumps(ef_dict, ensure_ascii=False), w_id))
+                        if not direct_cols and cursor.rowcount > 0:
+                            updated_count += cursor.rowcount
+
+        return updated_count
+
+    def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
+        """
+        Deletes session metadata, cascading deletion to sentences and words in SQLite.
+        """
+        return self.db.delete_session(session_zid, zid=zid)
+
+    def list_sessions(self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None) -> List[Dict[str, Any]]:
+        return self.db.list_sessions_with_counts(limit=limit, offset=offset, zid=zid)
+
+    def cleanup_db(self, older_than_days: float, zid: Optional[str] = None) -> int:
+        return self.db.cleanup_db(older_than_days=older_than_days, zid=zid)
+
+    def vacuum(self, zid: Optional[str] = None) -> bool:
+        return self.db.vacuum(zid=zid)
 
 
 class StorageRouter:
@@ -2862,6 +3188,30 @@ class StorageRouter:
 
     def load_tsv_rows(self, *args, **kwargs):
         return self.adapter.load_tsv_rows(*args, **kwargs)
+
+    def update_word(self, *args, **kwargs):
+        return self.adapter.update_word(*args, **kwargs)
+
+    def update_word_selection(self, *args, **kwargs):
+        return self.adapter.update_word_selection(*args, **kwargs)
+
+    def update_sentence_translation(self, *args, **kwargs):
+        return self.adapter.update_sentence_translation(*args, **kwargs)
+
+    def batch_update_words(self, *args, **kwargs):
+        return self.adapter.batch_update_words(*args, **kwargs)
+
+    def delete_session(self, *args, **kwargs):
+        return self.adapter.delete_session(*args, **kwargs)
+
+    def list_sessions(self, *args, **kwargs):
+        return self.adapter.list_sessions(*args, **kwargs)
+
+    def cleanup_db(self, *args, **kwargs):
+        return self.adapter.cleanup_db(*args, **kwargs)
+
+    def vacuum(self, *args, **kwargs):
+        return self.adapter.vacuum(*args, **kwargs)
 
     @contextlib.contextmanager
     def file_lock(self, file_path: Path):
@@ -2910,7 +3260,9 @@ def save_tsv_rows_safely(tsv_path: Path, comments: List[str], headers: List[str]
 
 
 def extract_zid(path):
-    name = path.name
+    if not path:
+        return "00000000000000"
+    name = path.name if hasattr(path, 'name') else Path(str(path)).name
     match = re.match(r'^(\d{14})', name)
     return match.group(1) if match else "00000000000000"
 
@@ -5513,6 +5865,12 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     shutil.rmtree(master_updates_dir, ignore_errors=True)
             except Exception:
                 pass
+            try:
+                storage_adapter = get_storage_adapter(config, resolved_paths)
+                if storage_adapter.backend_name == 'sqlite':
+                    storage_adapter.delete_session(zid)
+            except Exception as e:
+                logger.warning(f"Failed deleting stub parent session from SQLite: {e}")
 
             bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
             text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
@@ -12000,6 +12358,105 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
     if zid is None:
         zid = generate_unique_zid()
 
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    session_zid = None
+    if isinstance(tsv_path_or_session, str) and (tsv_path_or_session.strip().isdigit() or len(tsv_path_or_session.strip()) >= 14):
+        session_zid = extract_zid(tsv_path_or_session.strip()) or tsv_path_or_session.strip()
+    elif tsv_path_or_session:
+        session_zid = extract_zid(str(tsv_path_or_session))
+
+    if storage_adapter.backend_name == 'sqlite' and session_zid:
+        bundle = storage_adapter.load_session(session_zid)
+        if bundle and bundle.get("session"):
+            mapping_file = resolved_paths.get('anki_mapping_file') if resolved_paths else None
+            mapping = load_anki_mapping(mapping_file) if mapping_file else None
+            editable_cols = []
+            role_fields = {}
+            if mapping:
+                if hasattr(mapping, 'has_section') and mapping.has_section('desk_editable'):
+                    editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
+                if hasattr(mapping, 'has_section') and mapping.has_section('desk_columns'):
+                    role_fields = {role: field for field, role in mapping['desk_columns'].items()}
+            selected_col_name = role_fields.get('selected', 'DeskSelected')
+            if selected_col_name not in editable_cols:
+                editable_cols.append(selected_col_name)
+
+            restored = storage_adapter.restore_session(session_zid)
+            current_data_rows = restored.get("data_rows", [])
+            if fingerprint:
+                current_fp = compute_content_fingerprint(current_data_rows)
+                if fingerprint != current_fp:
+                    raise StructuredError(ErrorCode.ROW_STALE, f"Row content hash mismatch. Rendered: {fingerprint}, Current: {current_fp}")
+
+            for delta in deltas:
+                row_id = delta.get("row_id")
+                col_name = delta.get("column")
+                val = delta.get("value")
+
+                if row_id is None or col_name is None or val is None:
+                    raise StructuredError(ErrorCode.INVALID_STATE, "Each delta must have 'row_id', 'column', and 'value'")
+
+                if col_name == "_delete":
+                    with storage_adapter.db.get_connection(zid=zid) as conn:
+                        conn.execute("DELETE FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, row_id))
+                    continue
+
+                if col_name not in editable_cols and col_name.lower() not in [c.lower() for c in editable_cols]:
+                    raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' is not inline-editable.")
+
+                if col_name in (selected_col_name, "DeskSelected", "selected"):
+                    storage_adapter.update_word_selection(session_zid, sentence_idx=None, token_order=row_id, selected=val, zid=zid)
+                else:
+                    storage_adapter.update_word(session_zid, sentence_idx=None, token_order=row_id, field=col_name, value=val, zid=zid)
+
+            updated_restored = storage_adapter.restore_session(session_zid)
+            new_fingerprint = compute_content_fingerprint(updated_restored.get("data_rows", []))
+
+            # Mirror updates to TSV file if it exists on disk
+            tsv_path = None
+            if isinstance(tsv_path_or_session, Path) and tsv_path_or_session.exists():
+                tsv_path = tsv_path_or_session
+            elif isinstance(tsv_path_or_session, str) and Path(tsv_path_or_session).exists():
+                tsv_path = Path(tsv_path_or_session)
+            elif resolved_paths and 'kardenwort_workspace' in resolved_paths:
+                try:
+                    kw_config = load_kardenwort_config(resolved_paths['kardenwort_workspace'])
+                    results_dir = resolve_results_dir(resolved_paths, kw_config)
+                    lang = language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
+                    tsv_path = find_working_tsv(results_dir, str(session_zid), lang)
+                except Exception:
+                    pass
+
+            if tsv_path and tsv_path.exists():
+                try:
+                    with file_lock(tsv_path):
+                        comments, headers, data_rows = load_tsv_rows(tsv_path)
+                        for delta in deltas:
+                            r_id = delta.get("row_id")
+                            c_name = delta.get("column")
+                            v_val = delta.get("value")
+                            if c_name == "_delete":
+                                if 0 <= r_id < len(data_rows):
+                                    data_rows[r_id] = None
+                            elif c_name in headers and 0 <= r_id < len(data_rows) and data_rows[r_id] is not None:
+                                data_rows[r_id][headers.index(c_name)] = v_val
+                        data_rows = [r for r in data_rows if r is not None]
+                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                except Exception as e:
+                    logger.warning(f"Failed updating mirror TSV during SQLite edit-save: {e}")
+
+            results_dir = resolve_results_dir(resolved_paths, config) if resolved_paths and config else None
+            if (zid or session_zid) and results_dir:
+                sess_logger = SessionLogger(zid or session_zid, results_dir, trace_id=(trace_id or f"{zid or session_zid}:edit-save"))
+                sess_logger.info(f"Saved {len(deltas)} edit delta(s) via SQLite to session {session_zid}")
+
+            return {
+                "status": "success",
+                "fingerprint": new_fingerprint,
+                "session_zid": session_zid,
+                "zid": zid
+            }
+
     if isinstance(tsv_path_or_session, Path):
         tsv_path = tsv_path_or_session
     elif isinstance(tsv_path_or_session, str) and (Path(tsv_path_or_session).exists() or '\\' in tsv_path_or_session or '/' in tsv_path_or_session):
@@ -12958,6 +13415,135 @@ def cmd_db_reset(args):
         print_structured_error("DESK_FAILED", f"Database reset failed: {str(e)}")
         sys.exit(1)
 
+def cmd_list_sessions(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    limit = getattr(args, 'limit', None)
+    sessions = db.list_sessions_with_counts(limit=limit, zid=getattr(args, 'zid', None))
+
+    if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+        out_str = json.dumps(sessions, indent=2, ensure_ascii=False)
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(out_str + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(out_str)
+    else:
+        if not sessions:
+            print("No active sessions found in database.")
+        else:
+            header = f"{'ZID':<16} {'LANG':<8} {'TOKENS':<8} {'CREATED AT':<25} {'SLUG'}"
+            print(header)
+            print("-" * len(header))
+            for s in sessions:
+                lang = f"{s.get('source_language', '')}->{s.get('target_language', '')}"
+                print(f"{s.get('zid', ''):<16} {lang:<8} {s.get('token_count', 0):<8} {str(s.get('created_at', '')):<25} {s.get('slug', '')}")
+    sys.exit(0)
+
+
+def cmd_delete_session(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    session_zid = getattr(args, 'zid', None)
+    if not session_zid or not str(session_zid).strip():
+        print_structured_error("INVALID_STATE", "Missing required --zid for session deletion")
+        sys.exit(1)
+
+    session_zid = str(session_zid).strip()
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    deleted = storage_adapter.delete_session(session_zid, zid=session_zid)
+
+    # Clean up disk TSV / txt if present in results/
+    results_dir = resolve_results_dir(resolved_paths, config) if resolved_paths and config else None
+    if results_dir and results_dir.exists():
+        for p in results_dir.glob(f"{session_zid}*"):
+            try:
+                if p.is_file():
+                    p.unlink()
+                elif p.is_dir():
+                    import shutil
+                    shutil.rmtree(p, ignore_errors=True)
+            except Exception:
+                pass
+
+    res = {
+        "ok": deleted,
+        "deleted_zid": session_zid,
+        "message": f"Session '{session_zid}' deleted successfully." if deleted else f"Session '{session_zid}' not found."
+    }
+    if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+        out_str = json.dumps(res, indent=2)
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(out_str + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(out_str)
+    else:
+        print(res["message"])
+    sys.exit(0 if deleted else 1)
+
+
+def cmd_cleanup_db(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    older_than = getattr(args, 'older_than', None)
+    if older_than is None:
+        print_structured_error("INVALID_STATE", "Missing required --older-than (in days) for cleanup-db")
+        sys.exit(1)
+
+    try:
+        days = float(older_than)
+    except (ValueError, TypeError):
+        print_structured_error("INVALID_STATE", f"Invalid --older-than value: '{older_than}'")
+        sys.exit(1)
+
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    count = db.cleanup_db(older_than_days=days, zid=getattr(args, 'zid', None))
+
+    res = {
+        "ok": True,
+        "deleted_count": count,
+        "older_than_days": days,
+        "message": f"Purged {count} session(s) older than {days} day(s)."
+    }
+    if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+        out_str = json.dumps(res, indent=2)
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(out_str + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(out_str)
+    else:
+        print(res["message"])
+    sys.exit(0)
+
+
+def cmd_vacuum_db(args):
+    config_path = getattr(args, 'config', None)
+    config, resolved_paths, _, _ = load_config(config_path)
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    ok = db.vacuum(zid=getattr(args, 'zid', None))
+
+    res = {
+        "ok": ok,
+        "message": "Database vacuumed and defragmented successfully." if ok else "Database vacuum failed."
+    }
+    if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+        out_str = json.dumps(res, indent=2)
+        if sys.__stdout__ is not None:
+            sys.__stdout__.write(out_str + "\n")
+            sys.__stdout__.flush()
+        else:
+            print(out_str)
+    else:
+        print(res["message"])
+    sys.exit(0 if ok else 1)
+
+
 def main():
     parser = argparse.ArgumentParser(description="Kardenwort Desk Orchestration Core")
     parser.add_argument("--config", default=None, help="Path to config.ini")
@@ -12973,6 +13559,11 @@ def main():
     parser.add_argument("--db-query", default=None, help="Execute safe read-only SQL query")
     parser.add_argument("--db-reset", action="store_true", help="Reset database (requires --force)")
     parser.add_argument("--force", action="store_true", help="Force flag for destructive operations")
+    parser.add_argument("--list-sessions", action="store_true", help="List active sessions with token counts")
+    parser.add_argument("--delete-session", action="store_true", help="Delete session by ZID (requires --zid)")
+    parser.add_argument("--cleanup-db", action="store_true", help="Purge old sessions (requires --older-than)")
+    parser.add_argument("--older-than", type=float, default=None, help="Retention period in days for cleanup-db")
+    parser.add_argument("--vacuum-db", action="store_true", help="Defragment and vacuum SQLite database")
 
     subparsers = parser.add_subparsers(dest="command", required=False)
 
@@ -12990,6 +13581,25 @@ def main():
     # db-reset
     p_db_reset = subparsers.add_parser("db-reset")
     p_db_reset.add_argument("--force", action="store_true", help="Confirm database reset")
+
+    # list-sessions
+    p_list_sess = subparsers.add_parser("list-sessions")
+    p_list_sess.add_argument("--limit", type=int, default=None, help="Limit number of sessions returned")
+    p_list_sess.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # delete-session
+    p_del_sess = subparsers.add_parser("delete-session")
+    p_del_sess.add_argument("--zid", required=True, help="Session ZID to delete")
+    p_del_sess.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # cleanup-db
+    p_cleanup = subparsers.add_parser("cleanup-db")
+    p_cleanup.add_argument("--older-than", type=float, required=True, help="Retention window in days")
+    p_cleanup.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
+
+    # vacuum-db
+    p_vacuum = subparsers.add_parser("vacuum-db")
+    p_vacuum.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
     # lookup
     p_lookup = subparsers.add_parser("lookup")
@@ -13166,6 +13776,18 @@ def main():
     if getattr(args, 'db_reset', False):
         cmd_db_reset(args)
         return
+    if getattr(args, 'list_sessions', False):
+        cmd_list_sessions(args)
+        return
+    if getattr(args, 'delete_session', False):
+        cmd_delete_session(args)
+        return
+    if getattr(args, 'cleanup_db', False):
+        cmd_cleanup_db(args)
+        return
+    if getattr(args, 'vacuum_db', False):
+        cmd_vacuum_db(args)
+        return
 
     commands = {
         "lookup": cmd_lookup,
@@ -13189,6 +13811,10 @@ def main():
         "db-check": cmd_db_check,
         "db-query": cmd_db_query,
         "db-reset": cmd_db_reset,
+        "list-sessions": cmd_list_sessions,
+        "delete-session": cmd_delete_session,
+        "cleanup-db": cmd_cleanup_db,
+        "vacuum-db": cmd_vacuum_db,
     }
 
     if not getattr(args, 'command', None):

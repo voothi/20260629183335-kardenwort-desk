@@ -705,6 +705,40 @@ class KardenwortDB:
             cursor.execute(sql, values)
             return cursor.rowcount > 0
 
+    def list_sessions_with_counts(
+        self, limit: Optional[int] = None, offset: int = 0, zid: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
+        """
+        Returns a list of sessions with token count and sentence count ordered by created_at DESC.
+        """
+        sql = """
+            SELECT 
+                s.zid, 
+                s.slug, 
+                s.source_language, 
+                s.target_language, 
+                s.text_mode, 
+                s.source_raw_text,
+                s.created_at, 
+                s.updated_at,
+                COUNT(w.id) as token_count,
+                COUNT(DISTINCT sn.sentence_index) as sentence_count
+            FROM sessions s
+            LEFT JOIN sentences sn ON sn.session_zid = s.zid
+            LEFT JOIN words w ON w.session_zid = s.zid
+            GROUP BY s.zid
+            ORDER BY s.created_at DESC
+        """
+        params: List[Any] = []
+        if limit is not None:
+            sql += " LIMIT ? OFFSET ?"
+            params.extend([limit, offset])
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return [dict(r) for r in cursor.fetchall()]
+
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
         Deletes a session by ZID. Associated sentences and words are cascade deleted.
@@ -713,6 +747,28 @@ class KardenwortDB:
             cursor = conn.cursor()
             cursor.execute("DELETE FROM sessions WHERE zid = ?;", (session_zid,))
             return cursor.rowcount > 0
+
+    def cleanup_db(self, older_than_days: float, zid: Optional[str] = None) -> int:
+        """
+        Deletes sessions older than specified number of days (cascades to sentences and words).
+        """
+        sql = "DELETE FROM sessions WHERE (julianday('now') - julianday(created_at)) > ?;"
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (older_than_days,))
+            return cursor.rowcount
+
+    def vacuum(self, zid: Optional[str] = None) -> bool:
+        """
+        Executes VACUUM on the database to defragment and reclaim free pages.
+        """
+        conn = self.get_connection(read_only=False, zid=zid)
+        try:
+            conn.isolation_level = None
+            conn.execute("VACUUM;")
+            return True
+        finally:
+            conn.close()
 
     # ---------------------------------------------------------------------------
     # Normalized CRUD Helpers: Sentences
