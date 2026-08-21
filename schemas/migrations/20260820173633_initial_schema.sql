@@ -1,4 +1,4 @@
--- 001_initial_schema.sql
+-- 20260820173633_initial_schema.sql
 -- Baseline relational schema for Kardenwort-Desk SQLite engine
 
 CREATE TABLE IF NOT EXISTS _migrations (

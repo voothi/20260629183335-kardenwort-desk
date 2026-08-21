@@ -107,13 +107,13 @@ def test_migration_runner_initial_schema(temp_db):
     """Verify deterministic migration execution and _migrations table recording."""
     res = temp_db.run_migrations()
     assert res["ok"] is True
-    assert "001_initial_schema.sql" in res["applied"]
+    assert "20260820173633_initial_schema.sql" in res["applied"]
     assert res["total_applied"] >= 1
 
     # Check status
     status = temp_db.get_status()
     assert status["ok"] is True
-    assert "001_initial_schema.sql" in status["migrations_applied"]
+    assert "20260820173633_initial_schema.sql" in status["migrations_applied"]
     assert "sessions" in status["tables"]
     assert "sentences" in status["tables"]
     assert "words" in status["tables"]
@@ -123,7 +123,7 @@ def test_migration_runner_initial_schema(temp_db):
     res_second = temp_db.run_migrations()
     assert res_second["ok"] is True
     assert len(res_second["applied"]) == 0
-    assert "001_initial_schema.sql" in res_second["already_applied"]
+    assert "20260820173633_initial_schema.sql" in res_second["already_applied"]
 
 
 def test_migration_runner_custom_scripts(tmp_path):
