@@ -138,7 +138,7 @@ def test_archive_click_does_not_highlight_unrelated_path_subtokens(page, tmp_pat
     archive_span.click()
 
     # The archive row should be selected
-    archive_row = page.locator("tr[data-row-id='0']")
+    archive_row = page.locator("tr[data-token-order='0']")
     assert "selected" in archive_row.get_attribute("class")
 
     # Tokens "Archive" and "Archived" should have active highlight

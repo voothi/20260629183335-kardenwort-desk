@@ -1525,7 +1525,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     raise StructuredError(ErrorCode.MISSING_FIELD, f"Missing required payload field: '{req_field}'")
 
             req_zid = generate_server_zid(self.server)
-            deltas = [{"row_id": int(body["row_id"]), "column": "DeskSelected", "value": "1" if body["status"] else ""}]
+            deltas = [{"row_id": int(body["row_id"]), "token_order": int(body.get("token_order", body["row_id"])), "column": "DeskSelected", "value": "1" if body["status"] else ""}]
             res = core_edit_save(
                 tsv_path_or_session=body["session_zid"],
                 deltas=deltas,

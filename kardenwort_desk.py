@@ -2678,10 +2678,13 @@ class SqliteStorageAdapter(StorageAdapter):
                         if val:
                             extra[h_name] = val
 
+                t_ord_raw = get_col_val(row, "tokenorder")
+                token_order = int(t_ord_raw) if (t_ord_raw is not None and str(t_ord_raw).strip().isdigit()) else row_idx
+
                 word_entry = {
                     "session_zid": session_zid,
                     "sentence_index": s_idx,
-                    "token_order": row_idx,
+                    "token_order": token_order,
                     "quotation": quotation,
                     "inflected_form": inflected or None,
                     "lemma": lemma,
@@ -2940,9 +2943,17 @@ class SqliteStorageAdapter(StorageAdapter):
                         val = extra_fields.get(h) if h in extra_fields else (word.get("inflected_form") or "")
                         row_cells.append(str(val or ""))
                     elif h_lower == "worddestination":
-                        row_cells.append(str(word.get("word_destination") or ""))
+                        w_dest = str(word.get("word_destination") or "")
+                        if w_dest.strip() == "[FAILED]":
+                            w_dest = ""
+                        row_cells.append(w_dest)
                     elif h_lower == "worddestinationinflectedform":
-                        row_cells.append(str(word.get("word_destination_inflected") or ""))
+                        w_dest_inf = str(word.get("word_destination_inflected") or "")
+                        if w_dest_inf.strip() == "[FAILED]":
+                            w_dest_inf = ""
+                        row_cells.append(w_dest_inf)
+                    elif h_lower == "tokenorder":
+                        row_cells.append(str(word.get("token_order", 0)))
                     elif h_lower == "wordsourcemorphologyai":
                         row_cells.append(str(word.get("morphology") or ""))
                     elif h_lower == "wordsourceipa":
@@ -3814,6 +3825,7 @@ def deduplicate_rows_by_lemma(
 ) -> List[List[str]]:
     """
     Deduplicates data rows by lemma, preserving first occurrence order and merging non-empty fields & inflected forms.
+    Rows with empty lemmas are preserved unchanged.
     """
     if not data_rows or not headers:
         return data_rows
@@ -3827,19 +3839,24 @@ def deduplicate_rows_by_lemma(
     if col_lemma == -1:
         return data_rows
 
-    seen_lemmas: List[str] = []
+    ordered_entries = []
     grouped_rows: Dict[str, List[List[str]]] = {}
     for row in data_rows:
         lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
         if not lemma_val:
+            ordered_entries.append(('row', row))
             continue
         if lemma_val not in grouped_rows:
             grouped_rows[lemma_val] = []
-            seen_lemmas.append(lemma_val)
+            ordered_entries.append(('lemma', lemma_val))
         grouped_rows[lemma_val].append(row)
 
     unique_rows: List[List[str]] = []
-    for lem in seen_lemmas:
+    for entry_type, val in ordered_entries:
+        if entry_type == 'row':
+            unique_rows.append(val)
+            continue
+        lem = val
         rows_list = grouped_rows[lem]
         merged_row = list(rows_list[0])
         merged_inflected: List[str] = []
@@ -4330,6 +4347,18 @@ def file_lock(file_path: Path, adapter: Optional[StorageAdapter] = None):
         yield
 
 
+def _sanitize_rows(data_rows: Optional[List[List[str]]]) -> Optional[List[List[str]]]:
+    """
+    Sanitizes data rows by replacing internal '[FAILED]' sentinels with empty string.
+    """
+    if not data_rows:
+        return data_rows
+    sanitized = []
+    for row in data_rows:
+        sanitized.append([("" if (isinstance(cell, str) and cell.strip() == "[FAILED]") else cell) for cell in row])
+    return sanitized
+
+
 def load_tsv_rows(tsv_path: Path, adapter: Optional[StorageAdapter] = None) -> Tuple[List[str], List[str], List[List[str]]]:
     act_adapter = adapter or _DEFAULT_TSV_ADAPTER
     return act_adapter.load_tsv_rows(tsv_path)
@@ -4337,7 +4366,7 @@ def load_tsv_rows(tsv_path: Path, adapter: Optional[StorageAdapter] = None) -> T
 
 def save_tsv_rows_safely(tsv_path: Path, comments: List[str], headers: List[str], data_rows: List[List[str]], adapter: Optional[StorageAdapter] = None) -> None:
     act_adapter = adapter or _DEFAULT_TSV_ADAPTER
-    act_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+    act_adapter.save_tsv_rows_safely(tsv_path, comments, headers, _sanitize_rows(data_rows) or [])
 
 
 def extract_zid(path):
@@ -7245,7 +7274,27 @@ html, body {{
     main_text_provider = text_base_provider
     lemma_base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
     role_fields = get_role_fields(mapping, headers)
-    data_rows = deduplicate_rows_by_lemma(data_rows, headers, role_fields=role_fields)
+    col_lemma_check = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    if col_lemma_check != -1:
+        seen_lemmas_check = set()
+        dup_lemmas = []
+        for r in data_rows:
+            if len(r) > col_lemma_check:
+                l_val = r[col_lemma_check].strip().lower()
+                if l_val:
+                    if l_val in seen_lemmas_check and l_val not in dup_lemmas:
+                        dup_lemmas.append(l_val)
+                    seen_lemmas_check.add(l_val)
+        if dup_lemmas:
+            logger.warning(f"Duplicate lemmas detected in restored data_rows: {dup_lemmas}")
+
+    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+    if col_token_order == -1:
+        headers.append("TokenOrder")
+        col_token_order = len(headers) - 1
+        for r_i, r in enumerate(data_rows):
+            r.append(str(r_i))
+
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
@@ -7286,7 +7335,7 @@ html, body {{
                         source_raw_text=text,
                         comments=comments,
                         headers=headers,
-                        data_rows=data_rows,
+                        data_rows=_sanitize_rows(data_rows),
                         working_tsv_path=None,
                         zid=zid,
                     )
@@ -7335,7 +7384,7 @@ html, body {{
     
     # Get column indices for IPA and Morphology to check if they are missing
     col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
-    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
+    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
 
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
@@ -7599,13 +7648,13 @@ html, body {{
                                 if len(row) <= col_word_dest:
                                     row.extend([''] * (col_word_dest - len(row) + 1))
                                 if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
-                                    row[col_word_dest] = "[FAILED]"
+                                    row[col_word_dest] = ""
                                     modified_sweep = True
                                     if is_sqlite:
                                         updates.append({
                                             "token_order": row_idx,
                                             "field": "word_destination",
-                                            "value": "[FAILED]",
+                                            "value": "",
                                         })
                     if modified_sweep:
                         if is_sqlite:
@@ -7975,6 +8024,8 @@ html, body {{
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
+        if trans_val == "[FAILED]":
+            trans_val = ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
         
@@ -7993,6 +8044,9 @@ html, body {{
             highlighted_val = row[col_highlighted] if len(row) > col_highlighted else ""
             if highlighted_val.strip().lower() in ["1", "true"]:
                 is_selected = "1"
+
+        token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and row[col_token_order].strip() else str(row_id)
+        sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and row[col_index].strip().isdigit() else "1"
 
         dynamic_tds = ""
         for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
@@ -8013,7 +8067,7 @@ html, body {{
             dynamic_tds += f'<td class="col-classification" data-col="{role}"><div class="scrollable-cell">{inner_html}</div></td>'
 
         table_rows.append(
-            f'<tr data-row-id="{row_id}" data-selected="{is_selected}" class="{row_highlight_class}">'
+            f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{lemma_val}</div></td>'
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"><div class="scrollable-cell">{trans_val}</div></td>'
@@ -10174,7 +10228,12 @@ html, body {{
             var scrollDiv = cell.querySelector('.scrollable-cell');
             var originalValue = scrollDiv ? (scrollDiv.textContent || scrollDiv.innerText) : (cell.textContent || cell.innerText || "");
             var colName = cell.getAttribute('data-col');
-            var rowId = cell.parentElement.getAttribute('data-row-id');
+            var trParent = cell.parentElement;
+            var rowId = trParent.getAttribute('data-row-id');
+            var tokenOrder = trParent.getAttribute('data-token-order');
+            var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '') ? parseInt(tokenOrder, 10) : parseInt(rowId, 10);
+            var sentenceIdx = trParent.getAttribute('data-sentence-idx');
+            var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '') ? parseInt(sentenceIdx, 10) : 1;
             
             var input = document.createElement('input');
             input.type = 'text';
@@ -10222,7 +10281,9 @@ html, body {{
                 if (newValue !== originalValue) {
                     var action = {
                         type: 'edit',
-                        rowId: parseInt(rowId),
+                        rowId: parseInt(rowId, 10),
+                        tokenOrder: tokenOrderVal,
+                        sentenceIdx: sentIdxVal,
                         column: colName,
                         oldValue: originalValue,
                         newValue: newValue,
@@ -10299,9 +10360,29 @@ html, body {{
         window.deleteSelectedRows = function() {
             var selected = getSelectedRowsArray();
             if (selected.length === 0) return;
+            var tOrders = [];
+            var sIndices = [];
+            for (var i = 0; i < selected.length; i++) {
+                var rId = selected[i];
+                var tOrd = rId;
+                var sIdx = 1;
+                for (var k = 0; k < tableRows.length; k++) {
+                    if (parseInt(tableRows[k].getAttribute('data-row-id'), 10) === rId) {
+                        var toAttr = tableRows[k].getAttribute('data-token-order');
+                        if (toAttr !== null && toAttr !== '') tOrd = parseInt(toAttr, 10);
+                        var siAttr = tableRows[k].getAttribute('data-sentence-idx');
+                        if (siAttr !== null && siAttr !== '') sIdx = parseInt(siAttr, 10);
+                        break;
+                    }
+                }
+                tOrders.push(tOrd);
+                sIndices.push(sIdx);
+            }
             var action = {
                 type: 'delete',
-                rowIds: selected
+                rowIds: selected,
+                tokenOrders: tOrders,
+                sentenceIndices: sIndices
             };
             pushHistory(action);
             applyAction(action);
@@ -10385,16 +10466,33 @@ html, body {{
                     for (var k = 0; k < deltas.length; k++) {
                         if (deltas[k].row_id === action.rowId && deltas[k].column === action.column) {
                             deltas[k].value = action.newValue;
+                            deltas[k].token_order = action.tokenOrder;
+                            deltas[k].sentence_idx = action.sentenceIdx;
                             found = true;
                             break;
                         }
                     }
                     if (!found) {
-                        deltas.push({ row_id: action.rowId, column: action.column, value: action.newValue });
+                        deltas.push({
+                            row_id: action.rowId,
+                            token_order: action.tokenOrder,
+                            sentence_idx: action.sentenceIdx,
+                            column: action.column,
+                            value: action.newValue
+                        });
                     }
                 } else if (action.type === 'delete') {
                     for (var j = 0; j < action.rowIds.length; j++) {
-                        deltas.push({ row_id: action.rowIds[j], column: '_delete', value: true });
+                        var rId = action.rowIds[j];
+                        var tOrd = (action.tokenOrders && action.tokenOrders[j] !== undefined) ? action.tokenOrders[j] : rId;
+                        var sIdx = (action.sentenceIndices && action.sentenceIndices[j] !== undefined) ? action.sentenceIndices[j] : 1;
+                        deltas.push({
+                            row_id: rId,
+                            token_order: tOrd,
+                            sentence_idx: sIdx,
+                            column: '_delete',
+                            value: true
+                        });
                     }
                 }
             }
@@ -10439,11 +10537,17 @@ html, body {{
                 for (var i = 0; i < tableRows.length; i++) {
                     var row = tableRows[i];
                     var rowIdStr = String(row.getAttribute('data-row-id'));
+                    var tOrdStr = row.getAttribute('data-token-order');
+                    var tOrdVal = (tOrdStr !== null && tOrdStr !== '') ? parseInt(tOrdStr, 10) : parseInt(rowIdStr, 10);
+                    var sIdxStr = row.getAttribute('data-sentence-idx');
+                    var sIdxVal = (sIdxStr !== null && sIdxStr !== '') ? parseInt(sIdxStr, 10) : 1;
                     var currentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr);
                     var initiallySelected = initialHighlights[rowIdStr] || false;
                     if (currentlySelected !== initiallySelected) {
                         mergedDeltas.push({
-                            row_id: parseInt(rowIdStr),
+                            row_id: parseInt(rowIdStr, 10),
+                            token_order: tOrdVal,
+                            sentence_idx: sIdxVal,
                             column: '{selected_col_name}',
                             value: currentlySelected ? '1' : ''
                         });
@@ -10993,7 +11097,9 @@ INJECTED_JS_TEMPLATE = """
         var selected = [];
         checkboxes.forEach(function(cb) {
             if (cb.checked) {
-                selected.push(parseInt(cb.getAttribute('data-row-id'), 10));
+                var tOrd = cb.getAttribute('data-token-order');
+                var rId = cb.getAttribute('data-row-id');
+                selected.push(parseInt((tOrd !== null && tOrd !== '') ? tOrd : rId, 10));
             }
         });
         return selected;
@@ -11024,6 +11130,7 @@ INJECTED_JS_TEMPLATE = """
             session_zid: SESSION_ZID,
             language: LANGUAGE,
             row_id: rowId,
+            token_order: rowId,
             status: newStatus,
             fingerprint: FINGERPRINT
         };
@@ -11190,14 +11297,16 @@ def render_section(token, ctx):
             field = COLUMN_TOKEN_MAP[t]
             col_indices[t] = headers.index(field) if field in headers else -1
 
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
         for row_id, row in enumerate(data_rows):
             sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
             is_checked_bool = str(sel_val).strip() in ("1", "true", "True")
             row_cls = ' class="kw-row-selected"' if is_checked_bool else ''
-            html_output += f'<tr{row_cls}>'
+            token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and row[col_token_order].strip() else str(row_id)
+            html_output += f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}"{row_cls}>'
             if server_enabled:
                 is_checked = "checked" if is_checked_bool else ""
-                html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" {is_checked} onchange="kwToggleTag(this, {row_id})"></td>'
+                html_output += f'<td class="kw-tag-control"><input type="checkbox" class="kw-tag-checkbox" data-row-id="{row_id}" data-token-order="{token_order_val}" {is_checked} onchange="kwToggleTag(this, {token_order_val})"></td>'
             for t in valid_tokens:
                 idx = col_indices[t]
                 val = row[idx] if idx != -1 and len(row) > idx else ""
@@ -11232,7 +11341,14 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
-    data_rows = deduplicate_rows_by_lemma(data_rows, headers, role_fields=role_fields)
+
+    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+    if col_token_order == -1:
+        headers.append("TokenOrder")
+        col_token_order = len(headers) - 1
+        for r_i, r in enumerate(data_rows):
+            r.append(str(r_i))
+
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
 
     effective_server_enabled = server_enabled or goldendict.get('server_enabled', False)
@@ -14091,13 +14207,13 @@ def cmd_progressive_worker(args):
                                     if len(row) <= col_word_dest:
                                         row.extend([''] * (col_word_dest - len(row) + 1))
                                     if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
-                                        row[col_word_dest] = "[FAILED]"
+                                        row[col_word_dest] = ""
                                         modified_sweep = True
                                         if is_sqlite:
                                             updates.append({
                                                 "token_order": row_idx,
                                                 "field": "word_destination",
-                                                "value": "[FAILED]",
+                                                "value": "",
                                             })
                         if modified_sweep:
                             if is_sqlite:
@@ -14173,6 +14289,8 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
 
             for delta in deltas:
                 row_id = delta.get("row_id")
+                token_order = delta.get("token_order") if delta.get("token_order") is not None else row_id
+                sentence_idx = delta.get("sentence_idx")
                 col_name = delta.get("column")
                 val = delta.get("value")
 
@@ -14181,16 +14299,16 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
 
                 if col_name == "_delete":
                     with storage_adapter.db.get_connection(zid=zid) as conn:
-                        conn.execute("DELETE FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, row_id))
+                        conn.execute("DELETE FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, token_order))
                     continue
 
                 if col_name not in editable_cols and col_name.lower() not in [c.lower() for c in editable_cols]:
                     raise StructuredError(ErrorCode.DESK_FAILED, f"Column '{col_name}' is not inline-editable.")
 
                 if col_name in (selected_col_name, "DeskSelected", "selected"):
-                    storage_adapter.update_word_selection(session_zid, sentence_idx=None, token_order=row_id, selected=val, zid=zid)
+                    storage_adapter.update_word_selection(session_zid, sentence_idx=sentence_idx, token_order=token_order, selected=val, zid=zid)
                 else:
-                    storage_adapter.update_word(session_zid, sentence_idx=None, token_order=row_id, field=col_name, value=val, zid=zid)
+                    storage_adapter.update_word(session_zid, sentence_idx=sentence_idx, token_order=token_order, field=col_name, value=val, zid=zid)
 
             updated_restored = storage_adapter.restore_session(session_zid)
             new_fingerprint = compute_content_fingerprint(updated_restored.get("data_rows", []))
@@ -14214,15 +14332,26 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 try:
                     with file_lock(tsv_path):
                         comments, headers, data_rows = load_tsv_rows(tsv_path)
+                        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
                         for delta in deltas:
                             r_id = delta.get("row_id")
+                            t_ord = delta.get("token_order")
                             c_name = delta.get("column")
                             v_val = delta.get("value")
-                            if c_name == "_delete":
-                                if 0 <= r_id < len(data_rows):
-                                    data_rows[r_id] = None
-                            elif c_name in headers and 0 <= r_id < len(data_rows) and data_rows[r_id] is not None:
-                                data_rows[r_id][headers.index(c_name)] = v_val
+                            target_row_idx = None
+                            if col_token_order != -1 and t_ord is not None:
+                                for idx, r in enumerate(data_rows):
+                                    if r is not None and len(r) > col_token_order and str(r[col_token_order]).strip() == str(t_ord):
+                                        target_row_idx = idx
+                                        break
+                            if target_row_idx is None and r_id is not None and 0 <= r_id < len(data_rows):
+                                target_row_idx = r_id
+
+                            if target_row_idx is not None:
+                                if c_name == "_delete":
+                                    data_rows[target_row_idx] = None
+                                elif c_name in headers and data_rows[target_row_idx] is not None:
+                                    data_rows[target_row_idx][headers.index(c_name)] = v_val
                         data_rows = [r for r in data_rows if r is not None]
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 except Exception as e:
