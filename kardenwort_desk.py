@@ -3894,6 +3894,9 @@ def synthesize_project_materials(
                     logger.debug(f"Heading translation failed: {ex}")
                     heading_translation = ""
 
+            if not heading_translation.strip():
+                heading_translation = heading_text
+
             all_sentences.append({
                 "session_zid": target_synth_zid,
                 "sentence_index": heading_sent_idx,
@@ -3935,6 +3938,7 @@ def synthesize_project_materials(
                 pending_heading_lemmas.append({
                     "words": heading_words,
                     "heading_text": heading_text,
+                    "heading_translation": heading_translation,
                     "sentence_index": heading_sent_idx,
                     "deck": deck_path,
                 })
@@ -4040,12 +4044,14 @@ def synthesize_project_materials(
         col_lemma = headers.index("WordSource") if "WordSource" in headers else -1
         col_inflected = headers.index("WordSourceInflectedForm") if "WordSourceInflectedForm" in headers else -1
         col_sent_src = headers.index("SentenceSource") if "SentenceSource" in headers else -1
+        col_sent_dest = headers.index("SentenceDestination") if "SentenceDestination" in headers else -1
         col_sent_idx = headers.index("SentenceSourceIndex") if "SentenceSourceIndex" in headers else -1
         col_deck = headers.index("Deck") if "Deck" in headers else -1
         col_sel = headers.index("DeskSelected") if "DeskSelected" in headers else -1
 
         for item in pending_heading_lemmas:
             h_text = item["heading_text"]
+            h_trans = item.get("heading_translation") or h_text
             s_idx = item["sentence_index"]
             d_path = item["deck"]
             for w, lem in item["words"]:
@@ -4058,6 +4064,8 @@ def synthesize_project_materials(
                     h_row[col_inflected] = w
                 if col_sent_src != -1:
                     h_row[col_sent_src] = h_text
+                if col_sent_dest != -1:
+                    h_row[col_sent_dest] = h_trans
                 if col_sent_idx != -1:
                     h_row[col_sent_idx] = str(s_idx)
                 if col_deck != -1:
@@ -7279,6 +7287,21 @@ html, body {{
                 pass
         if col_sentence_dest != -1 and len(row) > col_sentence_dest:
             extracted_translations[content_line_idx] = row[col_sentence_dest]
+
+    if is_sqlite:
+        try:
+            target_zid_to_read = extract_zid(working_tsv_path)
+            if target_zid_to_read != "00000000000000":
+                db_sents = storage_adapter.db.get_sentences_by_session(target_zid_to_read)
+                for s in db_sents:
+                    s_idx = s.get("sentence_index", 1) - 1
+                    s_dest = s.get("sentence_destination") or s.get("sentence_destination2")
+                    if s_dest and str(s_dest).strip():
+                        extracted_translations[s_idx] = str(s_dest).strip()
+                    elif str(s.get("sentence_source", "")).strip().startswith("#"):
+                        extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
+        except Exception:
+            pass
             
     sentence_translations = {}
     if not sentence_translated and 'sentence_translations_raw' in locals():
@@ -7294,6 +7317,8 @@ html, body {{
                 if ln.strip():
                     if c_idx < len(clean_translations):
                         sentence_translations[a_idx] = clean_translations[c_idx]
+                    elif ln.strip().startswith("#"):
+                        sentence_translations[a_idx] = ln.strip()
                     else:
                         sentence_translations[a_idx] = ""
                     c_idx += 1
@@ -7306,7 +7331,10 @@ html, body {{
             c_idx = 0
             for a_idx, ln in enumerate(text.splitlines()):
                 if ln.strip():
-                    sentence_translations[a_idx] = extracted_translations.get(c_idx, "")
+                    val = extracted_translations.get(c_idx, "")
+                    if not val and ln.strip().startswith("#"):
+                        val = ln.strip()
+                    sentence_translations[a_idx] = val
                     c_idx += 1
                 else:
                     sentence_translations[a_idx] = ""

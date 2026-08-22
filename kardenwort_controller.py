@@ -1149,9 +1149,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 sentence_translation = ""
                 if synthesized.get("sentences"):
                     sentence_translation = "\n".join([
-                        str(s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
+                        str(s.get("sentence_destination") or s.get("sentence_destination2") or s.get("sentence_source") or "").strip()
                         for s in synthesized["sentences"]
-                        if (s.get("sentence_destination") or s.get("sentence_destination2"))
                     ])
                 fingerprint = compute_content_fingerprint(data_rows)
                 slug = synthesized.get("slug") or ""
@@ -1378,9 +1377,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 sentence_translation = ""
                 if synthesized.get("sentences"):
                     sentence_translation = "\n".join([
-                        str(s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
+                        str(s.get("sentence_destination") or s.get("sentence_destination2") or s.get("sentence_source") or "").strip()
                         for s in synthesized["sentences"]
-                        if (s.get("sentence_destination") or s.get("sentence_destination2"))
                     ])
                 fingerprint = compute_content_fingerprint(data_rows)
                 synth_zid = synthesized.get("session_zid") or f"project_{project_id}"
