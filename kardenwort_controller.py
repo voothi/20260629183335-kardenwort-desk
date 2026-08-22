@@ -1581,7 +1581,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 writer.writerow(sanitized_row)
 
             tsv_data = output.getvalue().encode('utf-8')
-            filename = f"{target_zid}-session.tsv"
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            sess = db.get_session(str(target_zid)) or {}
+            slug = sess.get("slug") or restored.get("slug") or ""
+            lang = sess.get("source_language") or sess.get("source_lang") or restored.get("language") or ""
+            
+            slug_part = f"-{slug}" if slug else ""
+            lang_part = f".{lang}" if lang else ""
+            filename = f"{target_zid}{slug_part}{lang_part}.tsv"
             self.send_response(200)
             self._send_cors_headers()
             self.send_header('Content-Type', 'text/tab-separated-values; charset=utf-8')

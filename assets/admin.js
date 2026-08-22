@@ -774,8 +774,11 @@ async function openTsvInspectorModal(session) {
     if (state.token) {
         downloadUrl += `?token=${encodeURIComponent(state.token)}`;
     }
+    const slugPart = session.slug ? `-${session.slug}` : '';
+    const langPart = (session.source_language || session.source_lang) ? `.${session.source_language || session.source_lang}` : '';
+    const tsvFilename = `${session.zid}${slugPart}${langPart}.tsv`;
     downloadBtn.setAttribute('href', downloadUrl);
-    downloadBtn.setAttribute('download', `${session.zid}-session.tsv`);
+    downloadBtn.setAttribute('download', tsvFilename);
 
     try {
         const headers = {};

@@ -178,7 +178,7 @@ def test_get_session_tsv_dynamic_streaming(tsv_test_controller_server):
     status, body_bytes, headers = make_request(server_url, f"/api/v1/sessions/{sample_zid}/tsv")
     assert status == 200
     assert "text/tab-separated-values" in headers.get("Content-Type", "")
-    assert f'filename="{sample_zid}-session.tsv"' in headers.get("Content-Disposition", "")
+    assert f'filename="{sample_zid}-goldene-gans.de.tsv"' in headers.get("Content-Disposition", "")
 
     tsv_text = body_bytes.decode("utf-8")
     lines = tsv_text.strip().split("\n")
