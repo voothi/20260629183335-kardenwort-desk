@@ -7519,15 +7519,14 @@ html, body {{
   .section {
     background: {section_bg};
     border: 1px solid {section_border};
-    border-radius: 12px;
-    padding: 16px;
-    margin-bottom: 16px;
-    box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
+    border-radius: 2px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
   }
   .section-title {
     font-size: 12px;
     text-transform: uppercase;
-    letter-spacing: 0.1em;
+    letter-spacing: 0.05em;
     color: {text_muted};
     margin-bottom: 8px;
     font-weight: 600;
