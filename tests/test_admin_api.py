@@ -132,16 +132,20 @@ def test_admin_html_and_assets_serving(admin_controller_server):
     assert status == 200
     assert "Kardenwort Desk Admin" in html_content
     assert "<title>Kardenwort Desk Admin</title>" in html_content
+    assert 'id="confirm-modal"' in html_content
+    assert 'id="btn-confirm-ok"' in html_content
 
     # 2. GET /assets/admin.css
     status, css_content = make_admin_request(url, "/assets/admin.css")
     assert status == 200
     assert "--bg-primary" in css_content
+    assert ".modal-card-sm" in css_content
 
     # 3. GET /assets/admin.js
     status, js_content = make_admin_request(url, "/assets/admin.js")
     assert status == 200
     assert "loadProjectTree" in js_content
+    assert "showConfirmDialog" in js_content
 
 
 def test_admin_auth_enforcement(admin_controller_server):

@@ -315,7 +315,11 @@ async function moveSessionOrder(projectId, currentIndex, delta) {
 }
 
 async function unlinkSession(projectId, sessionZid) {
-    if (!confirm(`Unlink session ${sessionZid}?`)) return;
+    const ok = await showConfirmDialog(`Unlink session ${sessionZid} from this project?`, {
+        title: 'Unlink Session',
+        okLabel: 'Unlink'
+    });
+    if (!ok) return;
     try {
         await apiFetch('/api/v1/admin/projects/unlink', {
             method: 'POST',
@@ -330,7 +334,11 @@ async function unlinkSession(projectId, sessionZid) {
 }
 
 async function deleteProject(projectId, title) {
-    if (!confirm(`Delete project "${title}"?`)) return;
+    const ok = await showConfirmDialog(`Move project "${title}" to Recycle Bin?`, {
+        title: 'Delete Project',
+        okLabel: 'Delete'
+    });
+    if (!ok) return;
     try {
         await apiFetch('/api/v1/admin/projects/delete', {
             method: 'POST',
@@ -343,12 +351,50 @@ async function deleteProject(projectId, title) {
 }
 
 // ---------------------------------------------------------------------------
-// 4. Modals (Project Create/Edit & Session Link)
+// 4. Modals (Project Create/Edit, Session Link & Confirmation)
 // ---------------------------------------------------------------------------
+let confirmModalResolver = null;
+
+function showConfirmDialog(message, options = {}) {
+    const modal = document.getElementById('confirm-modal');
+    const titleEl = document.getElementById('confirm-modal-title');
+    const msgEl = document.getElementById('confirm-modal-message');
+    const okBtn = document.getElementById('btn-confirm-ok');
+    const cancelBtn = document.getElementById('btn-confirm-cancel');
+
+    if (confirmModalResolver) {
+        confirmModalResolver(false);
+        confirmModalResolver = null;
+    }
+
+    titleEl.textContent = options.title || 'Confirm Action';
+    msgEl.textContent = message;
+    okBtn.textContent = options.okLabel || 'Confirm';
+    cancelBtn.textContent = options.cancelLabel || 'Cancel';
+
+    if (options.isDanger === false) {
+        okBtn.className = 'btn btn-primary';
+    } else {
+        okBtn.className = 'btn btn-danger';
+    }
+
+    modal.classList.remove('hidden');
+    okBtn.focus();
+
+    return new Promise((resolve) => {
+        confirmModalResolver = (val) => {
+            modal.classList.add('hidden');
+            confirmModalResolver = null;
+            resolve(val);
+        };
+    });
+}
+
 function initModals() {
     const projectModal = document.getElementById('project-modal');
     const linkModal = document.getElementById('link-session-modal');
     const assignModal = document.getElementById('assign-project-modal');
+    const confirmModal = document.getElementById('confirm-modal');
 
     document.getElementById('btn-new-root-project').addEventListener('click', () => openProjectModal());
     document.getElementById('btn-modal-close').addEventListener('click', () => projectModal.classList.add('hidden'));
@@ -362,6 +408,31 @@ function initModals() {
     document.getElementById('btn-assign-modal-close').addEventListener('click', () => assignModal.classList.add('hidden'));
     document.getElementById('btn-assign-modal-cancel').addEventListener('click', () => assignModal.classList.add('hidden'));
     document.getElementById('btn-assign-modal-save').addEventListener('click', saveAssignProjectModal);
+
+    // Confirmation Modal Events
+    const closeConfirm = (val) => {
+        if (confirmModalResolver) {
+            confirmModalResolver(val);
+        } else {
+            confirmModal.classList.add('hidden');
+        }
+    };
+
+    document.getElementById('btn-confirm-modal-close').addEventListener('click', () => closeConfirm(false));
+    document.getElementById('btn-confirm-cancel').addEventListener('click', () => closeConfirm(false));
+    document.getElementById('btn-confirm-ok').addEventListener('click', () => closeConfirm(true));
+
+    document.addEventListener('keydown', (e) => {
+        if (confirmModal && !confirmModal.classList.contains('hidden')) {
+            if (e.key === 'Escape') {
+                e.preventDefault();
+                closeConfirm(false);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                closeConfirm(true);
+            }
+        }
+    });
 }
 
 function openProjectModal(node = null, parentId = null) {
@@ -687,7 +758,11 @@ function openSessionInReader(zid) {
 }
 
 async function deleteSessionFromLibrary(zid) {
-    if (!confirm(`Move session ${zid} to Recycle Bin?`)) return;
+    const ok = await showConfirmDialog(`Move session ${zid} to Recycle Bin?`, {
+        title: 'Delete Session',
+        okLabel: 'Delete'
+    });
+    if (!ok) return;
     try {
         await apiFetch('/api/v1/admin/sessions/delete', {
             method: 'POST',
@@ -771,7 +846,11 @@ window.restoreTrash = async function(type, id) {
 };
 
 document.getElementById('btn-purge-trash').addEventListener('click', async () => {
-    if (!confirm('Permanently purge all deleted records?')) return;
+    const ok = await showConfirmDialog('Permanently purge all deleted records from Recycle Bin?', {
+        title: 'Purge Recycle Bin',
+        okLabel: 'Purge All'
+    });
+    if (!ok) return;
     try {
         const res = await apiFetch('/api/v1/admin/trash/purge', { method: 'POST', body: JSON.stringify({}) });
         showToast(`Purged ${res.purged_sessions || 0} sessions, ${res.purged_projects || 0} projects`, 'success');
