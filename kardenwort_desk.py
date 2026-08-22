@@ -3400,7 +3400,7 @@ class SqliteStorageAdapter(StorageAdapter):
         results_dir = Path(self.resolved_paths.get("results_dir") or "results")
         import_path = dest_path if save_to_favorites else (results_dir / f"temp_import_{dest_filename}")
 
-        comments = [f"# Exported from SQLite session {session_zid}"]
+        comments = []
         with self._tsv_fallback.file_lock(import_path):
             self._tsv_fallback.save_tsv_rows_safely(import_path, comments, headers, exported_rows)
 
