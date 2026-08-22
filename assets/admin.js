@@ -222,14 +222,8 @@ function createNodeElement(node) {
         }
     });
 
-    card.querySelector('.btn-open-desk').addEventListener('click', () => {
-        const url = `/?project_id=${node.id}${state.token ? '&token=' + encodeURIComponent(state.token) : ''}`;
-        window.open(url, '_blank');
-    });
-    card.querySelector('.btn-open-dict').addEventListener('click', () => {
-        const url = `/?project_id=${node.id}&view=goldendict${state.token ? '&token=' + encodeURIComponent(state.token) : ''}`;
-        window.open(url, '_blank');
-    });
+    card.querySelector('.btn-open-desk').addEventListener('click', () => openProjectInDesk(node.id));
+    card.querySelector('.btn-open-dict').addEventListener('click', () => openProjectInDict(node.id));
     card.querySelector('.btn-export-deck').addEventListener('click', () => exportProjectDeck(node.id, node.title));
     card.querySelector('.btn-add-child').addEventListener('click', () => openProjectModal(null, node.id));
     card.querySelector('.btn-link-session').addEventListener('click', () => openLinkSessionModal(node.id));
@@ -926,6 +920,22 @@ function openSessionInDesk(zid) {
 
 function openSessionInDict(zid) {
     let url = `/?session_zid=${encodeURIComponent(zid)}&view=goldendict&theme=dark`;
+    if (state.token) {
+        url += `&token=${encodeURIComponent(state.token)}`;
+    }
+    window.open(url, '_blank');
+}
+
+function openProjectInDesk(projectId) {
+    let url = `/?project_id=${encodeURIComponent(projectId)}&theme=dark`;
+    if (state.token) {
+        url += `&token=${encodeURIComponent(state.token)}`;
+    }
+    window.open(url, '_blank');
+}
+
+function openProjectInDict(projectId) {
+    let url = `/?project_id=${encodeURIComponent(projectId)}&view=goldendict&theme=dark`;
     if (state.token) {
         url += `&token=${encodeURIComponent(state.token)}`;
     }

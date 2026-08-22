@@ -1162,7 +1162,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
                     goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
                     goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
-                    goldendict['theme'] = req_theme or 'compact'
+                    goldendict['theme'] = req_theme or 'dark'
                     goldendict.setdefault('heading_source', '__default__')
                     goldendict.setdefault('heading_translation', '__default__')
                     goldendict.setdefault('heading_lemmas', '__default__')
