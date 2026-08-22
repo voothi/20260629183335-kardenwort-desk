@@ -82,10 +82,38 @@
                 <div id="drop-zone-status" class="drop-zone-status hidden"></div>
             </div>
 
+            <!-- Batch Action Toolbar & Selection Banner -->
+            <div id="sessions-batch-toolbar" class="batch-toolbar hidden">
+                <div class="batch-toolbar-info">
+                    <span id="sessions-selected-count" class="batch-count-badge">0 selected</span>
+                </div>
+                <div class="batch-toolbar-actions">
+                    <button id="btn-batch-delete-sessions" class="btn btn-danger btn-sm">Delete Selected</button>
+                    <button id="btn-batch-clear-selection" class="btn btn-secondary btn-sm">Clear Selection</button>
+                </div>
+            </div>
+
+            <div id="sessions-selection-banner" class="selection-banner hidden">
+                <span id="selection-banner-text">All sessions on this page are selected.</span>
+                <button type="button" id="btn-select-all-matching" class="btn-banner-action">Select all matching sessions in library</button>
+            </div>
+
             <div class="sessions-table-container">
                 <table class="data-table" id="sessions-data-table">
                     <thead>
                         <tr>
+                            <th style="width: 48px;" class="th-checkbox">
+                                <div class="checkbox-dropdown-container">
+                                    <input type="checkbox" id="master-sessions-checkbox" title="Select all on this page" />
+                                    <button type="button" id="btn-master-dropdown-toggle" class="btn-dropdown-arrow" title="Selection options">&#9662;</button>
+                                    <div id="master-dropdown-menu" class="select-dropdown-menu hidden">
+                                        <button type="button" class="dropdown-item" data-select="all">All</button>
+                                        <button type="button" class="dropdown-item" data-select="none">None</button>
+                                        <button type="button" class="dropdown-item" data-select="assigned">Assigned</button>
+                                        <button type="button" class="dropdown-item" data-select="unassigned">Unassigned</button>
+                                    </div>
+                                </div>
+                            </th>
                             <th style="width: 140px;">ZID</th>
                             <th>Slug / Preview</th>
                             <th style="width: 60px;">Lang</th>
@@ -97,7 +125,7 @@
                     </thead>
                     <tbody id="sessions-table-body">
                         <tr>
-                            <td colspan="7" class="loading-spinner">Loading sessions library...</td>
+                            <td colspan="8" class="loading-spinner">Loading sessions library...</td>
                         </tr>
                     </tbody>
                 </table>

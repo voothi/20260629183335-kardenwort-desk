@@ -907,3 +907,149 @@ body {
     outline: none;
     border-color: var(--border-focus);
 }
+
+/* --------------------------------------------------------------------------
+   Batch Selection & Dropdown Menu
+   -------------------------------------------------------------------------- */
+.th-checkbox {
+    text-align: center;
+    vertical-align: middle;
+    padding: 6px 8px;
+}
+
+.td-checkbox {
+    text-align: center;
+    vertical-align: middle;
+    padding: 6px 8px;
+}
+
+.checkbox-dropdown-container {
+    position: relative;
+    display: inline-flex;
+    align-items: center;
+    gap: 2px;
+}
+
+.btn-dropdown-arrow {
+    background: transparent;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    font-size: 10px;
+    padding: 2px 3px;
+    border-radius: var(--radius-sm);
+    line-height: 1;
+}
+
+.btn-dropdown-arrow:hover {
+    background: var(--bg-hover);
+    color: var(--text-main);
+}
+
+.select-dropdown-menu {
+    position: absolute;
+    top: 100%;
+    left: 0;
+    margin-top: 4px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-sm);
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+    z-index: 100;
+    min-width: 110px;
+    display: flex;
+    flex-direction: column;
+    padding: 4px 0;
+}
+
+.select-dropdown-menu.hidden {
+    display: none;
+}
+
+.select-dropdown-menu .dropdown-item {
+    background: transparent;
+    border: none;
+    color: var(--text-main);
+    padding: 6px 12px;
+    text-align: left;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    transition: background 0.15s;
+}
+
+.select-dropdown-menu .dropdown-item:hover {
+    background: var(--bg-hover);
+    color: #ffffff;
+}
+
+/* Batch Toolbar */
+.batch-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-left: 3px solid #f5b700;
+    padding: 8px 12px;
+    margin-bottom: 8px;
+    border-radius: var(--radius-sm);
+}
+
+.batch-toolbar.hidden {
+    display: none;
+}
+
+.batch-count-badge {
+    font-size: var(--font-size-sm);
+    font-weight: 600;
+    color: var(--text-main);
+}
+
+.batch-toolbar-actions {
+    display: flex;
+    gap: 8px;
+}
+
+/* Selection Banner */
+.selection-banner {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    gap: 8px;
+    background: rgba(245, 183, 0, 0.12);
+    border: 1px solid rgba(245, 183, 0, 0.35);
+    padding: 8px 14px;
+    margin-bottom: 8px;
+    font-size: var(--font-size-xs);
+    color: #ffd866;
+    border-radius: var(--radius-sm);
+}
+
+.selection-banner.hidden {
+    display: none;
+}
+
+.btn-banner-action {
+    background: transparent;
+    border: none;
+    color: #58a6ff;
+    text-decoration: underline;
+    font-size: var(--font-size-xs);
+    cursor: pointer;
+    font-weight: 500;
+    padding: 0;
+}
+
+.btn-banner-action:hover {
+    color: #79c0ff;
+}
+
+/* Desk Signature Yellow/Gold Row Highlighting */
+.data-table tr.row-selected td {
+    background-color: rgba(245, 183, 0, 0.16) !important;
+}
+
+.data-table tr.row-selected {
+    border-left: 3px solid #f5b700;
+}
+
