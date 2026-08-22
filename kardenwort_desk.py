@@ -77,6 +77,53 @@ class ErrorCode(str, Enum):
 _VALID_ERROR_CODES: FrozenSet[str] = frozenset(member.value for member in ErrorCode)
 
 
+class SentenceMatchStrategy(str, Enum):
+    """
+    Authoritative enumeration of sentence matching and lookup strategies.
+    - CHECKSUM: Exact content / checksum match.
+    - NORMALIZED: Normalized sentence matching (whitespace collapsed, markdown headers stripped, quotes normalized).
+    - CONTEXTUAL: Contextual substring / window search.
+    - NONE: Bypass sentence search and cached lookup completely.
+    """
+    CHECKSUM = "checksum"
+    NORMALIZED = "normalized"
+    CONTEXTUAL = "contextual"
+    NONE = "none"
+
+    @classmethod
+    def from_str(cls, val: Optional[str]) -> "SentenceMatchStrategy":
+        if not val:
+            return cls.NORMALIZED
+        clean = str(val).strip().lower()
+        for member in cls:
+            if member.value == clean:
+                return member
+        return cls.NORMALIZED
+
+
+def normalize_sentence_for_lookup(text: str) -> str:
+    r"""
+    Normalizes a sentence or text fragment for flexible, decoupled search:
+    - Strips zero-width chars and BOM
+    - Strips leading Markdown heading tokens (^#+\s*)
+    - Normalizes curly/smart apostrophes and quotes
+    - Collapses consecutive whitespace into a single space
+    - Strips surrounding whitespace
+    """
+    if not text:
+        return ""
+    cleaned = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
+    lines = []
+    for line in cleaned.splitlines():
+        line = re.sub(r'^\s*#{1,6}\s+', '', line)
+        lines.append(line)
+    cleaned = " ".join(lines)
+    cleaned = re.sub(r"[’‘´ʼ]", "'", cleaned)
+    cleaned = re.sub(r'[“”«»]', '"', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+
 class StructuredError(Exception):
     """
     Authoritative exception class for structured errors across CLI and HTTP layers.
@@ -364,6 +411,7 @@ SEC_SERVER = "server"
 SEC_SERVICES = "services"
 SEC_LANGUAGE_CHECK = "language_check"
 SEC_STORAGE = "storage"
+SEC_LOOKUP = "lookup"
 SINGLE_WORD_DELIMITERS = ('-', '.', '_')
 
 
@@ -1770,6 +1818,14 @@ def load_config(config_path=None):
         goldendict['server_port'] = 18335
         goldendict['server_api_key'] = ''
 
+    if SEC_LOOKUP in config:
+        lk = config[SEC_LOOKUP]
+        goldendict['sentence_match_strategy'] = lk.get('sentence_match_strategy', 'normalized').strip().lower()
+        goldendict['allow_checksum_fallback'] = lk.getboolean('allow_checksum_fallback', fallback=True)
+    else:
+        goldendict['sentence_match_strategy'] = 'normalized'
+        goldendict['allow_checksum_fallback'] = True
+
     wordfill = {}
     if SEC_WORDFILL in config:
         wf = config[SEC_WORDFILL]
@@ -2213,6 +2269,19 @@ class StorageAdapter:
 
     def vacuum(self, zid: Optional[str] = None) -> bool:
         return False
+
+    def find_sentence_by_strategy(
+        self,
+        sentence_text: str,
+        language: Optional[str] = None,
+        target_language: Optional[str] = None,
+        strategy: str = "normalized",
+        allow_fallback: bool = True,
+        exclude_zid: Optional[str] = None,
+        limit: int = 10,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return []
 
 
 class TsvStorageAdapter(StorageAdapter):
@@ -2946,6 +3015,10 @@ class SqliteStorageAdapter(StorageAdapter):
         if lookup_ttl_seconds <= 0:
             return None
 
+        strategy = str(kwargs.get("sentence_match_strategy") or kwargs.get("strategy") or "normalized").strip().lower()
+        if strategy == "none":
+            return None
+
         raw_text = source_raw_text or kwargs.get("text") or ""
         if raw_text:
             normalized_raw = raw_text.strip()
@@ -2970,6 +3043,32 @@ class SqliteStorageAdapter(StorageAdapter):
             if rows:
                 cached_zid = rows[0]["zid"]
                 return self.db.get_session_bundle(cached_zid, zid=zid)
+
+            # Strategy fallback for normalized or contextual
+            if strategy in ("normalized", "contextual"):
+                cand_conditions = ["source_language = ?"]
+                cand_params: List[Any] = [source_language]
+                if target_language:
+                    cand_conditions.append("target_language = ?")
+                    cand_params.append(target_language)
+                cand_params.append(lookup_ttl_seconds)
+                cand_sql = f"""
+                    SELECT zid, slug, source_language, target_language, text_mode, source_raw_text, created_at, updated_at
+                    FROM sessions
+                    WHERE {' AND '.join(cand_conditions)}
+                      AND (julianday('now') - julianday(created_at)) * 86400 <= ?
+                    ORDER BY created_at DESC;
+                """
+                cand_rows = self.db.query_readonly(cand_sql, tuple(cand_params), zid=zid)
+                norm_query = normalize_sentence_for_lookup(raw_text)
+                for cr in cand_rows:
+                    cand_text = cr.get("source_raw_text") or ""
+                    cand_norm = normalize_sentence_for_lookup(cand_text)
+                    if strategy == "normalized" and cand_norm == norm_query:
+                        return self.db.get_session_bundle(cr["zid"], zid=zid)
+                    elif strategy == "contextual":
+                        if norm_query == cand_norm or norm_query in cand_norm or cand_norm in norm_query:
+                            return self.db.get_session_bundle(cr["zid"], zid=zid)
             return None
 
         sql = """
@@ -2984,6 +3083,28 @@ class SqliteStorageAdapter(StorageAdapter):
             cached_zid = rows[0]["zid"]
             return self.db.get_session_bundle(cached_zid, zid=zid)
         return None
+
+    def find_sentence_by_strategy(
+        self,
+        sentence_text: str,
+        language: Optional[str] = None,
+        target_language: Optional[str] = None,
+        strategy: str = "normalized",
+        allow_fallback: bool = True,
+        exclude_zid: Optional[str] = None,
+        limit: int = 10,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        return self.db.find_sentence_by_strategy(
+            sentence_text=sentence_text,
+            language=language,
+            target_language=target_language,
+            strategy=strategy,
+            allow_fallback=allow_fallback,
+            exclude_zid=exclude_zid,
+            limit=limit,
+            zid=zid,
+        )
 
     def save_tsv_rows_safely(
         self,
@@ -10510,7 +10631,11 @@ class LookupResultTuple(tuple):
         return inst
 
 
-def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, goldendict, zid, text_mode='single', wordfill_cfg=None):
+def run_lookup_flow(
+    text, language, target_lang, fmt, config, resolved_paths, goldendict, zid,
+    text_mode='single', wordfill_cfg=None, sentence_match_strategy=None,
+    allow_checksum_fallback=None, no_checksum_lookup=False
+):
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     import hashlib
     import time
@@ -10526,19 +10651,52 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     
     ttl_seconds = goldendict['lookup_ttl_seconds']
     run_intellifiller = goldendict['run_intellifiller']
+
+    if no_checksum_lookup:
+        effective_strategy = "none"
+    elif sentence_match_strategy is not None:
+        effective_strategy = sentence_match_strategy.value if isinstance(sentence_match_strategy, SentenceMatchStrategy) else str(sentence_match_strategy).lower()
+    else:
+        effective_strategy = goldendict.get('sentence_match_strategy') or (config.get(SEC_LOOKUP, 'sentence_match_strategy', fallback='normalized').lower() if hasattr(config, 'get') and config.has_section(SEC_LOOKUP) else 'normalized')
+
+    if allow_checksum_fallback is None:
+        effective_allow_fallback = goldendict.get('allow_checksum_fallback', config.getboolean(SEC_LOOKUP, 'allow_checksum_fallback', fallback=True) if hasattr(config, 'getboolean') and config.has_section(SEC_LOOKUP) else True)
+    else:
+        effective_allow_fallback = bool(allow_checksum_fallback)
     
-    main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
-    try:
-        sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
-    except TranslationAlignmentError as tae:
-        logger.error(f"Lookup translation alignment error: {tae}")
-        sentence_translations = tae.partial_dict
-        
     storage_adapter = get_storage_adapter(config, resolved_paths)
+
+    sentence_translations = None
+    if effective_strategy != "none" and hasattr(storage_adapter, 'find_sentence_by_strategy'):
+        try:
+            matches = storage_adapter.find_sentence_by_strategy(
+                sentence_text=text,
+                language=language,
+                target_language=target_lang,
+                strategy=effective_strategy,
+                allow_fallback=effective_allow_fallback,
+                exclude_zid=zid,
+                limit=1,
+                zid=zid,
+            )
+            if matches and matches[0].get("sentence_destination"):
+                matched_dest = str(matches[0]["sentence_destination"]).strip()
+                if matched_dest:
+                    sentence_translations = {0: matched_dest, "FULL_TEXT": matched_dest}
+        except Exception as e:
+            logger.debug(f"Strategy sentence search failed: {e}")
+
+    if sentence_translations is None:
+        main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
+        try:
+            sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
+        except TranslationAlignmentError as tae:
+            logger.error(f"Lookup translation alignment error: {tae}")
+            sentence_translations = tae.partial_dict
 
     cached = False
     with storage_adapter.file_lock(working_tsv_path):
-        if ttl_seconds > 0:
+        if ttl_seconds > 0 and effective_strategy != "none":
             cached_res = storage_adapter.get_cached_session(
                 slug, language, ttl_seconds,
                 results_dir=results_dir,
@@ -10546,6 +10704,8 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                 target_language=target_lang,
                 text_mode=text_mode,
                 zid=zid,
+                sentence_match_strategy=effective_strategy,
+                allow_checksum_fallback=effective_allow_fallback,
             )
             if cached_res is not None:
                 if isinstance(cached_res, dict):
@@ -11680,7 +11840,13 @@ def cmd_wordfill(args):
     sys.exit(0)
 
 
-def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, text_mode='single', sections=None, lemma_columns=None, theme=None, no_headings=False, disable_css=False, zid=None, wordfill_cfg=None, config=None, resolved_paths=None, goldendict=None, bypass_lang_check=False, storage=None):
+def core_lookup(
+    text, language, target_lang=None, config_path=None, fmt=None, text_mode='single',
+    sections=None, lemma_columns=None, theme=None, no_headings=False, disable_css=False,
+    zid=None, wordfill_cfg=None, config=None, resolved_paths=None, goldendict=None,
+    bypass_lang_check=False, storage=None, sentence_match_strategy=None,
+    allow_checksum_fallback=None, no_checksum_lookup=False
+):
     if zid is None:
         zid = generate_unique_zid()
 
@@ -11754,7 +11920,10 @@ def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, te
 
     lookup_res = run_lookup_flow(
         text, language, target_lang, goldendict['format'], config, resolved_paths, goldendict, zid, text_mode,
-        wordfill_cfg=wordfill_cfg
+        wordfill_cfg=wordfill_cfg,
+        sentence_match_strategy=sentence_match_strategy,
+        allow_checksum_fallback=allow_checksum_fallback,
+        no_checksum_lookup=no_checksum_lookup,
     )
     comments, headers, data_rows, sentence_translation = lookup_res[:4]
     working_tsv_path = getattr(lookup_res, 'working_tsv_path', None) or (lookup_res[4] if len(lookup_res) > 4 else None)
@@ -11820,6 +11989,8 @@ def cmd_lookup(args):
             zid=zid,
             bypass_lang_check=getattr(args, 'bypass_lang_check', False),
             storage=getattr(args, 'storage', None),
+            sentence_match_strategy=getattr(args, 'sentence_match_strategy', None),
+            no_checksum_lookup=getattr(args, 'no_checksum_lookup', False),
         )
         emit_payload(res["html"], raw=True)
 
@@ -15832,6 +16003,8 @@ def main():
     parser.add_argument("--tree", action="store_true", help="Display projects as tree")
     parser.add_argument("--include-deleted", action="store_true", help="Include soft-deleted records")
     parser.add_argument("--send-to-anki", action="store_true", help="Send exported deck directly to Anki")
+    parser.add_argument("--sentence-match-strategy", choices=["normalized", "checksum", "contextual", "none"], default=None, help="Sentence match/lookup strategy")
+    parser.add_argument("--no-checksum-lookup", action="store_true", help="Bypass sentence matching and cached checksum lookup")
 
     subparsers = parser.add_subparsers(dest="command", required=False)
 
@@ -15923,6 +16096,8 @@ def main():
     p_lookup.add_argument("--disable-css", action="store_true", help="Disable outputting CSS styles in HTML")
     p_lookup.add_argument("--theme", choices=["dark", "light", "compact"], help="Theme (html format)")
     p_lookup.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
+    p_lookup.add_argument("--sentence-match-strategy", choices=["normalized", "checksum", "contextual", "none"], default=None, help="Sentence match/lookup strategy")
+    p_lookup.add_argument("--no-checksum-lookup", action="store_true", help="Bypass sentence matching and cached checksum lookup")
     p_lookup.add_argument("--zid", default=None, help="Session ZID")
     p_lookup.add_argument("--trace-id", default=None, help="Trace correlation ID")
 
@@ -16041,6 +16216,8 @@ def main():
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
     p_desk.add_argument("--theme", default="dark", choices=["dark", "light", "white"], help="Theme (dark or light or white)")
     p_desk.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
+    p_desk.add_argument("--sentence-match-strategy", choices=["normalized", "checksum", "contextual", "none"], default=None, help="Sentence match/lookup strategy")
+    p_desk.add_argument("--no-checksum-lookup", action="store_true", help="Bypass sentence matching and cached checksum lookup")
     p_desk.add_argument("--zid", default=None, help="Session ZID")
     p_desk.add_argument("--trace-id", default=None, help="Trace correlation ID")
     p_desk.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")

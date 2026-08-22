@@ -333,6 +333,14 @@ heading_lemmas =
 ; Valid tokens: inflected, lemma, ipa, morphology, translation
 lemma_columns = inflected,lemma,translation
 
+[lookup]
+; Sentence match and search strategy for lookup and continuous reading.
+; Options: normalized (default), checksum, contextual, none
+sentence_match_strategy = normalized
+
+; If true and sentence_match_strategy = checksum, falls back to normalized text matching if exact checksum yields no match
+allow_checksum_fallback = true
+
 [translation]
 ; The split mode for translation. Options: newline_join (default), line_by_line, marker, proportional
 translation_split_mode = newline_join

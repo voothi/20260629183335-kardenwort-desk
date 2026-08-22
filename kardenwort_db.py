@@ -22,6 +22,26 @@ from typing import Dict, Any, List, Optional, Tuple, Union, Generator
 logger = logging.getLogger("kardenwort.desk.db")
 
 
+def _normalize_sentence_text(text: str) -> str:
+    """
+    Normalizes sentence text for flexible matching across markdown headers,
+    whitespace variances, and quotes/apostrophes.
+    """
+    if not text:
+        return ""
+    cleaned = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
+    lines = []
+    for line in cleaned.splitlines():
+        line = re.sub(r'^\s*#{1,6}\s+', '', line)
+        lines.append(line)
+    cleaned = " ".join(lines)
+    cleaned = re.sub(r"[’‘´ʼ]", "'", cleaned)
+    cleaned = re.sub(r'[“”«»]', '"', cleaned)
+    cleaned = re.sub(r'\s+', ' ', cleaned).strip()
+    return cleaned
+
+
+
 # ---------------------------------------------------------------------------
 # Structured Database Logger (results/db.log)
 # ---------------------------------------------------------------------------
@@ -1574,6 +1594,105 @@ class KardenwortDB:
                 (session_zid, sentence_index),
             )
             return cursor.rowcount > 0
+
+    def find_sentence_by_strategy(
+        self,
+        sentence_text: str,
+        language: Optional[str] = None,
+        target_language: Optional[str] = None,
+        strategy: str = "normalized",
+        allow_fallback: bool = True,
+        exclude_zid: Optional[str] = None,
+        limit: int = 10,
+        zid: Optional[str] = None,
+    ) -> List[Dict[str, Any]]:
+        """
+        Searches sentences table according to the chosen strategy:
+        - 'none': Returns empty list.
+        - 'checksum': Exact match on sentence_source. If allow_fallback=True and no match found, falls back to normalized.
+        - 'normalized': Normalized text matching (ignoring markdown headings, whitespace variances, quote punctuation differences).
+        - 'contextual': Substring / window search matching sentence within broader text context.
+        """
+        if not sentence_text or not sentence_text.strip():
+            return []
+
+        strat = (strategy or "normalized").strip().lower()
+        if strat == "none":
+            return []
+
+        norm_query = _normalize_sentence_text(sentence_text)
+        if not norm_query:
+            return []
+
+        base_sql = """
+            SELECT snt.*, s.source_language, s.target_language, s.created_at as session_created_at
+            FROM sentences snt
+            JOIN sessions s ON snt.session_zid = s.zid
+            WHERE s.deleted_at IS NULL
+        """
+        params: List[Any] = []
+
+        if language:
+            base_sql += " AND s.source_language = ?"
+            params.append(language)
+
+        if target_language:
+            base_sql += " AND (s.target_language = ? OR s.target_language IS NULL OR s.target_language = '')"
+            params.append(target_language)
+
+        if exclude_zid:
+            base_sql += " AND s.zid != ?"
+            params.append(exclude_zid)
+
+        if strat == "checksum":
+            chk_sql = base_sql + " AND snt.sentence_source = ? ORDER BY s.created_at DESC LIMIT ?;"
+            chk_params = list(params) + [sentence_text, limit]
+            with self.get_connection(read_only=True, zid=zid) as conn:
+                cursor = conn.cursor()
+                cursor.execute(chk_sql, chk_params)
+                results = [dict(r) for r in cursor.fetchall()]
+
+            if results:
+                return results
+            if not allow_fallback:
+                return []
+            strat = "normalized"
+
+        if strat == "normalized":
+            norm_sql = base_sql + " ORDER BY s.created_at DESC;"
+            with self.get_connection(read_only=True, zid=zid) as conn:
+                cursor = conn.cursor()
+                cursor.execute(norm_sql, params)
+                rows = cursor.fetchall()
+
+            matched: List[Dict[str, Any]] = []
+            for r in rows:
+                row_dict = dict(r)
+                if _normalize_sentence_text(row_dict.get("sentence_source", "")) == norm_query:
+                    matched.append(row_dict)
+                    if len(matched) >= limit:
+                        break
+            return matched
+
+        if strat == "contextual":
+            ctx_sql = base_sql + " ORDER BY s.created_at DESC;"
+            with self.get_connection(read_only=True, zid=zid) as conn:
+                cursor = conn.cursor()
+                cursor.execute(ctx_sql, params)
+                rows = cursor.fetchall()
+
+            matched: List[Dict[str, Any]] = []
+            norm_lower = norm_query.lower()
+            for r in rows:
+                row_dict = dict(r)
+                row_norm_lower = _normalize_sentence_text(row_dict.get("sentence_source", "")).lower()
+                if norm_lower == row_norm_lower or norm_lower in row_norm_lower or row_norm_lower in norm_lower:
+                    matched.append(row_dict)
+                    if len(matched) >= limit:
+                        break
+            return matched
+
+        return []
 
     # ---------------------------------------------------------------------------
     # Normalized CRUD Helpers: Words
