@@ -663,7 +663,8 @@ class KardenwortDB:
                     target_language = excluded.target_language,
                     text_mode = excluded.text_mode,
                     source_raw_text = excluded.source_raw_text,
-                    updated_at = excluded.updated_at;
+                    updated_at = excluded.updated_at,
+                    deleted_at = NULL;
                 """,
                 (session_zid, slug, source_lang, target_lang, text_mode, source_raw_text, created_at, updated_at),
             )
@@ -1993,7 +1994,8 @@ class KardenwortDB:
                     target_language = excluded.target_language,
                     text_mode = excluded.text_mode,
                     source_raw_text = excluded.source_raw_text,
-                    updated_at = excluded.updated_at;
+                    updated_at = excluded.updated_at,
+                    deleted_at = NULL;
                 """,
                 (session_zid, slug, source_lang, target_lang, text_mode, source_raw_text, created_at, updated_at),
             )

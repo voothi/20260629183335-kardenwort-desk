@@ -5291,12 +5291,11 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_i
     ]
     
     log_file_path = favorites_tsv_path.parent / f"{zid}-import.log"
-    log_file = open(log_file_path, 'a', encoding='utf-8')
-    
     logger.info(f"Launching detached import: {' '.join(cmd)}")
     
     # Detached background import always runs without showing a console window
     show_window = False
+    creationflags = 0
     if sys.platform == 'win32':
         # CREATE_NEW_PROCESS_GROUP = 0x00000200
         # DETACHED_PROCESS = 0x00000008
@@ -5305,23 +5304,26 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_i
             creationflags = 0x00000200 | 0x00000008
         else:
             creationflags = 0x00000200 | 0x08000000
-        p = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            creationflags=creationflags,
-            close_fds=True
-        )
-    else:
-        p = subprocess.Popen(
-            cmd,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            start_new_session=True,
-            close_fds=True
-        )
+
+    with open(log_file_path, 'a', encoding='utf-8') as log_file:
+        if sys.platform == 'win32':
+            p = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                creationflags=creationflags,
+                close_fds=True
+            )
+        else:
+            p = subprocess.Popen(
+                cmd,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                start_new_session=True,
+                close_fds=True
+            )
         
     return p.pid, str(log_file_path)
 

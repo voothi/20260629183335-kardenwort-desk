@@ -1073,6 +1073,30 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, res)
             return
 
+        if path == '/session/export':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+
+            session_zid = body.get('session_zid')
+            selected_rows = body.get('selected_row_ids') or body.get('row_ids') or []
+            if not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+
+            from kardenwort_desk import core_export
+            res = core_export(
+                tsv_path_or_session=session_zid,
+                selected_row_ids=selected_rows,
+                config=self.server.config,
+                resolved_paths=self.server.resolved_paths,
+                language=body.get('language'),
+                zid=body.get('zid') or session_zid,
+                trace_id=f"{session_zid}:export:selection",
+            )
+            self._send_json(200, res)
+            return
+
         if path == '/session/status':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
