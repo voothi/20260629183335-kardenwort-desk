@@ -297,12 +297,8 @@ class KardenwortDB:
             name = p.name
             m = re.match(r"^(\d+)", name)
             if m:
-                num_str = m.group(1)
-                if len(num_str) <= 4:
-                    return (1, int(num_str), name)
-                else:
-                    return (0, int(num_str), name)
-            return (2, 0, name)
+                return (0, int(m.group(1)), name)
+            return (1, 0, name)
 
         migration_files = sorted(self.migrations_dir.glob("*.sql"), key=_migration_sort_key)
         applied_now: List[str] = []
