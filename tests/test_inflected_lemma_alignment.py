@@ -174,3 +174,67 @@ def test_render_flow_preserves_data_token_order_attribute(tmp_path):
 
     assert 'data-token-order="42"' in html
 
+
+def test_write_update_js_serializes_token_order_and_inflected(tmp_path):
+    """Verify that write_update_js serializes token_order, inflected form, and sentence_idx."""
+    from kardenwort_desk import write_update_js
+    import json
+
+    tsv_file = tmp_path / "20260823005501-test.en.tsv"
+    tsv_file.write_text("Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tTokenOrder\tSentenceSourceIndex\n", encoding="utf-8")
+    headers = ["Quotation", "WordSource", "WordSourceInflectedForm", "WordDestination", "TokenOrder", "SentenceSourceIndex"]
+    data_rows = [
+        ["dem", "der", "dem", "the", "5", "1"],
+        ["geht", "gehen", "geht", "goes", "2", "1"],
+    ]
+    role_fields = {
+        "lemma": "WordSource",
+        "inflected": "WordSourceInflectedForm",
+        "word_translation": "WordDestination",
+    }
+    js_path = write_update_js(tsv_file, data_rows, headers, role_fields, stage="translated", zid="20260823005501")
+    assert js_path.exists()
+    content = js_path.read_text(encoding="utf-8")
+    assert "window.receiveUpdate" in content
+    # Parse update payload
+    prefix = "window.receiveUpdate("
+    start = content.index(prefix) + len(prefix)
+    end = content.rindex(");")
+    payload = json.loads(content[start:end])
+    assert "rows" in payload
+    rows = payload["rows"]
+    assert "0" in rows or 0 in rows
+    r0 = rows.get("0") or rows.get(0)
+    assert r0["token_order"] == "5"
+    assert r0["inflected"] == "dem"
+    assert r0["lemma"] == "der"
+    assert r0["trans"] == "the"
+    assert r0["sentence_idx"] == "1"
+
+
+def test_js_render_row_includes_token_order_lookup_and_inflected_sync(tmp_path):
+    """Verify that generated HTML JavaScript contains token_order matching and inflected synchronization."""
+    config, resolved_paths = _create_render_test_env(tmp_path)
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_file = res_dir / "20260823005501-jscheck.en.tsv"
+    tsv_content = (
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tTokenOrder\n"
+        "passing\tpass\tpassing\tпроходить\t12\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = run_render_flow(
+        text="passing",
+        language="en",
+        zid="20260823005501",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+
+    assert "data-token-order" in html
+    assert "rowData.token_order" in html
+    assert "rowData.hasOwnProperty('inflected')" in html
+

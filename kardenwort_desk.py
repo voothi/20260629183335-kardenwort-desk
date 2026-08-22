@@ -8674,10 +8674,27 @@ html, body {{
             renderRow: function(rowId, globalStage) {
                 var updated = false;
                 var rowData = window.AppState.rows[rowId];
-                var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                if (!rowData) return false;
+                var tr = null;
+                if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
+                    tr = document.querySelector('tr[data-token-order="' + rowData.token_order + '"]');
+                }
+                if (!tr) {
+                    tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
                 if (tds.length >= 5) {
+                    if (!tds[0].classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
+                        var div = tds[0].querySelector('.scrollable-cell');
+                        var val = rowData.inflected || "";
+                        var oldVal = div ? (div.textContent || div.innerText) : (tds[0].classList.contains('editing') ? null : (tds[0].textContent || tds[0].innerText));
+                        if (oldVal !== val) {
+                            if (div) setCellText(div, val);
+                            else if (!tds[0].classList.contains('editing')) setCellText(tds[0], val);
+                            updated = true;
+                        }
+                    }
                     if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
                         var div = tds[1].querySelector('.scrollable-cell');
                         var val = rowData.lemma || "";
@@ -12892,13 +12909,15 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                 
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
-                safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id)
     return data_rows
 
 
 def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows, zid=None, trace_id=None):
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+    lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
 
     if is_sqlite:
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
@@ -12911,7 +12930,8 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
             trace_id=trace_id,
         )
         comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment", zid=zid, trace_id=trace_id)
+        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="enrichment", zid=zid, trace_id=trace_id)
         return data_rows
 
     batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
@@ -12926,7 +12946,8 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
-                write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=batch_trace_id)
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=batch_trace_id)
         except Exception as e:
             logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
     return data_rows
@@ -13122,21 +13143,31 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     else:
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
         col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
+        col_inflected2 = headers.index("WordSourceInflectedForm2") if "WordSourceInflectedForm2" in headers else -1
+        col_quotation = headers.index("Quotation") if "Quotation" in headers else -1
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
         col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
         col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
         
         rows_data = {}
         for row_id, row in enumerate(data_rows):
             lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+            inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
             trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
             morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
             ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+            token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
+            sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
             rows_data[row_id] = {
                 "lemma": lemma_val,
+                "inflected": inflected_val,
                 "trans": trans_val,
                 "ipa": ipa_val,
-                "morph": morph_val
+                "morph": morph_val,
+                "token_order": token_order_val,
+                "sentence_idx": sent_idx_val
             }
             if class_cols:
                 class_vals = {}
@@ -13299,6 +13330,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             time.sleep(0.1)
     else:
         logger.error(f"Failed to atomically move update js file after 10 retries: {update_js_path}")
+    return update_js_path
 
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
     m = re.match(r'^(\d{14})', tsv_path.name)
@@ -13383,30 +13415,19 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             working_tsv_path=tsv_path,
                             zid=zid,
                         )
-                        
-                    norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
-                    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in sentence_translations_raw.values() if isinstance(line, str)]
-                    is_single = (getattr(args, 'text_mode', 'single') == 'single') and ('\n' not in text and '\r' not in text)
-                    if is_single:
-                        translated_text_str = f"<div>{' '.join(lines)}</div>"
-                    else:
-                        translated_text_str = "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
-                        
-                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", translated_text=translated_text_str, zid=zid, trace_id=trace_id)
-                    translated_text_emitted = True
-                except Exception as e:
-                    logger.error(f"Failed to translate main text in background: {e}")
-                    raise e
                     
-        # check if lemmas need translation
-        lemmas_to_translate = []
-        if col_lemma != -1:
+                    sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id)
+                except Exception as e:
+                    logger.error(f"Failed in text translation: {e}")
+                    raise
+                    
+        if run_base == 'auto' and col_lemma != -1:
+            lang = getattr(args, 'language', 'en')
+            lemmas_to_translate = []
             seen = set()
             for row in data_rows:
                 if len(row) > col_lemma and row[col_lemma].strip():
-                    if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
-                        if 'skeleton-loader' not in row[col_word_dest]:
-                            continue
                     val = row[col_lemma]
                     if val not in seen:
                         seen.add(val)
@@ -13435,7 +13456,8 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_enrich
                         )
                     else:
-                        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+                        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
                 else:
                     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
@@ -13449,6 +13471,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), args.target_lang, config, resolved_paths, provider)
                         
                         if is_sqlite:
+                            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
                             updates = []
                             for row_idx, row in enumerate(data_rows):
                                 if col_lemma != -1 and len(row) > col_lemma:
@@ -13458,8 +13481,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                         while len(row) <= col_word_dest:
                                             row.append("")
                                         row[col_word_dest] = trans_val
+                                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
                                         updates.append({
-                                            "token_order": row_idx,
+                                            "token_order": t_ord,
                                             "field": "word_destination",
                                             "value": trans_val,
                                         })
@@ -13479,13 +13503,18 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                                 data_rows = current_rows
                         
-                        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id)
+                        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id)
                         
-                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+                    sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
             else:
-                safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
         else:
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+            lang = getattr(args, 'language', 'en')
+            sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
         err_obj = getattr(e, 'envelope', None) or {
@@ -13544,6 +13573,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         selected_rows = valid_selected
         
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
+        lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
 
         if is_sqlite:
             storage_adapter.enrich_session_intellifiller(
@@ -13555,7 +13585,8 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 trace_id=trace_id,
             )
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
+            sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
         else:
             for i in range(0, len(selected_rows), batch_size):
                 batch = selected_rows[i:i + batch_size]
@@ -13563,7 +13594,8 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 run_headless_intellifiller(tsv_path, prompt_val, config, resolved_paths, selected_rows=batch, reprocess=True)
                 
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
-                safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
     except Exception as e:
         logger.error(f"Failing in {stage_name} stage: {e}")
         err_obj = getattr(e, 'envelope', None) or {
