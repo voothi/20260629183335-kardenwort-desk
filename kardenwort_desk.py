@@ -2444,11 +2444,11 @@ class SqliteStorageAdapter(StorageAdapter):
     def save_session(
         self,
         session_zid: str,
-        slug: str,
-        source_language: str,
-        target_language: str,
-        text_mode: str,
-        source_raw_text: str,
+        slug: str = "",
+        source_language: str = "",
+        target_language: str = "",
+        text_mode: str = "single",
+        source_raw_text: str = "",
         sentences: Optional[List[Dict[str, Any]]] = None,
         words: Optional[List[Dict[str, Any]]] = None,
         comments: Optional[List[str]] = None,
@@ -2464,6 +2464,21 @@ class SqliteStorageAdapter(StorageAdapter):
                 f"Invalid session ZID '{session_zid}' for SQLite storage persistence.",
             )
 
+        existing_sess = None
+        try:
+            bundle = self.db.get_session_bundle(session_zid, zid=zid)
+            if bundle and bundle.get("session"):
+                existing_sess = bundle["session"]
+        except Exception:
+            existing_sess = None
+
+        if existing_sess:
+            slug = slug or existing_sess.get("slug", "")
+            source_language = source_language or existing_sess.get("source_language", "")
+            target_language = target_language or existing_sess.get("target_language", "")
+            text_mode = text_mode if (text_mode != "single" or "text_mode" not in existing_sess) else existing_sess.get("text_mode", "single")
+            source_raw_text = source_raw_text or existing_sess.get("source_raw_text", "")
+
         now_iso = datetime.now(timezone.utc).isoformat()
         session_record = {
             "zid": session_zid,
@@ -2472,7 +2487,7 @@ class SqliteStorageAdapter(StorageAdapter):
             "target_language": target_language or "",
             "text_mode": text_mode or "single",
             "source_raw_text": source_raw_text or "",
-            "created_at": now_iso,
+            "created_at": existing_sess.get("created_at", now_iso) if existing_sess else now_iso,
             "updated_at": now_iso,
         }
 
@@ -4684,8 +4699,10 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
 
 def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest,
                          sentence_translations_raw, tsv_path, comments, headers,
-                         *, col_text_dest=-1, persist=True, return_single=False):
+                         *, col_text_dest=-1, persist=True, return_single=False,
+                         adapter: Optional[StorageAdapter] = None, config=None, resolved_paths=None):
     eff_mode = _effective_text_mode(text, text_mode)
+    act_adapter = adapter or (get_storage_adapter(config, resolved_paths) if (config or resolved_paths) else None) or _DEFAULT_TSV_ADAPTER
     
     content_to_absolute = {}
     if eff_mode != 'single':
@@ -4716,8 +4733,8 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             row[col_text_dest] = sentence_translations_raw.get('FULL_TEXT', sentence_translations_raw.get(0, ""))
             
     if persist and tsv_path:
-        with file_lock(tsv_path):
-            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        with act_adapter.file_lock(tsv_path):
+            act_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
     if return_single:
         if text_mode == 'single':
@@ -11739,32 +11756,44 @@ def cmd_reprocess(args):
     else:
         tsv_path = find_working_tsv(results_dir, zid, lang)
         
-    if not tsv_path or not tsv_path.exists():
-        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
-        sys.exit(1)
-        
-    try:
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
-    except Exception as e:
-        print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
-        sys.exit(1)
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+    if is_sqlite:
+        restored = storage_adapter.restore_session(zid)
+        comments = restored.get("comments", [])
+        headers = restored.get("headers", [])
+        data_rows = restored.get("data_rows", [])
+        tsv_path = Path(tsv_path_str) if tsv_path_str else (results_dir / f"{zid}.{lang}.tsv")
+    else:
+        if not tsv_path or not tsv_path.exists():
+            print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
+            sys.exit(1)
+        try:
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        except Exception as e:
+            print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
+            sys.exit(1)
         
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
     
     editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
     
-    exclude_roles = {'lemma', 'inflected', 'word_translation', 'selected', 'source_word', 'source_sentence', 'sentence_index'}
+    exclude_roles = {'lemma', 'inflected', 'word_translation', 'selected', 'source_word', 'source_sentence', 'sentence_index', 'quotation'}
     exclude_from_clear = set()
-    if 'desk_columns' in mapping:
-        for col, role in mapping['desk_columns'].items():
-            if role in exclude_roles and col in headers:
-                exclude_from_clear.add(col)
-    for section in ('fields_mapping.word', 'fields_mapping.sentence'):
-        if section in mapping:
-            for col, role in mapping[section].items():
+    for role, col in role_fields.items():
+        if role in exclude_roles and col in headers:
+            exclude_from_clear.add(col)
+    for sec in ('fields', 'desk_columns', 'fields_mapping.word', 'fields_mapping.sentence'):
+        if sec in mapping:
+            for col, role in mapping[sec].items():
                 if role in exclude_roles and col in headers:
                     exclude_from_clear.add(col)
+    # Ensure source word columns are always protected from clearing
+    for col in headers:
+        if col.lower() in ('wordsource', 'wordsourceinflectedform', 'quotation', 'sentencesource', 'sentencesourceindex'):
+            exclude_from_clear.add(col)
                     
     fields_to_clear = [c for c in editable_cols if c not in exclude_from_clear]
     for col in headers:
@@ -11780,10 +11809,8 @@ def cmd_reprocess(args):
     for row_id in selected_rows:
         if 0 <= row_id < len(data_rows):
             row = data_rows[row_id]
-            # Check if row is not completely empty
             if not any(str(cell).strip() for cell in row):
                 continue
-            # If we have a source column, ensure it's not empty
             if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
                 continue
                 
@@ -11801,14 +11828,25 @@ def cmd_reprocess(args):
         emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
         sys.exit(0)
         
+    trace_id = getattr(args, 'trace_id', None) or (f"{zid}:reprocess:worker" if zid else None)
     try:
-        with file_lock(tsv_path):
-            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        if is_sqlite:
+            storage_adapter.save_session(
+                session_zid=zid,
+                comments=comments,
+                headers=headers,
+                data_rows=data_rows,
+                working_tsv_path=None,
+                zid=zid,
+            )
+        else:
+            with file_lock(tsv_path):
+                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             
         role_fields = get_role_fields(mapping, headers)
         run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
         if run_enrich == 'auto':
-            write_update_js(tsv_path, data_rows, headers, role_fields)
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
         sys.exit(1)
@@ -11816,11 +11854,9 @@ def cmd_reprocess(args):
     prompt_name = config.get(SEC_LANGUAGES, f'{lang}_prompt')
     logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows in batches.")
     
-    # Spawn the batch worker
     python_exe = sys.executable
     desk_script = Path(__file__).resolve()
     
-    trace_id = getattr(args, 'trace_id', None) or (f"{zid}:reprocess:worker" if zid else None)
     cmd = [
         str(python_exe),
         str(desk_script),
@@ -11861,22 +11897,17 @@ def cmd_reprocess(args):
                 stderr=log_file,
                 close_fds=True
             )
-        reprocess_payload: ReprocessStartedPayload = {
-            "reprocess_started": True,
-            "rows": cleared_count,
-        }
+        reprocess_payload: ReprocessStartedPayload = {"reprocess_started": True}
         emit_payload(reprocess_payload)
     except Exception as e:
-        logger.error(f"Failed to launch reprocess worker: {e}")
-        skipped_payload: ExportSkippedPayload = {
-            "status": "skipped",
-            "message": f"Failed to launch worker: {e}",
-        }
-        emit_payload(skipped_payload)
+        logger.error(f"Failed to launch batch worker: {e}")
+        print_structured_error("DESK_FAILED", f"Failed to launch worker: {e}")
+        sys.exit(1)
 
-def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang):
+def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang, zid=None, trace_id=None):
     col_lemma_name = role_fields.get('lemma', 'WordSource')
     col_word_dest_name = role_fields.get('word_translation', 'WordDestination')
+    storage_adapter = get_storage_adapter(config, resolved_paths)
     
     col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
     col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
@@ -11894,29 +11925,46 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
             provider_to_use = 'combined' if lemmas_provider == 'combined' else lemmas_provider
             lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, provider_to_use)
             
-            with file_lock(tsv_path):
-                comments, headers, data_rows = load_tsv_rows(tsv_path)
-                for row_id in selected_rows:
-                    if 0 <= row_id < len(data_rows):
-                        row = data_rows[row_id]
-                        if len(row) > col_lemma:
-                            lemma_val = row[col_lemma].strip()
-                            while len(row) <= col_word_dest:
-                                row.append("")
-                            if lemma_val in lemma_translations:
-                                row[col_word_dest] = lemma_translations[lemma_val]
-                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            with storage_adapter.file_lock(tsv_path):
+                comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
+                col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
+                if col_lemma != -1 and col_word_dest != -1:
+                    for row_id in selected_rows:
+                        if 0 <= row_id < len(data_rows):
+                            row = data_rows[row_id]
+                            if len(row) > col_lemma:
+                                lemma_val = row[col_lemma].strip()
+                                while len(row) <= col_word_dest:
+                                    row.append("")
+                                if lemma_val in lemma_translations:
+                                    row[col_word_dest] = lemma_translations[lemma_val]
+                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
-                write_update_js(tsv_path, data_rows, headers, role_fields)
+                safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
     return data_rows
 
 
 def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows, zid=None, trace_id=None):
-    # Fallback: 5 (smaller than the progressive worker's default of 30).
-    # This is user-triggered (interactive reprocess), so smaller batches give faster
-    # intermediate UI updates between each IntelliFiller call. Config key: intellifiller_batch_size.
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+    if is_sqlite:
+        prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
+        storage_adapter.enrich_session_intellifiller(
+            session_zid=zid,
+            prompt_name=prompt_val,
+            selected_rows=selected_rows,
+            reprocess=True,
+            zid=zid,
+            trace_id=trace_id,
+        )
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="enrichment", zid=zid, trace_id=trace_id)
+        return data_rows
+
     batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
     for i in range(0, len(selected_rows), batch_size):
         batch = selected_rows[i:i + batch_size]
@@ -11959,9 +12007,12 @@ def cmd_reprocess_worker(args):
     data_rows, headers, role_fields = [], [], {}
     class_cols = []
     
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
     try:
-        with file_lock(tsv_path):
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        with storage_adapter.file_lock(tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
@@ -11976,7 +12027,7 @@ def cmd_reprocess_worker(args):
         
         if lemmas_provider in ('combined', 'google', 'deepl'):
             try:
-                data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang)
+                data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang, zid=zid, trace_id=trace_id)
                 safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
             except Exception as e:
                 logger.error(f"Failed fast-path translation during reprocess: {e}")
@@ -11996,17 +12047,15 @@ def cmd_reprocess_worker(args):
                     sess_logger.error(f"IntelliFiller stage failed: [{worker_error.get('code')}] {worker_error.get('message')}")
                 
         if not worker_error:
-            # Restore original lemmas if run_lemmatizer is disabled
             if not run_lemmatizer and col_lemma != -1 and original_lemmas:
-                with file_lock(tsv_path):
-                    comments_latest, headers_latest, data_rows_latest = load_tsv_rows(tsv_path)
+                with storage_adapter.file_lock(tsv_path):
+                    comments_latest, headers_latest, data_rows_latest = storage_adapter.load_tsv_rows(tsv_path)
                     for row_id, orig_val in original_lemmas.items():
                         if 0 <= row_id < len(data_rows_latest):
                             data_rows_latest[row_id][col_lemma] = orig_val
-                    save_tsv_rows_safely(tsv_path, comments_latest, headers_latest, data_rows_latest)
+                    storage_adapter.save_tsv_rows_safely(tsv_path, comments_latest, headers_latest, data_rows_latest)
                     data_rows = data_rows_latest
                     
-            # Update classification fields if enabled
             try:
                 desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
                 kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -12576,9 +12625,15 @@ def cmd_retext(args):
     else:
         tsv_path = find_working_tsv(results_dir, zid, lang)
         
-    if not tsv_path or not tsv_path.exists():
-        print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
-        sys.exit(1)
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+    if is_sqlite:
+        tsv_path = Path(tsv_path_str) if tsv_path_str else (results_dir / f"{zid}.{lang}.tsv")
+    else:
+        if not tsv_path or not tsv_path.exists():
+            print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
+            sys.exit(1)
         
     logger.info("Triggering async retext worker.")
     
@@ -12649,26 +12704,34 @@ def cmd_retext_worker(args):
     if sess_logger:
         sess_logger.info("Retext worker started")
     
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
     try:
-        with file_lock(tsv_path):
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        with storage_adapter.file_lock(tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
         
-        source_text_path = tsv_path.with_suffix('.txt')
-        if not source_text_path.exists():
-            worker_error = {
-                "code": "ERR_SOURCE_FILE_MISSING",
-                "message": "Source text file missing for retext",
-                "provider": "desk",
-                "details": {}
-            }
-            if sess_logger:
-                sess_logger.error(worker_error["message"])
-            return
-            
-        text = source_text_path.read_text(encoding='utf-8')
+        if is_sqlite:
+            restored = storage_adapter.restore_session(zid)
+            text = restored.get("source_text", "")
+            if not text:
+                text = restored.get("session", {}).get("source_raw_text", "")
+        else:
+            source_text_path = tsv_path.with_suffix('.txt')
+            if not source_text_path.exists():
+                worker_error = {
+                    "code": "ERR_SOURCE_FILE_MISSING",
+                    "message": "Source text file missing for retext",
+                    "provider": "desk",
+                    "details": {}
+                }
+                if sess_logger:
+                    sess_logger.error(worker_error["message"])
+                return
+            text = source_text_path.read_text(encoding='utf-8')
         text_reprocess_provider = config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
         if sess_logger:
@@ -12699,11 +12762,13 @@ def cmd_retext_worker(args):
                 sess_logger.error(f"Retext translation failed: {te_other}")
             raise te_other
             
-        target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
-        eff_mode = _effective_text_mode(text, text_mode)
-        _write_translation_txt(text, eff_mode, sentence_translations, target_text_path, save_flag=True, overwrite=True)
+        if not is_sqlite:
+            target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
+            eff_mode = _effective_text_mode(text, text_mode)
+            _write_translation_txt(text, eff_mode, sentence_translations, target_text_path, save_flag=True, overwrite=True)
         
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
+        with storage_adapter.file_lock(tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
         col_text_dest = headers.index(role_fields['text_destination']) if 'text_destination' in role_fields and role_fields['text_destination'] in headers else -1
         col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
@@ -12711,7 +12776,8 @@ def cmd_retext_worker(args):
         resolve_translations(
             text, text_mode, data_rows, col_index, col_sentence_dest,
             sentence_translations, tsv_path, comments, headers,
-            col_text_dest=col_text_dest, persist=True, return_single=False
+            col_text_dest=col_text_dest, persist=True, return_single=False,
+            adapter=storage_adapter, config=config, resolved_paths=resolved_paths
         )
         if sess_logger:
             sess_logger.info("Retext completed successfully")
@@ -12726,8 +12792,8 @@ def cmd_retext_worker(args):
             }
     finally:
         try:
-            with file_lock(tsv_path):
-                comments, headers, data_rows = load_tsv_rows(tsv_path)
+            with storage_adapter.file_lock(tsv_path):
+                comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             # source_text="" because retext never changes the source text;

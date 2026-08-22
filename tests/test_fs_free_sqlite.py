@@ -8,6 +8,7 @@ import configparser
 import csv
 import json
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import MagicMock
 import pytest
@@ -347,3 +348,149 @@ def test_fs_free_repeat_lookup_fast_cache_hit_zero_disk_writes(monkeypatch, tmp_
     # Verify zero TSV, TXT, or lock files on disk in results/
     created_files = [f for f in results_dir.iterdir() if f.is_file() and not f.name.endswith(".log")]
     assert len(created_files) == 0, f"Expected 0 persistent files in results/, found: {created_files}"
+
+
+def test_fs_free_reprocess_and_retext_sqlite_mode(monkeypatch, tmp_path):
+    """
+    Verifies that cmd_reprocess, cmd_reprocess_worker, cmd_retext, cmd_retext_worker,
+    and cmd_export function cleanly in SQLite mode without existing TSV files in results/.
+    """
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    db_file = tmp_path / "kardenwort_fs_reprocess.db"
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    fav_dir = tmp_path / "favorites"
+    fav_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = results_dir
+    resolved_paths["favorites_output_dir"] = fav_dir
+
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_db_path", str(db_file))
+    config.set("storage", "fallback_to_tsv", "true")
+    config.set("storage", "cache_ttl_seconds", "86400")
+    config.set("settings", "favorites_output_dir", str(fav_dir))
+    config.set("settings", "send_to_anki_after_export", "false")
+    config.set("settings", "save_to_favorites_on_export", "true")
+    config.set("pipeline", "lemma_reprocess_provider", "google")
+    resolved_paths["storage_backend"] = "sqlite"
+    resolved_paths["sqlite_db_path"] = db_file.resolve()
+
+    anki_mapping_path = tmp_path / "anki-mapping.ini"
+    anki_mapping_path.write_text("""[fields]
+WordSource = lemma
+WordDestination = word_translation
+SentenceSourceIndex = sentence_index
+SentenceSource = sentence_source
+SentenceDestination = sentence_destination
+DeskSelected = selected
+""", encoding="utf-8")
+    ws_dir = tmp_path / "workspace"
+    ws_dir.mkdir(exist_ok=True)
+    (ws_dir / "config.ini").write_text("[settings]\n", encoding="utf-8")
+
+    if not config.has_section("environment"):
+        config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(ws_dir))
+    config.set("environment", "kardenwort_python", sys.executable)
+    resolved_paths["kardenwort_workspace"] = ws_dir
+    resolved_paths["kardenwort_python"] = sys.executable
+
+    cfg_file = tmp_path / "reprocess_config.ini"
+    with open(cfg_file, "w", encoding="utf-8") as f:
+        config.write(f)
+
+    test_zid = "20260822150000"
+    adapter = get_storage_adapter(config, resolved_paths)
+
+    # 1. Populate initial SQLite session
+    adapter.save_session(
+        session_zid=test_zid,
+        slug="reprocess-test",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="The quick fox.",
+        sentences=[{"sentence_index": 1, "sentence_source": "The quick fox.", "sentence_destination": "Быстрая лиса."}],
+        words=[
+            {"sentence_index": 1, "token_order": 0, "quotation": "quick", "lemma": "quick", "word_destination": "быстрый", "selected": 0},
+            {"sentence_index": 1, "token_order": 1, "quotation": "fox", "lemma": "fox", "word_destination": "лиса", "selected": 1},
+        ],
+    )
+
+    # 2. Test cmd_reprocess with selection manifest
+    manifest_file = tmp_path / "manifest_reproc.json"
+    manifest_data = {
+        "selected_row_ids": [0],
+        "zid": test_zid,
+        "tsv_path": str(results_dir / f"{test_zid}-reprocess-test.en.tsv"),
+    }
+    manifest_file.write_text(json.dumps(manifest_data), encoding="utf-8")
+
+    class ReprocessArgs:
+        selection_manifest = str(manifest_file)
+        language = "en"
+        config = str(cfg_file)
+        trace_id = f"{test_zid}:reprocess:test"
+
+    desk.cmd_reprocess(ReprocessArgs())
+
+    # 3. Test cmd_reprocess_worker fast path
+    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_reprocessed" for l in lemmas})
+    class BatchWorkerArgs:
+        tsv = str(results_dir / f"{test_zid}-reprocess-test.en.tsv")
+        prompt = "en_prompt"
+        rows = "0"
+        zid = test_zid
+        trace_id = f"{test_zid}:reprocess:worker"
+        config = str(cfg_file)
+
+    desk.cmd_reprocess_worker(BatchWorkerArgs())
+
+    # Check updated word in SQLite
+    with adapter.db.get_connection(zid=test_zid) as conn:
+        words = conn.execute("SELECT * FROM words WHERE session_zid = ? ORDER BY token_order", (test_zid,)).fetchall()
+        assert words[0]["word_destination"] == "quick_reprocessed"
+
+    # 4. Test cmd_retext_worker
+    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Очень быстрая лиса."})
+    class RetextWorkerArgs:
+        tsv = str(results_dir / f"{test_zid}-reprocess-test.en.tsv")
+        language = "en"
+        text_mode = "single"
+        zid = test_zid
+        trace_id = f"{test_zid}:retext:worker"
+        config = str(cfg_file)
+
+    desk.cmd_retext_worker(RetextWorkerArgs())
+
+    # Check updated sentence in SQLite
+    with adapter.db.get_connection(zid=test_zid) as conn:
+        sents = conn.execute("SELECT * FROM sentences WHERE session_zid = ?", (test_zid,)).fetchall()
+        assert sents[0]["sentence_destination"] == "Очень быстрая лиса."
+
+    # 5. Test cmd_export via selection manifest
+    export_manifest_file = tmp_path / "manifest_export.json"
+    export_manifest_data = {
+        "selected_row_ids": [1],
+        "zid": test_zid,
+        "tsv_path": str(results_dir / f"{test_zid}-reprocess-test.en.tsv"),
+    }
+    export_manifest_file.write_text(json.dumps(export_manifest_data), encoding="utf-8")
+
+    class ExportArgs:
+        selection_manifest = str(export_manifest_file)
+        language = "en"
+        config = str(cfg_file)
+        zid = test_zid
+        trace_id = f"{test_zid}:export:test"
+
+    desk.cmd_export(ExportArgs())
+
+    # Verify favorites file was exported to favorites/
+    fav_files = list(fav_dir.glob("*.tsv"))
+    assert len(fav_files) == 1
+
+    # Verify zero TSV files were left in results/
+    results_tsvs = list(results_dir.glob("*.tsv"))
+    assert len(results_tsvs) == 0
