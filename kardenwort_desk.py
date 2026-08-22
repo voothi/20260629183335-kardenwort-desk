@@ -6441,8 +6441,13 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         paths_to_spawn = [(master_seq + i + 1, path) for i, path in enumerate(sub_tsv_paths)]
         if spawn_order == 'reverse':
             paths_to_spawn.reverse()
+            
+        for seq, path in paths_to_spawn:
+            ahk_args.extend(["--seq-num", str(seq), "--restore", str(path)])
+
         base_dir = resolved_paths.get('base_dir') if resolved_paths else Path('.')
-        spawn_ahk(ahk_args, base_dir)
+        if ahk_args:
+            spawn_ahk(ahk_args, base_dir)
         
         if not is_sqlite:
             try:

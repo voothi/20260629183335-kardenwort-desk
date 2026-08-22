@@ -178,6 +178,12 @@ def test_fs_free_multi_window_sentences_mode_zero_disk_writes(monkeypatch, tmp_p
         sessions = conn.execute("SELECT * FROM sessions ORDER BY zid ASC").fetchall()
         assert len(sessions) >= 2
 
+    # Verify AHK child process was spawned with --restore commands
+    assert len(spawned_processes) >= 1
+    spawned_cmds = [p[0] for p in spawned_processes if len(p) > 0 and isinstance(p[0], list)]
+    has_restore = any("--restore" in cmd for cmd in spawned_cmds)
+    assert has_restore, f"Expected --restore in spawned child commands: {spawned_cmds}"
+
 
 def test_fs_free_progressive_worker_in_memory_enrichment(monkeypatch, tmp_path):
     """
