@@ -3020,7 +3020,7 @@ class SqliteStorageAdapter(StorageAdapter):
             if sess_zid:
                 try:
                     restored = self.restore_session(sess_zid)
-                    if restored and restored.get("data_rows"):
+                    if restored is not None and "data_rows" in restored:
                         return (
                             restored.get("comments", []),
                             restored.get("headers", []),

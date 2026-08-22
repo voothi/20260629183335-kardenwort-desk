@@ -361,14 +361,14 @@ def test_admin_sessions_explorer_api(admin_controller_server):
     assert resp["total_count"] == 0
 
     # 6. Reader Launch / Rendering Endpoints
-    # GET /?session_zid=sess_zid
+    # GET /?session_zid=sess_zid (Full Kardenwort-Desk Window view)
     status, html_content = make_admin_request(url, f"/?session_zid={sess_zid}")
     assert status == 200
-    assert "kw-lookup-container" in html_content
+    assert ("lemma-table" in html_content or "source-container" in html_content)
     assert sess_zid in html_content
 
-    # GET /lookup?session_zid=sess_zid
-    status, html_content = make_admin_request(url, f"/lookup?session_zid={sess_zid}")
+    # GET /?session_zid=sess_zid&view=goldendict (Compact GoldenDict view)
+    status, html_content = make_admin_request(url, f"/?session_zid={sess_zid}&view=goldendict")
     assert status == 200
     assert "kw-lookup-container" in html_content
 

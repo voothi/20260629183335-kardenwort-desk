@@ -48,6 +48,7 @@ from kardenwort_desk import (
     get_storage_adapter,
     parse_tsv_to_bundle,
     render_lookup_html,
+    run_render_flow,
     SessionLogger,
     SEC_SETTINGS,
     SEC_LANGUAGES,
@@ -1145,34 +1146,53 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 fingerprint = compute_content_fingerprint(data_rows)
 
                 req_theme = qs.get('theme', [None])[0]
-                goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
-                goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
-                goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
-                goldendict['theme'] = req_theme or 'dark'
-                goldendict.setdefault('heading_source', '__default__')
-                goldendict.setdefault('heading_translation', '__default__')
-                goldendict.setdefault('heading_lemmas', '__default__')
-                goldendict.setdefault('run_intellifiller', False)
-                goldendict['server_enabled'] = True
-                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+                view_mode = qs.get('view', [None])[0]
+                slug = restored.get("slug") or ""
+                text_mode = restored.get("text_mode") or "single"
 
-                html = render_lookup_html(
-                    text=source_text,
-                    language=sess_lang,
-                    target_lang=target_lang,
-                    config=self.server.config,
-                    resolved_paths=self.server.resolved_paths,
-                    zid=session_zid,
-                    goldendict=goldendict,
-                    comments=comments,
-                    headers=headers,
-                    data_rows=data_rows,
-                    sentence_translation=sentence_translation,
-                    session_zid=session_zid,
-                    api_token=getattr(self.server, 'api_key', ''),
-                    server_enabled=True,
-                    fingerprint=fingerprint,
-                )
+                if view_mode == 'goldendict':
+                    goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
+                    goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
+                    goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+                    goldendict['theme'] = req_theme or 'dark'
+                    goldendict.setdefault('heading_source', '__default__')
+                    goldendict.setdefault('heading_translation', '__default__')
+                    goldendict.setdefault('heading_lemmas', '__default__')
+                    goldendict.setdefault('run_intellifiller', False)
+                    goldendict['server_enabled'] = True
+                    goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+
+                    html = render_lookup_html(
+                        text=source_text,
+                        language=sess_lang,
+                        target_lang=target_lang,
+                        config=self.server.config,
+                        resolved_paths=self.server.resolved_paths,
+                        zid=session_zid,
+                        goldendict=goldendict,
+                        comments=comments,
+                        headers=headers,
+                        data_rows=data_rows,
+                        sentence_translation=sentence_translation,
+                        session_zid=session_zid,
+                        api_token=getattr(self.server, 'api_key', ''),
+                        server_enabled=True,
+                        fingerprint=fingerprint,
+                    )
+                else:
+                    results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
+                    slug_suffix = f"-{slug}" if slug else ""
+                    tsv_path = results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv"
+                    html = run_render_flow(
+                        text=source_text,
+                        language=sess_lang,
+                        zid=session_zid,
+                        text_mode=text_mode,
+                        config=self.server.config,
+                        resolved_paths=self.server.resolved_paths,
+                        theme=req_theme or 'dark',
+                        tsv_path=tsv_path,
+                    )
                 body = html.encode('utf-8')
                 self.send_response(200)
                 self._send_cors_headers()
