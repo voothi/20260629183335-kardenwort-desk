@@ -2936,10 +2936,40 @@ class SqliteStorageAdapter(StorageAdapter):
         lookup_ttl_seconds: int,
         results_dir: Optional[Path] = None,
         zid: Optional[str] = None,
+        source_raw_text: Optional[str] = None,
+        target_language: Optional[str] = None,
+        text_mode: Optional[str] = None,
         **kwargs,
     ) -> Optional[Any]:
         if lookup_ttl_seconds <= 0:
             return None
+
+        raw_text = source_raw_text or kwargs.get("text") or ""
+        if raw_text:
+            normalized_raw = raw_text.strip()
+            conditions = ["TRIM(source_raw_text) = ?", "source_language = ?"]
+            params: List[Any] = [normalized_raw, source_language]
+            if target_language:
+                conditions.append("target_language = ?")
+                params.append(target_language)
+            if text_mode:
+                conditions.append("text_mode = ?")
+                params.append(text_mode)
+            params.append(lookup_ttl_seconds)
+
+            sql = f"""
+                SELECT zid, slug, source_language, target_language, text_mode, source_raw_text, created_at, updated_at
+                FROM sessions
+                WHERE {' AND '.join(conditions)}
+                  AND (julianday('now') - julianday(created_at)) * 86400 <= ?
+                ORDER BY created_at DESC LIMIT 1;
+            """
+            rows = self.db.query_readonly(sql, tuple(params), zid=zid)
+            if rows:
+                cached_zid = rows[0]["zid"]
+                return self.db.get_session_bundle(cached_zid, zid=zid)
+            return None
+
         sql = """
             SELECT zid, slug, source_language, target_language, text_mode, source_raw_text, created_at, updated_at
             FROM sessions
@@ -5152,7 +5182,7 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                 raise IntelliFillerError(parsed_err.get("message", "Headless IntelliFiller failed"), envelope=parsed_err)
 
 def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, zid=None, trace_id=None):
-    python_exe = sys.executable
+    python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
     desk_script = Path(__file__).resolve()
     
     if selected_rows is None:
@@ -5200,8 +5230,8 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
             close_fds=True
         )
 
-def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False, text_mode='single', zid=None, trace_id=None):
-    python_exe = sys.executable
+def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False, text_mode='single', zid=None, trace_id=None, resolved_paths=None):
+    python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
     desk_script = Path(__file__).resolve()
     if not zid:
         import re
@@ -5379,7 +5409,13 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         if ttl_seconds > 0:
             m = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', cache_key, re.IGNORECASE)
             slug_part = m.group(1) if m else generate_slug(text)
-            cached_bundle = storage_adapter.get_cached_session(slug_part, language, ttl_seconds, zid=zid)
+            cached_bundle = storage_adapter.get_cached_session(
+                slug_part, language, ttl_seconds,
+                source_raw_text=text,
+                target_language=target_lang,
+                text_mode=eff_mode,
+                zid=zid,
+            )
             if cached_bundle and cached_bundle.get("session"):
                 cached_zid = cached_bundle["session"].get("zid")
                 return results_dir / f"{cached_zid}-{slug_part}.{language}.tsv"
@@ -6524,7 +6560,13 @@ html, body {{
     if is_sqlite:
         ttl_val = config.getint(SEC_STORAGE, 'cache_ttl_seconds', fallback=config.getint(SEC_SETTINGS, 'lookup_ttl_seconds', fallback=86400))
         if ttl_val > 0:
-            cached_session_bundle = storage_adapter.get_cached_session(slug, language, ttl_val, zid=zid)
+            cached_session_bundle = storage_adapter.get_cached_session(
+                slug, language, ttl_val,
+                source_raw_text=text,
+                target_language=target_lang,
+                text_mode=eff_mode,
+                zid=zid,
+            )
 
     if cached_session_bundle and cached_session_bundle.get("session"):
         cached_zid = cached_session_bundle["session"].get("zid")
@@ -10009,7 +10051,14 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     cached = False
     with storage_adapter.file_lock(working_tsv_path):
         if ttl_seconds > 0:
-            cached_res = storage_adapter.get_cached_session(slug, language, ttl_seconds, results_dir=results_dir, zid=zid)
+            cached_res = storage_adapter.get_cached_session(
+                slug, language, ttl_seconds,
+                results_dir=results_dir,
+                source_raw_text=text,
+                target_language=target_lang,
+                text_mode=text_mode,
+                zid=zid,
+            )
             if cached_res is not None:
                 if isinstance(cached_res, dict):
                     cached_zid = cached_res.get("session", {}).get("zid") or cached_res.get("zid")
@@ -11854,7 +11903,7 @@ def cmd_reprocess(args):
     prompt_name = config.get(SEC_LANGUAGES, f'{lang}_prompt')
     logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows in batches.")
     
-    python_exe = sys.executable
+    python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
     desk_script = Path(__file__).resolve()
     
     cmd = [
@@ -12637,7 +12686,7 @@ def cmd_retext(args):
         
     logger.info("Triggering async retext worker.")
     
-    python_exe = sys.executable
+    python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
     desk_script = Path(__file__).resolve()
     
     trace_id = getattr(args, 'trace_id', None) or (f"{zid}:retext:worker" if zid else None)
