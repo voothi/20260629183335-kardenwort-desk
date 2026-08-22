@@ -2946,7 +2946,22 @@ class SqliteStorageAdapter(StorageAdapter):
         data_rows: List[List[str]],
         **kwargs,
     ) -> None:
-        self._tsv_fallback.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        zid = extract_zid(tsv_path) or generate_unique_zid()
+        slug_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', tsv_path.name, re.IGNORECASE)
+        slug_val = slug_match.group(1) if slug_match else ""
+        lang_val = kwargs.get("language") or (tsv_path.suffixes[-2][1:] if len(tsv_path.suffixes) >= 2 else "en")
+        self.save_session(
+            session_zid=zid,
+            slug=slug_val,
+            source_language=lang_val,
+            target_language=kwargs.get("target_language", "ru"),
+            text_mode=kwargs.get("text_mode", "single"),
+            comments=comments,
+            headers=headers,
+            data_rows=data_rows,
+            working_tsv_path=None,
+            zid=zid,
+        )
 
     def load_tsv_rows(
         self,
@@ -6485,7 +6500,19 @@ html, body {{
     
     eff_mode = _effective_text_mode(text, text_mode)
     
-    if tsv_path and Path(tsv_path).exists():
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+    cached_session_bundle = None
+    if is_sqlite:
+        ttl_val = config.getint(SEC_STORAGE, 'cache_ttl_seconds', fallback=config.getint(SEC_SETTINGS, 'lookup_ttl_seconds', fallback=86400))
+        if ttl_val > 0:
+            cached_session_bundle = storage_adapter.get_cached_session(slug, language, ttl_val, zid=zid)
+
+    if cached_session_bundle and cached_session_bundle.get("session"):
+        cached_zid = cached_session_bundle["session"].get("zid")
+        working_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
+    elif tsv_path and Path(tsv_path).exists():
         working_tsv_path = Path(tsv_path)
     else:
         working_tsv_path = prepare_lookup_tsv(
@@ -6499,7 +6526,6 @@ html, body {{
         tsv_slug = tsv_match.group(1)
     
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-    storage_adapter = get_storage_adapter(config, resolved_paths)
     comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
@@ -6537,8 +6563,23 @@ html, body {{
                             f"wordfill (desk): pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
                             f"from corpus."
                         )
-                with file_lock(working_tsv_path):
-                    save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                if is_sqlite:
+                    storage_adapter.save_session(
+                        session_zid=zid,
+                        slug=tsv_slug,
+                        source_language=language,
+                        target_language=target_lang,
+                        text_mode=text_mode,
+                        source_raw_text=text,
+                        comments=comments,
+                        headers=headers,
+                        data_rows=data_rows,
+                        working_tsv_path=None,
+                        zid=zid,
+                    )
+                else:
+                    with file_lock(working_tsv_path):
+                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
         except Exception as wf_err:
             logger.warning(f"wordfill (desk): early pre-fill step failed, continuing: {wf_err}")
 
@@ -6804,13 +6845,14 @@ html, body {{
         # because intellifiller was never scheduled to run in this code path.
         if run_base == 'auto':
             try:
-                with file_lock(working_tsv_path):
-                    comments, headers_latest, current_rows = load_tsv_rows(working_tsv_path)
+                with storage_adapter.file_lock(working_tsv_path):
+                    comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(working_tsv_path)
                     col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
                     col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
                     
                     modified_sweep = False
-                    for row in current_rows:
+                    updates = []
+                    for row_idx, row in enumerate(current_rows):
                         if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                             if col_word_dest != -1:
                                 if len(row) <= col_word_dest:
@@ -6818,20 +6860,31 @@ html, body {{
                                 if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
                                     row[col_word_dest] = "[FAILED]"
                                     modified_sweep = True
+                                    if is_sqlite:
+                                        updates.append({
+                                            "token_order": row_idx,
+                                            "field": "word_destination",
+                                            "value": "[FAILED]",
+                                        })
                     if modified_sweep:
-                        save_tsv_rows_safely(working_tsv_path, comments, headers_latest, current_rows)
+                        if is_sqlite:
+                            if updates:
+                                storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
+                        else:
+                            save_tsv_rows_safely(working_tsv_path, comments, headers_latest, current_rows)
                         data_rows = current_rows
             except Exception as e:
                 logger.error(f"Error sweeping FAILED (WordDestination) in UI thread: {e}")
 
-        try:
-            working_tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
-        except Exception:
-            pass
-        try:
-            working_tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
-        except Exception:
-            pass
+        if not is_sqlite:
+            try:
+                working_tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
+            except Exception:
+                pass
+            try:
+                working_tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
+            except Exception:
+                pass
 
     token_cfg = RuntimeTokenConfig.from_config(config)
     apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())

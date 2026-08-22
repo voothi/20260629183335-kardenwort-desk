@@ -255,3 +255,95 @@ SentenceDestination = sentence_destination
         words = conn.execute("SELECT * FROM words WHERE session_zid = ?", (test_zid,)).fetchall()
         assert len(words) == 1
         assert words[0]["word_destination"] == "fox_ru"
+
+
+def test_fs_free_repeat_lookup_fast_cache_hit_zero_disk_writes(monkeypatch, tmp_path):
+    """
+    Verifies that launching the same text a second time hits the SQLite cache,
+    bypasses spaCy tokenization subprocess, and produces 0 persistent TSV files in results/.
+    """
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    db_file = tmp_path / "kardenwort_fs_repeat.db"
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = results_dir
+
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_db_path", str(db_file))
+    config.set("storage", "fallback_to_tsv", "true")
+    config.set("storage", "cache_ttl_seconds", "86400")
+    resolved_paths["storage_backend"] = "sqlite"
+    resolved_paths["sqlite_db_path"] = db_file.resolve()
+
+    # Configure wordfill enabled with dummy rule
+    wordfill_cfg = {"enabled": True, "rules": []}
+
+    spawned_processes = []
+    def mock_spawn(*args, **kwargs):
+        spawned_processes.append(args)
+        mock_proc = MagicMock()
+        mock_proc.pid = 99999
+        return mock_proc
+
+    monkeypatch.setattr(subprocess, "Popen", mock_spawn)
+
+    core_subprocesses = []
+    def mock_run(*args, **kwargs):
+        core_subprocesses.append(args)
+        cmd = args[0]
+        out_idx = cmd.index("--output-file") + 1
+        out_file = Path(cmd[out_idx])
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        headers = [
+            "Quotation", "WordSource", "WordSource2", "WordSourceInflectedForm", "WordSourceInflectedForm2",
+            "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination",
+            "WordSourceMorphologyAI", "WordSourceIPA", "DeskSelected", "LeitnerBox",
+        ]
+        rows = [
+            ["Werde", "Werden", "Werden", "Werde", "Werde", "Становиться", "1", "Werde Fahrer.", "Стань водителем.", "", "", "0", "1"],
+            ["Fahrer", "Fahrer", "Fahrer", "Fahrer", "Fahrer", "Водитель", "1", "Werde Fahrer.", "Стань водителем.", "", "", "0", "1"],
+        ]
+        with open(out_file, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow(row)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Стань водителем."})
+    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_ru" for l in lemmas})
+    monkeypatch.setattr(desk, "run_headless_intellifiller", lambda *a, **kw: None)
+
+    # 1. First launch
+    test_zid_1 = "20260822140001"
+    html_1 = desk.run_render_flow(
+        text="The quick fox.",
+        language="en",
+        zid=test_zid_1,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        wordfill_cfg=wordfill_cfg,
+    )
+    assert len(html_1) > 0
+    assert len(core_subprocesses) == 1
+
+    # 2. Second launch of the exact same text
+    test_zid_2 = "20260822140002"
+    html_2 = desk.run_render_flow(
+        text="The quick fox.",
+        language="en",
+        zid=test_zid_2,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        wordfill_cfg=wordfill_cfg,
+    )
+    assert len(html_2) > 0
+    # Core spaCy subprocess must NOT have been called again (cache hit!)
+    assert len(core_subprocesses) == 1, "Expected second launch to hit SQLite cache without running spaCy subprocess"
+
+    # Verify zero TSV, TXT, or lock files on disk in results/
+    created_files = [f for f in results_dir.iterdir() if f.is_file() and not f.name.endswith(".log")]
+    assert len(created_files) == 0, f"Expected 0 persistent files in results/, found: {created_files}"
