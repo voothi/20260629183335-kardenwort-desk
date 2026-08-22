@@ -1111,12 +1111,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 headers = restored.get("headers", [])
                 comments = restored.get("comments", [])
                 sentence_translation = restored.get("sentence_translation", "")
+                if not sentence_translation and restored.get("sentences"):
+                    sentence_translation = "\n".join([
+                        str(s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
+                        for s in restored["sentences"]
+                        if (s.get("sentence_destination") or s.get("sentence_destination2"))
+                    ])
                 fingerprint = compute_content_fingerprint(data_rows)
 
+                req_theme = qs.get('theme', [None])[0]
                 goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
                 goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
                 goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
-                goldendict.setdefault('theme', 'compact')
+                goldendict['theme'] = req_theme or 'dark'
                 goldendict.setdefault('run_intellifiller', False)
                 goldendict['server_enabled'] = True
                 goldendict['server_api_key'] = getattr(self.server, 'api_key', '')

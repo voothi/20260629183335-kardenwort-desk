@@ -2717,8 +2717,22 @@ class SqliteStorageAdapter(StorageAdapter):
             max_s_idx = sorted_sent_indices[-1] if sorted_sent_indices else 1
             min_s_idx = sorted_sent_indices[0] if sorted_sent_indices else 1
 
-            data_rows = []
+            # Deduplicate words by sentence_index, token_order, quotation, lemma
+            seen_tokens = set()
+            unique_db_words = []
             for word in db_words:
+                s_idx = word.get("sentence_index", 1)
+                t_ord = word.get("token_order", 0)
+                q_txt = str(word.get("quotation") or "").strip().lower()
+                l_txt = str(word.get("lemma") or "").strip().lower()
+                token_key = (s_idx, t_ord, q_txt, l_txt)
+                if token_key in seen_tokens:
+                    continue
+                seen_tokens.add(token_key)
+                unique_db_words.append(word)
+
+            data_rows = []
+            for word in unique_db_words:
                 s_idx = word.get("sentence_index", 1)
                 sent_record = sentences_by_idx.get(s_idx, {})
 
@@ -2826,15 +2840,25 @@ class SqliteStorageAdapter(StorageAdapter):
 
                 data_rows.append(row_cells)
 
+            sentence_trans_parts = []
+            for s in db_sentences:
+                st = (s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
+                if st:
+                    sentence_trans_parts.append(st)
+            sentence_translation = "\n".join(sentence_trans_parts)
+
             return {
                 "session_zid": zid,
                 "source_text": source_text,
+                "sentence_translation": sentence_translation,
+                "source_language": session.get("source_language", ""),
+                "target_language": session.get("target_language", ""),
                 "comments": comments,
                 "headers": headers,
                 "data_rows": data_rows,
                 "session": session,
                 "sentences": db_sentences,
-                "words": db_words,
+                "words": unique_db_words,
             }
 
     def get_cached_session(

@@ -679,7 +679,7 @@ function renderSessionsExplorerTable(sessions) {
 }
 
 function openSessionInReader(zid) {
-    let url = `/?session_zid=${encodeURIComponent(zid)}`;
+    let url = `/?session_zid=${encodeURIComponent(zid)}&theme=dark`;
     if (state.token) {
         url += `&token=${encodeURIComponent(state.token)}`;
     }

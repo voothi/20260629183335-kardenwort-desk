@@ -1908,8 +1908,9 @@ class KardenwortDB:
                 ]
                 conn.executemany(sent_sql, sent_records)
 
-            # 3. Insert words
+            # 3. Insert words (clear previous session words first to guarantee no duplicate rows)
             if words:
+                conn.execute("DELETE FROM words WHERE session_zid = ?;", (session_zid,))
                 word_sql = """
                     INSERT INTO words (
                         session_zid, sentence_index, token_order, quotation, inflected_form,
