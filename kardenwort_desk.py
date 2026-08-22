@@ -10687,17 +10687,18 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         .kw-lookup-container {
             --bg-primary: #0d0f12;
             --bg-secondary: #13161c;
-            --bg-card: #161a22;
-            --bg-hover: #1f242d;
-            --border-color: rgba(255, 255, 255, 0.1);
+            --bg-card: rgba(255, 255, 255, 0.03);
+            --bg-hover: rgba(255, 255, 255, 0.02);
+            --border-color: rgba(255, 255, 255, 0.08);
             --border-subtle: rgba(255, 255, 255, 0.05);
+            --border-th: rgba(255, 255, 255, 0.1);
             --text-main: #e3e6eb;
             --text-muted: #8b949e;
             --font-size-xs: 12px;
             --font-size-sm: 13px;
             --font-size-base: 14px;
             --font-size-md: 16px;
-            --radius-sm: 2px;
+            --radius-curved: 12px;
 
             background-color: var(--bg-primary);
             color: var(--text-main);
@@ -10709,15 +10710,16 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         .kw-section {
             background: var(--bg-card);
             border: 1px solid var(--border-color);
-            border-radius: var(--radius-sm);
-            padding: 14px 16px;
-            margin-bottom: 14px;
+            border-radius: var(--radius-curved);
+            padding: 16px;
+            margin-bottom: 16px;
+            box-shadow: 0 4px 20px rgba(0, 0, 0, 0.2);
         }
         h3, .kw-heading {
             font-size: var(--font-size-xs);
             font-weight: 600;
             text-transform: uppercase;
-            letter-spacing: 0.05em;
+            letter-spacing: 0.1em;
             color: var(--text-muted);
             margin: 0 0 8px 0;
         }
@@ -10729,15 +10731,12 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             margin: 0;
         }
         .kw-translation {
-            font-size: var(--font-size-base);
-            line-height: 1.5;
+            font-size: var(--font-size-md);
+            line-height: 1.6;
             color: var(--text-main);
             margin: 0;
         }
         .kw-table-container {
-            border: 1px solid var(--border-color);
-            background: var(--bg-secondary);
-            border-radius: var(--radius-sm);
             overflow-x: auto;
             margin-top: 8px;
         }
@@ -10745,22 +10744,23 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             width: 100%;
             border-collapse: collapse;
             font-size: var(--font-size-base);
+            margin-top: 4px;
         }
         .kw-lemmas-table th {
-            background: var(--bg-card);
             color: var(--text-muted);
             font-size: var(--font-size-xs);
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.05em;
             text-align: left;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
+            padding: 10px 12px;
+            border-bottom: 1px solid var(--border-th);
         }
         .kw-lemmas-table td {
-            padding: 8px 12px;
+            padding: 10px 12px;
             border-bottom: 1px solid var(--border-subtle);
             color: var(--text-main);
+            vertical-align: top;
         }
         .kw-lemmas-table tr:last-child td {
             border-bottom: none;
@@ -10769,7 +10769,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             background-color: var(--bg-hover);
         }
         .kw-lemmas-table tr.kw-row-selected td {
-            background-color: rgba(255, 204, 0, 0.2) !important;
+            background-color: rgba(255, 204, 0, 0.15) !important;
         }
         .kw-tag-header {
             width: 36px;
@@ -10789,15 +10789,15 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-top: 12px;
+            margin-top: 14px;
         }
         .kw-export-btn {
-            background-color: var(--bg-card);
+            background-color: #161a22;
             color: var(--text-main);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-sm);
-            padding: 4px 12px;
-            height: 26px;
+            border: 1px solid var(--border-th);
+            border-radius: 4px;
+            padding: 5px 14px;
+            height: 28px;
             font-size: var(--font-size-sm);
             font-weight: 500;
             cursor: pointer;
@@ -10805,9 +10805,10 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             align-items: center;
             justify-content: center;
             text-decoration: none;
+            transition: all 0.2s ease;
         }
         .kw-export-btn:hover {
-            background-color: var(--bg-hover);
+            background-color: #1f242d;
             border-color: rgba(255, 255, 255, 0.2);
         }
         .kw-export-btn:disabled {
@@ -10823,7 +10824,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             font-family: var(--font-mono, monospace);
         }"""
         if theme == 'light':
-            css = css.replace('#0d0f12', '#f6f8fa').replace('#13161c', '#ffffff').replace('#161a22', '#ffffff').replace('#e3e6eb', '#24292f').replace('rgba(255, 255, 255, 0.1)', 'rgba(0, 0, 0, 0.1)').replace('rgba(255, 255, 255, 0.05)', 'rgba(0, 0, 0, 0.05)')
+            css = css.replace('#0d0f12', '#f6f8fa').replace('#13161c', '#ffffff').replace('#161a22', '#ffffff').replace('#e3e6eb', '#24292f').replace('rgba(255, 255, 255, 0.08)', 'rgba(0, 0, 0, 0.1)').replace('rgba(255, 255, 255, 0.05)', 'rgba(0, 0, 0, 0.05)').replace('rgba(255, 255, 255, 0.1)', 'rgba(0, 0, 0, 0.1)')
 
     if goldendict.get('disable_css', False):
         base_html = f"""<!DOCTYPE html>
