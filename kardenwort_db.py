@@ -914,6 +914,79 @@ class KardenwortDB:
             )
             return cursor.rowcount > 0
 
+    def soft_delete_sessions_batch(
+        self,
+        session_zids: Optional[List[str]] = None,
+        query: Optional[str] = None,
+        language: Optional[str] = None,
+        assigned: Optional[Union[bool, str]] = None,
+        project_id: Optional[int] = None,
+        excluded_zids: Optional[List[str]] = None,
+        zid: Optional[str] = None,
+    ) -> int:
+        """
+        Soft-deletes multiple sessions in a single batch operation by setting deleted_at.
+        Returns the number of affected sessions.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        conditions: List[str] = ["deleted_at IS NULL"]
+        params: List[Any] = [now_iso]
+
+        if session_zids is not None:
+            if not session_zids:
+                return 0
+            clean_zids = [str(z) for z in session_zids if str(z).strip()]
+            if not clean_zids:
+                return 0
+            placeholders = ",".join(["?"] * len(clean_zids))
+            conditions.append(f"zid IN ({placeholders})")
+            params.extend(clean_zids)
+        else:
+            if query and query.strip():
+                clean_q = f"%{query.strip()}%"
+                conditions.append("(zid LIKE ? OR slug LIKE ? OR source_raw_text LIKE ?)")
+                params.extend([clean_q, clean_q, clean_q])
+
+            if language and language.strip() and language.strip().lower() != "all":
+                conditions.append("source_language = ?")
+                params.append(language.strip())
+
+            if project_id is not None:
+                conditions.append("EXISTS (SELECT 1 FROM project_sessions ps WHERE ps.session_zid = sessions.zid AND ps.project_id = ?)")
+                params.append(project_id)
+
+            if assigned is not None:
+                if isinstance(assigned, bool):
+                    is_assigned = assigned
+                else:
+                    str_assigned = str(assigned).strip().lower()
+                    if str_assigned in ("true", "1", "assigned"):
+                        is_assigned = True
+                    elif str_assigned in ("false", "0", "unassigned"):
+                        is_assigned = False
+                    else:
+                        is_assigned = None
+
+                if is_assigned is True:
+                    conditions.append("EXISTS (SELECT 1 FROM project_sessions ps WHERE ps.session_zid = sessions.zid)")
+                elif is_assigned is False:
+                    conditions.append("NOT EXISTS (SELECT 1 FROM project_sessions ps WHERE ps.session_zid = sessions.zid)")
+
+        if excluded_zids:
+            clean_ex = [str(z) for z in excluded_zids if str(z).strip()]
+            if clean_ex:
+                placeholders = ",".join(["?"] * len(clean_ex))
+                conditions.append(f"zid NOT IN ({placeholders})")
+                params.extend(clean_ex)
+
+        where_clause = f"WHERE {' AND '.join(conditions)}"
+        sql = f"UPDATE sessions SET deleted_at = ? {where_clause};"
+
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, params)
+            return cursor.rowcount
+
     def restore_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
         Restores a soft-deleted session by resetting deleted_at to NULL.

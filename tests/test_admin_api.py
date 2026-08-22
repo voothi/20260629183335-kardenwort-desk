@@ -396,4 +396,51 @@ def test_admin_sessions_explorer_api(admin_controller_server):
     assert resp["total_sessions"] >= 1
 
 
+def test_admin_api_batch_delete_sessions(admin_controller_server):
+    url, server, db, root_proj_id, child_proj_id, sess_zid = admin_controller_server
 
+    # Create 3 temporary sessions
+    zids = ["20260822990001", "20260822990002", "20260822990003"]
+    for z in zids:
+        db.insert_session({
+            "zid": z,
+            "raw_text": "Bonjour le monde",
+            "clean_text": "Bonjour le monde",
+            "source_language": "fr",
+            "target_language": "ru",
+            "text_mode": "single",
+            "slug": f"batch-test-{z}"
+        })
+
+    # 1. Batch delete explicit list with exclusion
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions/batch-delete", method="POST", body={
+        "mode": "explicit",
+        "session_zids": [zids[0], zids[1]],
+        "excluded_zids": [zids[1]],
+    })
+    assert status == 200
+    assert resp["ok"] is True
+    assert resp["deleted_count"] == 1
+
+    # Verify zids[0] is deleted, zids[1] is NOT deleted
+    status, resp = make_admin_request(url, f"/api/v1/admin/sessions?query={zids[0]}")
+    assert status == 200
+    assert resp["total_count"] == 0
+
+    status, resp = make_admin_request(url, f"/api/v1/admin/sessions?query={zids[1]}")
+    assert status == 200
+    assert resp["total_count"] == 1
+
+    # 2. Batch delete with all_matching filter for French language
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions/batch-delete", method="POST", body={
+        "mode": "all_matching",
+        "filter": {"language": "fr"},
+    })
+    assert status == 200
+    assert resp["ok"] is True
+    assert resp["deleted_count"] == 2  # zids[1] and zids[2]
+
+    # Verify all French sessions are soft deleted
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions?language=fr")
+    assert status == 200
+    assert resp["total_count"] == 0
