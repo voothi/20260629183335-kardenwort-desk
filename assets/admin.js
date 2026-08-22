@@ -3,9 +3,21 @@
  * Utilitarian Minimalist Edition
  */
 
+let initialToken = '';
+try {
+    if (typeof localStorage !== 'undefined') {
+        initialToken = localStorage.getItem('kardenwort_api_token') || '';
+    }
+} catch (e) {}
+try {
+    if (!initialToken && typeof window !== 'undefined' && window.location && window.location.search) {
+        initialToken = new URLSearchParams(window.location.search).get('token') || '';
+    }
+} catch (e) {}
+
 // State Management
 const state = {
-    token: localStorage.getItem('kardenwort_api_token') || new URLSearchParams(window.location.search).get('token') || '',
+    token: initialToken,
     activeTab: 'tab-tree',
     projectTree: [],
     allSessions: [],
@@ -27,6 +39,9 @@ const state = {
         lastClickedIndex: null
     }
 };
+if (typeof window !== 'undefined') {
+    window.state = state;
+}
 
 // Helper: HTTP Request with API Token
 async function apiFetch(endpoint, options = {}) {
@@ -1375,3 +1390,13 @@ async function loadTelemetry() {
         document.getElementById('raw-telemetry-json').textContent = 'Error fetching telemetry';
     }
 }
+
+if (typeof window !== 'undefined') {
+    window.renderSessionsExplorerTable = renderSessionsExplorerTable;
+    window.loadSessionsExplorer = loadSessionsExplorer;
+    window.updateSelectionUI = updateSelectionUI;
+    window.isSessionSelected = isSessionSelected;
+    window.clearAllSelections = clearAllSelections;
+    window.deleteBatchSelectedSessions = deleteBatchSelectedSessions;
+}
+
