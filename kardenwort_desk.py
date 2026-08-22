@@ -9774,15 +9774,24 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         if ttl_seconds > 0:
             cached_res = storage_adapter.get_cached_session(slug, language, ttl_seconds, results_dir=results_dir, zid=zid)
             if cached_res is not None:
-                if isinstance(cached_res, Path):
-                    working_tsv_path = cached_res
-                    cached = True
-                elif isinstance(cached_res, dict):
+                if isinstance(cached_res, dict):
                     cached_zid = cached_res.get("session", {}).get("zid") or cached_res.get("zid")
                     if cached_zid:
-                        c_tsv = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
-                        if c_tsv.exists():
-                            working_tsv_path = c_tsv
+                        try:
+                            restored = storage_adapter.restore_session(cached_zid)
+                            if restored and restored.get("data_rows"):
+                                cached_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
+                                return LookupResultTuple(
+                                    restored.get("comments", []),
+                                    restored.get("headers", []),
+                                    restored.get("data_rows", []),
+                                    restored.get("sentence_translation", ""),
+                                    cached_tsv_path
+                                )
+                        except Exception as e:
+                            logger.warning(f"Could not restore cached SQLite session '{cached_zid}': {e}")
+                elif isinstance(cached_res, Path):
+                    working_tsv_path = cached_res
                     cached = True
 
         if not cached:
@@ -9820,9 +9829,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                             f"wordfill: pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
                             f"from corpus."
                         )
-                # Save the pre-filled rows back to the working TSV so they persist!
-                with storage_adapter.file_lock(working_tsv_path):
-                    storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                # In-memory wordfill pre-fill complete; deferred to final save_session
         except Exception as wf_err:
             logger.warning(f"wordfill: early pre-fill step failed, continuing: {wf_err}")
     
@@ -9832,7 +9839,7 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
     sentence_translation = resolve_translations(
         text, text_mode, data_rows, col_index, col_sentence_dest,
         sentence_translations, working_tsv_path, comments, headers,
-        persist=True, return_single=True
+        persist=False, return_single=True
     )
     
     save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
@@ -9862,17 +9869,14 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                         while len(row) <= col_word_dest:
                             row.append("")
                         row[col_word_dest] = trans
-            
-            with storage_adapter.file_lock(working_tsv_path):
-                storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
 
     if run_intellifiller:
+        with storage_adapter.file_lock(working_tsv_path):
+            storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
         run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
-        
-    comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
-    
-    if not run_intellifiller:
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+    else:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
         
@@ -10897,14 +10901,18 @@ def core_lookup(text, language, target_lang=None, config_path=None, fmt=None, te
         working_tsv_path = results_dir / f"{zid}-{slug}.{language}.tsv"
 
     session_zid = extract_zid(working_tsv_path) or working_tsv_path.stem
-    if working_tsv_path and Path(working_tsv_path).exists():
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    if storage_adapter.backend_name == 'sqlite' and session_zid:
         try:
-            _, _, disk_rows = load_tsv_rows(working_tsv_path)
-            fingerprint = compute_content_fingerprint(disk_rows)
-        except Exception:
-            fingerprint = compute_content_fingerprint(data_rows)
-    else:
-        fingerprint = compute_content_fingerprint(data_rows)
+            restored = storage_adapter.restore_session(session_zid)
+            if restored and restored.get("data_rows"):
+                comments = restored.get("comments", comments)
+                headers = restored.get("headers", headers)
+                data_rows = restored.get("data_rows", data_rows)
+        except Exception as e:
+            logger.warning(f"Could not restore session '{session_zid}' for lookup view: {e}")
+
+    fingerprint = compute_content_fingerprint(data_rows)
     server_enabled = goldendict.get('server_enabled', False)
     api_token = goldendict.get('server_api_key', '')
 
