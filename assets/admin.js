@@ -875,7 +875,8 @@ function renderSessionsExplorerTable(sessions) {
                 <div class="table-actions">
                     <button class="btn btn-secondary btn-sm btn-view-tsv" title="View & Download TSV">TSV</button>
                     <button class="btn btn-secondary btn-sm btn-assign-proj" title="Assign to Project">+ Book</button>
-                    <button class="btn btn-secondary btn-sm btn-open-reader" title="Open in Reader">Open</button>
+                    <button class="btn btn-secondary btn-sm btn-open-desk" title="Open Desk View">Desk</button>
+                    <button class="btn btn-secondary btn-sm btn-open-dict" title="Open Dict View">Dict</button>
                     <button class="btn btn-danger btn-sm btn-delete-sess" title="Delete Session">Del</button>
                 </div>
             </td>
@@ -883,15 +884,24 @@ function renderSessionsExplorerTable(sessions) {
 
         tr.querySelector('.btn-view-tsv').addEventListener('click', () => openTsvInspectorModal(s));
         tr.querySelector('.btn-assign-proj').addEventListener('click', () => openAssignProjectModal(s));
-        tr.querySelector('.btn-open-reader').addEventListener('click', () => openSessionInReader(s.zid));
+        tr.querySelector('.btn-open-desk').addEventListener('click', () => openSessionInDesk(s.zid));
+        tr.querySelector('.btn-open-dict').addEventListener('click', () => openSessionInDict(s.zid));
         tr.querySelector('.btn-delete-sess').addEventListener('click', () => deleteSessionFromLibrary(s.zid));
 
         tbody.appendChild(tr);
     });
 }
 
-function openSessionInReader(zid) {
+function openSessionInDesk(zid) {
     let url = `/?session_zid=${encodeURIComponent(zid)}&theme=dark`;
+    if (state.token) {
+        url += `&token=${encodeURIComponent(state.token)}`;
+    }
+    window.open(url, '_blank');
+}
+
+function openSessionInDict(zid) {
+    let url = `/?session_zid=${encodeURIComponent(zid)}&view=goldendict&theme=dark`;
     if (state.token) {
         url += `&token=${encodeURIComponent(state.token)}`;
     }
