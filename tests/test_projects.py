@@ -624,6 +624,115 @@ def test_synthesize_project_materials_frequency_sorting(temp_project_env, monkey
     assert lemmas == ["the", "button", "attribute", "modal", "Freq", "Project"]
 
 
+def test_synthesize_project_materials_unlisted_compound_word_frequency_sorting(temp_project_env, monkeypatch):
+    from kardenwort_desk import synthesize_project_materials
+
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    tmp_path = temp_project_env["tmp_path"]
+    resolved_paths = dict(temp_project_env["resolved_paths"])
+    resolved_paths["kardenwort_workspace"] = tmp_path
+    resolved_paths["kardenwort_python"] = "python"
+
+    def mock_subprocess_run(cmd, *args, **kwargs):
+        from types import SimpleNamespace
+        order = ["the", "window", "Strict", "Freq", "Project"]
+        input_data = kwargs.get("input", "")
+        if not input_data and len(args) > 0:
+            input_data = args[0]
+        words = [w.strip() for w in input_data.splitlines() if w.strip()]
+        sorted_w = sorted(words, key=lambda x: (x not in order, order.index(x) if x in order else 0, x.lower()))
+        return SimpleNamespace(stdout="\n".join(sorted_w) + "\n")
+
+    monkeypatch.setattr("subprocess.run", mock_subprocess_run)
+
+    pid = db.create_project(title="Strict Freq Project", slug="strict-freq-project")
+    sid1 = "20260822140001"
+
+    adapter.save_session(
+        session_zid=sid1,
+        slug="sess1",
+        source_language="en",
+        source_raw_text="Sentence 1",
+        headers=["Quotation", "WordSource", "DeskSelected", "SentenceSource", "SentenceSourceIndex", "Deck"],
+        data_rows=[
+            ["kardenwort-window", "kardenwort-window", "1", "Sentence 1", "1", ""],
+            ["window", "window", "1", "Sentence 1", "1", ""],
+            ["the", "the", "1", "Sentence 1", "1", ""],
+            ["superfluous", "superfluous", "1", "Sentence 1", "1", ""],
+        ],
+    )
+
+    db.link_session_to_project(pid, sid1, order_index=0)
+
+    import configparser
+    cfg = configparser.ConfigParser()
+    cfg.add_section("languages")
+    cfg.set("languages", "en_lemma_index", "data/en/freq.csv")
+
+    freq_dir = tmp_path / "data" / "en"
+    freq_dir.mkdir(parents=True, exist_ok=True)
+    (freq_dir / "freq.csv").write_text("the\nwindow\nStrict\nFreq\nProject\n", encoding="utf-8")
+
+    synthesized = synthesize_project_materials(
+        project_id=pid,
+        db=db,
+        config=cfg,
+        resolved_paths=resolved_paths,
+        language="en",
+    )
+
+    assert synthesized["ok"] is True
+    lemmas = [r[1] for r in synthesized["data_rows"]]
+    # Expected order: ranked lemmas (the, window, Strict, Freq, Project), followed by unlisted compound and unknown words at the bottom
+    assert lemmas == ["the", "window", "Strict", "Freq", "Project", "kardenwort-window", "superfluous"]
+
+
+def test_sort_rows_by_frequency_strict_compound_integration():
+    import sys
+    from pathlib import Path
+    import configparser
+    from kardenwort_desk import sort_rows_by_frequency
+
+    kardenwort_ws = Path(__file__).resolve().parent.parent.parent / "20241223170748-kardenwort"
+    kardenwort_script = kardenwort_ws / "src" / "kardenwort" / "core" / "kardenwort.py"
+    if not kardenwort_script.exists():
+        pytest.skip("Kardenwort workspace not found")
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section("languages")
+    cfg.set("languages", "en_lemma_index", "data/en/20260717113656-english-word-freq-list-370k.csv")
+
+    resolved_paths = {
+        "kardenwort_python": sys.executable,
+        "kardenwort_workspace": str(kardenwort_ws),
+    }
+
+    headers = ["WordSource", "SentenceSource"]
+    data_rows = [
+        ["kardenwort-window", "Sentence with kardenwort-window"],
+        ["the", "Sentence with the"],
+        ["window", "Sentence with window"],
+        ["superfluous", "Sentence with superfluous"],
+    ]
+
+    sorted_rows = sort_rows_by_frequency(
+        data_rows=data_rows,
+        headers=headers,
+        lang="en",
+        config=cfg,
+        resolved_paths=resolved_paths,
+        role_fields={"lemma": "WordSource"}
+    )
+
+    lemmas = [r[0] for r in sorted_rows]
+    # 'the' is rank 1, 'window' is rank 680, while 'kardenwort-window' and 'superfluous' are unranked
+    assert lemmas[0] == "the"
+    assert lemmas[1] == "window"
+    assert set(lemmas[2:]) == {"kardenwort-window", "superfluous"}
+
+
+
 def test_hierarchical_markdown_headings_and_parallel_translation(temp_project_env, monkeypatch):
     import configparser
     from kardenwort_desk import synthesize_project_materials
