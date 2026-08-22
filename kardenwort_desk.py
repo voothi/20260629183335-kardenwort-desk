@@ -13347,6 +13347,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
+    lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
     
@@ -13417,7 +13418,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id)
                 except Exception as e:
                     logger.error(f"Failed in text translation: {e}")
                     raise
