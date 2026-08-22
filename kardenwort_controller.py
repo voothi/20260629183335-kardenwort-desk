@@ -258,6 +258,15 @@ class ProcessSupervisor:
         else:
             spacy_cmd = [str(spacy_python), str(spacy_script), "--port", str(spacy_port)]
 
+        spacy_ttl = ""
+        if self.config:
+            try:
+                spacy_ttl = self.config.get(SEC_SERVICES, 'spacy_model_idle_ttl', fallback='') or ''
+            except Exception:
+                spacy_ttl = ''
+        if spacy_ttl and str(spacy_ttl).strip() and str(spacy_ttl).strip() != '0':
+            spacy_cmd.extend(["--model-ttl", str(spacy_ttl).strip()])
+
         self.services["spacy"] = SidecarService(
             name="spacy",
             port=spacy_port,
