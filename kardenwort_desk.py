@@ -5593,12 +5593,13 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
 def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
     lock_target = Path(str(tsv_path) + ".intellifiller")
     with file_lock(lock_target):
-        # 1. Read [intellifiller] section from config
+        # 1. Read [intellifiller] and timeout sections from config
         model = None
         base_url = None
         api_key = None
         temperature = None
         prompt_template = None
+        timeout = config.getint(SEC_TIMEOUTS, 'intellifiller_timeout', fallback=120) if config and hasattr(config, 'getint') else 120
         if config and config.has_section("intellifiller"):
             model = config.get("intellifiller", "model", fallback=None)
             base_url = config.get("intellifiller", "base_url", fallback=None)
@@ -5724,6 +5725,8 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                 cmd.extend(["--temperature", str(temperature).strip()])
             if prompt_template:
                 cmd.extend(["--prompt-template", str(prompt_template)])
+            if timeout:
+                cmd.extend(["--timeout", str(timeout)])
 
             if reprocess:
                 cmd.append("--reprocess")
