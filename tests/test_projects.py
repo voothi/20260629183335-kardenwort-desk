@@ -455,11 +455,26 @@ def test_synthesize_project_materials_and_reader_view(temp_project_env):
     assert synthesized["project_id"] == book_id
     assert synthesized["project_title"] == "Faust"
     assert synthesized["total_sessions"] == 2
-    assert synthesized["total_words"] == 3  # 3 unique lemmas: erst, Satz, zweit (Satz merged)
+    # 5 unique lemmas: erst, Satz, zweit + Faust, Chapter
+    assert synthesized["total_words"] == 5
 
-    # Check continuous text contains both chapter texts
-    assert "Erster Satz" in synthesized["source_text"]
-    assert "Zweiter Satz" in synthesized["source_text"]
+    # Check continuous Markdown text contains hierarchical headings without blank line padding
+    expected_text = "# Faust\n## Chapter 1\nErster Satz im ersten Kapitel.\n## Chapter 2\nZweiter Satz im zweiten Kapitel."
+    assert synthesized["source_text"] == expected_text
+    assert synthesized["source_raw_text"] == expected_text
+
+    # Check sentence records alignment
+    assert len(synthesized["sentences"]) == 5
+    assert synthesized["sentences"][0]["sentence_source"] == "# Faust"
+    assert synthesized["sentences"][0]["sentence_index"] == 1
+    assert synthesized["sentences"][1]["sentence_source"] == "## Chapter 1"
+    assert synthesized["sentences"][1]["sentence_index"] == 2
+    assert synthesized["sentences"][2]["sentence_source"] == "Erster Satz im ersten Kapitel."
+    assert synthesized["sentences"][2]["sentence_index"] == 3
+    assert synthesized["sentences"][3]["sentence_source"] == "## Chapter 2"
+    assert synthesized["sentences"][3]["sentence_index"] == 4
+    assert synthesized["sentences"][4]["sentence_source"] == "Zweiter Satz im zweiten Kapitel."
+    assert synthesized["sentences"][4]["sentence_index"] == 5
 
     # Check hierarchical deck paths in data rows
     headers = synthesized["headers"]
@@ -469,6 +484,8 @@ def test_synthesize_project_materials_and_reader_view(temp_project_env):
     deck_map = {r[quot_idx]: r[deck_idx] for r in synthesized["data_rows"]}
     assert deck_map["Erster"] == "German::Faust::Chapter 1"
     assert deck_map["Zweiter"] == "German::Faust::Chapter 2"
+    assert deck_map["Faust"] == "German::Faust"
+    assert deck_map["Chapter"] == "German::Faust::Chapter 1" or "German::Faust" in deck_map["Chapter"]
 
     # Check chapter metadata
     assert len(synthesized["chapters"]) == 2
@@ -540,12 +557,15 @@ def test_synthesize_project_materials_frequency_sorting(temp_project_env, monkey
     resolved_paths["kardenwort_workspace"] = tmp_path
     resolved_paths["kardenwort_python"] = "python"
 
-    # Mock subprocess for sort-frequency returning a deterministic frequency order: 'the', 'button', 'attribute', 'modal'
-    def mock_subprocess_run(cmd, input, capture_output, text, encoding, check):
+    # Mock subprocess for sort-frequency returning a deterministic frequency order
+    def mock_subprocess_run(cmd, *args, **kwargs):
         from types import SimpleNamespace
-        order = ["the", "button", "attribute", "modal"]
-        words = [w.strip() for w in input.splitlines() if w.strip()]
-        sorted_w = sorted(words, key=lambda x: order.index(x.lower()) if x.lower() in order else 999)
+        order = ["the", "button", "attribute", "modal", "Freq", "Project"]
+        input_data = kwargs.get("input", "")
+        if not input_data and len(args) > 0:
+            input_data = args[0]
+        words = [w.strip() for w in input_data.splitlines() if w.strip()]
+        sorted_w = sorted(words, key=lambda x: order.index(x) if x in order else 999)
         return SimpleNamespace(stdout="\n".join(sorted_w) + "\n")
 
     monkeypatch.setattr("subprocess.run", mock_subprocess_run)
@@ -588,7 +608,7 @@ def test_synthesize_project_materials_frequency_sorting(temp_project_env, monkey
     # Ensure fake lemma index exists
     freq_dir = tmp_path / "data" / "en"
     freq_dir.mkdir(parents=True, exist_ok=True)
-    (freq_dir / "freq.csv").write_text("the\nbutton\nattribute\nmodal\n", encoding="utf-8")
+    (freq_dir / "freq.csv").write_text("the\nbutton\nattribute\nmodal\nFreq\nProject\n", encoding="utf-8")
 
     synthesized = synthesize_project_materials(
         project_id=pid,
@@ -600,8 +620,86 @@ def test_synthesize_project_materials_frequency_sorting(temp_project_env, monkey
 
     assert synthesized["ok"] is True
     lemmas = [r[1] for r in synthesized["data_rows"]]
-    # Expected order: the (#0), button (#1), attribute (#2), modal (#3)
-    assert lemmas == ["the", "button", "attribute", "modal"]
+    # Expected order: the (#0), button (#1), attribute (#2), modal (#3), Freq (#4), Project (#5)
+    assert lemmas == ["the", "button", "attribute", "modal", "Freq", "Project"]
+
+
+def test_hierarchical_markdown_headings_and_parallel_translation(temp_project_env, monkeypatch):
+    import configparser
+    from kardenwort_desk import synthesize_project_materials
+
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    resolved_paths = temp_project_env["resolved_paths"]
+
+    # Mock translation provider
+    def mock_translate_text(text, source, target, config, resolved_paths, provider, zid=None, trace_id=None):
+        return f"[{target}] {text}"
+
+    monkeypatch.setattr("kardenwort_desk.translate_text", mock_translate_text)
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section("settings")
+    cfg.set("settings", "default_target_language", "ru")
+    cfg.add_section("pipeline")
+    cfg.set("pipeline", "translation_provider", "mock")
+
+    # Construct 3-level tree: Book -> Volume 1 -> Chapter 1 -> Section 1.1
+    book_id = db.create_project(title="Faust Complete", slug="faust-complete")
+    vol1_id = db.create_project(title="Volume 1", parent_id=book_id, slug="vol1")
+    ch1_id = db.create_project(title="Chapter 1", parent_id=vol1_id, slug="ch1")
+    sec1_id = db.create_project(title="1 1", parent_id=ch1_id, slug="sec1")  # Numeric title
+
+    sid = "20260822160001"
+    adapter.save_session(
+        session_zid=sid,
+        slug="sec1-sess",
+        source_language="de",
+        source_raw_text="Habe nun, ach! Philosophie studiert.",
+        headers=["Quotation", "WordSource", "DeskSelected", "SentenceSource", "SentenceSourceIndex", "Deck"],
+        data_rows=[
+            ["Philosophie", "Philosophie", "1", "Habe nun, ach! Philosophie studiert.", "1", ""],
+            ["studiert", "studieren", "1", "Habe nun, ach! Philosophie studiert.", "1", ""],
+        ],
+    )
+    db.link_session_to_project(sec1_id, sid, order_index=0)
+
+    synthesized = synthesize_project_materials(
+        project_id=book_id,
+        db=db,
+        config=cfg,
+        resolved_paths=resolved_paths,
+        language="de",
+    )
+
+    assert synthesized["ok"] is True
+
+    # 1. Check hierarchical markdown heading depths (# Faust Complete, ## Volume 1, ### Chapter 1, #### 1 1)
+    expected_text = "# Faust Complete\n## Volume 1\n### Chapter 1\n#### 1 1\nHabe nun, ach! Philosophie studiert."
+    assert synthesized["source_text"] == expected_text
+
+    # 2. Check sentence translations are aligned
+    sents = synthesized["sentences"]
+    assert len(sents) == 5
+    assert sents[0]["sentence_source"] == "# Faust Complete"
+    assert sents[0]["sentence_destination"] == "[ru] # Faust Complete"
+    assert sents[1]["sentence_source"] == "## Volume 1"
+    assert sents[1]["sentence_destination"] == "[ru] ## Volume 1"
+    assert sents[2]["sentence_source"] == "### Chapter 1"
+    assert sents[2]["sentence_destination"] == "[ru] ### Chapter 1"
+    assert sents[3]["sentence_source"] == "#### 1 1"
+    assert sents[3]["sentence_destination"] == "[ru] #### 1 1"
+    assert sents[4]["sentence_source"] == "Habe nun, ach! Philosophie studiert."
+
+    # 3. Check heading lemmas are present and numeric '1 1' produced no invalid tokens
+    lemmas = [r[1] for r in synthesized["data_rows"]]
+    assert "Faust" in lemmas
+    assert "Complete" in lemmas
+    assert "Volume" in lemmas
+    assert "Chapter" in lemmas
+    assert "Philosophie" in lemmas
+    assert "studieren" in lemmas
+    assert "1" not in lemmas
 
 
 def test_deduplicate_and_represent_different_inflected_forms():

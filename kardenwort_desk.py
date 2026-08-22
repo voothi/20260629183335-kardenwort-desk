@@ -3847,12 +3847,97 @@ def synthesize_project_materials(
     chapters: List[Dict[str, Any]] = []
     total_sessions = 0
     global_sentence_offset = 0
+    pending_heading_lemmas: List[Dict[str, Any]] = []
 
-    def _collect(node: Dict[str, Any]):
+    target_lang = (
+        config.get(SEC_SETTINGS, "default_target_language", fallback="ru")
+        if config and hasattr(config, "get")
+        else "ru"
+    )
+    provider = (
+        config.get(SEC_PIPELINE, "translation_provider", fallback="none")
+        if config and hasattr(config, "get")
+        else "none"
+    )
+
+    def _collect(node: Dict[str, Any], level: int = 0):
         nonlocal headers, total_sessions, global_sentence_offset
         p_id = node["id"]
+        title = str(node.get("title", "") or "").strip()
         deck_path = resolve_project_deck_path(p_id, db, language=lang)
         sessions = db.get_project_sessions(p_id)
+
+        target_synth_zid = zid or f"project_{project_id}"
+
+        # 1. Inject node title as Markdown heading if present
+        if title:
+            heading_hashes = '#' * min(level + 1, 6)
+            heading_text = f"{heading_hashes} {title}"
+            source_texts.append(heading_text)
+
+            heading_sent_idx = 1 + global_sentence_offset
+            global_sentence_offset += 1
+
+            heading_translation = ""
+            if provider and provider != "none":
+                try:
+                    heading_translation = translate_text(
+                        heading_text,
+                        source=lang,
+                        target=target_lang,
+                        config=config,
+                        resolved_paths=resolved_paths,
+                        provider=provider,
+                        zid=zid,
+                    ) or ""
+                except Exception as ex:
+                    logger.debug(f"Heading translation failed: {ex}")
+                    heading_translation = ""
+
+            all_sentences.append({
+                "session_zid": target_synth_zid,
+                "sentence_index": heading_sent_idx,
+                "sentence_source": heading_text,
+                "sentence_destination": heading_translation,
+                "project_id": p_id,
+                "deck": deck_path,
+            })
+
+            # Lemmatize heading title
+            tokens = []
+            try:
+                tokens = tokenize_text_with_fallback(
+                    title,
+                    language=lang,
+                    config=config,
+                    resolved_paths=resolved_paths or {},
+                    zid=zid,
+                )
+            except Exception as tok_err:
+                logger.debug(f"Heading tokenization failed: {tok_err}")
+                tokens = []
+
+            heading_words = []
+            if tokens:
+                for tok in tokens:
+                    w = tok.get("word") or tok.get("text") or ""
+                    lem = tok.get("lemma") or w
+                    if w and (tok.get("is_word", True) or any(c.isalpha() for c in w)):
+                        if any(c.isalpha() for c in w):
+                            heading_words.append((w, lem))
+            else:
+                raw_words = re.findall(r'\b[^\W\d_]+\b', title, re.UNICODE)
+                for w in raw_words:
+                    if w.strip():
+                        heading_words.append((w.strip(), w.strip()))
+
+            if heading_words:
+                pending_heading_lemmas.append({
+                    "words": heading_words,
+                    "heading_text": heading_text,
+                    "sentence_index": heading_sent_idx,
+                    "deck": deck_path,
+                })
 
         for sess in sessions:
             s_zid = sess["session_zid"]
@@ -3885,7 +3970,6 @@ def synthesize_project_materials(
 
                 all_data_rows.append(row_copy)
 
-            target_synth_zid = zid or f"project_{project_id}"
             if sess_sents:
                 for sent in sess_sents:
                     sent_copy = dict(sent)
@@ -3918,10 +4002,10 @@ def synthesize_project_materials(
             total_sessions += 1
 
         for child in node.get("children", []):
-            _collect(child)
+            _collect(child, level=level + 1)
 
     for root_node in trees:
-        _collect(root_node)
+        _collect(root_node, level=0)
 
     if not headers:
         headers = [
@@ -3951,7 +4035,38 @@ def synthesize_project_materials(
             "ClassificationOxford", "ClassificationGoethe",
         ]
 
-    combined_text = "\n\n".join(t for t in source_texts if t.strip())
+    if pending_heading_lemmas and headers:
+        col_quot = headers.index("Quotation") if "Quotation" in headers else -1
+        col_lemma = headers.index("WordSource") if "WordSource" in headers else -1
+        col_inflected = headers.index("WordSourceInflectedForm") if "WordSourceInflectedForm" in headers else -1
+        col_sent_src = headers.index("SentenceSource") if "SentenceSource" in headers else -1
+        col_sent_idx = headers.index("SentenceSourceIndex") if "SentenceSourceIndex" in headers else -1
+        col_deck = headers.index("Deck") if "Deck" in headers else -1
+        col_sel = headers.index("DeskSelected") if "DeskSelected" in headers else -1
+
+        for item in pending_heading_lemmas:
+            h_text = item["heading_text"]
+            s_idx = item["sentence_index"]
+            d_path = item["deck"]
+            for w, lem in item["words"]:
+                h_row = [""] * len(headers)
+                if col_quot != -1:
+                    h_row[col_quot] = w
+                if col_lemma != -1:
+                    h_row[col_lemma] = lem
+                if col_inflected != -1:
+                    h_row[col_inflected] = w
+                if col_sent_src != -1:
+                    h_row[col_sent_src] = h_text
+                if col_sent_idx != -1:
+                    h_row[col_sent_idx] = str(s_idx)
+                if col_deck != -1:
+                    h_row[col_deck] = d_path
+                if col_sel != -1:
+                    h_row[col_sel] = "1"
+                all_data_rows.append(h_row)
+
+    combined_text = "\n".join(t.strip() for t in source_texts if t.strip())
     all_data_rows = deduplicate_rows_by_lemma(all_data_rows, headers)
     all_data_rows = sort_rows_by_frequency(all_data_rows, headers, lang, config, resolved_paths)
 
@@ -3962,7 +4077,7 @@ def synthesize_project_materials(
         "project_title": project.get("title", ""),
         "slug": project.get("slug") or f"project_{project_id}",
         "source_language": lang,
-        "target_language": config.get(SEC_SETTINGS, "default_target_language", fallback="ru") if config and hasattr(config, "get") else "ru",
+        "target_language": target_lang,
         "text_mode": "multi",
         "source_text": combined_text,
         "source_raw_text": combined_text,
