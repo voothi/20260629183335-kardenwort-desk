@@ -20,7 +20,11 @@ const state = {
         query: '',
         language: '',
         assigned: '',
-        loading: false
+        loading: false,
+        selectedZids: new Set(),
+        allMatching: false,
+        excludedZids: new Set(),
+        lastClickedIndex: null
     }
 };
 
@@ -663,12 +667,20 @@ function initSessionsExplorer() {
     const prevBtn = document.getElementById('btn-sessions-prev');
     const nextBtn = document.getElementById('btn-sessions-next');
 
+    const masterCheckbox = document.getElementById('master-sessions-checkbox');
+    const dropdownToggle = document.getElementById('btn-master-dropdown-toggle');
+    const dropdownMenu = document.getElementById('master-dropdown-menu');
+    const bannerBtn = document.getElementById('btn-select-all-matching');
+    const batchClearBtn = document.getElementById('btn-batch-clear-selection');
+    const batchDeleteBtn = document.getElementById('btn-batch-delete-sessions');
+
     let debounceTimer = null;
     searchInput.addEventListener('input', () => {
         clearTimeout(debounceTimer);
         debounceTimer = setTimeout(() => {
             state.sessionsExplorer.query = searchInput.value.trim();
             state.sessionsExplorer.page = 1;
+            clearAllSelections();
             loadSessionsExplorer();
         }, 300);
     });
@@ -676,12 +688,14 @@ function initSessionsExplorer() {
     langFilter.addEventListener('change', () => {
         state.sessionsExplorer.language = langFilter.value;
         state.sessionsExplorer.page = 1;
+        clearAllSelections();
         loadSessionsExplorer();
     });
 
     assignFilter.addEventListener('change', () => {
         state.sessionsExplorer.assigned = assignFilter.value;
         state.sessionsExplorer.page = 1;
+        clearAllSelections();
         loadSessionsExplorer();
     });
 
@@ -692,13 +706,82 @@ function initSessionsExplorer() {
         }
     });
 
-        nextBtn.addEventListener('click', () => {
-            const totalPages = Math.ceil(state.sessionsExplorer.totalCount / state.sessionsExplorer.pageSize) || 1;
-            if (state.sessionsExplorer.page < totalPages) {
-                state.sessionsExplorer.page++;
-                loadSessionsExplorer();
+    nextBtn.addEventListener('click', () => {
+        const totalPages = Math.ceil(state.sessionsExplorer.totalCount / state.sessionsExplorer.pageSize) || 1;
+        if (state.sessionsExplorer.page < totalPages) {
+            state.sessionsExplorer.page++;
+            loadSessionsExplorer();
+        }
+    });
+
+    // Master Checkbox and Dropdown Menu Listeners
+    if (masterCheckbox) {
+        masterCheckbox.addEventListener('change', () => {
+            if (masterCheckbox.checked) {
+                const sessions = state.sessionsExplorer.sessions || [];
+                sessions.forEach(s => setSessionSelected(s.zid, true));
+            } else {
+                clearAllSelections();
             }
+            updateSelectionUI();
         });
+    }
+
+    if (dropdownToggle && dropdownMenu) {
+        dropdownToggle.addEventListener('click', (e) => {
+            e.stopPropagation();
+            dropdownMenu.classList.toggle('hidden');
+        });
+
+        document.addEventListener('click', () => {
+            dropdownMenu.classList.add('hidden');
+        });
+
+        dropdownMenu.querySelectorAll('.dropdown-item').forEach(item => {
+            item.addEventListener('click', (e) => {
+                e.stopPropagation();
+                dropdownMenu.classList.add('hidden');
+                const selType = item.getAttribute('data-select');
+                const sessions = state.sessionsExplorer.sessions || [];
+                if (selType === 'all') {
+                    sessions.forEach(s => setSessionSelected(s.zid, true));
+                } else if (selType === 'none') {
+                    clearAllSelections();
+                } else if (selType === 'assigned') {
+                    clearAllSelections();
+                    sessions.filter(s => s.projects && s.projects.length > 0).forEach(s => setSessionSelected(s.zid, true));
+                } else if (selType === 'unassigned') {
+                    clearAllSelections();
+                    sessions.filter(s => !s.projects || s.projects.length === 0).forEach(s => setSessionSelected(s.zid, true));
+                }
+                updateSelectionUI();
+            });
+        });
+    }
+
+    if (bannerBtn) {
+        bannerBtn.addEventListener('click', () => {
+            if (state.sessionsExplorer.allMatching) {
+                clearAllSelections();
+            } else {
+                state.sessionsExplorer.allMatching = true;
+                state.sessionsExplorer.selectedZids.clear();
+                state.sessionsExplorer.excludedZids.clear();
+            }
+            updateSelectionUI();
+        });
+    }
+
+    if (batchClearBtn) {
+        batchClearBtn.addEventListener('click', () => {
+            clearAllSelections();
+            updateSelectionUI();
+        });
+    }
+
+    if (batchDeleteBtn) {
+        batchDeleteBtn.addEventListener('click', deleteBatchSelectedSessions);
+    }
 
     // Drag and Drop TSV Ingestion
     const dropZone = document.getElementById('sessions-drop-zone');
@@ -734,6 +817,169 @@ function initSessionsExplorer() {
             }
         });
     }
+}
+
+function isSessionSelected(zid) {
+    if (state.sessionsExplorer.allMatching) {
+        return !state.sessionsExplorer.excludedZids.has(zid);
+    }
+    return state.sessionsExplorer.selectedZids.has(zid);
+}
+
+function getSelectedCount() {
+    if (state.sessionsExplorer.allMatching) {
+        return Math.max(0, state.sessionsExplorer.totalCount - state.sessionsExplorer.excludedZids.size);
+    }
+    return state.sessionsExplorer.selectedZids.size;
+}
+
+function clearAllSelections() {
+    state.sessionsExplorer.selectedZids.clear();
+    state.sessionsExplorer.allMatching = false;
+    state.sessionsExplorer.excludedZids.clear();
+    state.sessionsExplorer.lastClickedIndex = null;
+}
+
+function setSessionSelected(zid, selected) {
+    if (state.sessionsExplorer.allMatching) {
+        if (selected) {
+            state.sessionsExplorer.excludedZids.delete(zid);
+        } else {
+            state.sessionsExplorer.excludedZids.add(zid);
+        }
+    } else {
+        if (selected) {
+            state.sessionsExplorer.selectedZids.add(zid);
+        } else {
+            state.sessionsExplorer.selectedZids.delete(zid);
+        }
+    }
+}
+
+function handleRowCheckboxClick(zid, index, isShift) {
+    const curSelected = isSessionSelected(zid);
+    const targetState = !curSelected;
+
+    if (isShift && state.sessionsExplorer.lastClickedIndex !== null) {
+        const start = Math.min(state.sessionsExplorer.lastClickedIndex, index);
+        const end = Math.max(state.sessionsExplorer.lastClickedIndex, index);
+        for (let i = start; i <= end; i++) {
+            const s = state.sessionsExplorer.sessions[i];
+            if (s) {
+                setSessionSelected(s.zid, targetState);
+            }
+        }
+    } else {
+        setSessionSelected(zid, targetState);
+    }
+
+    state.sessionsExplorer.lastClickedIndex = index;
+    updateSelectionUI();
+}
+
+function updateSelectionUI() {
+    const sessions = state.sessionsExplorer.sessions || [];
+    const masterCheckbox = document.getElementById('master-sessions-checkbox');
+    const batchToolbar = document.getElementById('sessions-batch-toolbar');
+    const selectedCountBadge = document.getElementById('sessions-selected-count');
+    const selectionBanner = document.getElementById('sessions-selection-banner');
+    const bannerText = document.getElementById('selection-banner-text');
+    const bannerBtn = document.getElementById('btn-select-all-matching');
+
+    let pageSelectedCount = 0;
+    const rows = document.querySelectorAll('#sessions-table-body tr');
+
+    rows.forEach(tr => {
+        const zid = tr.getAttribute('data-zid');
+        if (!zid) return;
+        const chk = tr.querySelector('.session-row-checkbox');
+        const isSelected = isSessionSelected(zid);
+        if (chk) chk.checked = isSelected;
+        tr.classList.toggle('row-selected', isSelected);
+        if (isSelected) pageSelectedCount++;
+    });
+
+    // Master Checkbox state
+    if (masterCheckbox) {
+        if (sessions.length > 0 && pageSelectedCount === sessions.length) {
+            masterCheckbox.checked = true;
+            masterCheckbox.indeterminate = false;
+        } else if (pageSelectedCount > 0) {
+            masterCheckbox.checked = false;
+            masterCheckbox.indeterminate = true;
+        } else {
+            masterCheckbox.checked = false;
+            masterCheckbox.indeterminate = false;
+        }
+    }
+
+    // Batch Toolbar state
+    const totalSelected = getSelectedCount();
+    if (batchToolbar && selectedCountBadge) {
+        if (totalSelected > 0) {
+            batchToolbar.classList.remove('hidden');
+            selectedCountBadge.textContent = `${totalSelected} selected`;
+        } else {
+            batchToolbar.classList.add('hidden');
+        }
+    }
+
+    // Cross-page Banner state
+    if (selectionBanner && bannerText && bannerBtn) {
+        if (state.sessionsExplorer.allMatching) {
+            selectionBanner.classList.remove('hidden');
+            bannerText.textContent = `All ${totalSelected} matching sessions in library are selected.`;
+            bannerBtn.textContent = 'Clear selection';
+        } else if (sessions.length > 0 && pageSelectedCount === sessions.length && state.sessionsExplorer.totalCount > sessions.length) {
+            selectionBanner.classList.remove('hidden');
+            bannerText.textContent = `All ${sessions.length} sessions on this page are selected.`;
+            bannerBtn.textContent = `Select all ${state.sessionsExplorer.totalCount} sessions in library`;
+        } else {
+            selectionBanner.classList.add('hidden');
+        }
+    }
+}
+
+async function deleteBatchSelectedSessions() {
+    const totalSelected = getSelectedCount();
+    if (totalSelected === 0) return;
+
+    const ok = await showConfirmDialog(`Move ${totalSelected} session(s) to Recycle Bin?`, {
+        title: 'Batch Delete Sessions',
+        okLabel: `Delete (${totalSelected})`
+    });
+    if (!ok) return;
+
+    try {
+        let payload = {};
+        if (state.sessionsExplorer.allMatching) {
+            payload = {
+                mode: 'all_matching',
+                filter: {
+                    query: state.sessionsExplorer.query || undefined,
+                    language: state.sessionsExplorer.language || undefined,
+                    assigned: state.sessionsExplorer.assigned || undefined
+                },
+                excluded_zids: Array.from(state.sessionsExplorer.excludedZids)
+            };
+        } else {
+            payload = {
+                mode: 'explicit',
+                session_zids: Array.from(state.sessionsExplorer.selectedZids)
+            };
+        }
+
+        const res = await apiFetch('/api/v1/admin/sessions/batch-delete', {
+            method: 'POST',
+            body: JSON.stringify(payload)
+        });
+
+        showToast(`Moved ${res.deleted_count ?? totalSelected} session(s) to Recycle Bin`, 'success');
+        clearAllSelections();
+        loadSessionsExplorer();
+        loadTrash();
+        loadProjectTree();
+    } catch (e) {}
 }
 
 async function handleTsvFileUpload(files) {
@@ -839,7 +1085,7 @@ async function loadSessionsExplorer(force = false) {
     if (assigned) params.set('assigned', assigned);
 
     try {
-        tbody.innerHTML = '<tr><td colspan="7" class="loading-spinner">Loading sessions library...</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="loading-spinner">Loading sessions library...</td></tr>';
         const res = await apiFetch(`/api/v1/admin/sessions?${params.toString()}`);
         state.sessionsExplorer.sessions = res.sessions || [];
         state.sessionsExplorer.totalCount = res.total_count || 0;
@@ -852,20 +1098,23 @@ async function loadSessionsExplorer(force = false) {
         prevBtn.disabled = page <= 1;
         nextBtn.disabled = page >= totalPages;
     } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Failed to load sessions.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Failed to load sessions.</td></tr>';
     }
 }
 
 function renderSessionsExplorerTable(sessions) {
     const tbody = document.getElementById('sessions-table-body');
     if (!sessions || sessions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No matching sessions found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No matching sessions found.</td></tr>';
+        updateSelectionUI();
         return;
     }
 
     tbody.innerHTML = '';
-    sessions.forEach(s => {
+    sessions.forEach((s, idx) => {
         const tr = document.createElement('tr');
+        tr.setAttribute('data-zid', s.zid);
+        tr.setAttribute('data-index', idx);
 
         // Projects badge
         let projectsHtml = '<span class="text-dim">—</span>';
@@ -880,6 +1129,9 @@ function renderSessionsExplorerTable(sessions) {
         const slugDisplay = s.slug || 'untitled';
 
         tr.innerHTML = `
+            <td class="td-checkbox">
+                <input type="checkbox" class="session-row-checkbox" data-zid="${escapeHtml(s.zid)}" data-index="${idx}" />
+            </td>
             <td><code class="session-badge">${escapeHtml(s.zid)}</code></td>
             <td>
                 <div class="session-cell-slug"><strong>${escapeHtml(slugDisplay)}</strong></div>
@@ -900,6 +1152,17 @@ function renderSessionsExplorerTable(sessions) {
             </td>
         `;
 
+        const chk = tr.querySelector('.session-row-checkbox');
+        chk.addEventListener('click', (e) => {
+            e.stopPropagation();
+            handleRowCheckboxClick(s.zid, idx, e.shiftKey);
+        });
+
+        tr.addEventListener('click', (e) => {
+            if (e.target.closest('button') || e.target.closest('input') || e.target.closest('a')) return;
+            handleRowCheckboxClick(s.zid, idx, e.shiftKey);
+        });
+
         tr.querySelector('.btn-view-tsv').addEventListener('click', () => openTsvInspectorModal(s));
         tr.querySelector('.btn-assign-proj').addEventListener('click', () => openAssignProjectModal(s));
         tr.querySelector('.btn-open-desk').addEventListener('click', () => openSessionInDesk(s.zid));
@@ -908,6 +1171,8 @@ function renderSessionsExplorerTable(sessions) {
 
         tbody.appendChild(tr);
     });
+
+    updateSelectionUI();
 }
 
 function openSessionInDesk(zid) {
