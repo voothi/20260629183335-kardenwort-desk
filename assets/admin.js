@@ -202,12 +202,12 @@ function createNodeElement(node) {
             ${node.description ? `<span class="node-desc">${escapeHtml(node.description)}</span>` : ''}
         </div>
         <div class="node-actions">
-            <button class="btn btn-primary btn-sm btn-open-reader" data-id="${node.id}" title="Open Book in Reader">Read</button>
-            <button class="btn btn-secondary btn-sm btn-export-deck" data-id="${node.id}" title="Export Book Deck">Export Deck</button>
-            <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Sub-Chapter">+ Sub</button>
+            <button class="btn btn-primary btn-sm btn-open-reader" data-id="${node.id}" title="Open in Reader">Read</button>
+            <button class="btn btn-secondary btn-sm btn-export-deck" data-id="${node.id}" title="Export Deck">Export Deck</button>
+            <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Child Node">+ Child</button>
             <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link</button>
-            <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Project">Edit</button>
-            <button class="btn btn-danger btn-sm btn-delete-node" data-id="${node.id}" title="Delete Project">Delete</button>
+            <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Node">Edit</button>
+            <button class="btn btn-danger btn-sm btn-delete-node" data-id="${node.id}" title="Delete Node">Delete</button>
         </div>
     `;
 
@@ -483,14 +483,14 @@ function openProjectModal(node = null, parentId = null) {
     const descInput = document.getElementById('project-desc-input');
 
     if (node) {
-        titleEl.textContent = 'Edit Project';
+        titleEl.textContent = 'Edit Node';
         idInput.value = node.id;
         parentInput.value = node.parent_id || '';
         titleInput.value = node.title || '';
         slugInput.value = node.slug || '';
         descInput.value = node.description || '';
     } else {
-        titleEl.textContent = parentId ? 'Create Sub-Chapter' : 'Create Root Project';
+        titleEl.textContent = parentId ? 'Create Child Node' : 'Create Root Node';
         idInput.value = '';
         parentInput.value = parentId || '';
         titleInput.value = '';
@@ -893,7 +893,7 @@ function renderSessionsExplorerTable(sessions) {
             <td>
                 <div class="table-actions">
                     <button class="btn btn-secondary btn-sm btn-view-tsv" title="View & Download TSV">TSV</button>
-                    <button class="btn btn-secondary btn-sm btn-assign-proj" title="Assign to Project">+ Book</button>
+                    <button class="btn btn-secondary btn-sm btn-assign-proj" title="Assign to Node">+ Assign</button>
                     <button class="btn btn-secondary btn-sm btn-open-desk" title="Open Desk View">Desk</button>
                     <button class="btn btn-secondary btn-sm btn-open-dict" title="Open Dict View">Dict</button>
                     <button class="btn btn-danger btn-sm btn-delete-sess" title="Delete Session">Del</button>
