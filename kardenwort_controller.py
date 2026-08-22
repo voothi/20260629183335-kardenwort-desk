@@ -1149,6 +1149,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
                 goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
                 goldendict['theme'] = req_theme or 'dark'
+                goldendict.setdefault('heading_source', '__default__')
+                goldendict.setdefault('heading_translation', '__default__')
+                goldendict.setdefault('heading_lemmas', '__default__')
                 goldendict.setdefault('run_intellifiller', False)
                 goldendict['server_enabled'] = True
                 goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
@@ -1251,6 +1254,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
                 goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
                 goldendict.setdefault('theme', 'compact')
+                goldendict.setdefault('heading_source', '__default__')
+                goldendict.setdefault('heading_translation', '__default__')
+                goldendict.setdefault('heading_lemmas', '__default__')
                 goldendict.setdefault('run_intellifiller', False)
                 goldendict['server_enabled'] = True
                 goldendict['server_api_key'] = getattr(self.server, 'api_key', '')

@@ -10464,20 +10464,21 @@ def render_section(token, ctx):
         return ""
         
     if token == "source":
-        html_output += make_heading("source", "Source Text")
+        heading = make_heading("source", "Source Text")
         normalized_text = normalize_blank_lines(ctx["text"])
         safe_text = normalized_text.replace('\r', '')
-        html_output += f'<div class="kw-source-text">{safe_text}</div>\n'
+        html_output += f'<div class="kw-section">{heading}<div class="kw-source-text">{safe_text}</div></div>\n'
         
     elif token == "translation":
-        html_output += make_heading("translation", "Translation")
+        heading = make_heading("translation", "Translation")
         normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
         safe_trans = html.escape(normalized_trans.replace('\r', ''))
-        html_output += f'<div class="kw-translation">{safe_trans}</div>\n'
+        html_output += f'<div class="kw-section">{heading}<div class="kw-translation">{safe_trans}</div></div>\n'
         
     elif token == "lemmas":
-        html_output += make_heading("lemmas", "Lemmas")
-        html_output += '<table class="kw-lemmas-table">\n'
+        heading = make_heading("lemmas", "Lemmas")
+        html_output += f'<div class="kw-section">{heading}'
+        html_output += '<div class="kw-table-container"><table class="kw-lemmas-table">\n'
         
         role_fields = ctx.get('role_fields', {})
         COLUMN_TOKEN_MAP = {
@@ -10529,10 +10530,11 @@ def render_section(token, ctx):
                 html_output += f'<td>{val}</td>'
             html_output += '</tr>\n'
 
-        html_output += '</tbody></table>\n'
+        html_output += '</tbody></table></div>\n'
 
         if server_enabled:
             html_output += '<div class="kw-actions-bar"><button id="kw-export-btn" class="kw-export-btn" onclick="kwExportSelected()">Export to Anki</button><span id="kw-interactive-status" class="kw-interactive-status"></span></div>\n'
+        html_output += '</div>\n'
         
     return html_output
 
@@ -10676,101 +10678,152 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         html, body {
             background-color: #0d0f12;
             color: #e3e6eb;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+            font-size: 14px;
+            line-height: 1.5;
             margin: 0;
             padding: 0;
         }
         .kw-lookup-container {
-            --bg-color: #0d0f12;
-            --text-color: #e3e6eb;
-            --section-bg: rgba(255, 255, 255, 0.03);
-            --table-th-border: rgba(255, 255, 255, 0.1);
-            --table-border: rgba(255, 255, 255, 0.05);
-            background-color: var(--bg-color);
-            color: var(--text-color);
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            margin: 0;
-            padding: 10px;
+            --bg-primary: #0d0f12;
+            --bg-secondary: #13161c;
+            --bg-card: #161a22;
+            --bg-hover: #1f242d;
+            --border-color: rgba(255, 255, 255, 0.1);
+            --border-subtle: rgba(255, 255, 255, 0.05);
+            --text-main: #e3e6eb;
+            --text-muted: #8b949e;
+            --font-size-xs: 12px;
+            --font-size-sm: 13px;
+            --font-size-base: 14px;
+            --font-size-md: 16px;
+            --radius-sm: 2px;
+
+            background-color: var(--bg-primary);
+            color: var(--text-main);
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 16px;
+            box-sizing: border-box;
+        }
+        .kw-section {
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
+            padding: 14px 16px;
+            margin-bottom: 14px;
+        }
+        h3, .kw-heading {
+            font-size: var(--font-size-xs);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
+            color: var(--text-muted);
+            margin: 0 0 8px 0;
         }
         .kw-source-text {
+            font-size: var(--font-size-md);
+            line-height: 1.6;
+            color: var(--text-main);
             white-space: pre-wrap;
-            padding: 4px 0;
-            margin-bottom: 0.8em;
-            font-family: inherit;
-            font-style: normal;
-            font-weight: normal;
+            margin: 0;
         }
         .kw-translation {
-            padding: 4px 0;
-            margin-bottom: 0.8em;
-            font-family: inherit;
-            font-style: normal;
-            font-weight: normal;
+            font-size: var(--font-size-base);
+            line-height: 1.5;
+            color: var(--text-main);
+            margin: 0;
+        }
+        .kw-table-container {
+            border: 1px solid var(--border-color);
+            background: var(--bg-secondary);
+            border-radius: var(--radius-sm);
+            overflow-x: auto;
+            margin-top: 8px;
         }
         .kw-lemmas-table {
             width: 100%;
             border-collapse: collapse;
-            margin-top: 10px;
+            font-size: var(--font-size-base);
         }
         .kw-lemmas-table th {
+            background: var(--bg-card);
+            color: var(--text-muted);
+            font-size: var(--font-size-xs);
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.05em;
             text-align: left;
-            padding: 8px;
-            border-bottom: 1px solid var(--table-th-border);
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-color);
         }
         .kw-lemmas-table td {
-            padding: 8px;
+            padding: 8px 12px;
+            border-bottom: 1px solid var(--border-subtle);
+            color: var(--text-main);
         }
-        .kw-lemmas-table tr {
-            border-bottom: 1px solid var(--table-border);
+        .kw-lemmas-table tr:last-child td {
+            border-bottom: none;
         }
-        .kw-lemmas-table tr.kw-row-selected {
-            background-color: rgba(255, 204, 0, 0.25) !important;
+        .kw-lemmas-table tr:hover td {
+            background-color: var(--bg-hover);
+        }
+        .kw-lemmas-table tr.kw-row-selected td {
+            background-color: rgba(255, 204, 0, 0.2) !important;
         }
         .kw-tag-header {
-            width: 32px;
+            width: 36px;
             text-align: center;
         }
         .kw-tag-control {
             text-align: center;
-            width: 32px;
+            width: 36px;
         }
         .kw-tag-checkbox {
             cursor: pointer;
             width: 16px;
             height: 16px;
-            accent-color: #0969da;
+            accent-color: #388bfd;
         }
         .kw-actions-bar {
             display: flex;
             align-items: center;
             gap: 10px;
-            margin-top: 8px;
-            margin-bottom: 8px;
+            margin-top: 12px;
         }
         .kw-export-btn {
-            background-color: #2da44e;
-            color: #ffffff;
-            border: 1px solid rgba(27, 31, 36, 0.15);
-            border-radius: 6px;
+            background-color: var(--bg-card);
+            color: var(--text-main);
+            border: 1px solid var(--border-color);
+            border-radius: var(--radius-sm);
             padding: 4px 12px;
-            font-size: 12px;
+            height: 26px;
+            font-size: var(--font-size-sm);
             font-weight: 500;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
         }
         .kw-export-btn:hover {
-            background-color: #2c974b;
+            background-color: var(--bg-hover);
+            border-color: rgba(255, 255, 255, 0.2);
         }
         .kw-export-btn:disabled {
-            opacity: 0.6;
+            opacity: 0.4;
             cursor: not-allowed;
         }
         .kw-interactive-status {
-            font-size: 12px;
+            font-size: var(--font-size-xs);
             font-weight: 500;
+            color: #3fb950;
             margin-left: 8px;
             display: none;
+            font-family: var(--font-mono, monospace);
         }"""
         if theme == 'light':
-            css = css.replace('#0d0f12', '#f6f8fa').replace('#e3e6eb', '#24292f').replace('rgba(255, 255, 255, 0.03)', 'rgba(0, 0, 0, 0.03)').replace('rgba(255, 255, 255, 0.1)', 'rgba(0, 0, 0, 0.1)').replace('rgba(255, 255, 255, 0.05)', 'rgba(0, 0, 0, 0.05)')
+            css = css.replace('#0d0f12', '#f6f8fa').replace('#13161c', '#ffffff').replace('#161a22', '#ffffff').replace('#e3e6eb', '#24292f').replace('rgba(255, 255, 255, 0.1)', 'rgba(0, 0, 0, 0.1)').replace('rgba(255, 255, 255, 0.05)', 'rgba(0, 0, 0, 0.05)')
 
     if goldendict.get('disable_css', False):
         base_html = f"""<!DOCTYPE html>
