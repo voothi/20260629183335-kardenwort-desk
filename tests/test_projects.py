@@ -20,6 +20,7 @@ from kardenwort_desk import (
     resolve_project_deck_path,
     synthesize_project_deck_descriptions,
     aggregate_project_materials,
+    synthesize_project_materials,
 )
 
 
@@ -399,4 +400,133 @@ def test_cli_project_commands(temp_project_env, monkeypatch):
     cmd_export_project_deck(args_export)
     fav_files = list(temp_project_env["favorites_dir"].glob("*.tsv"))
     assert len(fav_files) >= 1
+
+
+def test_synthesize_project_materials_and_reader_view(temp_project_env):
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    resolved_paths = temp_project_env["resolved_paths"]
+
+    # 1. Create Book with 2 chapters
+    book_id = db.create_project(title="Faust", slug="faust", description="Goethe's Tragedy")
+    c1_id = db.create_project(title="Chapter 1", parent_id=book_id, slug="ch1")
+    c2_id = db.create_project(title="Chapter 2", parent_id=book_id, slug="ch2")
+
+    # 2. Add sessions to chapters
+    s1_zid = "20260822100001"
+    s2_zid = "20260822100002"
+
+    adapter.save_session(
+        session_zid=s1_zid,
+        slug="ch1-sess",
+        source_language="de",
+        source_raw_text="Erster Satz im ersten Kapitel.",
+        headers=["Quotation", "WordSource", "DeskSelected", "SentenceSource", "SentenceSourceIndex", "Deck"],
+        data_rows=[
+            ["Erster", "erst", "1", "Erster Satz im ersten Kapitel.", "1", ""],
+            ["Satz", "Satz", "0", "Erster Satz im ersten Kapitel.", "1", ""],
+        ],
+    )
+
+    adapter.save_session(
+        session_zid=s2_zid,
+        slug="ch2-sess",
+        source_language="de",
+        source_raw_text="Zweiter Satz im zweiten Kapitel.",
+        headers=["Quotation", "WordSource", "DeskSelected", "SentenceSource", "SentenceSourceIndex", "Deck"],
+        data_rows=[
+            ["Zweiter", "zweit", "1", "Zweiter Satz im zweiten Kapitel.", "1", ""],
+            ["Satz", "Satz", "1", "Zweiter Satz im zweiten Kapitel.", "1", ""],
+        ],
+    )
+
+    db.link_session_to_project(c1_id, s1_zid, order_index=0)
+    db.link_session_to_project(c2_id, s2_zid, order_index=1)
+
+    # 3. Test synthesize_project_materials
+    synthesized = synthesize_project_materials(
+        project_id=book_id,
+        db=db,
+        resolved_paths=resolved_paths,
+        language="German",
+    )
+
+    assert synthesized["ok"] is True
+    assert synthesized["project_id"] == book_id
+    assert synthesized["project_title"] == "Faust"
+    assert synthesized["total_sessions"] == 2
+    assert synthesized["total_words"] == 4  # 2 words in ch1 + 2 words in ch2
+
+    # Check continuous text contains both chapter texts
+    assert "Erster Satz" in synthesized["source_text"]
+    assert "Zweiter Satz" in synthesized["source_text"]
+
+    # Check hierarchical deck paths in data rows
+    headers = synthesized["headers"]
+    deck_idx = headers.index("Deck")
+    quot_idx = headers.index("Quotation")
+
+    deck_map = {r[quot_idx]: r[deck_idx] for r in synthesized["data_rows"]}
+    assert deck_map["Erster"] == "German::Faust::Chapter 1"
+    assert deck_map["Zweiter"] == "German::Faust::Chapter 2"
+
+    # Check chapter metadata
+    assert len(synthesized["chapters"]) == 2
+    assert synthesized["chapters"][0]["deck"] == "German::Faust::Chapter 1"
+    assert synthesized["chapters"][1]["deck"] == "German::Faust::Chapter 2"
+
+
+def test_cli_project_reader_integration(temp_project_env, monkeypatch):
+    from types import SimpleNamespace
+    from kardenwort_desk import cmd_desk, cmd_restore
+
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    resolved_paths = temp_project_env["resolved_paths"]
+
+    pid = db.create_project(title="CLI Book", slug="cli-book")
+    sid = "20260822120001"
+    adapter.save_session(
+        session_zid=sid,
+        slug="cli-sess",
+        source_language="de",
+        source_raw_text="CLI Text",
+        headers=["Quotation", "WordSource", "DeskSelected", "SentenceSource", "SentenceSourceIndex", "Deck"],
+        data_rows=[["CLI", "cli", "1", "CLI Text", "1", ""]],
+    )
+    db.link_session_to_project(pid, sid)
+
+    monkeypatch.setattr(
+        "kardenwort_desk.load_config",
+        lambda p: (None, resolved_paths, None, None)
+    )
+
+    # 1. Test cmd_desk with --project and --no-gui
+    args_desk = SimpleNamespace(
+        config=None,
+        project=pid,
+        file=[],
+        text_mode="multi",
+        language="German",
+        no_gui=True,
+        theme="dark",
+        bypass_lang_check=True,
+        zid=None,
+        trace_id=None,
+        json_output=True,
+    )
+    cmd_desk(args_desk)
+
+    # 2. Test cmd_restore with --project and --no-gui
+    args_restore = SimpleNamespace(
+        config=None,
+        project=pid,
+        file=[],
+        zid=None,
+        no_gui=True,
+        language="German",
+        json_output=True,
+    )
+    cmd_restore(args_restore)
+
 

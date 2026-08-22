@@ -202,6 +202,8 @@ function createNodeElement(node) {
             ${node.description ? `<span class="node-desc">${escapeHtml(node.description)}</span>` : ''}
         </div>
         <div class="node-actions">
+            <button class="btn btn-primary btn-sm btn-open-reader" data-id="${node.id}" title="Open Book in Reader">📖 Read</button>
+            <button class="btn btn-secondary btn-sm btn-export-deck" data-id="${node.id}" title="Export Book Deck">🎴 Export Deck</button>
             <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Sub-Chapter">+ Sub</button>
             <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link</button>
             <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Project">Edit</button>
@@ -219,6 +221,11 @@ function createNodeElement(node) {
         }
     });
 
+    card.querySelector('.btn-open-reader').addEventListener('click', () => {
+        const url = `/?project_id=${node.id}${state.token ? '&token=' + encodeURIComponent(state.token) : ''}`;
+        window.open(url, '_blank');
+    });
+    card.querySelector('.btn-export-deck').addEventListener('click', () => exportProjectDeck(node.id, node.title));
     card.querySelector('.btn-add-child').addEventListener('click', () => openProjectModal(null, node.id));
     card.querySelector('.btn-link-session').addEventListener('click', () => openLinkSessionModal(node.id));
     card.querySelector('.btn-edit-node').addEventListener('click', () => openProjectModal(node));
@@ -348,6 +355,18 @@ async function deleteProject(projectId, title) {
         loadProjectTree();
         loadTrash();
     } catch (e) {}
+}
+
+async function exportProjectDeck(projectId, title) {
+    try {
+        const res = await apiFetch('/api/v1/admin/projects/export-deck', {
+            method: 'POST',
+            body: JSON.stringify({ project_id: projectId })
+        });
+        showToast(`Exported deck for "${title}" (${res.total_words || 0} words).`, 'success');
+    } catch (e) {
+        showToast(`Failed to export deck: ${e.message}`, 'error');
+    }
 }
 
 // ---------------------------------------------------------------------------

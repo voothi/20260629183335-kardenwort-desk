@@ -372,4 +372,28 @@ def test_admin_sessions_explorer_api(admin_controller_server):
     assert status == 200
     assert "kw-lookup-container" in html_content
 
+    # 7. Project Reader View & Export Endpoints
+    # GET /?project_id=root_id
+    status, html_content = make_admin_request(url, f"/?project_id={root_id}")
+    assert status == 200
+    assert ("lemma-table" in html_content or "kw-lookup-container" in html_content)
+
+    # GET /api/v1/lookup?project_id=root_id
+    status, resp = make_admin_request(url, f"/api/v1/lookup?project_id={root_id}")
+    assert status == 200
+    assert resp["ok"] is True
+    assert resp["project_id"] == root_id
+    assert resp["total_sessions"] >= 1
+
+    # POST /api/v1/admin/projects/export-deck
+    status, resp = make_admin_request(url, "/api/v1/admin/projects/export-deck", method="POST", body={
+        "project_id": root_id,
+        "language": "German",
+    })
+    assert status == 200
+    assert resp["ok"] is True
+    assert resp["project_id"] == root_id
+    assert resp["total_sessions"] >= 1
+
+
 

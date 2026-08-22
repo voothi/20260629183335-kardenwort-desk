@@ -3671,6 +3671,165 @@ def aggregate_project_materials(
     }
 
 
+def synthesize_project_materials(
+    project_id: int,
+    db: Optional[Any] = None,
+    config: Optional[Any] = None,
+    resolved_paths: Optional[Dict[str, Any]] = None,
+    language: Optional[str] = None,
+    zid: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Synthesizes continuous reading and study materials across all sessions in a project
+    and its descendant subprojects ordered sequentially by order_index.
+    Restores session bundles from SQLite in memory, populates hierarchical deck tags,
+    and returns a unified multi-chapter reader structure.
+    """
+    from kardenwort_db import KardenwortDB
+    if db is None:
+        db = KardenwortDB(config=config, resolved_paths=resolved_paths)
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths)
+
+    project = db.get_project(project_id)
+    if not project:
+        raise StructuredError(ErrorCode.NOT_FOUND, f"Project with ID '{project_id}' not found.")
+
+    trees = db.get_project_tree(project_id)
+    if not trees:
+        raise StructuredError(ErrorCode.NOT_FOUND, f"No project tree found for ID '{project_id}'.")
+
+    lang = language or (
+        config.get(SEC_SETTINGS, "default_language", fallback="de")
+        if config and hasattr(config, "get")
+        else "de"
+    )
+
+    all_data_rows: List[List[str]] = []
+    all_sentences: List[Dict[str, Any]] = []
+    source_texts: List[str] = []
+    headers: List[str] = []
+    chapters: List[Dict[str, Any]] = []
+    total_sessions = 0
+    global_sentence_offset = 0
+
+    def _collect(node: Dict[str, Any]):
+        nonlocal headers, total_sessions, global_sentence_offset
+        p_id = node["id"]
+        deck_path = resolve_project_deck_path(p_id, db, language=lang)
+        sessions = db.get_project_sessions(p_id)
+
+        for sess in sessions:
+            s_zid = sess["session_zid"]
+            restored = adapter.restore_session(s_zid)
+            if not headers and restored.get("headers"):
+                headers = list(restored["headers"])
+
+            sess_rows = restored.get("data_rows", [])
+            sess_sents = restored.get("sentences", [])
+            sess_text = restored.get("source_text") or restored.get("source_raw_text") or ""
+            if sess_text:
+                source_texts.append(sess_text)
+
+            deck_idx = headers.index("Deck") if "Deck" in headers else -1
+            sent_idx_col = headers.index("SentenceSourceIndex") if "SentenceSourceIndex" in headers else -1
+
+            for row in sess_rows:
+                row_copy = list(row)
+                if deck_idx != -1:
+                    if len(row_copy) > deck_idx:
+                        row_copy[deck_idx] = deck_path
+                    else:
+                        row_copy.extend([""] * (deck_idx - len(row_copy) + 1))
+                        row_copy[deck_idx] = deck_path
+
+                if sent_idx_col != -1 and len(row_copy) > sent_idx_col:
+                    raw_s = str(row_copy[sent_idx_col]).strip()
+                    if raw_s.isdigit():
+                        row_copy[sent_idx_col] = str(int(raw_s) + global_sentence_offset)
+
+                all_data_rows.append(row_copy)
+
+            for sent in sess_sents:
+                sent_copy = dict(sent)
+                orig_s_idx = sent_copy.get("sentence_index", 1)
+                sent_copy["sentence_index"] = orig_s_idx + global_sentence_offset
+                sent_copy["project_id"] = p_id
+                sent_copy["deck"] = deck_path
+                all_sentences.append(sent_copy)
+
+            if sess_sents:
+                max_s = max(s.get("sentence_index", 1) for s in sess_sents)
+                global_sentence_offset += max_s
+            elif sess_rows:
+                global_sentence_offset += 1
+
+            chapters.append({
+                "project_id": p_id,
+                "project_title": node.get("title", ""),
+                "deck": deck_path,
+                "session_zid": s_zid,
+                "word_count": len(sess_rows),
+            })
+            total_sessions += 1
+
+        for child in node.get("children", []):
+            _collect(child)
+
+    for root_node in trees:
+        _collect(root_node)
+
+    if not headers:
+        headers = [
+            "Quotation", "WordSource", "WordSource2", "WordSourceInflectedForm", "WordSourceInflectedForm2",
+            "WordDestination", "WordDestinationInflectedForm", "WordSourceContext", "SentenceSourceContextLeft",
+            "SentenceSource", "SentenceSourceContextRight", "SentenceDestinationContextLeft", "SentenceDestination",
+            "SentenceDestinationContextRight", "SentenceDestination2ContextLeft", "SentenceDestination2",
+            "SentenceDestination2ContextRight", "SentenceSourceWordlist", "SentenceSourceCloze",
+            "SentenceSourceRewriteAISentenceSource", "SentenceSourceRewriteAISentenceDestination",
+            "WordSourceMorphologyAI", "Note", "WordRussian", "WordUkrainian", "WordEnglish", "WordGerman",
+            "WordSourceMorphemeFirst", "WordSourceMorphemeFirstDefinition", "WordSourceMorphemeSecond",
+            "WordSourceMorphemeSecondDefinition", "WordSourceMorphemeThird", "WordSourceMorphemeThirdDefinition",
+            "WordSourceMorphemeFourth", "WordSourceMorphemeFourthDefinition", "WordSourceMorphemeFifth",
+            "WordSourceMorphemeFifthDefinition", "WordSourceIPA", "WordSourceSynonymAI",
+            "WordSourceDefinitionAISentenceSource", "WordSourceDefinitionAISentenceDestination",
+            "WordSourceDefinitionFirst", "WordSourceDefinitionFirstClipping", "WordSourceDefinitionSecond",
+            "WordDestinationDefinitionFirst", "WordDestinationDefinitionSecond", "WordSourceAudio",
+            "SentenceSourceIPA", "SentenceSourceAudio", "Image", "WordSourceCloze", "WordSourceContextAI",
+            "TextSource", "TextDestination", "TextSourceURL", "SentenceEnglish", "SentenceGerman",
+            "SentenceUkrainian", "SentenceRussian", "Source", "SourceURL", "SeparatorAudio",
+            "Source-en-GB", "Source-en-US", "Source-de-DE", "Source-uk-UA", "Source-ru-RU",
+            "Destination-en-GB", "Destination-en-US", "Destination-de-DE", "Destination-uk-UA",
+            "Destination-ru-RU", "Overlapping", "ToggleAlwaysEmptyField", "Note ID",
+            "am-all-morphs", "am-all-morphs-count", "am-unknown-morphs", "am-unknown-morphs-count",
+            "am-highlighted", "am-score", "am-score-terms", "am-study-morphs",
+            "SentenceSourceIndex", "Deck", "LeitnerBox", "LeitnerDue", "DeskSelected",
+            "ClassificationOxford", "ClassificationGoethe",
+        ]
+
+    combined_text = "\n\n".join(t for t in source_texts if t.strip())
+
+    return {
+        "ok": True,
+        "session_zid": zid or f"project_{project_id}",
+        "project_id": project_id,
+        "project_title": project.get("title", ""),
+        "slug": project.get("slug") or f"project_{project_id}",
+        "source_language": lang,
+        "target_language": config.get(SEC_SETTINGS, "default_target_language", fallback="ru") if config and hasattr(config, "get") else "ru",
+        "text_mode": "multi",
+        "source_text": combined_text,
+        "source_raw_text": combined_text,
+        "headers": headers,
+        "data_rows": all_data_rows,
+        "sentences": all_sentences,
+        "total_sessions": total_sessions,
+        "total_words": len(all_data_rows),
+        "comments": [f"# Synthesized Project Session: {project.get('title')} (ID: {project_id})"],
+        "chapters": chapters,
+        "fingerprint": compute_content_fingerprint(all_data_rows),
+    }
+
+
 class StorageRouter:
     """
     Unified storage router coordinating SQLite and legacy TSV backends,
@@ -14178,11 +14337,46 @@ def cmd_restore(args):
     logger.info("Restore subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
 
+    target_project = getattr(args, "project", None) or getattr(args, "project_id", None)
+    if target_project is not None:
+        if not getattr(args, "no_gui", False):
+            spawn_ahk(["--project", str(target_project)], resolved_paths['base_dir'])
+            return
+        synthesized = synthesize_project_materials(
+            project_id=int(target_project),
+            config=config,
+            resolved_paths=resolved_paths,
+            language=getattr(args, "language", None),
+            zid=getattr(args, "zid", None),
+        )
+        if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+            out_str = json.dumps(synthesized, indent=2, ensure_ascii=False)
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(out_str + "\n")
+                sys.__stdout__.flush()
+            else:
+                print(out_str)
+        else:
+            payload = {
+                "source_text": synthesized.get("source_text", ""),
+                "headers": synthesized.get("headers", []),
+                "data_rows": synthesized.get("data_rows", []),
+                "warnings": [],
+                "project_id": int(target_project),
+                "project_title": synthesized.get("project_title", ""),
+                "total_sessions": synthesized.get("total_sessions", 0),
+                "total_words": synthesized.get("total_words", 0),
+            }
+            from b64util import encode
+            response_str = json.dumps(payload)
+            emit_payload(encode(response_str), raw=True)
+        return
+
     file_list = args.file if isinstance(args.file, list) else ([args.file] if args.file else [])
     target_zid = getattr(args, "zid", None)
 
     if not file_list and not target_zid:
-        print_structured_error("INVALID_STATE", "Either --file or --zid must be provided for restore.")
+        print_structured_error("INVALID_STATE", "Either --file or --zid or --project must be provided for restore.")
         sys.exit(1)
 
     router = StorageRouter(config=config, resolved_paths=resolved_paths)
@@ -14275,9 +14469,37 @@ def cmd_restore(args):
 def cmd_desk(args):
     logger.info("Desk subcommand invoked")
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
-    
-    file_list = args.file if isinstance(args.file, list) else [args.file]
-    
+
+    target_project = getattr(args, "project", None) or getattr(args, "project_id", None)
+    if target_project is not None:
+        if not getattr(args, "no_gui", False):
+            spawn_ahk(["--project", str(target_project)], resolved_paths['base_dir'])
+            return
+        synthesized = synthesize_project_materials(
+            project_id=int(target_project),
+            config=config,
+            resolved_paths=resolved_paths,
+            language=getattr(args, "language", None),
+            zid=getattr(args, "zid", None),
+        )
+        if getattr(args, 'json_output', False) or getattr(args, 'json', False):
+            out_str = json.dumps(synthesized, indent=2, ensure_ascii=False)
+            if sys.__stdout__ is not None:
+                sys.__stdout__.write(out_str + "\n")
+                sys.__stdout__.flush()
+            else:
+                print(out_str)
+        else:
+            from b64util import encode
+            response_str = json.dumps(synthesized)
+            emit_payload(encode(response_str), raw=True)
+        return
+
+    file_list = args.file if isinstance(args.file, list) else ([args.file] if args.file else [])
+    if not file_list:
+        print_structured_error("INVALID_STATE", "Either --file or --project must be provided for desk.")
+        sys.exit(1)
+
     if not args.no_gui:
         ahk_args = []
         zid_groups = {}
@@ -15346,7 +15568,7 @@ def main():
     parser.add_argument("--title", default=None, help="Project title")
     parser.add_argument("--slug", default=None, help="Project slug")
     parser.add_argument("--parent-id", type=int, default=None, help="Parent project ID")
-    parser.add_argument("--project-id", type=int, default=None, help="Target project ID")
+    parser.add_argument("--project", "--project-id", dest="project_id", type=int, default=None, help="Target project ID or synthesize project session")
     parser.add_argument("--session-zid", default=None, help="Session ZID for project linking")
     parser.add_argument("--session-zids", nargs="+", default=None, help="Session ZIDs for project reordering")
     parser.add_argument("--description", default=None, help="Project description")
@@ -15549,11 +15771,15 @@ def main():
     p_restore = subparsers.add_parser("restore")
     p_restore.add_argument("--file", nargs="*", default=None, help="Session file to restore")
     p_restore.add_argument("--zid", default=None, help="Session ZID to restore")
+    p_restore.add_argument("--project", "--project-id", dest="project", type=int, default=None, help="Project ID to synthesize")
+    p_restore.add_argument("--language", default=None, help="Language code")
     p_restore.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
+    p_restore.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
     # desk
     p_desk = subparsers.add_parser("desk")
-    p_desk.add_argument("--file", nargs="+", required=True, help="Text file to analyze")
+    p_desk.add_argument("--file", nargs="*", default=None, help="Text file to analyze")
+    p_desk.add_argument("--project", "--project-id", dest="project", type=int, default=None, help="Project ID for multi-chapter synthesis")
     p_desk.add_argument("--text-mode", choices=["single", "multi"], default="multi")
     p_desk.add_argument("--language", help="Language code")
     p_desk.add_argument("--no-gui", action="store_true", help="Do not spawn AHK window")
@@ -15561,6 +15787,7 @@ def main():
     p_desk.add_argument("--bypass-lang-check", "--force-language", dest="bypass_lang_check", action="store_true", help="Bypass pre-flight language verification")
     p_desk.add_argument("--zid", default=None, help="Session ZID")
     p_desk.add_argument("--trace-id", default=None, help="Trace correlation ID")
+    p_desk.add_argument("--json", dest="json_output", action="store_true", help="Output in JSON format")
 
     # wordfill
     p_wordfill = subparsers.add_parser("wordfill")
@@ -15635,6 +15862,9 @@ def main():
         return
     if getattr(args, 'export_project_deck', False):
         cmd_export_project_deck(args)
+        return
+    if getattr(args, 'project', None) is not None and not getattr(args, 'command', None):
+        cmd_desk(args)
         return
 
     commands = {

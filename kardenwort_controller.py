@@ -49,6 +49,9 @@ from kardenwort_desk import (
     parse_tsv_to_bundle,
     render_lookup_html,
     run_render_flow,
+    synthesize_project_materials,
+    aggregate_project_materials,
+    resolve_project_deck_path,
     SessionLogger,
     SEC_SETTINGS,
     SEC_LANGUAGES,
@@ -1120,8 +1123,75 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
 
             session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
+            project_id = qs.get('project_id', [None])[0] or qs.get('project', [None])[0]
             text = qs.get('text', [None])[0]
             language = qs.get('language', [None])[0]
+
+            if project_id:
+                try:
+                    synthesized = synthesize_project_materials(
+                        project_id=int(project_id),
+                        config=self.server.config,
+                        resolved_paths=self.server.resolved_paths,
+                        language=language,
+                    )
+                except Exception as e:
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials synthesis failed: {e}")
+
+                source_text = synthesized.get("source_text", "")
+                sess_lang = synthesized.get("source_language") or language or "de"
+                target_lang = synthesized.get("target_language") or qs.get('target-lang', ['ru'])[0]
+                data_rows = synthesized.get("data_rows", [])
+                headers = synthesized.get("headers", [])
+                comments = synthesized.get("comments", [])
+                sentence_translation = ""
+                if synthesized.get("sentences"):
+                    sentence_translation = "\n".join([
+                        str(s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
+                        for s in synthesized["sentences"]
+                        if (s.get("sentence_destination") or s.get("sentence_destination2"))
+                    ])
+                fingerprint = compute_content_fingerprint(data_rows)
+                req_theme = qs.get('theme', [None])[0]
+                view_mode = qs.get('view', [None])[0]
+                synth_zid = synthesized.get("session_zid") or f"project_{project_id}"
+
+                goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
+                goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
+                goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+                goldendict['theme'] = req_theme or ('dark' if view_mode != 'goldendict' else 'compact')
+                goldendict.setdefault('heading_source', '__default__')
+                goldendict.setdefault('heading_translation', '__default__')
+                goldendict.setdefault('heading_lemmas', '__default__')
+                goldendict.setdefault('run_intellifiller', False)
+                goldendict['server_enabled'] = True
+                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+
+                html = render_lookup_html(
+                    text=source_text,
+                    language=sess_lang,
+                    target_lang=target_lang,
+                    config=self.server.config,
+                    resolved_paths=self.server.resolved_paths,
+                    zid=synth_zid,
+                    goldendict=goldendict,
+                    comments=comments,
+                    headers=headers,
+                    data_rows=data_rows,
+                    sentence_translation=sentence_translation,
+                    session_zid=synth_zid,
+                    api_token=getattr(self.server, 'api_key', ''),
+                    server_enabled=True,
+                    fingerprint=fingerprint,
+                )
+                body = html.encode('utf-8')
+                self.send_response(200)
+                self._send_cors_headers()
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
 
             if session_zid:
                 adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
@@ -1243,7 +1313,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 return
 
             if not text:
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid' query parameter")
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid' or 'project_id' query parameter")
             if not language:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' query parameter")
 
@@ -1251,8 +1321,76 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
+            project_id = qs.get('project_id', [None])[0] or qs.get('project', [None])[0]
             text = qs.get('text', [None])[0]
             language = qs.get('language', [None])[0]
+
+            if project_id:
+                try:
+                    synthesized = synthesize_project_materials(
+                        project_id=int(project_id),
+                        config=self.server.config,
+                        resolved_paths=self.server.resolved_paths,
+                        language=language,
+                    )
+                except Exception as e:
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials synthesis failed: {e}")
+
+                source_text = synthesized.get("source_text", "")
+                sess_lang = synthesized.get("source_language") or language or "de"
+                target_lang = synthesized.get("target_language") or qs.get('target-lang', ['ru'])[0]
+                data_rows = synthesized.get("data_rows", [])
+                headers = synthesized.get("headers", [])
+                comments = synthesized.get("comments", [])
+                sentence_translation = ""
+                if synthesized.get("sentences"):
+                    sentence_translation = "\n".join([
+                        str(s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
+                        for s in synthesized["sentences"]
+                        if (s.get("sentence_destination") or s.get("sentence_destination2"))
+                    ])
+                fingerprint = compute_content_fingerprint(data_rows)
+                synth_zid = synthesized.get("session_zid") or f"project_{project_id}"
+
+                goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
+                goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
+                goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+                goldendict.setdefault('theme', 'compact')
+                goldendict.setdefault('heading_source', '__default__')
+                goldendict.setdefault('heading_translation', '__default__')
+                goldendict.setdefault('heading_lemmas', '__default__')
+                goldendict.setdefault('run_intellifiller', False)
+                goldendict['server_enabled'] = True
+                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+
+                html = render_lookup_html(
+                    text=source_text,
+                    language=sess_lang,
+                    target_lang=target_lang,
+                    config=self.server.config,
+                    resolved_paths=self.server.resolved_paths,
+                    zid=synth_zid,
+                    goldendict=goldendict,
+                    comments=comments,
+                    headers=headers,
+                    data_rows=data_rows,
+                    sentence_translation=sentence_translation,
+                    session_zid=synth_zid,
+                    api_token=getattr(self.server, 'api_key', ''),
+                    server_enabled=True,
+                    fingerprint=fingerprint,
+                )
+                self._send_json(200, {
+                    "ok": True,
+                    "html": html,
+                    "project_id": int(project_id),
+                    "session_zid": synth_zid,
+                    "language": sess_lang,
+                    "fingerprint": fingerprint,
+                    "total_sessions": synthesized.get("total_sessions", 0),
+                    "total_words": synthesized.get("total_words", 0),
+                })
+                return
 
             if session_zid:
                 adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
@@ -1308,7 +1446,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 return
 
             if not text:
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' query parameter")
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'project_id' query parameter")
             if not language:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' query parameter")
 
@@ -1523,6 +1661,53 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
             ok = db.reorder_project_sessions(int(project_id), session_zids)
             self._send_json(200, {"ok": ok, "project_id": project_id, "session_zids": session_zids})
+            return
+
+        if path == '/api/v1/admin/projects/export-deck':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            project_id = body.get('project_id')
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+            lang = body.get('language')
+            req_zid = generate_server_zid(self.server)
+            res = aggregate_project_materials(
+                project_id=int(project_id),
+                config=self.server.config,
+                resolved_paths=self.server.resolved_paths,
+                language=lang,
+                zid=req_zid,
+            )
+            self._send_json(200, res)
+            return
+
+        if path == '/api/v1/admin/projects/synthesize':
+            if method not in ('GET', 'POST'):
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            if method == 'POST':
+                body = self._read_json_body()
+                self._authenticate_token(body)
+                project_id = body.get('project_id')
+                lang = body.get('language')
+            else:
+                self._authenticate_token(query_params=qs)
+                project_id = qs.get('project_id', [None])[0] or qs.get('project', [None])[0]
+                lang = qs.get('language', [None])[0]
+
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload/parameters")
+
+            req_zid = generate_server_zid(self.server)
+            res = synthesize_project_materials(
+                project_id=int(project_id),
+                config=self.server.config,
+                resolved_paths=self.server.resolved_paths,
+                language=lang,
+                zid=req_zid,
+            )
+            self._send_json(200, res)
             return
 
         if path == '/api/v1/admin/sessions':
