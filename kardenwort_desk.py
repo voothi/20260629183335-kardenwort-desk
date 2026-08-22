@@ -7409,6 +7409,7 @@ html, body {{
         if col_sentence_dest != -1 and len(row) > col_sentence_dest:
             extracted_translations[content_line_idx] = row[col_sentence_dest]
 
+    db_sents = None
     if is_sqlite:
         try:
             target_zid_to_read = extract_zid(working_tsv_path)
@@ -7416,7 +7417,7 @@ html, body {{
                 db_sents = storage_adapter.db.get_sentences_by_session(target_zid_to_read)
                 for s in db_sents:
                     s_idx = s.get("sentence_index", 1) - 1
-                    s_dest = s.get("sentence_destination") or s.get("sentence_destination2")
+                    s_dest = s.get("sentence_destination")
                     if s_dest and str(s_dest).strip():
                         extracted_translations[s_idx] = str(s_dest).strip()
                     elif str(s.get("sentence_source", "")).strip().startswith("#"):
@@ -7447,7 +7448,14 @@ html, body {{
                     sentence_translations[a_idx] = ""
     else:
         if eff_mode == 'single':
-            sentence_translations[0] = extracted_translations.get(0, "")
+            if is_sqlite and db_sents:
+                clean_lines = [str(s.get("sentence_destination")).strip() for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)) if s.get("sentence_destination") and str(s.get("sentence_destination")).strip()]
+                if clean_lines:
+                    sentence_translations[0] = " ".join(clean_lines)
+                else:
+                    sentence_translations[0] = extracted_translations.get(0, "")
+            else:
+                sentence_translations[0] = extracted_translations.get(0, "")
         else:
             c_idx = 0
             for a_idx, ln in enumerate(text.splitlines()):
@@ -12969,6 +12977,44 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         else:
             # Note: We intentionally do not fallback to reading source_text from .txt when it is None
             # because sending plain text destroys the span DOM established in the frontend.
+            if translated_text is None and zid:
+                try:
+                    storage_adapter = get_storage_adapter(config)
+                    if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
+                        db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                        clean_translations = []
+                        if db_sents:
+                            for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
+                                s_dest = s.get("sentence_destination")
+                                if s_dest and str(s_dest).strip():
+                                    clean_translations.append(str(s_dest).strip())
+                        if clean_translations:
+                            norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
+                            lines = [html.escape(normalize_bracket_spacing(line) if norm_brackets else line) for line in clean_translations]
+                            is_single = True
+                            if source_text:
+                                stripped_src = source_text.strip()
+                                if '\n' in stripped_src or '\r' in stripped_src:
+                                    is_single = False
+                            else:
+                                bundle = storage_adapter.load_session(zid) if hasattr(storage_adapter, 'load_session') else None
+                                src_raw = bundle.get("session", {}).get("source_raw_text") if bundle else None
+                                if src_raw and ('\n' in src_raw or '\r' in src_raw):
+                                    is_single = False
+                                elif tsv_path and tsv_path.with_suffix('.txt').exists():
+                                    try:
+                                        txt = tsv_path.with_suffix('.txt').read_text(encoding='utf-8')
+                                        if '\n' in txt or '\r' in txt:
+                                            is_single = False
+                                    except Exception:
+                                        pass
+                            if is_single:
+                                translated_text = f"<div>{' '.join(lines)}</div>"
+                            else:
+                                translated_text = "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+                except Exception as e:
+                    logger.debug(f"Failed to read clean translation from SQLite in write_update_js: {e}")
+
             if translated_text is None:
                 if tsv_path:
                     try:
@@ -13040,9 +13086,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                         non_empty = [s for s in sentences if s]
                         if non_empty and all(s == non_empty[0] for s in non_empty):
                             sentences = [non_empty[0]]
-                        translated_text = f"<div>{html.escape(' '.join(sentences))}</div>"
+                        translated_text = f"<div>{' '.join(sentences)}</div>"
                     else:
-                        translated_text = "".join(f"<div>{html.escape(s)}</div>" for s in sentences)
+                        translated_text = "".join(f"<div>{s}</div>" for s in sentences)
                     
             update_data = {
                 "stage": stage,
