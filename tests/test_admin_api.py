@@ -33,9 +33,14 @@ def admin_controller_server(tmp_path_factory):
 
     # Point db to isolated test db
     test_db_path = test_dir / "kardenwort_test.db"
+    resolved_paths["sqlite_db_path"] = str(test_db_path)
     resolved_paths["db_path"] = str(test_db_path)
-    if "db" in config:
-        config["db"]["path"] = str(test_db_path)
+    if "storage" not in config:
+        config.add_section("storage")
+    config["storage"]["sqlite_db_path"] = str(test_db_path)
+    if "db" not in config:
+        config.add_section("db")
+    config["db"]["path"] = str(test_db_path)
 
     # Initialize DB & migrations
     db = KardenwortDB(config=config, resolved_paths=resolved_paths)

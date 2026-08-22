@@ -2426,7 +2426,7 @@ class SqliteStorageAdapter(StorageAdapter):
         self.resolved_paths = resolved_paths or {}
         from kardenwort_db import KardenwortDB
         self.db = KardenwortDB(
-            db_path=db_path or self.resolved_paths.get("sqlite_db_path"),
+            db_path=db_path or self.resolved_paths.get("sqlite_db_path") or self.resolved_paths.get("db_path"),
             config=config,
             resolved_paths=self.resolved_paths,
         )

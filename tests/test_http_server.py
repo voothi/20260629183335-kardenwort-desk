@@ -58,6 +58,13 @@ class TestHTTPServer(unittest.TestCase):
 class TestHTTPServerRunning(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
+        import tempfile
+        cls.test_dir = tempfile.TemporaryDirectory()
+        test_dir_p = Path(cls.test_dir.name)
+        test_db_p = (test_dir_p / "test_kardenwort.db").resolve()
+        test_res_p = (test_dir_p / "results").resolve()
+        test_res_p.mkdir(parents=True, exist_ok=True)
+
         cls.running_config = DESK_DIR / ".test_running_config.ini"
         with open(DESK_DIR / "config.ini", "r", encoding="utf-8") as f:
             base_cfg = f.read()
@@ -65,6 +72,8 @@ class TestHTTPServerRunning(unittest.TestCase):
         running_content = re.sub(r'enabled\s*=\s*false', 'enabled = true', base_cfg, flags=re.IGNORECASE)
         running_content = re.sub(r'api_key\s*=.*', f'api_key = {TEST_TOKEN}', running_content)
         running_content = re.sub(r'port\s*=.*', f'port = {TEST_PORT}', running_content)
+        running_content = re.sub(r'sqlite_db_path\s*=.*', f'sqlite_db_path = {test_db_p.as_posix()}', running_content)
+        running_content = re.sub(r'results_dir\s*=.*', f'results_dir = {test_res_p.as_posix()}', running_content)
         with open(cls.running_config, "w", encoding="utf-8") as f:
             f.write(running_content)
 
@@ -86,6 +95,8 @@ class TestHTTPServerRunning(unittest.TestCase):
                 os.remove(cls.running_config)
             except OSError:
                 pass
+        if hasattr(cls, 'test_dir'):
+            cls.test_dir.cleanup()
 
     def test_03_health_endpoint(self):
         url = f"http://127.0.0.1:{TEST_PORT}/api/v1/health"

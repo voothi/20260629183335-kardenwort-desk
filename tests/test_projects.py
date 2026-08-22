@@ -35,6 +35,7 @@ def temp_project_env(tmp_path):
 
     resolved_paths = {
         "sqlite_db_path": str(db_file),
+        "db_path": str(db_file),
         "results_dir": str(results_dir),
         "favorites_output_dir": str(favorites_dir),
         "migrations_dir": str(migrations_dir),

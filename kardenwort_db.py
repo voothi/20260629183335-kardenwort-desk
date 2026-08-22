@@ -164,8 +164,13 @@ class KardenwortDB:
             self.db_path = Path(db_path).resolve()
         elif resolved_paths and "sqlite_db_path" in resolved_paths and resolved_paths["sqlite_db_path"]:
             self.db_path = Path(resolved_paths["sqlite_db_path"]).resolve()
+        elif resolved_paths and "db_path" in resolved_paths and resolved_paths["db_path"]:
+            self.db_path = Path(resolved_paths["db_path"]).resolve()
         elif config and hasattr(config, "get") and config.has_option("storage", "sqlite_db_path"):
             raw_p = config.get("storage", "sqlite_db_path")
+            self.db_path = (workspace_dir / raw_p).resolve() if not Path(raw_p).is_absolute() else Path(raw_p).resolve()
+        elif config and hasattr(config, "get") and config.has_option("db", "path"):
+            raw_p = config.get("db", "path")
             self.db_path = (workspace_dir / raw_p).resolve() if not Path(raw_p).is_absolute() else Path(raw_p).resolve()
         else:
             self.db_path = (workspace_dir / "data" / "kardenwort.db").resolve()
