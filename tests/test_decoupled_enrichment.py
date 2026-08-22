@@ -296,3 +296,104 @@ def test_sqlite_enrich_session_intellifiller_and_export_fidelity(enrichment_env)
     assert fav_rows[0][morph_col] == "Noun|Masc|Sing"
     assert fav_rows[0][ipa_col] == "/hʊnt/"
     assert fav_rows[0][syn_col] == "Köter, Vierbeiner"
+
+
+def test_run_headless_intellifiller_passes_local_model_parameters(enrichment_env):
+    """
+    Verifies that _run_headless_intellifiller_impl passes --model, --base-url,
+    --api-key, and --temperature from [intellifiller] section to the CLI command.
+    """
+    tmp_path = enrichment_env["tmp_path"]
+    config = enrichment_env["config"]
+    resolved_paths = dict(enrichment_env["resolved_paths"])
+    resolved_paths["kardenwort_python"] = Path("python")
+    resolved_paths["intellifiller_headless"] = Path("mock_headless.py")
+
+    # Add [intellifiller] section to config
+    if not config.has_section("intellifiller"):
+        config.add_section("intellifiller")
+    config.set("intellifiller", "model", "qwen2.5:3b")
+    config.set("intellifiller", "base_url", "http://127.0.0.1:11434/v1")
+    config.set("intellifiller", "api_key", "test_key")
+    config.set("intellifiller", "temperature", "0.0")
+
+    target_tsv = tmp_path / "test_cmd_params.tsv"
+    headers = ["WordSource", "WordDestination"]
+    rows = [["Katze", ""]]
+    save_tsv_rows_safely(target_tsv, ["# comment"], headers, rows)
+
+    received_cmd = []
+
+    def fake_subprocess_run(cmd, *args, **kwargs):
+        nonlocal received_cmd
+        received_cmd = list(cmd)
+        mock_res = MagicMock()
+        mock_res.returncode = 0
+        mock_res.stdout = ""
+        mock_res.stderr = ""
+        return mock_res
+
+    with patch("subprocess.run", side_effect=fake_subprocess_run):
+        res = _run_headless_intellifiller_impl(
+            tsv_path=target_tsv,
+            prompt_name="morphology_and_ipa",
+            config=config,
+            resolved_paths=resolved_paths,
+            zid="20260822100000",
+        )
+        assert res is True
+
+    assert "--model" in received_cmd
+    assert received_cmd[received_cmd.index("--model") + 1] == "qwen2.5:3b"
+    assert "--base-url" in received_cmd
+    assert received_cmd[received_cmd.index("--base-url") + 1] == "http://127.0.0.1:11434/v1"
+    assert "--api-key" in received_cmd
+    assert received_cmd[received_cmd.index("--api-key") + 1] == "test_key"
+    assert "--temperature" in received_cmd
+    assert received_cmd[received_cmd.index("--temperature") + 1] == "0.0"
+
+
+def test_performance_tracing_records_local_ollama_provider(enrichment_env):
+    """
+    Verifies that TraceTimer logs provider: "local_ollama" into speed_trace.jsonl.
+    """
+    tmp_path = enrichment_env["tmp_path"]
+    config = enrichment_env["config"]
+    resolved_paths = dict(enrichment_env["resolved_paths"])
+    results_dir = enrichment_env["results_dir"]
+
+    # Configure local Ollama in intellifiller section
+    if not config.has_section("intellifiller"):
+        config.add_section("intellifiller")
+    config.set("intellifiller", "model", "qwen2.5:3b")
+    config.set("intellifiller", "base_url", "http://127.0.0.1:11434/v1")
+
+    # Enable speed_trace logging
+    if not config.has_section("profiling"):
+        config.add_section("profiling")
+    config.set("profiling", "enable_performance_tracing", "true")
+
+    target_tsv = tmp_path / "test_trace.tsv"
+    save_tsv_rows_safely(target_tsv, [], ["WordSource", "WordDestination"], [["Hund", ""]])
+
+    with patch("kardenwort_desk._run_headless_intellifiller_impl", return_value=True):
+        run_headless_intellifiller(
+            tsv_path=target_tsv,
+            prompt_name="morphology_and_ipa",
+            config=config,
+            resolved_paths=resolved_paths,
+            zid="20260822110000"
+        )
+
+    trace_file = results_dir / "speed_trace.jsonl"
+    assert trace_file.exists()
+
+    with open(trace_file, "r", encoding="utf-8") as f:
+        lines = [json.loads(line.strip()) for line in f if line.strip()]
+
+    matching = [l for l in lines if l.get("phase") == "intellifiller_enrichment"]
+    assert len(matching) > 0
+    trace_entry = matching[-1]
+    assert trace_entry["extra"]["provider"] == "local_ollama"
+    assert trace_entry["extra"]["model"] == "qwen2.5:3b"
+

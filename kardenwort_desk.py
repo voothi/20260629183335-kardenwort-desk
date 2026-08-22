@@ -622,7 +622,12 @@ def query_intellifiller_server(
     trace_id: Optional[str] = None,
     field_mapping: Optional[dict] = None,
     timeout: float = 30.0,
-    connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
+    connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT,
+    model: Optional[str] = None,
+    base_url: Optional[str] = None,
+    api_key: Optional[str] = None,
+    temperature: Optional[float] = None,
+    prompt_template: Optional[str] = None
 ) -> Optional[dict]:
     """
     Queries the persistent IntelliFiller HTTP microservice.
@@ -644,6 +649,16 @@ def query_intellifiller_server(
     }
     if field_mapping:
         payload["field_mapping"] = field_mapping
+    if model:
+        payload["model"] = model
+    if base_url:
+        payload["base_url"] = base_url
+    if api_key:
+        payload["api_key"] = api_key
+    if temperature is not None:
+        payload["temperature"] = temperature
+    if prompt_template:
+        payload["prompt_template"] = prompt_template
     try:
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         req = urllib.request.Request(
@@ -5559,13 +5574,39 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
     if zid is None:
         m = re.match(r"^(\d{14})", tsv_path.name)
         zid = m.group(1) if m else (tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown")
-    with TraceTimer("intellifiller_enrichment", zid, config, resolved_paths):
+    
+    # Determine provider and model for performance tracing
+    model_name = "qwen2.5:3b"
+    base_url = None
+    if config and config.has_section("intellifiller"):
+        model_name = config.get("intellifiller", "model", fallback="qwen2.5:3b")
+        base_url = config.get("intellifiller", "base_url", fallback=None)
+    
+    provider_id = "local_ollama" if (base_url and ("127.0.0.1" in base_url or "localhost" in base_url)) else ("cloud_openai" if not base_url or "api.openai.com" in base_url else "custom_endpoint")
+    extra_trace = {
+        "provider": provider_id,
+        "model": model_name
+    }
+    with TraceTimer("intellifiller_enrichment", zid, config, resolved_paths, extra=extra_trace):
         return _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows, reprocess, zid=zid, trace_id=trace_id)
 
 def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
     lock_target = Path(str(tsv_path) + ".intellifiller")
     with file_lock(lock_target):
-        # 1. Try HTTP microservice if configured
+        # 1. Read [intellifiller] section from config
+        model = None
+        base_url = None
+        api_key = None
+        temperature = None
+        prompt_template = None
+        if config and config.has_section("intellifiller"):
+            model = config.get("intellifiller", "model", fallback=None)
+            base_url = config.get("intellifiller", "base_url", fallback=None)
+            api_key = config.get("intellifiller", "api_key", fallback=None)
+            temperature = config.get("intellifiller", "temperature", fallback=None)
+            prompt_template = config.get("intellifiller", "prompt_template", fallback=None)
+
+        # 2. Try HTTP microservice if configured
         intellifiller_url = None
         if config:
             if config.has_section(SEC_SERVICES):
@@ -5615,6 +5656,7 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                     batch_rows.append(row_dict)
 
                 timeout = config.getint(SEC_TIMEOUTS, 'intellifiller_timeout', fallback=120) if config else 120
+                temp_val = float(temperature) if (temperature is not None and str(temperature).strip()) else None
                 resp = query_intellifiller_server(
                     rows=batch_rows,
                     prompt=prompt_name,
@@ -5622,7 +5664,12 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                     server_url=intellifiller_url,
                     zid=zid,
                     trace_id=trace_id,
-                    timeout=float(timeout)
+                    timeout=float(timeout),
+                    model=model,
+                    base_url=base_url,
+                    api_key=api_key,
+                    temperature=temp_val,
+                    prompt_template=prompt_template
                 )
 
                 if resp is not None:
@@ -5667,6 +5714,17 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                 "--tsv", str(temp_tsv_path),
                 "--prompt", prompt_name,
             ]
+            if model:
+                cmd.extend(["--model", str(model)])
+            if base_url:
+                cmd.extend(["--base-url", str(base_url)])
+            if api_key:
+                cmd.extend(["--api-key", str(api_key)])
+            if temperature is not None and str(temperature).strip():
+                cmd.extend(["--temperature", str(temperature).strip()])
+            if prompt_template:
+                cmd.extend(["--prompt-template", str(prompt_template)])
+
             if reprocess:
                 cmd.append("--reprocess")
             if zid:
