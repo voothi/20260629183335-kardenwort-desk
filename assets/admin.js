@@ -262,7 +262,7 @@ function createSessionElement(session, projectId, index, total) {
         <div class="session-item-info">
             <span class="session-badge">${escapeHtml(session.session_zid)}</span>
             <span class="session-slug">${escapeHtml(session.slug || 'untitled')}</span>
-            <span class="text-muted" style="font-size: 11px;">(${escapeHtml(session.source_language || '')})</span>
+            <span class="text-muted" style="font-size: 12px;">(${escapeHtml(session.source_language || '')})</span>
         </div>
         <div class="session-actions">
             <button class="btn btn-icon btn-move-up" ${index === 0 ? 'disabled' : ''} title="Move Up">[Up]</button>
@@ -939,7 +939,7 @@ async function loadTrash() {
                 <div class="trash-item">
                     <div class="trash-item-info">
                         <strong>${escapeHtml(s.zid)}</strong>
-                        <span class="text-muted" style="font-size: 11px;">${escapeHtml(s.slug || 'Untitled')} &bull; Deleted: ${escapeHtml(s.deleted_at || '')}</span>
+                        <span class="text-muted" style="font-size: 12px;">${escapeHtml(s.slug || 'Untitled')} &bull; Deleted: ${escapeHtml(s.deleted_at || '')}</span>
                     </div>
                     <div class="trash-item-actions">
                         <button class="btn btn-secondary btn-sm" onclick="restoreTrash('session', '${s.zid}')">[Restore]</button>
@@ -956,7 +956,7 @@ async function loadTrash() {
                 <div class="trash-item">
                     <div class="trash-item-info">
                         <strong>${escapeHtml(p.title)}</strong>
-                        <span class="text-muted" style="font-size: 11px;">ID: ${p.id} &bull; Deleted: ${escapeHtml(p.deleted_at || '')}</span>
+                        <span class="text-muted" style="font-size: 12px;">ID: ${p.id} &bull; Deleted: ${escapeHtml(p.deleted_at || '')}</span>
                     </div>
                     <div class="trash-item-actions">
                         <button class="btn btn-secondary btn-sm" onclick="restoreTrash('project', ${p.id})">[Restore]</button>
