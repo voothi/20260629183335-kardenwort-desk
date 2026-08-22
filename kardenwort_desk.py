@@ -7746,17 +7746,14 @@ html, body {{
 <body class="{theme_class}">
 <div class="container">
   <div class="section">
-    <div class="section-title">Source Text</div>
     <div class="source-text" id="source-container">{source_html}</div>
   </div>
   
   <div class="section">
-    <div class="section-title">Translation</div>
     <div class="translation-text" id="translation-container">{sentence_html}</div>
   </div>
   
   <div class="section">
-    <div class="section-title">Lemmas</div>
     <table id="lemma-table">
       <thead>
         {table_header_html}
