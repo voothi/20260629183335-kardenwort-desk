@@ -2616,7 +2616,9 @@ class SqliteStorageAdapter(StorageAdapter):
                 }
                 word_list.append(word_entry)
 
-            if not sent_map:
+            if sentences is not None:
+                norm_sentences = list(sentences)
+            elif not sent_map:
                 try:
                     existing_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
                     if existing_sents:
@@ -6294,6 +6296,17 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
         if is_sqlite:
+            master_sentences = []
+            for idx_s, s_src in enumerate(source_sentences):
+                s_dst = translated_sentences[idx_s] if idx_s < len(translated_sentences) else ""
+                s_dst2 = padded_translated_sentences[idx_s] if idx_s < len(padded_translated_sentences) else s_dst
+                master_sentences.append({
+                    "session_zid": zid,
+                    "sentence_index": idx_s + 1,
+                    "sentence_source": s_src,
+                    "sentence_destination": s_dst,
+                    "sentence_destination2": s_dst2,
+                })
             storage_adapter.save_session(
                 session_zid=zid,
                 slug=master_slug,
@@ -6304,6 +6317,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 comments=comments,
                 headers=headers,
                 data_rows=master_data_rows,
+                sentences=master_sentences,
                 working_tsv_path=None,
                 zid=zid,
             )
@@ -6341,6 +6355,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             for i in range(len(source_sentences)):
                 sub_text = source_sentences[i]
                 sub_trans = translated_sentences[i] if i < len(translated_sentences) else ""
+                sub_trans_padded = padded_translated_sentences[i] if i < len(padded_translated_sentences) else sub_trans
                 
                 sub_dt = master_time + timedelta(seconds=i+1)
                 sub_zid = sub_dt.strftime('%Y%m%d%H%M%S')
@@ -6419,6 +6434,13 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     
                 sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
                 if is_sqlite:
+                    child_sentences = [{
+                        "session_zid": sub_zid,
+                        "sentence_index": 1,
+                        "sentence_source": sub_text,
+                        "sentence_destination": sub_trans,
+                        "sentence_destination2": sub_trans_padded,
+                    }]
                     storage_adapter.save_session(
                         session_zid=sub_zid,
                         slug=sub_slug,
@@ -6429,6 +6451,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         comments=comments,
                         headers=headers,
                         data_rows=sub_rows,
+                        sentences=child_sentences,
                         working_tsv_path=None,
                         zid=sub_zid,
                     )

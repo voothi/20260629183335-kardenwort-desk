@@ -500,3 +500,86 @@ DeskSelected = selected
     # Verify zero TSV files were left in results/
     results_tsvs = list(results_dir.glob("*.tsv"))
     assert len(results_tsvs) == 0
+
+
+def test_clean_sentence_translation_view_in_sentences_mode(monkeypatch, tmp_path):
+    """
+    Verifies that sentences_mode stores clean unpadded sentence translation in sentences.sentence_destination
+    for both master and child sessions, while keeping padded sentences in sentence_destination2 / card fields.
+    """
+    config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
+    db_file = tmp_path / "kardenwort_clean_trans.db"
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = results_dir
+
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_db_path", str(db_file))
+    config.set("storage", "fallback_to_tsv", "true")
+    resolved_paths["storage_backend"] = "sqlite"
+    resolved_paths["sqlite_db_path"] = db_file.resolve()
+
+    if not config.has_section("sentences_mode"):
+        config.add_section("sentences_mode")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "min_sentences", "2")
+    config.set("sentences_mode", "parent_mode", "none")
+
+    # Enable context padding
+    config.set("settings", "anki_context_mode", "single")
+    config.set("settings", "anki_context_words_after", "5")
+    config.set("settings", "anki_translated_context_words_after", "5")
+
+    monkeypatch.setattr(subprocess, "Popen", lambda *a, **kw: MagicMock(pid=99999))
+
+    def mock_run(*args, **kwargs):
+        cmd = args[0]
+        out_idx = cmd.index("--output-file") + 1
+        out_file = Path(cmd[out_idx])
+        out_file.parent.mkdir(parents=True, exist_ok=True)
+        headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination2"]
+        rows = [
+            ["first", "", "1", "First sentence.", ""],
+            ["second", "", "2", "Second sentence.", ""],
+        ]
+        with open(out_file, "w", encoding="utf-8", newline="") as f:
+            writer = csv.writer(f, delimiter="\t", lineterminator="\n")
+            writer.writerow(headers)
+            for row in rows:
+                writer.writerow(row)
+
+    monkeypatch.setattr(subprocess, "run", mock_run)
+    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "Первое предложение.", 1: "Второе предложение."})
+    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_ru" for l in lemmas})
+
+    test_zid = "20260822143000"
+    desk.run_render_flow(
+        text="First sentence. Second sentence.",
+        language="en",
+        zid=test_zid,
+        text_mode="sentences",
+        config=config,
+        resolved_paths=resolved_paths,
+    )
+
+    adapter = get_storage_adapter(config, resolved_paths)
+    with adapter.db.get_connection(zid=test_zid) as conn:
+        child_sents = conn.execute("SELECT session_zid, sentence_index, sentence_source, sentence_destination, sentence_destination2 FROM sentences ORDER BY session_zid ASC, sentence_index ASC").fetchall()
+        assert len(child_sents) >= 2
+        for s in child_sents:
+            clean_dst = s["sentence_destination"]
+            assert clean_dst in ("Первое предложение.", "Второе предложение."), f"Expected clean sentence_destination, got: {clean_dst}"
+
+        # Master session (multi) has joined sentences
+        restored_master = adapter.restore_session(test_zid)
+        assert restored_master["sentence_translation"] == "Первое предложение.\nВторое предложение."
+
+        # Child session 1 (single) has single clean sentence
+        restored_child1 = adapter.restore_session("20260822143001")
+        assert restored_child1["sentence_translation"] == "Первое предложение."
+
+        # Child session 2 (single) has single clean sentence
+        restored_child2 = adapter.restore_session("20260822143002")
+        assert restored_child2["sentence_translation"] == "Второе предложение."
+
