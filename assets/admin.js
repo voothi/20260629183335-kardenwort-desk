@@ -11,7 +11,17 @@ const state = {
     allSessions: [],
     deletedSessions: [],
     deletedProjects: [],
-    telemetry: null
+    telemetry: null,
+    sessionsExplorer: {
+        sessions: [],
+        totalCount: 0,
+        page: 1,
+        pageSize: 50,
+        query: '',
+        language: '',
+        assigned: '',
+        loading: false
+    }
 };
 
 // Helper: HTTP Request with API Token
@@ -66,11 +76,13 @@ document.addEventListener('DOMContentLoaded', () => {
     initAuthToken();
     initTabs();
     initModals();
+    initSessionsExplorer();
     initMaintenance();
     
     // Initial Load
     checkServerHealth();
     loadProjectTree();
+    loadSessionsExplorer();
     loadTrash();
     loadTelemetry();
 });
@@ -131,12 +143,14 @@ function initTabs() {
     });
 
     document.getElementById('btn-refresh-tree').addEventListener('click', loadProjectTree);
+    document.getElementById('btn-refresh-sessions').addEventListener('click', () => loadSessionsExplorer(true));
     document.getElementById('btn-refresh-trash').addEventListener('click', loadTrash);
     document.getElementById('btn-refresh-telemetry').addEventListener('click', loadTelemetry);
 }
 
 function refreshCurrentTab() {
     if (state.activeTab === 'tab-tree') loadProjectTree();
+    else if (state.activeTab === 'tab-sessions') loadSessionsExplorer();
     else if (state.activeTab === 'tab-trash') loadTrash();
     else if (state.activeTab === 'tab-telemetry') loadTelemetry();
 }
@@ -334,16 +348,20 @@ async function deleteProject(projectId, title) {
 function initModals() {
     const projectModal = document.getElementById('project-modal');
     const linkModal = document.getElementById('link-session-modal');
+    const assignModal = document.getElementById('assign-project-modal');
 
     document.getElementById('btn-new-root-project').addEventListener('click', () => openProjectModal());
     document.getElementById('btn-modal-close').addEventListener('click', () => projectModal.classList.add('hidden'));
     document.getElementById('btn-modal-cancel').addEventListener('click', () => projectModal.classList.add('hidden'));
-
     document.getElementById('btn-modal-save').addEventListener('click', saveProjectModal);
 
     document.getElementById('btn-link-modal-close').addEventListener('click', () => linkModal.classList.add('hidden'));
     document.getElementById('btn-link-modal-cancel').addEventListener('click', () => linkModal.classList.add('hidden'));
     document.getElementById('btn-link-modal-save').addEventListener('click', saveLinkSessionModal);
+
+    document.getElementById('btn-assign-modal-close').addEventListener('click', () => assignModal.classList.add('hidden'));
+    document.getElementById('btn-assign-modal-cancel').addEventListener('click', () => assignModal.classList.add('hidden'));
+    document.getElementById('btn-assign-modal-save').addEventListener('click', saveAssignProjectModal);
 }
 
 function openProjectModal(node = null, parentId = null) {
@@ -424,7 +442,7 @@ async function openLinkSessionModal(projectId) {
     modal.classList.remove('hidden');
 
     try {
-        const res = await apiFetch('/api/v1/admin/sessions');
+        const res = await apiFetch('/api/v1/admin/sessions?limit=200');
         const sessions = res.sessions || [];
         if (sessions.length === 0) {
             select.innerHTML = '<option value="">No sessions available</option>';
@@ -456,6 +474,228 @@ async function saveLinkSessionModal() {
         });
         showToast('Session linked', 'success');
         document.getElementById('link-session-modal').classList.add('hidden');
+        loadProjectTree();
+        loadSessionsExplorer();
+    } catch (e) {}
+}
+
+function flattenProjectTree(nodes, prefix = '') {
+    let result = [];
+    if (!nodes) return result;
+    for (const node of nodes) {
+        const label = prefix ? `${prefix} > ${node.title}` : node.title;
+        result.push({ id: node.id, label: label, title: node.title });
+        if (node.children && node.children.length > 0) {
+            result = result.concat(flattenProjectTree(node.children, label));
+        }
+    }
+    return result;
+}
+
+async function openAssignProjectModal(session) {
+    const modal = document.getElementById('assign-project-modal');
+    document.getElementById('assign-modal-session-zid').value = session.zid;
+    
+    const infoBox = document.getElementById('assign-modal-session-info');
+    infoBox.innerHTML = `<strong>${escapeHtml(session.zid)}</strong> &bull; <span>${escapeHtml(session.slug || 'untitled')}</span> <span class="text-muted">(${escapeHtml(session.source_language || '')})</span>`;
+
+    const select = document.getElementById('assign-project-select');
+    select.innerHTML = '<option value="">Loading projects...</option>';
+    modal.classList.remove('hidden');
+
+    try {
+        if (!state.projectTree || state.projectTree.length === 0) {
+            const res = await apiFetch('/api/v1/admin/projects');
+            state.projectTree = res.projects || [];
+        }
+        const flatProjects = flattenProjectTree(state.projectTree);
+        if (flatProjects.length === 0) {
+            select.innerHTML = '<option value="">No projects available - create a project first</option>';
+            return;
+        }
+        select.innerHTML = flatProjects.map(p => 
+            `<option value="${p.id}">${escapeHtml(p.label)}</option>`
+        ).join('');
+    } catch (e) {
+        select.innerHTML = '<option value="">Failed to load projects</option>';
+    }
+}
+
+async function saveAssignProjectModal() {
+    const sessionZid = document.getElementById('assign-modal-session-zid').value;
+    const projectId = document.getElementById('assign-project-select').value;
+
+    if (!projectId) {
+        showToast('Please select a target project', 'error');
+        return;
+    }
+
+    try {
+        await apiFetch('/api/v1/admin/projects/link', {
+            method: 'POST',
+            body: JSON.stringify({
+                project_id: parseInt(projectId),
+                session_zid: sessionZid
+            })
+        });
+        showToast('Session assigned to project', 'success');
+        document.getElementById('assign-project-modal').classList.add('hidden');
+        loadSessionsExplorer();
+        loadProjectTree();
+    } catch (e) {}
+}
+
+// ---------------------------------------------------------------------------
+// 5. Sessions Library Explorer
+// ---------------------------------------------------------------------------
+function initSessionsExplorer() {
+    const searchInput = document.getElementById('sessions-search-input');
+    const langFilter = document.getElementById('sessions-lang-filter');
+    const assignFilter = document.getElementById('sessions-assign-filter');
+    const prevBtn = document.getElementById('btn-sessions-prev');
+    const nextBtn = document.getElementById('btn-sessions-next');
+
+    let debounceTimer = null;
+    searchInput.addEventListener('input', () => {
+        clearTimeout(debounceTimer);
+        debounceTimer = setTimeout(() => {
+            state.sessionsExplorer.query = searchInput.value.trim();
+            state.sessionsExplorer.page = 1;
+            loadSessionsExplorer();
+        }, 300);
+    });
+
+    langFilter.addEventListener('change', () => {
+        state.sessionsExplorer.language = langFilter.value;
+        state.sessionsExplorer.page = 1;
+        loadSessionsExplorer();
+    });
+
+    assignFilter.addEventListener('change', () => {
+        state.sessionsExplorer.assigned = assignFilter.value;
+        state.sessionsExplorer.page = 1;
+        loadSessionsExplorer();
+    });
+
+    prevBtn.addEventListener('click', () => {
+        if (state.sessionsExplorer.page > 1) {
+            state.sessionsExplorer.page--;
+            loadSessionsExplorer();
+        }
+    });
+
+    nextBtn.addEventListener('click', () => {
+        const totalPages = Math.ceil(state.sessionsExplorer.totalCount / state.sessionsExplorer.pageSize) || 1;
+        if (state.sessionsExplorer.page < totalPages) {
+            state.sessionsExplorer.page++;
+            loadSessionsExplorer();
+        }
+    });
+}
+
+async function loadSessionsExplorer(force = false) {
+    const tbody = document.getElementById('sessions-table-body');
+    const prevBtn = document.getElementById('btn-sessions-prev');
+    const nextBtn = document.getElementById('btn-sessions-next');
+    const pageInfo = document.getElementById('sessions-page-info');
+    const totalInfo = document.getElementById('sessions-total-info');
+
+    const { page, pageSize, query, language, assigned } = state.sessionsExplorer;
+    const offset = (page - 1) * pageSize;
+
+    const params = new URLSearchParams();
+    params.set('limit', pageSize);
+    params.set('offset', offset);
+    if (query) params.set('query', query);
+    if (language) params.set('language', language);
+    if (assigned) params.set('assigned', assigned);
+
+    try {
+        tbody.innerHTML = '<tr><td colspan="7" class="loading-spinner">Loading sessions library...</td></tr>';
+        const res = await apiFetch(`/api/v1/admin/sessions?${params.toString()}`);
+        state.sessionsExplorer.sessions = res.sessions || [];
+        state.sessionsExplorer.totalCount = res.total_count || 0;
+
+        renderSessionsExplorerTable(state.sessionsExplorer.sessions);
+
+        const totalPages = Math.ceil(state.sessionsExplorer.totalCount / pageSize) || 1;
+        pageInfo.textContent = `Page ${page} of ${totalPages}`;
+        totalInfo.textContent = `Total: ${state.sessionsExplorer.totalCount} sessions`;
+        prevBtn.disabled = page <= 1;
+        nextBtn.disabled = page >= totalPages;
+    } catch (e) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">Failed to load sessions.</td></tr>';
+    }
+}
+
+function renderSessionsExplorerTable(sessions) {
+    const tbody = document.getElementById('sessions-table-body');
+    if (!sessions || sessions.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="empty-state">No matching sessions found.</td></tr>';
+        return;
+    }
+
+    tbody.innerHTML = '';
+    sessions.forEach(s => {
+        const tr = document.createElement('tr');
+
+        // Projects badge
+        let projectsHtml = '<span class="text-dim">—</span>';
+        if (s.projects && s.projects.length > 0) {
+            projectsHtml = s.projects.map(p => 
+                `<span class="project-tag" title="Project ID: ${p.id}">${escapeHtml(p.title)}</span>`
+            ).join(' ');
+        }
+
+        // Preview snippet
+        const rawPreview = s.source_raw_text ? (s.source_raw_text.length > 70 ? s.source_raw_text.substring(0, 70) + '...' : s.source_raw_text) : '';
+        const slugDisplay = s.slug || 'untitled';
+
+        tr.innerHTML = `
+            <td><code class="session-badge">${escapeHtml(s.zid)}</code></td>
+            <td>
+                <div class="session-cell-slug"><strong>${escapeHtml(slugDisplay)}</strong></div>
+                ${rawPreview ? `<div class="session-cell-preview text-muted">${escapeHtml(rawPreview)}</div>` : ''}
+            </td>
+            <td><span class="lang-tag">${escapeHtml(s.source_language || '—')}</span></td>
+            <td>${s.sentence_count ?? 0}</td>
+            <td>${s.word_count ?? s.token_count ?? 0}</td>
+            <td>${projectsHtml}</td>
+            <td>
+                <div class="table-actions">
+                    <button class="btn btn-secondary btn-sm btn-assign-proj" title="Assign to Project">+ Book</button>
+                    <button class="btn btn-secondary btn-sm btn-open-reader" title="Open in Reader">Open</button>
+                    <button class="btn btn-danger btn-sm btn-delete-sess" title="Delete Session">[Del]</button>
+                </div>
+            </td>
+        `;
+
+        tr.querySelector('.btn-assign-proj').addEventListener('click', () => openAssignProjectModal(s));
+        tr.querySelector('.btn-open-reader').addEventListener('click', () => openSessionInReader(s.zid));
+        tr.querySelector('.btn-delete-sess').addEventListener('click', () => deleteSessionFromLibrary(s.zid));
+
+        tbody.appendChild(tr);
+    });
+}
+
+function openSessionInReader(zid) {
+    let url = `/?session_zid=${encodeURIComponent(zid)}`;
+    if (state.token) {
+        url += `&token=${encodeURIComponent(state.token)}`;
+    }
+    window.open(url, '_blank');
+}
+
+async function deleteSessionFromLibrary(zid) {
+    if (!confirm(`Move session ${zid} to Recycle Bin?`)) return;
+    try {
+        await apiFetch('/api/v1/admin/sessions/delete', {
+            method: 'POST',
+            body: JSON.stringify({ session_zid: zid })
+        });
+        showToast('Session moved to Recycle Bin', 'success');
+        loadSessionsExplorer();
+        loadTrash();
         loadProjectTree();
     } catch (e) {}
 }

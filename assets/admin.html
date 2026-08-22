@@ -25,6 +25,7 @@
 
     <nav class="admin-nav">
         <button class="nav-tab active" data-tab="tab-tree">Project Tree</button>
+        <button class="nav-tab" data-tab="tab-sessions">Sessions Library</button>
         <button class="nav-tab" data-tab="tab-trash">Recycle Bin</button>
         <button class="nav-tab" data-tab="tab-maintenance">Database Maintenance</button>
         <button class="nav-tab" data-tab="tab-telemetry">Telemetry and Stats</button>
@@ -45,6 +46,62 @@
 
             <div class="tree-container" id="project-tree-container">
                 <div class="loading-spinner">Loading project tree...</div>
+            </div>
+        </section>
+
+        <!-- TAB 2: Sessions Library -->
+        <section id="tab-sessions" class="tab-pane">
+            <div class="section-toolbar sessions-toolbar">
+                <div class="toolbar-search">
+                    <input type="text" id="sessions-search-input" class="form-input" placeholder="Search by ZID, slug, or content..." />
+                </div>
+                <div class="toolbar-filters">
+                    <select id="sessions-lang-filter" class="form-input form-select">
+                        <option value="">All Languages</option>
+                        <option value="de">German (de)</option>
+                        <option value="en">English (en)</option>
+                        <option value="ru">Russian (ru)</option>
+                        <option value="fr">French (fr)</option>
+                    </select>
+                    <select id="sessions-assign-filter" class="form-input form-select">
+                        <option value="">All Sessions</option>
+                        <option value="unassigned">Unassigned Only</option>
+                        <option value="assigned">Assigned Only</option>
+                    </select>
+                    <button id="btn-refresh-sessions" class="btn btn-secondary">Refresh</button>
+                </div>
+            </div>
+
+            <div class="sessions-table-container">
+                <table class="data-table" id="sessions-data-table">
+                    <thead>
+                        <tr>
+                            <th style="width: 140px;">ZID</th>
+                            <th>Slug / Preview</th>
+                            <th style="width: 70px;">Lang</th>
+                            <th style="width: 70px;">Sentences</th>
+                            <th style="width: 70px;">Words</th>
+                            <th style="width: 180px;">Project</th>
+                            <th style="width: 180px;">Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="sessions-table-body">
+                        <tr>
+                            <td colspan="7" class="loading-spinner">Loading sessions library...</td>
+                        </tr>
+                    </tbody>
+                </table>
+            </div>
+
+            <div class="sessions-pagination-bar">
+                <div class="pagination-controls">
+                    <button id="btn-sessions-prev" class="btn btn-secondary btn-sm" disabled>&laquo; Prev</button>
+                    <span id="sessions-page-info" class="pagination-info">Page 1 of 1</span>
+                    <button id="btn-sessions-next" class="btn btn-secondary btn-sm" disabled>Next &raquo;</button>
+                </div>
+                <div class="pagination-stats" id="sessions-total-info">
+                    Total: 0 sessions
+                </div>
             </div>
         </section>
 
@@ -210,6 +267,33 @@
             <div class="modal-footer">
                 <button id="btn-link-modal-cancel" class="btn btn-secondary">Cancel</button>
                 <button id="btn-link-modal-save" class="btn btn-primary">Link</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for Assigning Session to Project (from Sessions Library) -->
+    <div id="assign-project-modal" class="modal-overlay hidden">
+        <div class="modal-card">
+            <div class="modal-header">
+                <h3>Assign Session to Project</h3>
+                <button class="modal-close" id="btn-assign-modal-close">[x]</button>
+            </div>
+            <div class="modal-body">
+                <input type="hidden" id="assign-modal-session-zid" />
+                <div class="form-group">
+                    <label>Session</label>
+                    <div id="assign-modal-session-info" class="session-info-display">--</div>
+                </div>
+                <div class="form-group">
+                    <label for="assign-project-select">Target Project / Chapter <span class="req">*</span></label>
+                    <select id="assign-project-select" class="form-input">
+                        <option value="">Loading projects...</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-assign-modal-cancel" class="btn btn-secondary">Cancel</button>
+                <button id="btn-assign-modal-save" class="btn btn-primary">Assign</button>
             </div>
         </div>
     </div>

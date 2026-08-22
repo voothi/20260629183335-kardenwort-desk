@@ -1355,10 +1355,49 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             self._authenticate_token(query_params=qs)
+            
+            query = qs.get('query', [None])[0] or qs.get('q', [None])[0]
+            language = qs.get('language', [None])[0] or qs.get('lang', [None])[0]
+            assigned_raw = qs.get('assigned', [None])[0]
+            project_id_raw = qs.get('project_id', [None])[0]
+            limit_raw = qs.get('limit', ['50'])[0]
+            offset_raw = qs.get('offset', ['0'])[0]
+
+            limit = int(limit_raw) if limit_raw and limit_raw.isdigit() else 50
+            offset = int(offset_raw) if offset_raw and offset_raw.isdigit() else 0
+            project_id = int(project_id_raw) if project_id_raw and project_id_raw.isdigit() else None
+
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
-            sessions = db.list_sessions(include_deleted=False)
-            self._send_json(200, {"ok": True, "sessions": sessions})
+            sessions, total_count = db.search_sessions(
+                query=query,
+                language=language,
+                assigned=assigned_raw,
+                project_id=project_id,
+                limit=limit,
+                offset=offset,
+            )
+            self._send_json(200, {
+                "ok": True,
+                "sessions": sessions,
+                "total_count": total_count,
+                "limit": limit,
+                "offset": offset,
+            })
+            return
+
+        if path == '/api/v1/admin/sessions/delete':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            session_zid = body.get('session_zid') or body.get('zid')
+            if not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            ok = db.soft_delete_session(str(session_zid))
+            self._send_json(200, {"ok": ok, "session_zid": session_zid})
             return
 
         # 7. Admin Trash & Soft Deletion Endpoints

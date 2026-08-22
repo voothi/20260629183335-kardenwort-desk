@@ -660,3 +660,108 @@ body {
 
 .toast.success { border-color: var(--accent-green); }
 .toast.error { border-color: var(--border-color); }
+
+/* --------------------------------------------------------------------------
+   Sessions Library Explorer
+   -------------------------------------------------------------------------- */
+.sessions-toolbar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+}
+
+.toolbar-search {
+    flex: 1;
+    min-width: 260px;
+}
+
+.toolbar-search .form-input {
+    width: 100%;
+}
+
+.toolbar-filters {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.form-select {
+    cursor: pointer;
+}
+
+.sessions-table-container {
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    margin-bottom: 8px;
+    overflow-x: auto;
+}
+
+.session-cell-slug {
+    font-size: 12px;
+    color: var(--text-main);
+}
+
+.session-cell-preview {
+    font-size: 11px;
+    margin-top: 2px;
+    max-width: 480px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lang-tag {
+    font-family: var(--font-mono);
+    font-size: 10px;
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    padding: 1px 4px;
+    border-radius: var(--radius-sm);
+    text-transform: uppercase;
+}
+
+.project-tag {
+    font-size: 11px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-subtle);
+    padding: 1px 5px;
+    border-radius: var(--radius-sm);
+    color: #58a6ff;
+    display: inline-block;
+}
+
+.table-actions {
+    display: flex;
+    align-items: center;
+    gap: 4px;
+}
+
+.sessions-pagination-bar {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    padding: 4px 2px;
+}
+
+.pagination-controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pagination-info,
+.pagination-stats {
+    font-size: 11px;
+    font-family: var(--font-mono);
+    color: var(--text-muted);
+}
+
+.session-info-display {
+    background: var(--bg-primary);
+    border: 1px solid var(--border-subtle);
+    padding: 6px 8px;
+    font-size: 12px;
+    border-radius: var(--radius-sm);
+}

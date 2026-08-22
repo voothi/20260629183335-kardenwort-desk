@@ -768,6 +768,122 @@ class KardenwortDB:
             cursor.execute(sql, params)
             return [dict(r) for r in cursor.fetchall()]
 
+    def search_sessions(
+        self,
+        query: Optional[str] = None,
+        language: Optional[str] = None,
+        assigned: Optional[Union[bool, str]] = None,
+        project_id: Optional[int] = None,
+        limit: int = 50,
+        offset: int = 0,
+        include_deleted: bool = False,
+        zid: Optional[str] = None,
+    ) -> Tuple[List[Dict[str, Any]], int]:
+        """
+        Retrieves paginated sessions matching search query, language, project_id, and assignment status,
+        along with sentence_count, word_count, and linked projects.
+        Returns (sessions_list, total_count).
+        """
+        conditions: List[str] = []
+        params: List[Any] = []
+
+        if not include_deleted:
+            conditions.append("s.deleted_at IS NULL")
+
+        if query and query.strip():
+            clean_q = f"%{query.strip()}%"
+            conditions.append("(s.zid LIKE ? OR s.slug LIKE ? OR s.source_raw_text LIKE ?)")
+            params.extend([clean_q, clean_q, clean_q])
+
+        if language and language.strip() and language.strip().lower() != "all":
+            conditions.append("s.source_language = ?")
+            params.append(language.strip())
+
+        if project_id is not None:
+            conditions.append("EXISTS (SELECT 1 FROM project_sessions ps WHERE ps.session_zid = s.zid AND ps.project_id = ?)")
+            params.append(project_id)
+
+        if assigned is not None:
+            if isinstance(assigned, bool):
+                is_assigned = assigned
+            else:
+                str_assigned = str(assigned).strip().lower()
+                if str_assigned in ("true", "1", "assigned"):
+                    is_assigned = True
+                elif str_assigned in ("false", "0", "unassigned"):
+                    is_assigned = False
+                else:
+                    is_assigned = None
+
+            if is_assigned is True:
+                conditions.append("EXISTS (SELECT 1 FROM project_sessions ps WHERE ps.session_zid = s.zid)")
+            elif is_assigned is False:
+                conditions.append("NOT EXISTS (SELECT 1 FROM project_sessions ps WHERE ps.session_zid = s.zid)")
+
+        where_clause = f"WHERE {' AND '.join(conditions)}" if conditions else ""
+
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            # 1. Count total matching sessions
+            count_sql = f"SELECT COUNT(*) FROM sessions s {where_clause};"
+            cursor.execute(count_sql, params)
+            total_count = cursor.fetchone()[0]
+
+            if total_count == 0:
+                return [], 0
+
+            # 2. Fetch paginated session records with sentence and word counts
+            data_sql = f"""
+                SELECT 
+                    s.zid, 
+                    s.slug, 
+                    s.source_language, 
+                    s.target_language, 
+                    s.text_mode, 
+                    s.source_raw_text,
+                    s.created_at, 
+                    s.updated_at,
+                    s.deleted_at,
+                    (SELECT COUNT(*) FROM sentences sn WHERE sn.session_zid = s.zid) AS sentence_count,
+                    (SELECT COUNT(*) FROM words w WHERE w.session_zid = s.zid) AS word_count
+                FROM sessions s
+                {where_clause}
+                ORDER BY s.created_at DESC
+                LIMIT ? OFFSET ?;
+            """
+            fetch_params = list(params) + [limit, offset]
+            cursor.execute(data_sql, fetch_params)
+            sessions = [dict(r) for r in cursor.fetchall()]
+
+            # 3. Batch attach linked projects for the fetched sessions
+            if sessions:
+                session_zids = [s["zid"] for s in sessions]
+                placeholders = ",".join(["?"] * len(session_zids))
+                proj_sql = f"""
+                    SELECT ps.session_zid, p.id, p.title, p.slug, p.parent_id
+                    FROM project_sessions ps
+                    JOIN projects p ON ps.project_id = p.id
+                    WHERE ps.session_zid IN ({placeholders}) AND p.deleted_at IS NULL
+                    ORDER BY p.order_index ASC, p.id ASC;
+                """
+                cursor.execute(proj_sql, session_zids)
+                proj_rows = cursor.fetchall()
+                proj_map: Dict[str, List[Dict[str, Any]]] = {}
+                for pr in proj_rows:
+                    sz = pr["session_zid"]
+                    proj_map.setdefault(sz, []).append({
+                        "id": pr["id"],
+                        "title": pr["title"],
+                        "slug": pr["slug"],
+                        "parent_id": pr["parent_id"],
+                    })
+
+                for s in sessions:
+                    s["projects"] = proj_map.get(s["zid"], [])
+                    s["token_count"] = s["word_count"]
+
+            return sessions, total_count
+
     def soft_delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
         Soft-deletes a session by setting deleted_at to current timestamp.

@@ -131,7 +131,7 @@ def test_admin_html_and_assets_serving(admin_controller_server):
     status, html_content = make_admin_request(url, "/admin")
     assert status == 200
     assert "Kardenwort Desk Admin" in html_content
-    assert "<title>Kardenwort Admin Panel</title>" in html_content
+    assert "<title>Kardenwort Desk Admin</title>" in html_content
 
     # 2. GET /assets/admin.css
     status, css_content = make_admin_request(url, "/assets/admin.css")
@@ -270,3 +270,89 @@ def test_admin_database_maintenance_suite(admin_controller_server):
     assert "active_sessions" in db_telemetry
     assert "total_projects" in db_telemetry
     assert db_telemetry["integrity_ok"] is True
+
+
+def test_admin_sessions_explorer_api(admin_controller_server):
+    url, _, db, root_id, child_id, sess_zid = admin_controller_server
+
+    # Create unassigned session for testing filters
+    unassigned_zid = "20260821200088"
+    db.insert_session({
+        "zid": unassigned_zid,
+        "raw_text": "Ein unassigned session text",
+        "clean_text": "Ein unassigned session text",
+        "source_language": "de",
+        "target_language": "en",
+        "text_mode": "single",
+        "slug": "standalone-test"
+    })
+    db.insert_sentence({
+        "session_zid": unassigned_zid,
+        "sentence_index": 0,
+        "sentence_source": "Ein unassigned session text",
+        "sentence_destination": "An unassigned session text"
+    })
+    db.insert_word({
+        "session_zid": unassigned_zid,
+        "sentence_index": 0,
+        "token_order": 0,
+        "quotation": "Ein",
+        "lemma": "ein"
+    })
+
+    # 1. GET /api/v1/admin/sessions (default limit)
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions")
+    assert status == 200
+    assert resp["ok"] is True
+    assert "sessions" in resp
+    assert "total_count" in resp
+    assert resp["total_count"] >= 2
+    
+    # Check session structure
+    sess_item = next(s for s in resp["sessions"] if s["zid"] == unassigned_zid)
+    assert sess_item["slug"] == "standalone-test"
+    assert sess_item["source_language"] == "de"
+    assert sess_item["sentence_count"] == 1
+    assert sess_item["word_count"] == 1
+    assert sess_item["projects"] == []
+
+    assigned_item = next(s for s in resp["sessions"] if s["zid"] == sess_zid)
+    assert len(assigned_item["projects"]) >= 1
+    assert assigned_item["projects"][0]["id"] == child_id
+
+    # 2. Search query filter
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions?query=standalone-test")
+    assert status == 200
+    assert resp["total_count"] == 1
+    assert resp["sessions"][0]["zid"] == unassigned_zid
+
+    # 3. Language filter
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions?language=de")
+    assert status == 200
+    assert all(s["source_language"] == "de" for s in resp["sessions"])
+
+    # 4. Assigned filter
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions?assigned=unassigned")
+    assert status == 200
+    zids = [s["zid"] for s in resp["sessions"]]
+    assert unassigned_zid in zids
+    assert sess_zid not in zids
+
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions?assigned=assigned")
+    assert status == 200
+    zids = [s["zid"] for s in resp["sessions"]]
+    assert sess_zid in zids
+    assert unassigned_zid not in zids
+
+    # 5. POST /api/v1/admin/sessions/delete
+    status, resp = make_admin_request(url, "/api/v1/admin/sessions/delete", method="POST", body={
+        "session_zid": unassigned_zid
+    })
+    assert status == 200
+    assert resp["ok"] is True
+
+    # Confirm soft-deleted
+    status, resp = make_admin_request(url, f"/api/v1/admin/sessions?query={unassigned_zid}")
+    assert status == 200
+    assert resp["total_count"] == 0
+
