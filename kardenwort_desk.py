@@ -3671,6 +3671,82 @@ def aggregate_project_materials(
     }
 
 
+def sort_rows_by_frequency(
+    data_rows: List[List[str]],
+    headers: List[str],
+    lang: str,
+    config: Optional[Any],
+    resolved_paths: Optional[Dict[str, Any]],
+    role_fields: Optional[Dict[str, Any]] = None,
+) -> List[List[str]]:
+    """
+    Sorts data rows globally by word frequency ranking in the configured language frequency dictionary index.
+    Known words are ordered by increasing frequency rank index (top 1 to N), followed by unranked words.
+    """
+    if not data_rows or not headers:
+        return data_rows
+
+    lemma_col = role_fields.get('lemma', 'WordSource') if isinstance(role_fields, dict) else 'WordSource'
+    col_lemma = headers.index(lemma_col) if lemma_col in headers else -1
+    if col_lemma == -1:
+        return data_rows
+
+    lemmas_to_sort = sorted(list(set(
+        row[col_lemma].strip()
+        for row in data_rows
+        if len(row) > col_lemma and row[col_lemma].strip()
+    )))
+    if not lemmas_to_sort:
+        return data_rows
+
+    try:
+        python_exe = resolved_paths.get('kardenwort_python') if resolved_paths else None
+        kardenwort_workspace = resolved_paths.get('kardenwort_workspace') if resolved_paths else None
+        if not python_exe or not kardenwort_workspace:
+            return data_rows
+
+        kardenwort_script = Path(kardenwort_workspace) / "src" / "kardenwort" / "core" / "kardenwort.py"
+        lemma_index_rel = config.get(SEC_LANGUAGES, f'{lang}_lemma_index', fallback="") if config and hasattr(config, "get") else ""
+        if not lemma_index_rel:
+            return data_rows
+
+        lemma_index_file = Path(kardenwort_workspace) / lemma_index_rel
+        if not lemma_index_file.exists():
+            return data_rows
+
+        cmd = [
+            str(python_exe),
+            str(kardenwort_script),
+            "--type", "sort-frequency",
+            "--language", lang,
+            "--lemma-index-file", str(lemma_index_file)
+        ]
+        stdin_data = "\n".join(lemmas_to_sort)
+        res = subprocess.run(
+            cmd,
+            input=stdin_data,
+            capture_output=True,
+            text=True,
+            encoding='utf-8',
+            check=True
+        )
+        sorted_lemmas = [line.strip() for line in res.stdout.splitlines() if line.strip()]
+        sorted_order = {word.lower(): idx for idx, word in enumerate(sorted_lemmas)}
+
+        sorted_rows = list(data_rows)
+        sorted_rows.sort(
+            key=lambda r: (
+                r[col_lemma].strip().lower() not in sorted_order if len(r) > col_lemma else True,
+                sorted_order.get(r[col_lemma].strip().lower(), 0) if len(r) > col_lemma else 0,
+                r[col_lemma].strip().lower() if len(r) > col_lemma else ""
+            )
+        )
+        return sorted_rows
+    except Exception as sort_err:
+        logger.warning(f"Failed to sort rows by frequency: {sort_err}")
+        return data_rows
+
+
 def synthesize_project_materials(
     project_id: int,
     db: Optional[Any] = None,
@@ -3816,6 +3892,7 @@ def synthesize_project_materials(
         ]
 
     combined_text = "\n\n".join(t for t in source_texts if t.strip())
+    all_data_rows = sort_rows_by_frequency(all_data_rows, headers, lang, config, resolved_paths)
 
     return {
         "ok": True,
@@ -6802,6 +6879,7 @@ html, body {{
     main_text_provider = text_base_provider
     lemma_base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
     role_fields = get_role_fields(mapping, headers)
+    data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -10720,6 +10798,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
+    data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
 
     effective_server_enabled = server_enabled or goldendict.get('server_enabled', False)
     effective_api_token = api_token or goldendict.get('server_api_key', '')
@@ -14100,52 +14179,14 @@ def cmd_merge(args):
 
             # Sort by frequency if requested
             if sort_frequency:
-                lemma_col = role_fields.get('lemma', 'WordSource') if isinstance(role_fields, dict) else 'WordSource'
-                col_lemma = first_headers.index(lemma_col) if lemma_col in first_headers else -1
-                if col_lemma != -1:
-                    lemmas_to_sort = sorted(list(set(row[col_lemma].strip() for row in all_data_rows if len(row) > col_lemma and row[col_lemma].strip())))
-                    if lemmas_to_sort:
-                        try:
-                            python_exe = resolved_paths['kardenwort_python']
-                            kardenwort_workspace = resolved_paths['kardenwort_workspace']
-                            kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
-                            
-                            lemma_index_rel = config.get(SEC_LANGUAGES, f'{lang}_lemma_index', fallback="")
-                            if lemma_index_rel:
-                                lemma_index_file = kardenwort_workspace / lemma_index_rel
-                                cmd = [
-                                    str(python_exe),
-                                    str(kardenwort_script),
-                                    "--type", "sort-frequency",
-                                    "--language", lang,
-                                    "--lemma-index-file", str(lemma_index_file)
-                                ]
-                                stdin_data = "\n".join(lemmas_to_sort)
-                                logger.info(f"Sorting {len(lemmas_to_sort)} lemmas via core sort-frequency")
-                                res = subprocess.run(
-                                    cmd,
-                                    input=stdin_data,
-                                    capture_output=True,
-                                    text=True,
-                                    encoding='utf-8',
-                                    check=True
-                                )
-                                sorted_lemmas = [line.strip() for line in res.stdout.splitlines() if line.strip()]
-                                sorted_order = {word.lower(): idx for idx, word in enumerate(sorted_lemmas)}
-                                
-                                all_data_rows.sort(
-                                    key=lambda r: (
-                                        r[col_lemma].strip().lower() not in sorted_order,
-                                        sorted_order.get(r[col_lemma].strip().lower(), 0),
-                                        r[col_lemma].strip().lower()
-                                    )
-                                )
-                            else:
-                                logger.warning(f"No lemma index file configured for language '{lang}', skipping frequency sort.")
-                        except Exception as sort_err:
-                            stderr_str = getattr(sort_err, 'stderr', '')
-                            stdout_str = getattr(sort_err, 'stdout', '')
-                            logger.error(f"Failed to sort lemmas by frequency: {sort_err}. Stderr: {stderr_str}. Stdout: {stdout_str}")
+                all_data_rows = sort_rows_by_frequency(
+                    all_data_rows,
+                    first_headers,
+                    lang,
+                    config,
+                    resolved_paths,
+                    role_fields=role_fields,
+                )
 
             written_txt_paths = set()
             try:

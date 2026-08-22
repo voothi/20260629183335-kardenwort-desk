@@ -530,3 +530,78 @@ def test_cli_project_reader_integration(temp_project_env, monkeypatch):
     cmd_restore(args_restore)
 
 
+def test_synthesize_project_materials_frequency_sorting(temp_project_env, monkeypatch):
+    from kardenwort_desk import synthesize_project_materials, sort_rows_by_frequency
+
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    tmp_path = temp_project_env["tmp_path"]
+    resolved_paths = dict(temp_project_env["resolved_paths"])
+    resolved_paths["kardenwort_workspace"] = tmp_path
+    resolved_paths["kardenwort_python"] = "python"
+
+    # Mock subprocess for sort-frequency returning a deterministic frequency order: 'the', 'button', 'attribute', 'modal'
+    def mock_subprocess_run(cmd, input, capture_output, text, encoding, check):
+        from types import SimpleNamespace
+        order = ["the", "button", "attribute", "modal"]
+        words = [w.strip() for w in input.splitlines() if w.strip()]
+        sorted_w = sorted(words, key=lambda x: order.index(x.lower()) if x.lower() in order else 999)
+        return SimpleNamespace(stdout="\n".join(sorted_w) + "\n")
+
+    monkeypatch.setattr("subprocess.run", mock_subprocess_run)
+
+    pid = db.create_project(title="Freq Project", slug="freq-project")
+    sid1 = "20260822130001"
+    sid2 = "20260822130002"
+
+    adapter.save_session(
+        session_zid=sid1,
+        slug="sess1",
+        source_language="en",
+        source_raw_text="Sentence 1",
+        headers=["Quotation", "WordSource", "DeskSelected", "SentenceSource", "SentenceSourceIndex", "Deck"],
+        data_rows=[
+            ["modal", "modal", "1", "Sentence 1", "1", ""],
+            ["attribute", "attribute", "1", "Sentence 1", "1", ""],
+        ],
+    )
+    adapter.save_session(
+        session_zid=sid2,
+        slug="sess2",
+        source_language="en",
+        source_raw_text="Sentence 2",
+        headers=["Quotation", "WordSource", "DeskSelected", "SentenceSource", "SentenceSourceIndex", "Deck"],
+        data_rows=[
+            ["the", "the", "1", "Sentence 2", "1", ""],
+            ["button", "button", "1", "Sentence 2", "1", ""],
+        ],
+    )
+
+    db.link_session_to_project(pid, sid1, order_index=0)
+    db.link_session_to_project(pid, sid2, order_index=1)
+
+    import configparser
+    cfg = configparser.ConfigParser()
+    cfg.add_section("languages")
+    cfg.set("languages", "en_lemma_index", "data/en/freq.csv")
+
+    # Ensure fake lemma index exists
+    freq_dir = tmp_path / "data" / "en"
+    freq_dir.mkdir(parents=True, exist_ok=True)
+    (freq_dir / "freq.csv").write_text("the\nbutton\nattribute\nmodal\n", encoding="utf-8")
+
+    synthesized = synthesize_project_materials(
+        project_id=pid,
+        db=db,
+        config=cfg,
+        resolved_paths=resolved_paths,
+        language="en",
+    )
+
+    assert synthesized["ok"] is True
+    lemmas = [r[1] for r in synthesized["data_rows"]]
+    # Expected order: the (#0), button (#1), attribute (#2), modal (#3)
+    assert lemmas == ["the", "button", "attribute", "modal"]
+
+
+
