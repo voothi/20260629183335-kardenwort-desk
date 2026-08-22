@@ -1835,6 +1835,128 @@ class KardenwortDB:
             cursor.execute("DELETE FROM words WHERE id = ?;", (word_id,))
             return cursor.rowcount > 0
 
+    def batch_update_words(
+        self,
+        session_zid: str,
+        updates_list: List[Dict[str, Any]],
+        zid: Optional[str] = None,
+    ) -> int:
+        """
+        Batch update word fields across multiple rows in a single atomic SQL transaction.
+        Handles direct columns (lemma, word_destination, morphology, ipa, etc.) as well
+        as dynamic custom fields stored in extra_fields JSON.
+        """
+        if not updates_list:
+            return 0
+
+        field_mapping = {
+            "quotation": "quotation",
+            "wordsource": "lemma",
+            "lemma": "lemma",
+            "wordsourceinflectedform": "inflected_form",
+            "inflectedform": "inflected_form",
+            "inflected_form": "inflected_form",
+            "worddestination": "word_destination",
+            "word_destination": "word_destination",
+            "worddestinationinflectedform": "word_destination_inflected",
+            "word_destination_inflected": "word_destination_inflected",
+            "wordsourcemorphologyai": "morphology",
+            "morphologyai": "morphology",
+            "morphology": "morphology",
+            "wordsourceipa": "ipa",
+            "ipa": "ipa",
+            "deskselected": "selected",
+            "selected": "selected",
+            "leitnerbox": "leitner_box",
+            "leitner_box": "leitner_box",
+            "leitnerdue": "leitner_due",
+            "leitner_due": "leitner_due",
+            "deck": "deck",
+            "classificationoxford": "classification_oxford",
+            "classification_oxford": "classification_oxford",
+            "classificationgoethe": "classification_goethe",
+            "classificationgoethe": "classification_goethe",
+            "pos": "pos",
+        }
+
+        updated_count = 0
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            for item in updates_list:
+                token_order = item.get("token_order")
+                sentence_idx = item.get("sentence_index")
+                word_id = item.get("id")
+
+                field_updates = {}
+                if "updates" in item and isinstance(item["updates"], dict):
+                    field_updates = item["updates"]
+                elif "field" in item and "value" in item:
+                    field_updates = {item["field"]: item["value"]}
+
+                if not field_updates:
+                    continue
+
+                direct_cols: Dict[str, Any] = {}
+                custom_fields: Dict[str, Any] = {}
+
+                for f_k, f_v in field_updates.items():
+                    f_norm = f_k.strip().lower().replace("_", "")
+                    if f_norm in field_mapping and f_norm not in ("wordsource2", "wordsourceinflectedform2"):
+                        col_name = field_mapping[f_norm]
+                        if col_name == "selected":
+                            direct_cols[col_name] = 1 if str(f_v).strip() in ("1", "true", "True") else 0
+                        elif col_name == "leitner_box":
+                            try:
+                                direct_cols[col_name] = int(f_v)
+                            except (ValueError, TypeError):
+                                direct_cols[col_name] = 1
+                        else:
+                            direct_cols[col_name] = f_v
+                    else:
+                        custom_fields[f_k] = f_v
+
+                if direct_cols:
+                    set_clauses = [f"{c} = ?" for c in direct_cols.keys()]
+                    params = list(direct_cols.values())
+                    if word_id is not None:
+                        params.append(word_id)
+                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE id = ?;", params)
+                    elif sentence_idx is not None and token_order is not None:
+                        params.extend([session_zid, sentence_idx, token_order])
+                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;", params)
+                    elif token_order is not None:
+                        params.extend([session_zid, token_order])
+                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE session_zid = ? AND token_order = ?;", params)
+                    if cursor.rowcount > 0:
+                        updated_count += cursor.rowcount
+
+                if custom_fields:
+                    if word_id is not None:
+                        cursor.execute("SELECT id, extra_fields FROM words WHERE id = ?;", (word_id,))
+                    elif sentence_idx is not None and token_order is not None:
+                        cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;", (session_zid, sentence_idx, token_order))
+                    elif token_order is not None:
+                        cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, token_order))
+                    row = cursor.fetchone()
+                    if row:
+                        w_id = row["id"]
+                        raw_ef = row["extra_fields"]
+                        ef_dict = {}
+                        if raw_ef:
+                            if isinstance(raw_ef, dict):
+                                ef_dict = dict(raw_ef)
+                            elif isinstance(raw_ef, str):
+                                try:
+                                    ef_dict = json.loads(raw_ef)
+                                except Exception:
+                                    ef_dict = {}
+                        ef_dict.update(custom_fields)
+                        cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (self._serialize_extra_fields(ef_dict), w_id))
+                        if not direct_cols and cursor.rowcount > 0:
+                            updated_count += cursor.rowcount
+
+        return updated_count
+
     # ---------------------------------------------------------------------------
     # Atomic Session Bundle Operations
     # ---------------------------------------------------------------------------

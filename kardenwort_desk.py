@@ -3063,112 +3063,76 @@ class SqliteStorageAdapter(StorageAdapter):
         """
         Batch update word fields across multiple rows in a single atomic SQL transaction.
         """
-        if not updates_list:
-            return 0
+        return self.db.batch_update_words(session_zid, updates_list, zid=zid)
 
-        field_mapping = {
-            "quotation": "quotation",
-            "wordsource": "lemma",
-            "lemma": "lemma",
-            "wordsourceinflectedform": "inflected_form",
-            "inflectedform": "inflected_form",
-            "inflected_form": "inflected_form",
-            "worddestination": "word_destination",
-            "word_destination": "word_destination",
-            "worddestinationinflectedform": "word_destination_inflected",
-            "word_destination_inflected": "word_destination_inflected",
-            "wordsourcemorphologyai": "morphology",
-            "morphology": "morphology",
-            "wordsourceipa": "ipa",
-            "ipa": "ipa",
-            "deskselected": "selected",
-            "selected": "selected",
-            "leitnerbox": "leitner_box",
-            "leitner_box": "leitner_box",
-            "leitnerdue": "leitner_due",
-            "leitner_due": "leitner_due",
-            "deck": "deck",
-            "classificationoxford": "classification_oxford",
-            "classification_oxford": "classification_oxford",
-            "classificationgoethe": "classification_goethe",
-            "classification_goethe": "classification_goethe",
-            "pos": "pos",
-        }
+    def enrich_session_intellifiller(
+        self,
+        session_zid: str,
+        prompt_name: str,
+        selected_rows: Optional[List[int]] = None,
+        reprocess: bool = False,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> bool:
+        """
+        Enriches a SQLite session using IntelliFiller via ephemeral scratch payload,
+        ingesting enriched tokens directly into SQLite words & extra_fields without
+        leaving persistent TSV files in results/.
+        """
+        zid = zid or session_zid
+        restored = self.restore_session(session_zid)
+        comments = restored.get("comments", [])
+        headers = restored.get("headers", [])
+        data_rows = restored.get("data_rows", [])
+        db_words = restored.get("words", [])
 
-        updated_count = 0
-        with self.db.get_connection(zid=zid) as conn:
-            cursor = conn.cursor()
-            for item in updates_list:
-                token_order = item.get("token_order")
-                sentence_idx = item.get("sentence_index")
-                word_id = item.get("id")
+        if not data_rows:
+            return True
 
-                field_updates = {}
-                if "updates" in item and isinstance(item["updates"], dict):
-                    field_updates = item["updates"]
-                elif "field" in item and "value" in item:
-                    field_updates = {item["field"]: item["value"]}
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_tsv_path = Path(temp_dir) / f"{session_zid}-ephemeral.tsv"
+            self._tsv_fallback.save_tsv_rows_safely(temp_tsv_path, comments, headers, data_rows)
 
-                if not field_updates:
-                    continue
+            success = run_headless_intellifiller(
+                tsv_path=temp_tsv_path,
+                prompt_name=prompt_name,
+                config=self.config,
+                resolved_paths=self.resolved_paths,
+                selected_rows=selected_rows,
+                reprocess=reprocess,
+                zid=zid,
+                trace_id=trace_id,
+            )
 
-                direct_cols: Dict[str, Any] = {}
-                custom_fields: Dict[str, Any] = {}
+            if success and temp_tsv_path.exists():
+                _, updated_headers, updated_rows = load_tsv_rows(temp_tsv_path)
+                updates_list = []
+                for row_idx, r in enumerate(updated_rows):
+                    if selected_rows is not None and row_idx not in selected_rows:
+                        continue
+                    row_updates = {}
+                    for col_idx, h in enumerate(updated_headers):
+                        if col_idx < len(r):
+                            row_updates[h] = r[col_idx]
 
-                for f_k, f_v in field_updates.items():
-                    f_norm = f_k.strip().lower().replace("_", "")
-                    if f_norm in field_mapping and f_norm not in ("wordsource2", "wordsourceinflectedform2"):
-                        col_name = field_mapping[f_norm]
-                        if col_name == "selected":
-                            direct_cols[col_name] = 1 if str(f_v).strip() in ("1", "true", "True") else 0
-                        elif col_name == "leitner_box":
-                            try:
-                                direct_cols[col_name] = int(f_v)
-                            except (ValueError, TypeError):
-                                direct_cols[col_name] = 1
-                        else:
-                            direct_cols[col_name] = f_v
+                    if row_idx < len(db_words):
+                        w_id = db_words[row_idx].get("id")
+                        updates_list.append({
+                            "id": w_id,
+                            "token_order": db_words[row_idx].get("token_order", row_idx),
+                            "sentence_index": db_words[row_idx].get("sentence_index", 1),
+                            "updates": row_updates,
+                        })
                     else:
-                        custom_fields[f_k] = f_v
+                        updates_list.append({
+                            "token_order": row_idx,
+                            "updates": row_updates,
+                        })
 
-                if direct_cols:
-                    set_clauses = [f"{c} = ?" for c in direct_cols.keys()]
-                    params = list(direct_cols.values())
-                    if word_id is not None:
-                        params.append(word_id)
-                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE id = ?;", params)
-                    elif sentence_idx is not None and token_order is not None:
-                        params.extend([session_zid, sentence_idx, token_order])
-                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;", params)
-                    elif token_order is not None:
-                        params.extend([session_zid, token_order])
-                        cursor.execute(f"UPDATE words SET {', '.join(set_clauses)} WHERE session_zid = ? AND token_order = ?;", params)
-                    if cursor.rowcount > 0:
-                        updated_count += cursor.rowcount
+                if updates_list:
+                    self.db.batch_update_words(session_zid, updates_list, zid=zid)
 
-                if custom_fields:
-                    if word_id is not None:
-                        cursor.execute("SELECT id, extra_fields FROM words WHERE id = ?;", (word_id,))
-                    elif sentence_idx is not None and token_order is not None:
-                        cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;", (session_zid, sentence_idx, token_order))
-                    elif token_order is not None:
-                        cursor.execute("SELECT id, extra_fields FROM words WHERE session_zid = ? AND token_order = ?;", (session_zid, token_order))
-                    row = cursor.fetchone()
-                    if row:
-                        w_id = row["id"]
-                        raw_ef = row["extra_fields"]
-                        ef_dict = {}
-                        if raw_ef:
-                            try:
-                                ef_dict = json.loads(raw_ef)
-                            except Exception:
-                                ef_dict = {}
-                        ef_dict.update(custom_fields)
-                        cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (json.dumps(ef_dict, ensure_ascii=False), w_id))
-                        if not direct_cols and cursor.rowcount > 0:
-                            updated_count += cursor.rowcount
-
-        return updated_count
+            return success
 
     def delete_session(self, session_zid: str, zid: Optional[str] = None) -> bool:
         """
@@ -5008,75 +4972,83 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
 
         python_exe = resolved_paths['kardenwort_python']
         headless_script = resolved_paths['intellifiller_headless']
-        
-        cmd = [
-            str(python_exe),
-            str(headless_script),
-            "--tsv", str(tsv_path),
-            "--prompt", prompt_name,
-        ]
-    if reprocess:
-        cmd.append("--reprocess")
-    if zid:
-        cmd.extend(["--zid", str(zid)])
-    if trace_id:
-        cmd.extend(["--trace-id", str(trace_id)])
-    
-    if selected_rows:
-        rows_str = ",".join(str(r) for r in selected_rows)
-        cmd.extend(["--selected-rows", rows_str])
-        
-    try:
-        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        headers = []
-        with open(tsv_path, 'r', encoding='utf-8') as f:
-            for line in f:
-                if not line.startswith('#'):
-                    headers = [h.strip() for h in line.split('\t')]
-                    break
-        role_fields = get_role_fields(mapping, headers)
-        target_field = role_fields.get('word_translation', 'WordDestination')
-        if target_field:
-            cmd.extend(["--target-field", target_field])
-    except Exception:
-        pass
-    
-    timeout = config.getint(SEC_TIMEOUTS, 'intellifiller_timeout', fallback=120)
-    logger.info(f"Running headless IntelliFiller command: {' '.join(cmd)}")
-    
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
-    if res.returncode == 0:
-        logger.info("Headless IntelliFiller finished successfully.")
-        return True
-    else:
-        parsed_err = None
-        combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
-        for line in reversed(combined_output.strip().splitlines()):
-            line = line.strip()
-            if line.startswith("{") and line.endswith("}"):
-                try:
-                    data = json.loads(line)
-                    if isinstance(data, dict) and data.get("status") == "error":
-                        parsed_err = data
-                        break
-                except Exception:
-                    pass
 
-        if not parsed_err:
-            err_msg = res.stderr.strip() if res.stderr else f"Process exited with code {res.returncode}"
-            parsed_err = {
-                "status": "error",
-                "zid": str(zid) if zid else "",
-                "trace_id": str(trace_id) if trace_id else "",
-                "code": "ERR_INTELLIFILLER_CRASH",
-                "message": err_msg,
-                "row_id": None,
-                "retryable": False,
-                "details": {"exit_code": res.returncode}
-            }
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_tsv_path = Path(temp_dir) / tsv_path.name
+            if tsv_path.exists():
+                shutil.copy2(tsv_path, temp_tsv_path)
 
-        logger.error(f"Headless IntelliFiller failed with exit code {res.returncode}: [{parsed_err.get('code')}] {parsed_err.get('message')}")
-        raise IntelliFillerError(parsed_err.get("message", "Headless IntelliFiller failed"), envelope=parsed_err)
+            cmd = [
+                str(python_exe),
+                str(headless_script),
+                "--tsv", str(temp_tsv_path),
+                "--prompt", prompt_name,
+            ]
+            if reprocess:
+                cmd.append("--reprocess")
+            if zid:
+                cmd.extend(["--zid", str(zid)])
+            if trace_id:
+                cmd.extend(["--trace-id", str(trace_id)])
+
+            if selected_rows:
+                rows_str = ",".join(str(r) for r in selected_rows)
+                cmd.extend(["--selected-rows", rows_str])
+
+            try:
+                mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+                headers = []
+                with open(temp_tsv_path, 'r', encoding='utf-8') as f:
+                    for line in f:
+                        if not line.startswith('#'):
+                            headers = [h.strip() for h in line.split('\t')]
+                            break
+                role_fields = get_role_fields(mapping, headers)
+                target_field = role_fields.get('word_translation', 'WordDestination')
+                if target_field:
+                    cmd.extend(["--target-field", target_field])
+            except Exception:
+                pass
+
+            timeout = config.getint(SEC_TIMEOUTS, 'intellifiller_timeout', fallback=120)
+            logger.info(f"Running headless IntelliFiller command: {' '.join(cmd)}")
+
+            res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+            if res.returncode == 0:
+                if temp_tsv_path.exists():
+                    comments, headers, data_rows = load_tsv_rows(temp_tsv_path)
+                    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                logger.info("Headless IntelliFiller finished successfully.")
+                return True
+            else:
+                parsed_err = None
+                combined_output = (res.stderr or "") + "\n" + (res.stdout or "")
+                for line in reversed(combined_output.strip().splitlines()):
+                    line = line.strip()
+                    if line.startswith("{") and line.endswith("}"):
+                        try:
+                            data = json.loads(line)
+                            if isinstance(data, dict) and data.get("status") == "error":
+                                parsed_err = data
+                                break
+                        except Exception:
+                            pass
+
+                if not parsed_err:
+                    err_msg = res.stderr.strip() if res.stderr else f"Process exited with code {res.returncode}"
+                    parsed_err = {
+                        "status": "error",
+                        "zid": str(zid) if zid else "",
+                        "trace_id": str(trace_id) if trace_id else "",
+                        "code": "ERR_INTELLIFILLER_CRASH",
+                        "message": err_msg,
+                        "row_id": None,
+                        "retryable": False,
+                        "details": {"exit_code": res.returncode}
+                    }
+
+                logger.error(f"Headless IntelliFiller failed with exit code {res.returncode}: [{parsed_err.get('code')}] {parsed_err.get('message')}")
+                raise IntelliFillerError(parsed_err.get("message", "Headless IntelliFiller failed"), envelope=parsed_err)
 
 def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, zid=None, trace_id=None):
     python_exe = sys.executable
