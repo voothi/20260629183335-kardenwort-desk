@@ -1087,52 +1087,169 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, safe_sess)
             return
 
-        # 4. Consolidated Legacy Endpoints (from http_server.py)
-        if path == '/lookup':
+        # 4. Consolidated Legacy & Reader Endpoints (from http_server.py & web reader)
+        if path in ('/', '/lookup', '/session/render'):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            text = qs.get('text', [''])[0]
-            language = qs.get('language', [''])[0]
+
+            session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
+            text = qs.get('text', [None])[0]
+            language = qs.get('language', [None])[0]
+
+            if session_zid:
+                from kardenwort_desk import get_storage_adapter, render_lookup_html, compute_content_fingerprint
+                adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+                try:
+                    restored = adapter.restore_session(session_zid)
+                except Exception as e:
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{session_zid}' not found: {e}")
+
+                source_text = restored.get("source_text", "")
+                sess_lang = restored.get("source_language") or language or "de"
+                target_lang = restored.get("target_language") or qs.get('target-lang', ['ru'])[0]
+                data_rows = restored.get("data_rows", [])
+                headers = restored.get("headers", [])
+                comments = restored.get("comments", [])
+                sentence_translation = restored.get("sentence_translation", "")
+                fingerprint = compute_content_fingerprint(data_rows)
+
+                goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
+                goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
+                goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+                goldendict.setdefault('theme', 'compact')
+                goldendict.setdefault('run_intellifiller', False)
+                goldendict['server_enabled'] = True
+                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+
+                html = render_lookup_html(
+                    text=source_text,
+                    language=sess_lang,
+                    target_lang=target_lang,
+                    config=self.server.config,
+                    resolved_paths=self.server.resolved_paths,
+                    zid=session_zid,
+                    goldendict=goldendict,
+                    comments=comments,
+                    headers=headers,
+                    data_rows=data_rows,
+                    sentence_translation=sentence_translation,
+                    session_zid=session_zid,
+                    api_token=getattr(self.server, 'api_key', ''),
+                    server_enabled=True,
+                    fingerprint=fingerprint,
+                )
+                body = html.encode('utf-8')
+                self.send_response(200)
+                self._send_cors_headers()
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if text and language:
+                bypass_lang_check = (
+                    qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1') or
+                    qs.get('force-language', ['false'])[0].lower() in ('true', '1')
+                )
+
+                res = core_lookup(
+                    text=text,
+                    language=language,
+                    target_lang=qs.get('target-lang', [None])[0],
+                    fmt=qs.get('format', ['html'])[0],
+                    text_mode=qs.get('text-mode', ['single'])[0],
+                    sections=qs.get('sections', [None])[0],
+                    lemma_columns=qs.get('lemma-columns', [None])[0],
+                    theme=qs.get('theme', [None])[0],
+                    no_headings='no-headings' in qs,
+                    disable_css='disable-css' in qs,
+                    config=self.server.config,
+                    resolved_paths=self.server.resolved_paths,
+                    goldendict=self.server.goldendict,
+                    bypass_lang_check=bypass_lang_check,
+                )
+                body = res["html"].encode('utf-8')
+                self.send_response(200)
+                self._send_cors_headers()
+                self.send_header('Content-Type', 'text/html; charset=utf-8')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                self.wfile.write(body)
+                return
+
+            if path == '/':
+                tok = qs.get('token', [None])[0]
+                target = f"/admin?token={urllib.parse.quote(tok)}" if tok else "/admin"
+                self.send_response(302)
+                self._send_cors_headers()
+                self.send_header('Location', target)
+                self.end_headers()
+                return
+
             if not text:
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' query parameter")
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid' query parameter")
             if not language:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' query parameter")
-
-            bypass_lang_check = (
-                qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1') or
-                qs.get('force-language', ['false'])[0].lower() in ('true', '1')
-            )
-
-            res = core_lookup(
-                text=text,
-                language=language,
-                target_lang=qs.get('target-lang', [None])[0],
-                fmt=qs.get('format', ['html'])[0],
-                text_mode=qs.get('text-mode', ['single'])[0],
-                sections=qs.get('sections', [None])[0],
-                lemma_columns=qs.get('lemma-columns', [None])[0],
-                theme=qs.get('theme', [None])[0],
-                no_headings='no-headings' in qs,
-                disable_css='disable-css' in qs,
-                config=self.server.config,
-                resolved_paths=self.server.resolved_paths,
-                goldendict=self.server.goldendict,
-                bypass_lang_check=bypass_lang_check,
-            )
-            body = res["html"].encode('utf-8')
-            self.send_response(200)
-            self._send_cors_headers()
-            self.send_header('Content-Type', 'text/html; charset=utf-8')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-            return
 
         if path == '/api/v1/lookup':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            text = qs.get('text', [''])[0]
-            language = qs.get('language', [''])[0]
+            session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
+            text = qs.get('text', [None])[0]
+            language = qs.get('language', [None])[0]
+
+            if session_zid:
+                from kardenwort_desk import get_storage_adapter, render_lookup_html, compute_content_fingerprint
+                adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+                try:
+                    restored = adapter.restore_session(session_zid)
+                except Exception as e:
+                    raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{session_zid}' not found: {e}")
+
+                source_text = restored.get("source_text", "")
+                sess_lang = restored.get("source_language") or language or "de"
+                target_lang = restored.get("target_language") or qs.get('target-lang', ['ru'])[0]
+                data_rows = restored.get("data_rows", [])
+                headers = restored.get("headers", [])
+                comments = restored.get("comments", [])
+                sentence_translation = restored.get("sentence_translation", "")
+                fingerprint = compute_content_fingerprint(data_rows)
+
+                goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
+                goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
+                goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+                goldendict.setdefault('theme', 'compact')
+                goldendict.setdefault('run_intellifiller', False)
+                goldendict['server_enabled'] = True
+                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+
+                html = render_lookup_html(
+                    text=source_text,
+                    language=sess_lang,
+                    target_lang=target_lang,
+                    config=self.server.config,
+                    resolved_paths=self.server.resolved_paths,
+                    zid=session_zid,
+                    goldendict=goldendict,
+                    comments=comments,
+                    headers=headers,
+                    data_rows=data_rows,
+                    sentence_translation=sentence_translation,
+                    session_zid=session_zid,
+                    api_token=getattr(self.server, 'api_key', ''),
+                    server_enabled=True,
+                    fingerprint=fingerprint,
+                )
+                self._send_json(200, {
+                    "ok": True,
+                    "html": html,
+                    "session_zid": session_zid,
+                    "language": sess_lang,
+                    "fingerprint": fingerprint
+                })
+                return
+
             if not text:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' query parameter")
             if not language:
