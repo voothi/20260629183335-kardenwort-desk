@@ -6576,7 +6576,7 @@ html, body {{
     if cached_session_bundle and cached_session_bundle.get("session"):
         cached_zid = cached_session_bundle["session"].get("zid")
         working_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
-    elif tsv_path and Path(tsv_path).exists():
+    elif tsv_path and (Path(tsv_path).exists() or is_sqlite):
         working_tsv_path = Path(tsv_path)
     else:
         working_tsv_path = prepare_lookup_tsv(
@@ -6591,6 +6591,17 @@ html, body {{
     
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+
+    if is_sqlite and (not text or not text.strip()):
+        try:
+            target_zid_to_read = extract_zid(working_tsv_path)
+            if target_zid_to_read != "00000000000000":
+                restored_meta = storage_adapter.restore_session(target_zid_to_read)
+                if restored_meta and restored_meta.get("source_text"):
+                    text = restored_meta["source_text"]
+                    eff_mode = _effective_text_mode(text, text_mode)
+        except Exception:
+            pass
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
