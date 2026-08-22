@@ -7492,7 +7492,7 @@ html, body {{
     background: {scrollbar_thumb_hover};
   }
   body {
-    font-family: 'Outfit', 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     background-color: {bg_color};
     color: {text_color};
     margin: 0;
@@ -10725,9 +10725,10 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             margin: 0;
         }
         .kw-translation {
-            font-size: var(--font-size-base);
-            line-height: 1.5;
+            font-size: var(--font-size-md);
+            line-height: 1.6;
             color: var(--text-main);
+            white-space: pre-wrap;
             margin: 0;
         }
         .kw-table-container {
