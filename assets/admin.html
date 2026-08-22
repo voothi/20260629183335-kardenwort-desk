@@ -3,17 +3,13 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Kardenwort Admin Panel</title>
+    <title>Kardenwort Desk Admin</title>
     <link rel="stylesheet" href="/assets/admin.css">
 </head>
 <body class="theme-dark">
     <header class="admin-header">
         <div class="header-brand">
-            <div class="brand-icon">📚</div>
-            <div class="brand-title">
-                <h1>Kardenwort Desk Admin</h1>
-                <span class="brand-subtitle">Project Tree, Storage &amp; Database Maintenance</span>
-            </div>
+            <h1 class="brand-title">KARDENWORT DESK ADMIN</h1>
         </div>
         <div class="header-controls">
             <div class="token-container">
@@ -28,26 +24,25 @@
     </header>
 
     <nav class="admin-nav">
-        <button class="nav-tab active" data-tab="tab-tree">🌳 Project Tree &amp; Chapters</button>
-        <button class="nav-tab" data-tab="tab-trash">🗑️ Recycle Bin (<span id="trash-count-badge">0</span>)</button>
-        <button class="nav-tab" data-tab="tab-maintenance">🛠️ Database Maintenance</button>
-        <button class="nav-tab" data-tab="tab-telemetry">📊 Telemetry &amp; Stats</button>
+        <button class="nav-tab active" data-tab="tab-tree">Project Tree</button>
+        <button class="nav-tab" data-tab="tab-trash">Recycle Bin (<span id="trash-count-badge">0</span>)</button>
+        <button class="nav-tab" data-tab="tab-maintenance">Database Maintenance</button>
+        <button class="nav-tab" data-tab="tab-telemetry">Telemetry and Stats</button>
     </nav>
 
     <main class="admin-content">
-        <!-- Notification Banner -->
+        <!-- Notification Container -->
         <div id="toast-container" class="toast-container"></div>
 
         <!-- TAB 1: Project Tree -->
         <section id="tab-tree" class="tab-pane active">
             <div class="section-toolbar">
                 <div class="toolbar-left">
-                    <h2>Project Hierarchy &amp; Books</h2>
-                    <span class="text-muted">Organize books, chapters, and nested reading sessions.</span>
+                    <h2>Project Tree</h2>
                 </div>
                 <div class="toolbar-right">
                     <button id="btn-new-root-project" class="btn btn-primary">+ New Root Project</button>
-                    <button id="btn-refresh-tree" class="btn btn-secondary">🔄 Refresh</button>
+                    <button id="btn-refresh-tree" class="btn btn-secondary">Refresh</button>
                 </div>
             </div>
 
@@ -61,29 +56,28 @@
             <div class="section-toolbar">
                 <div class="toolbar-left">
                     <h2>Recycle Bin</h2>
-                    <span class="text-muted">Soft-deleted sessions and projects. Items can be restored or permanently purged.</span>
                 </div>
                 <div class="toolbar-right">
-                    <button id="btn-purge-trash" class="btn btn-danger">⚠️ Purge All Deleted Records</button>
-                    <button id="btn-refresh-trash" class="btn btn-secondary">🔄 Refresh</button>
+                    <button id="btn-purge-trash" class="btn btn-danger">Purge All Deleted Records</button>
+                    <button id="btn-refresh-trash" class="btn btn-secondary">Refresh</button>
                 </div>
             </div>
 
             <div class="trash-grid">
-                <div class="card">
-                    <div class="card-header">
+                <div class="panel">
+                    <div class="panel-header">
                         <h3>Deleted Sessions</h3>
                     </div>
-                    <div class="card-body" id="deleted-sessions-list">
+                    <div class="panel-body" id="deleted-sessions-list">
                         <div class="empty-state">No deleted sessions</div>
                     </div>
                 </div>
 
-                <div class="card">
-                    <div class="card-header">
+                <div class="panel">
+                    <div class="panel-header">
                         <h3>Deleted Projects</h3>
                     </div>
-                    <div class="card-body" id="deleted-projects-list">
+                    <div class="panel-body" id="deleted-projects-list">
                         <div class="empty-state">No deleted projects</div>
                     </div>
                 </div>
@@ -94,46 +88,45 @@
         <section id="tab-maintenance" class="tab-pane">
             <div class="section-toolbar">
                 <div class="toolbar-left">
-                    <h2>Database Operations &amp; Backups</h2>
-                    <span class="text-muted">Perform zero-locking physical snapshots, streaming logical SQL dumps, and background vacuuming.</span>
+                    <h2>Database Operations</h2>
                 </div>
             </div>
 
-            <div class="maintenance-cards">
-                <div class="maintenance-card">
-                    <div class="m-icon">💾</div>
-                    <div class="m-info">
-                        <h3>Physical SQLite Snapshot</h3>
-                        <p>Creates a non-blocking, online binary backup of <code>kardenwort.db</code> into the <code>backup/</code> directory using SQLite's native backup API.</p>
-                        <div class="m-action">
-                            <button id="btn-snapshot-backup" class="btn btn-primary">Take Snapshot</button>
-                            <span id="snapshot-status" class="status-msg"></span>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="maintenance-card">
-                    <div class="m-icon">📜</div>
-                    <div class="m-info">
-                        <h3>Logical SQL Dump</h3>
-                        <p>Streams a complete SQL dump (DDL schemas + INSERT statements) directly to your browser for export and archiving.</p>
-                        <div class="m-action">
-                            <button id="btn-sql-dump" class="btn btn-secondary">Download dump.sql</button>
-                        </div>
-                    </div>
-                </div>
-
-                <div class="maintenance-card">
-                    <div class="m-icon">🧹</div>
-                    <div class="m-info">
-                        <h3>Vacuum &amp; Query Optimization</h3>
-                        <p>Reclaims unused disk pages and runs <code>PRAGMA optimize;</code> asynchronously in a background worker thread without blocking active reads/writes.</p>
-                        <div class="m-action">
-                            <button id="btn-vacuum-db" class="btn btn-secondary">Run VACUUM &amp; Optimize</button>
-                            <span id="vacuum-status" class="status-msg"></span>
-                        </div>
-                    </div>
-                </div>
+            <div class="maintenance-table-container">
+                <table class="data-table">
+                    <thead>
+                        <tr>
+                            <th>Operation</th>
+                            <th>Description</th>
+                            <th style="width: 220px;">Action</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        <tr>
+                            <td><strong>Physical SQLite Snapshot</strong></td>
+                            <td class="text-muted">Online binary backup into the <code>backup/</code> directory using SQLite native backup API.</td>
+                            <td>
+                                <button id="btn-snapshot-backup" class="btn btn-primary btn-sm">Take Snapshot</button>
+                                <span id="snapshot-status" class="status-msg"></span>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Logical SQL Dump</strong></td>
+                            <td class="text-muted">Direct streaming SQL schema and data export for archiving.</td>
+                            <td>
+                                <button id="btn-sql-dump" class="btn btn-secondary btn-sm">Download dump.sql</button>
+                            </td>
+                        </tr>
+                        <tr>
+                            <td><strong>Vacuum and Optimize</strong></td>
+                            <td class="text-muted">Reclaims unused disk pages and runs <code>PRAGMA optimize</code> in a worker thread.</td>
+                            <td>
+                                <button id="btn-vacuum-db" class="btn btn-secondary btn-sm">Run Vacuum and Optimize</button>
+                                <span id="vacuum-status" class="status-msg"></span>
+                            </td>
+                        </tr>
+                    </tbody>
+                </table>
             </div>
         </section>
 
@@ -141,11 +134,10 @@
         <section id="tab-telemetry" class="tab-pane">
             <div class="section-toolbar">
                 <div class="toolbar-left">
-                    <h2>System Telemetry &amp; Storage Metrics</h2>
-                    <span class="text-muted">Real-time health status, database size, and session counters.</span>
+                    <h2>Telemetry and Storage Metrics</h2>
                 </div>
                 <div class="toolbar-right">
-                    <button id="btn-refresh-telemetry" class="btn btn-secondary">🔄 Refresh</button>
+                    <button id="btn-refresh-telemetry" class="btn btn-secondary">Refresh</button>
                 </div>
             </div>
 
@@ -172,11 +164,11 @@
                 </div>
             </div>
 
-            <div class="card mt-4">
-                <div class="card-header">
+            <div class="panel mt-4">
+                <div class="panel-header">
                     <h3>Raw Telemetry Payload</h3>
                 </div>
-                <div class="card-body">
+                <div class="panel-body">
                     <pre id="raw-telemetry-json" class="code-block">Loading telemetry...</pre>
                 </div>
             </div>
@@ -188,7 +180,7 @@
         <div class="modal-card">
             <div class="modal-header">
                 <h3 id="modal-project-title">Create Project</h3>
-                <button class="modal-close" id="btn-modal-close">&times;</button>
+                <button class="modal-close" id="btn-modal-close">[x]</button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="modal-project-id" />
@@ -196,15 +188,15 @@
                 
                 <div class="form-group">
                     <label for="project-title-input">Title <span class="req">*</span></label>
-                    <input type="text" id="project-title-input" class="form-input" placeholder="e.g. Harry Potter and the Sorcerer's Stone" required />
+                    <input type="text" id="project-title-input" class="form-input" placeholder="Title" required />
                 </div>
                 <div class="form-group">
                     <label for="project-slug-input">Slug (optional)</label>
-                    <input type="text" id="project-slug-input" class="form-input" placeholder="e.g. harry-potter-1" />
+                    <input type="text" id="project-slug-input" class="form-input" placeholder="slug" />
                 </div>
                 <div class="form-group">
                     <label for="project-desc-input">Description</label>
-                    <textarea id="project-desc-input" class="form-input" rows="3" placeholder="Book synopsis or chapter notes..."></textarea>
+                    <textarea id="project-desc-input" class="form-input" rows="3" placeholder="Description..."></textarea>
                 </div>
             </div>
             <div class="modal-footer">
@@ -218,8 +210,8 @@
     <div id="link-session-modal" class="modal-overlay hidden">
         <div class="modal-card">
             <div class="modal-header">
-                <h3>Link Session to Chapter</h3>
-                <button class="modal-close" id="btn-link-modal-close">&times;</button>
+                <h3>Link Session to Project</h3>
+                <button class="modal-close" id="btn-link-modal-close">[x]</button>
             </div>
             <div class="modal-body">
                 <input type="hidden" id="link-modal-project-id" />

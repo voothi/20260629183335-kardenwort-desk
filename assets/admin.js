@@ -1,5 +1,6 @@
 /**
  * Kardenwort Desk Admin Panel - Frontend Controller
+ * Utilitarian Minimalist Edition
  */
 
 // State Management
@@ -40,13 +41,13 @@ async function apiFetch(endpoint, options = {}) {
     }
 }
 
-// Toast Notifications
+// Toast Notifications (Minimalist & Plaintext)
 function showToast(message, type = 'info') {
     const container = document.getElementById('toast-container');
     const toast = document.createElement('div');
     toast.className = `toast ${type}`;
-    const icon = type === 'success' ? '✅' : type === 'error' ? '❌' : 'ℹ️';
-    toast.innerHTML = `<span>${icon}</span> <span>${escapeHtml(message)}</span>`;
+    const prefix = type === 'success' ? '[OK]' : type === 'error' ? '[ERR]' : '[INFO]';
+    toast.innerHTML = `<span>${prefix}</span> <span>${escapeHtml(message)}</span>`;
     container.appendChild(toast);
     setTimeout(() => {
         toast.remove();
@@ -181,7 +182,7 @@ function createNodeElement(node) {
     card.className = 'node-card';
     card.innerHTML = `
         <div class="node-info">
-            <span class="node-toggle" data-id="${node.id}">${hasChildren ? '▼' : '•'}</span>
+            <span class="node-toggle" data-id="${node.id}">${hasChildren ? '▼' : '·'}</span>
             <span class="node-title">${escapeHtml(node.title)}</span>
             <span class="node-slug">${escapeHtml(node.slug)}</span>
             ${node.description ? `<span class="node-desc">${escapeHtml(node.description)}</span>` : ''}
@@ -189,8 +190,8 @@ function createNodeElement(node) {
         <div class="node-actions">
             <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Sub-Chapter">+ Sub-Chapter</button>
             <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link Session</button>
-            <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Node">✏️</button>
-            <button class="btn btn-danger btn-sm btn-delete-node" data-id="${node.id}" title="Delete Project">🗑️</button>
+            <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Project">[Edit]</button>
+            <button class="btn btn-danger btn-sm btn-delete-node" data-id="${node.id}" title="Delete Project">[Delete]</button>
         </div>
     `;
 
@@ -250,9 +251,9 @@ function createSessionElement(session, projectId, index, total) {
             <span class="text-muted" style="font-size: 11px;">(${escapeHtml(session.source_language || '')})</span>
         </div>
         <div class="session-actions">
-            <button class="btn btn-icon btn-move-up" ${index === 0 ? 'disabled' : ''} title="Move Up">↑</button>
-            <button class="btn btn-icon btn-move-down" ${index === total - 1 ? 'disabled' : ''} title="Move Down">↓</button>
-            <button class="btn btn-icon btn-unlink" title="Unlink from Chapter">✕</button>
+            <button class="btn btn-icon btn-move-up" ${index === 0 ? 'disabled' : ''} title="Move Up">[Up]</button>
+            <button class="btn btn-icon btn-move-down" ${index === total - 1 ? 'disabled' : ''} title="Move Down">[Down]</button>
+            <button class="btn btn-icon btn-unlink" title="Unlink from Chapter">[Unlink]</button>
         </div>
     `;
 
@@ -490,7 +491,7 @@ async function loadTrash() {
                         <span class="text-muted" style="font-size: 11px;">${escapeHtml(s.slug || 'Untitled')} &bull; Deleted: ${escapeHtml(s.deleted_at || '')}</span>
                     </div>
                     <div class="trash-item-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('session', '${s.zid}')">Restore</button>
+                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('session', '${s.zid}')">[Restore]</button>
                     </div>
                 </div>
             `).join('');
@@ -507,7 +508,7 @@ async function loadTrash() {
                         <span class="text-muted" style="font-size: 11px;">ID: ${p.id} &bull; Deleted: ${escapeHtml(p.deleted_at || '')}</span>
                     </div>
                     <div class="trash-item-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('project', ${p.id})">Restore</button>
+                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('project', ${p.id})">[Restore]</button>
                     </div>
                 </div>
             `).join('');
