@@ -72,6 +72,16 @@
                 </div>
             </div>
 
+            <!-- Drag & Drop TSV Import Zone -->
+            <div id="sessions-drop-zone" class="drop-zone">
+                <div class="drop-zone-content">
+                    <span class="drop-zone-icon">&#8681;</span>
+                    <span class="drop-zone-text">Drag &amp; drop <code>.tsv</code> session files here or <button type="button" id="btn-browse-tsv" class="btn btn-secondary btn-sm">Browse Files</button></span>
+                    <input type="file" id="tsv-file-input" accept=".tsv,.txt" multiple style="display: none;" />
+                </div>
+                <div id="drop-zone-status" class="drop-zone-status hidden"></div>
+            </div>
+
             <div class="sessions-table-container">
                 <table class="data-table" id="sessions-data-table">
                     <thead>
@@ -311,6 +321,29 @@
             <div class="modal-footer">
                 <button id="btn-confirm-cancel" class="btn btn-secondary">Cancel</button>
                 <button id="btn-confirm-ok" class="btn btn-danger">Confirm</button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Modal for TSV Inspector & Raw View -->
+    <div id="tsv-inspector-modal" class="modal-overlay hidden">
+        <div class="modal-card modal-card-lg">
+            <div class="modal-header">
+                <h3 id="tsv-modal-title">Session TSV Inspector</h3>
+                <button class="modal-close" id="btn-tsv-modal-close">[x]</button>
+            </div>
+            <div class="modal-body">
+                <div class="tsv-modal-toolbar">
+                    <span id="tsv-modal-stats" class="tsv-stats text-muted">Loading TSV details...</span>
+                    <div class="tsv-modal-actions">
+                        <button id="btn-tsv-copy" class="btn btn-secondary btn-sm">Copy All</button>
+                        <a id="btn-tsv-download" class="btn btn-primary btn-sm" download>Download .tsv</a>
+                    </div>
+                </div>
+                <textarea id="tsv-raw-viewer" class="tsv-viewer-textarea" readonly spellcheck="false" placeholder="Loading TSV..."></textarea>
+            </div>
+            <div class="modal-footer">
+                <button id="btn-tsv-modal-dismiss" class="btn btn-secondary">Close</button>
             </div>
         </div>
     </div>

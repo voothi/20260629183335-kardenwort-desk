@@ -409,6 +409,25 @@ function initModals() {
     document.getElementById('btn-assign-modal-cancel').addEventListener('click', () => assignModal.classList.add('hidden'));
     document.getElementById('btn-assign-modal-save').addEventListener('click', saveAssignProjectModal);
 
+    // TSV Inspector Modal Events
+    const tsvModal = document.getElementById('tsv-inspector-modal');
+    if (tsvModal) {
+        document.getElementById('btn-tsv-modal-close').addEventListener('click', () => tsvModal.classList.add('hidden'));
+        document.getElementById('btn-tsv-modal-dismiss').addEventListener('click', () => tsvModal.classList.add('hidden'));
+        document.getElementById('btn-tsv-copy').addEventListener('click', async () => {
+            const viewer = document.getElementById('tsv-raw-viewer');
+            if (!viewer || !viewer.value) return;
+            try {
+                await navigator.clipboard.writeText(viewer.value);
+                showToast('TSV content copied to clipboard', 'success');
+            } catch (err) {
+                viewer.select();
+                document.execCommand('copy');
+                showToast('TSV content copied to clipboard', 'success');
+            }
+        });
+    }
+
     // Confirmation Modal Events
     const closeConfirm = (val) => {
         if (confirmModalResolver) {
@@ -655,13 +674,130 @@ function initSessionsExplorer() {
         }
     });
 
-    nextBtn.addEventListener('click', () => {
-        const totalPages = Math.ceil(state.sessionsExplorer.totalCount / state.sessionsExplorer.pageSize) || 1;
-        if (state.sessionsExplorer.page < totalPages) {
-            state.sessionsExplorer.page++;
-            loadSessionsExplorer();
+        nextBtn.addEventListener('click', () => {
+            const totalPages = Math.ceil(state.sessionsExplorer.totalCount / state.sessionsExplorer.pageSize) || 1;
+            if (state.sessionsExplorer.page < totalPages) {
+                state.sessionsExplorer.page++;
+                loadSessionsExplorer();
+            }
+        });
+
+    // Drag and Drop TSV Ingestion
+    const dropZone = document.getElementById('sessions-drop-zone');
+    const fileInput = document.getElementById('tsv-file-input');
+    const browseBtn = document.getElementById('btn-browse-tsv');
+
+    if (dropZone && fileInput) {
+        if (browseBtn) {
+            browseBtn.addEventListener('click', () => fileInput.click());
         }
-    });
+
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files && fileInput.files.length > 0) {
+                handleTsvFileUpload(Array.from(fileInput.files));
+                fileInput.value = '';
+            }
+        });
+
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        ['dragleave', 'dragend'].forEach(evt => {
+            dropZone.addEventListener(evt, () => dropZone.classList.remove('dragover'));
+        });
+
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            if (e.dataTransfer && e.dataTransfer.files && e.dataTransfer.files.length > 0) {
+                handleTsvFileUpload(Array.from(e.dataTransfer.files));
+            }
+        });
+    }
+}
+
+async function handleTsvFileUpload(files) {
+    const statusDiv = document.getElementById('drop-zone-status');
+    if (!files || files.length === 0) return;
+
+    statusDiv.classList.remove('hidden', 'error');
+    statusDiv.textContent = `Uploading ${files.length} file(s)...`;
+
+    let successCount = 0;
+    let errorCount = 0;
+
+    for (const file of files) {
+        try {
+            const text = await file.text();
+            const res = await apiFetch('/api/v1/sessions/import-tsv', {
+                method: 'POST',
+                body: JSON.stringify({
+                    tsv_content: text,
+                    filename: file.name
+                })
+            });
+            successCount++;
+            showToast(`Ingested session ${res.session_zid || file.name} (${res.sentences_count} sent, ${res.words_count} words)`, 'success');
+        } catch (err) {
+            errorCount++;
+            showToast(`Failed to import ${file.name}: ${err.message}`, 'error');
+        }
+    }
+
+    if (errorCount === 0) {
+        statusDiv.textContent = `Successfully imported ${successCount} session(s).`;
+        setTimeout(() => statusDiv.classList.add('hidden'), 5000);
+    } else {
+        statusDiv.classList.add('error');
+        statusDiv.textContent = `Import finished: ${successCount} succeeded, ${errorCount} failed.`;
+    }
+
+    loadSessionsExplorer(true);
+    loadTelemetry();
+}
+
+async function openTsvInspectorModal(session) {
+    const modal = document.getElementById('tsv-inspector-modal');
+    const titleEl = document.getElementById('tsv-modal-title');
+    const statsEl = document.getElementById('tsv-modal-stats');
+    const viewer = document.getElementById('tsv-raw-viewer');
+    const downloadBtn = document.getElementById('btn-tsv-download');
+
+    titleEl.textContent = `Session TSV: ${session.zid} - ${session.slug || 'untitled'}`;
+    statsEl.textContent = 'Streaming dynamic TSV from SQLite...';
+    viewer.value = 'Loading TSV...';
+    modal.classList.remove('hidden');
+
+    let downloadUrl = `/api/v1/sessions/${encodeURIComponent(session.zid)}/tsv`;
+    if (state.token) {
+        downloadUrl += `?token=${encodeURIComponent(state.token)}`;
+    }
+    downloadBtn.setAttribute('href', downloadUrl);
+    downloadBtn.setAttribute('download', `${session.zid}-session.tsv`);
+
+    try {
+        const headers = {};
+        if (state.token) {
+            headers['X-API-Token'] = state.token;
+        }
+        const resp = await fetch(downloadUrl, { headers });
+        if (!resp.ok) {
+            throw new Error(`Failed to fetch TSV: HTTP ${resp.status}`);
+        }
+        const text = await resp.text();
+        viewer.value = text;
+
+        const lines = text.split(/\r?\n/).filter(l => l.trim().length > 0);
+        const dataRowsCount = lines.filter(l => !l.startsWith('#')).length - 1;
+        const sizeKb = (new Blob([text]).size / 1024).toFixed(1);
+        statsEl.textContent = `${Math.max(0, dataRowsCount)} rows | ${sizeKb} KB | UTF-8`;
+    } catch (err) {
+        viewer.value = `Error loading TSV: ${err.message}`;
+        statsEl.textContent = 'Error loading TSV';
+        showToast(err.message, 'error');
+    }
 }
 
 async function loadSessionsExplorer(force = false) {
@@ -734,6 +870,7 @@ function renderSessionsExplorerTable(sessions) {
             <td>${projectsHtml}</td>
             <td>
                 <div class="table-actions">
+                    <button class="btn btn-secondary btn-sm btn-view-tsv" title="View & Download TSV">TSV</button>
                     <button class="btn btn-secondary btn-sm btn-assign-proj" title="Assign to Project">+ Book</button>
                     <button class="btn btn-secondary btn-sm btn-open-reader" title="Open in Reader">Open</button>
                     <button class="btn btn-danger btn-sm btn-delete-sess" title="Delete Session">[Del]</button>
@@ -741,6 +878,7 @@ function renderSessionsExplorerTable(sessions) {
             </td>
         `;
 
+        tr.querySelector('.btn-view-tsv').addEventListener('click', () => openTsvInspectorModal(s));
         tr.querySelector('.btn-assign-proj').addEventListener('click', () => openAssignProjectModal(s));
         tr.querySelector('.btn-open-reader').addEventListener('click', () => openSessionInReader(s.zid));
         tr.querySelector('.btn-delete-sess').addEventListener('click', () => deleteSessionFromLibrary(s.zid));

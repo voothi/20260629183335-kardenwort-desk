@@ -14549,6 +14549,235 @@ def cmd_vacuum_db(args):
     sys.exit(0 if ok else 1)
 
 
+def parse_tsv_to_bundle(
+    tsv_content_or_path: Union[str, Path, List[str]],
+    filename: Optional[str] = None,
+    session_zid: Optional[str] = None,
+    language: Optional[str] = None,
+    slug: Optional[str] = None,
+    source_raw_text: Optional[str] = None,
+    config: Optional[Any] = None,
+    resolved_paths: Optional[Dict[str, Any]] = None,
+    zid: Optional[str] = None,
+) -> Dict[str, Any]:
+    """
+    Parses raw TSV content (or lines, or a Path) into an atomic session bundle dictionary
+    containing 'session', 'sentences', and 'words' structures suitable for SQLite insertion
+    via save_session_bundle.
+    """
+    comments: List[str] = []
+    headers: List[str] = []
+    data_rows: List[List[str]] = []
+
+    if isinstance(tsv_content_or_path, Path) or (isinstance(tsv_content_or_path, str) and "\n" not in tsv_content_or_path and Path(tsv_content_or_path).is_file()):
+        p = Path(tsv_content_or_path)
+        if not filename:
+            filename = p.name
+        comments, headers, data_rows = load_tsv_rows(p)
+    elif isinstance(tsv_content_or_path, list):
+        import csv
+        lines_to_parse = []
+        for line in tsv_content_or_path:
+            line_str = line.rstrip("\r\n")
+            if not headers and not lines_to_parse and line_str.startswith("#"):
+                comments.append(line_str)
+            elif line_str:
+                lines_to_parse.append(line_str)
+        reader = csv.reader(lines_to_parse, delimiter="\t")
+        for i, row in enumerate(reader):
+            if i == 0:
+                headers = row
+            else:
+                data_rows.append(row)
+    else:
+        import csv
+        raw_text = str(tsv_content_or_path)
+        lines_to_parse = []
+        for line in raw_text.splitlines():
+            line_str = line.rstrip("\r\n")
+            if not headers and not lines_to_parse and line_str.startswith("#"):
+                comments.append(line_str)
+            elif line_str:
+                lines_to_parse.append(line_str)
+        reader = csv.reader(lines_to_parse, delimiter="\t")
+        for i, row in enumerate(reader):
+            if i == 0:
+                headers = row
+            else:
+                data_rows.append(row)
+
+    if not headers or not data_rows:
+        raise StructuredError(
+            ErrorCode.INVALID_PAYLOAD,
+            "Invalid or empty TSV content provided for ingestion.",
+        )
+
+    # Determine session ZID
+    file_zid = session_zid
+    if not file_zid and filename:
+        file_zid = extract_zid(filename)
+    if not file_zid:
+        file_zid = generate_unique_zid()
+
+    # Determine language and slug
+    detected_lang = language
+    detected_slug = slug or ""
+    if filename:
+        name_no_ext = Path(filename).stem
+        parts = name_no_ext.split(".")
+        if not detected_lang and len(parts) > 1 and len(parts[-1]) in (2, 3, 5):
+            detected_lang = parts[-1]
+        slug_part = parts[0]
+        if not detected_slug:
+            extracted_zid_in_fn = extract_zid(slug_part)
+            if extracted_zid_in_fn and slug_part.startswith(f"{extracted_zid_in_fn}-"):
+                detected_slug = slug_part[len(extracted_zid_in_fn) + 1:]
+            elif not extracted_zid_in_fn:
+                detected_slug = slug_part
+
+    if not detected_lang:
+        detected_lang = (
+            config.get(SEC_SETTINGS, "default_language", fallback="de")
+            if config and hasattr(config, "get")
+            else "de"
+        )
+
+    headers_lower = {h.lower(): idx for idx, h in enumerate(headers)}
+
+    def get_col_val(r: List[str], col_name: str, default: str = "") -> str:
+        idx = headers_lower.get(col_name.lower())
+        return r[idx] if idx is not None and idx < len(r) else default
+
+    known_cols = {
+        "quotation", "wordsource", "wordsourceinflectedform",
+        "worddestination", "worddestinationinflectedform",
+        "wordsourcemorphologyai", "wordsourceipa", "deskselected", "leitnerbox",
+        "leitnerdue", "deck", "classificationoxford", "classificationgoethe",
+        "sentencesourceindex", "sentencesource", "sentencedestination",
+        "sentencedestination2", "sentencesourceipa", "sentencesourceaudio",
+        "sentencesourcecontextleft", "sentencesourcecontextright",
+        "sentencedestinationcontextleft", "sentencedestinationcontextright",
+        "sentencedestination2contextleft", "sentencedestination2contextright",
+        "sentencesourcewordlist", "sentencesourcecloze",
+        "wordsource2", "wordsourceinflectedform2",
+        "textsource", "textdestination", "textsourceurl", "source", "sourceurl",
+        "separatoraudio", "note", "note id", "togglealwaysemptyfield",
+    }
+
+    raw_sentence_index_map: Dict[Any, int] = {}
+    seq_counter = 1
+    sent_map: Dict[int, Dict[str, Any]] = {}
+    word_list: List[Dict[str, Any]] = []
+
+    for row_idx, row in enumerate(data_rows):
+        raw_s_val = get_col_val(row, "sentencesourceindex")
+        if raw_s_val:
+            if raw_s_val not in raw_sentence_index_map:
+                raw_sentence_index_map[raw_s_val] = seq_counter
+                seq_counter += 1
+            norm_s_idx = raw_sentence_index_map[raw_s_val]
+        else:
+            sent_src_text = get_col_val(row, "sentencesource")
+            if sent_src_text:
+                if sent_src_text not in raw_sentence_index_map:
+                    raw_sentence_index_map[sent_src_text] = seq_counter
+                    seq_counter += 1
+                norm_s_idx = raw_sentence_index_map[sent_src_text]
+            else:
+                norm_s_idx = 1
+
+        if norm_s_idx not in sent_map:
+            sent_map[norm_s_idx] = {
+                "session_zid": file_zid,
+                "sentence_index": norm_s_idx,
+                "sentence_source": get_col_val(row, "sentencesource"),
+                "sentence_destination": get_col_val(row, "sentencedestination") or None,
+                "sentence_destination2": get_col_val(row, "sentencedestination2") or None,
+                "sentence_source_ipa": get_col_val(row, "sentencesourceipa") or None,
+                "sentence_source_audio": get_col_val(row, "sentencesourceaudio") or None,
+            }
+
+        quotation = (
+            get_col_val(row, "quotation")
+            or get_col_val(row, "wordsourceinflectedform")
+            or get_col_val(row, "wordsource")
+            or ""
+        )
+        lemma = get_col_val(row, "wordsource") or quotation
+        inflected = get_col_val(row, "wordsourceinflectedform")
+        morph = get_col_val(row, "wordsourcemorphologyai")
+        ipa = get_col_val(row, "wordsourceipa")
+        w_dest = get_col_val(row, "worddestination")
+        w_dest_inf = get_col_val(row, "worddestinationinflectedform")
+        sel_raw = get_col_val(row, "deskselected")
+        selected = 1 if str(sel_raw).strip() in ("1", "true", "True") else 0
+        box_raw = get_col_val(row, "leitnerbox")
+        box = int(box_raw) if box_raw.isdigit() else 1
+        due = get_col_val(row, "leitnerdue") or None
+        deck = get_col_val(row, "deck") or None
+        oxford = get_col_val(row, "classificationoxford") or None
+        goethe = get_col_val(row, "classificationgoethe") or None
+
+        extra: Dict[str, Any] = {}
+        for h_idx, h_name in enumerate(headers):
+            if h_name.lower() not in known_cols and h_idx < len(row):
+                val = row[h_idx]
+                if val:
+                    extra[h_name] = val
+
+        word_entry = {
+            "session_zid": file_zid,
+            "sentence_index": norm_s_idx,
+            "token_order": row_idx,
+            "quotation": quotation,
+            "inflected_form": inflected or None,
+            "lemma": lemma,
+            "pos": None,
+            "morphology": morph or None,
+            "ipa": ipa or None,
+            "word_destination": w_dest or None,
+            "word_destination_inflected": w_dest_inf or None,
+            "selected": selected,
+            "leitner_box": box,
+            "leitner_due": due,
+            "deck": deck,
+            "classification_oxford": oxford,
+            "classification_goethe": goethe,
+            "extra_fields": extra if extra else None,
+        }
+        word_list.append(word_entry)
+
+    text_mode = "multi" if len(sent_map) > 1 else "single"
+    if not source_raw_text:
+        source_raw_text = "\n".join(
+            s["sentence_source"] for s in sent_map.values() if s.get("sentence_source")
+        )
+
+    target_lang = (
+        config.get(SEC_SETTINGS, "default_target_language", fallback="ru")
+        if config and hasattr(config, "get")
+        else "ru"
+    )
+
+    session_record = {
+        "zid": file_zid,
+        "slug": detected_slug,
+        "source_language": detected_lang,
+        "target_language": target_lang,
+        "text_mode": text_mode,
+        "source_raw_text": source_raw_text,
+    }
+
+    return {
+        "session": session_record,
+        "sentences": list(sent_map.values()),
+        "words": word_list,
+        "comments": comments,
+        "headers": headers,
+        "data_rows": data_rows,
+    }
+
+
 def migrate_tsvs_to_db(results_dir: Path, config=None, resolved_paths=None, zid: Optional[str] = None) -> Dict[str, Any]:
     """
     Parses historical TSV files in results_dir, normalizes sentence indices to 1-based integers,

@@ -45,6 +45,9 @@ from kardenwort_desk import (
     find_working_tsv,
     extract_zid,
     generate_slug,
+    get_storage_adapter,
+    parse_tsv_to_bundle,
+    render_lookup_html,
     SessionLogger,
     SEC_SETTINGS,
     SEC_LANGUAGES,
@@ -1084,7 +1087,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
 
-            from kardenwort_desk import core_export
             res = core_export(
                 tsv_path_or_session=session_zid,
                 selected_row_ids=selected_rows,
@@ -1121,7 +1123,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             language = qs.get('language', [None])[0]
 
             if session_zid:
-                from kardenwort_desk import get_storage_adapter, render_lookup_html, compute_content_fingerprint
                 adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
                 try:
                     restored = adapter.restore_session(session_zid)
@@ -1231,7 +1232,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             language = qs.get('language', [None])[0]
 
             if session_zid:
-                from kardenwort_desk import get_storage_adapter, render_lookup_html, compute_content_fingerprint
                 adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
                 try:
                     restored = adapter.restore_session(session_zid)
@@ -1547,6 +1547,105 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             ok = db.soft_delete_session(str(session_zid))
             self._send_json(200, {"ok": ok, "session_zid": session_zid})
             return
+
+        # 6.1 TSV Virtualization: Dynamic Export
+        session_tsv_match = re.match(r"^/(?:api/v1/admin/sessions|api/v1/sessions|sessions)/([0-9a-zA-Z_\-]+)/tsv$", path)
+        if session_tsv_match:
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token(query_params=qs)
+            target_zid = session_tsv_match.group(1)
+            adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+            try:
+                restored = adapter.restore_session(target_zid)
+            except Exception as e:
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{target_zid}' not found: {e}")
+
+            import io
+            import csv
+            output = io.StringIO()
+            writer = csv.writer(output, delimiter='\t', lineterminator='\n')
+            for comment in restored.get("comments", []):
+                output.write(f"{comment}\n")
+            headers = restored.get("headers", [])
+            if headers:
+                writer.writerow(headers)
+            for row in restored.get("data_rows", []):
+                sanitized_row = [str(cell).replace('\r\n', ' ').replace('\n', ' ').replace('\r', ' ') for cell in row]
+                writer.writerow(sanitized_row)
+
+            tsv_data = output.getvalue().encode('utf-8')
+            filename = f"{target_zid}-session.tsv"
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header('Content-Type', 'text/tab-separated-values; charset=utf-8')
+            self.send_header('Content-Disposition', f'attachment; filename="{filename}"')
+            self.send_header('Content-Length', str(len(tsv_data)))
+            self.end_headers()
+            self.wfile.write(tsv_data)
+            return
+
+        # 6.2 TSV Virtualization: Drag-and-Drop / Ingestion
+        if path in ('/api/v1/sessions/import-tsv', '/api/v1/admin/sessions/import-tsv'):
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+
+            content_type = self.headers.get('Content-Type', '')
+            filename = qs.get('filename', [None])[0]
+            session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
+            lang = qs.get('language', [None])[0]
+            slug = qs.get('slug', [None])[0]
+
+            if 'application/json' in content_type:
+                body = self._read_json_body()
+                self._authenticate_token(body)
+                tsv_content = body.get('tsv_content') or body.get('content') or body.get('tsv')
+                filename = body.get('filename') or filename
+                session_zid = body.get('session_zid') or body.get('zid') or session_zid
+                lang = body.get('language') or lang
+                slug = body.get('slug') or slug
+            else:
+                self._authenticate_token(query_params=qs)
+                content_len = int(self.headers.get('Content-Length', 0))
+                tsv_bytes = self.rfile.read(content_len)
+                tsv_content = tsv_bytes.decode('utf-8', errors='replace')
+
+            if not tsv_content:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'tsv_content' in payload")
+
+            from kardenwort_db import KardenwortDB
+            req_zid = generate_server_zid(self.server)
+            bundle = parse_tsv_to_bundle(
+                tsv_content_or_path=tsv_content,
+                filename=filename,
+                session_zid=session_zid,
+                language=lang,
+                slug=slug,
+                config=self.server.config,
+                resolved_paths=self.server.resolved_paths,
+                zid=req_zid,
+            )
+
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            db.run_migrations(zid=req_zid)
+            created_zid = db.save_session_bundle(
+                session=bundle["session"],
+                sentences=bundle["sentences"],
+                words=bundle["words"],
+                zid=req_zid,
+            )
+
+            self._send_json(200, {
+                "ok": True,
+                "session_zid": created_zid,
+                "slug": bundle["session"].get("slug", ""),
+                "source_language": bundle["session"].get("source_language", ""),
+                "sentences_count": len(bundle["sentences"]),
+                "words_count": len(bundle["words"]),
+                "zid": req_zid
+            })
+            return
+
 
         # 7. Admin Trash & Soft Deletion Endpoints
         if path == '/api/v1/admin/trash':
