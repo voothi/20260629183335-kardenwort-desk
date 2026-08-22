@@ -1128,12 +1128,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             language = qs.get('language', [None])[0]
 
             if project_id:
+                req_zid = generate_unique_zid()
                 try:
                     synthesized = synthesize_project_materials(
                         project_id=int(project_id),
                         config=self.server.config,
                         resolved_paths=self.server.resolved_paths,
                         language=language,
+                        zid=req_zid,
                     )
                 except Exception as e:
                     raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials synthesis failed: {e}")
@@ -1155,8 +1157,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 slug = synthesized.get("slug") or ""
                 req_theme = qs.get('theme', [None])[0]
                 view_mode = qs.get('view', [None])[0]
-                raw_zid = synthesized.get("session_zid") or ""
-                synth_zid = raw_zid if re.match(r'^\d{14}$', raw_zid) else generate_unique_zid()
+                synth_zid = synthesized.get("session_zid") or req_zid
                 if view_mode == 'goldendict':
                     goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
                     goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
@@ -1356,12 +1357,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             language = qs.get('language', [None])[0]
 
             if project_id:
+                req_zid = generate_unique_zid()
                 try:
                     synthesized = synthesize_project_materials(
                         project_id=int(project_id),
                         config=self.server.config,
                         resolved_paths=self.server.resolved_paths,
                         language=language,
+                        zid=req_zid,
                     )
                 except Exception as e:
                     raise StructuredError(ErrorCode.NOT_FOUND, f"Project '{project_id}' materials synthesis failed: {e}")

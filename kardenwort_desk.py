@@ -2492,7 +2492,7 @@ class SqliteStorageAdapter(StorageAdapter):
         }
 
         # If sentences and words are provided directly
-        norm_sentences = list(sentences) if sentences is not None else []
+        norm_sentences = [{**dict(s), "session_zid": session_zid} for s in sentences] if sentences is not None else []
         norm_words = list(words) if words is not None else []
 
         # If headers and data_rows are provided, normalize into sentences and words
@@ -2617,7 +2617,7 @@ class SqliteStorageAdapter(StorageAdapter):
                 word_list.append(word_entry)
 
             if sentences is not None:
-                norm_sentences = list(sentences)
+                norm_sentences = [{**dict(s), "session_zid": session_zid} for s in sentences]
             elif not sent_map:
                 try:
                     existing_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
