@@ -5305,7 +5305,7 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_i
         else:
             creationflags = 0x00000200 | 0x08000000
 
-    with open(log_file_path, 'a', encoding='utf-8') as log_file:
+    with open(log_file_path, 'w', encoding='utf-8') as log_file:
         if sys.platform == 'win32':
             p = subprocess.Popen(
                 cmd,
