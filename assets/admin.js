@@ -204,8 +204,8 @@ function createNodeElement(node) {
         <div class="node-actions">
             <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Sub-Chapter">+ Sub</button>
             <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link</button>
-            <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Project">[Edit]</button>
-            <button class="btn btn-danger btn-sm btn-delete-node" data-id="${node.id}" title="Delete Project">[Delete]</button>
+            <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Project">Edit</button>
+            <button class="btn btn-danger btn-sm btn-delete-node" data-id="${node.id}" title="Delete Project">Delete</button>
         </div>
     `;
 
@@ -265,9 +265,9 @@ function createSessionElement(session, projectId, index, total) {
             <span class="text-muted" style="font-size: 12px;">(${escapeHtml(session.source_language || '')})</span>
         </div>
         <div class="session-actions">
-            <button class="btn btn-icon btn-move-up" ${index === 0 ? 'disabled' : ''} title="Move Up">[Up]</button>
-            <button class="btn btn-icon btn-move-down" ${index === total - 1 ? 'disabled' : ''} title="Move Down">[Down]</button>
-            <button class="btn btn-icon btn-unlink" title="Unlink">[Unlink]</button>
+            <button class="btn btn-icon btn-move-up" ${index === 0 ? 'disabled' : ''} title="Move Up">▲</button>
+            <button class="btn btn-icon btn-move-down" ${index === total - 1 ? 'disabled' : ''} title="Move Down">▼</button>
+            <button class="btn btn-icon btn-unlink" title="Unlink">Unlink</button>
         </div>
     `;
 
@@ -873,7 +873,7 @@ function renderSessionsExplorerTable(sessions) {
                     <button class="btn btn-secondary btn-sm btn-view-tsv" title="View & Download TSV">TSV</button>
                     <button class="btn btn-secondary btn-sm btn-assign-proj" title="Assign to Project">+ Book</button>
                     <button class="btn btn-secondary btn-sm btn-open-reader" title="Open in Reader">Open</button>
-                    <button class="btn btn-danger btn-sm btn-delete-sess" title="Delete Session">[Del]</button>
+                    <button class="btn btn-danger btn-sm btn-delete-sess" title="Delete Session">Del</button>
                 </div>
             </td>
         `;
@@ -942,7 +942,7 @@ async function loadTrash() {
                         <span class="text-muted" style="font-size: 12px;">${escapeHtml(s.slug || 'Untitled')} &bull; Deleted: ${escapeHtml(s.deleted_at || '')}</span>
                     </div>
                     <div class="trash-item-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('session', '${s.zid}')">[Restore]</button>
+                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('session', '${s.zid}')">Restore</button>
                     </div>
                 </div>
             `).join('');
@@ -959,7 +959,7 @@ async function loadTrash() {
                         <span class="text-muted" style="font-size: 12px;">ID: ${p.id} &bull; Deleted: ${escapeHtml(p.deleted_at || '')}</span>
                     </div>
                     <div class="trash-item-actions">
-                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('project', ${p.id})">[Restore]</button>
+                        <button class="btn btn-secondary btn-sm" onclick="restoreTrash('project', ${p.id})">Restore</button>
                     </div>
                 </div>
             `).join('');
