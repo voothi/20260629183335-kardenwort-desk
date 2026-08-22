@@ -202,8 +202,8 @@ function createNodeElement(node) {
             ${node.description ? `<span class="node-desc">${escapeHtml(node.description)}</span>` : ''}
         </div>
         <div class="node-actions">
-            <button class="btn btn-primary btn-sm btn-open-reader" data-id="${node.id}" title="Open Book in Reader">📖 Read</button>
-            <button class="btn btn-secondary btn-sm btn-export-deck" data-id="${node.id}" title="Export Book Deck">🎴 Export Deck</button>
+            <button class="btn btn-primary btn-sm btn-open-reader" data-id="${node.id}" title="Open Book in Reader">Read</button>
+            <button class="btn btn-secondary btn-sm btn-export-deck" data-id="${node.id}" title="Export Book Deck">Export Deck</button>
             <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Sub-Chapter">+ Sub</button>
             <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link</button>
             <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Project">Edit</button>
