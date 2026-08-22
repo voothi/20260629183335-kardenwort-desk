@@ -477,8 +477,10 @@ async function loadTrash() {
         state.deletedSessions = data.sessions || [];
         state.deletedProjects = data.projects || [];
 
-        const totalCount = state.deletedSessions.length + state.deletedProjects.length;
-        badge.textContent = totalCount;
+        if (badge) {
+            const totalCount = state.deletedSessions.length + state.deletedProjects.length;
+            badge.textContent = totalCount;
+        }
 
         // Render deleted sessions
         if (state.deletedSessions.length === 0) {

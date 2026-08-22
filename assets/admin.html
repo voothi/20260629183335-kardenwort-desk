@@ -9,7 +9,7 @@
 <body class="theme-dark">
     <header class="admin-header">
         <div class="header-brand">
-            <h1 class="brand-title">KARDENWORT DESK ADMIN</h1>
+            <h1 class="brand-title">Kardenwort Desk Admin</h1>
         </div>
         <div class="header-controls">
             <div class="token-container">
@@ -25,7 +25,7 @@
 
     <nav class="admin-nav">
         <button class="nav-tab active" data-tab="tab-tree">Project Tree</button>
-        <button class="nav-tab" data-tab="tab-trash">Recycle Bin (<span id="trash-count-badge">0</span>)</button>
+        <button class="nav-tab" data-tab="tab-trash">Recycle Bin</button>
         <button class="nav-tab" data-tab="tab-maintenance">Database Maintenance</button>
         <button class="nav-tab" data-tab="tab-telemetry">Telemetry and Stats</button>
     </nav>
@@ -37,10 +37,7 @@
         <!-- TAB 1: Project Tree -->
         <section id="tab-tree" class="tab-pane active">
             <div class="section-toolbar">
-                <div class="toolbar-left">
-                    <h2>Project Tree</h2>
-                </div>
-                <div class="toolbar-right">
+                <div class="toolbar-actions">
                     <button id="btn-new-root-project" class="btn btn-primary">+ New Root Project</button>
                     <button id="btn-refresh-tree" class="btn btn-secondary">Refresh</button>
                 </div>
@@ -54,11 +51,8 @@
         <!-- TAB 2: Recycle Bin -->
         <section id="tab-trash" class="tab-pane">
             <div class="section-toolbar">
-                <div class="toolbar-left">
-                    <h2>Recycle Bin</h2>
-                </div>
-                <div class="toolbar-right">
-                    <button id="btn-purge-trash" class="btn btn-danger">Purge All Deleted Records</button>
+                <div class="toolbar-actions">
+                    <button id="btn-purge-trash" class="btn btn-secondary">Purge All Deleted Records</button>
                     <button id="btn-refresh-trash" class="btn btn-secondary">Refresh</button>
                 </div>
             </div>
@@ -86,12 +80,6 @@
 
         <!-- TAB 3: Database Maintenance -->
         <section id="tab-maintenance" class="tab-pane">
-            <div class="section-toolbar">
-                <div class="toolbar-left">
-                    <h2>Database Operations</h2>
-                </div>
-            </div>
-
             <div class="maintenance-table-container">
                 <table class="data-table">
                     <thead>
@@ -103,7 +91,7 @@
                     </thead>
                     <tbody>
                         <tr>
-                            <td><strong>Physical SQLite Snapshot</strong></td>
+                            <td>Physical SQLite Snapshot</td>
                             <td class="text-muted">Online binary backup into the <code>backup/</code> directory using SQLite native backup API.</td>
                             <td>
                                 <button id="btn-snapshot-backup" class="btn btn-primary btn-sm">Take Snapshot</button>
@@ -111,14 +99,14 @@
                             </td>
                         </tr>
                         <tr>
-                            <td><strong>Logical SQL Dump</strong></td>
+                            <td>Logical SQL Dump</td>
                             <td class="text-muted">Direct streaming SQL schema and data export for archiving.</td>
                             <td>
                                 <button id="btn-sql-dump" class="btn btn-secondary btn-sm">Download dump.sql</button>
                             </td>
                         </tr>
                         <tr>
-                            <td><strong>Vacuum and Optimize</strong></td>
+                            <td>Vacuum and Optimize</td>
                             <td class="text-muted">Reclaims unused disk pages and runs <code>PRAGMA optimize</code> in a worker thread.</td>
                             <td>
                                 <button id="btn-vacuum-db" class="btn btn-secondary btn-sm">Run Vacuum and Optimize</button>
@@ -133,10 +121,7 @@
         <!-- TAB 4: Telemetry -->
         <section id="tab-telemetry" class="tab-pane">
             <div class="section-toolbar">
-                <div class="toolbar-left">
-                    <h2>Telemetry and Storage Metrics</h2>
-                </div>
-                <div class="toolbar-right">
+                <div class="toolbar-actions">
                     <button id="btn-refresh-telemetry" class="btn btn-secondary">Refresh</button>
                 </div>
             </div>

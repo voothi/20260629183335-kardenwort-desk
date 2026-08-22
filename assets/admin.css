@@ -1,26 +1,23 @@
 /* ==========================================================================
    Kardenwort Desk Admin Panel - Utilitarian Minimalist Stylesheet
-   Theme: Utilitarian Console Dark
+   Single Unified Design Layout
    ========================================================================== */
 
 :root {
     --bg-primary: #0d0f12;
     --bg-secondary: #13161c;
     --bg-card: #161a22;
-    --bg-hover: #1c212a;
+    --bg-hover: #1f242d;
     --border-color: rgba(255, 255, 255, 0.1);
     --border-subtle: rgba(255, 255, 255, 0.05);
-    --border-focus: #1f6feb;
+    --border-focus: #388bfd;
     
     --text-main: #e3e6eb;
     --text-muted: #8b949e;
     --text-dim: #6e7681;
 
-    --accent-blue: #0969da;
-    --accent-blue-hover: #1f6feb;
+    --accent-blue: #1f6feb;
     --accent-green: #2da44e;
-    --accent-red: #cf222e;
-    --accent-red-hover: #a40e26;
 
     --font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     --font-mono: ui-monospace, SFMono-Regular, "SF Mono", Menlo, Consolas, monospace;
@@ -66,10 +63,8 @@ body {
 
 .brand-title {
     font-size: 13px;
-    font-weight: 700;
-    color: #fff;
-    letter-spacing: 0.5px;
-    font-family: var(--font-mono);
+    font-weight: 600;
+    color: var(--text-main);
 }
 
 .header-controls {
@@ -123,7 +118,7 @@ body {
 }
 
 .status-pill.error .status-dot {
-    background-color: var(--accent-red);
+    background-color: var(--text-muted);
 }
 
 /* --------------------------------------------------------------------------
@@ -134,29 +129,30 @@ body {
     border-bottom: 1px solid var(--border-color);
     display: flex;
     padding: 0 16px;
-    gap: 2px;
+    gap: 4px;
 }
 
 .nav-tab {
     background: transparent;
-    border: none;
-    border-bottom: 2px solid transparent;
+    border: 1px solid transparent;
+    border-bottom: none;
     color: var(--text-muted);
     font-size: 12px;
-    font-weight: 600;
-    padding: 8px 14px;
+    font-weight: 500;
+    padding: 6px 12px;
     cursor: pointer;
+    margin-bottom: -1px;
 }
 
 .nav-tab:hover {
     color: var(--text-main);
-    background: rgba(255, 255, 255, 0.02);
 }
 
 .nav-tab.active {
     color: var(--text-main);
-    border-bottom-color: var(--accent-blue);
     background: var(--bg-primary);
+    border-color: var(--border-color);
+    border-bottom: 1px solid var(--bg-primary);
 }
 
 /* --------------------------------------------------------------------------
@@ -180,21 +176,13 @@ body {
 
 .section-toolbar {
     display: flex;
-    justify-content: space-between;
+    justify-content: flex-start;
     align-items: center;
-    margin-bottom: 12px;
-    flex-wrap: wrap;
-    gap: 8px;
+    margin-bottom: 10px;
+    gap: 6px;
 }
 
-.toolbar-left h2 {
-    font-size: 14px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
-}
-
-.toolbar-right {
+.toolbar-actions {
     display: flex;
     gap: 6px;
 }
@@ -203,10 +191,10 @@ body {
     color: var(--text-muted);
 }
 
-.mt-4 { margin-top: 16px; }
+.mt-4 { margin-top: 12px; }
 
 /* --------------------------------------------------------------------------
-   Buttons & Inputs
+   Buttons (Unified neutral styling)
    -------------------------------------------------------------------------- */
 .btn {
     display: inline-flex;
@@ -227,6 +215,7 @@ body {
 
 .btn:hover {
     background-color: var(--bg-hover);
+    border-color: rgba(255, 255, 255, 0.2);
 }
 
 .btn:disabled {
@@ -235,13 +224,13 @@ body {
 }
 
 .btn-primary {
-    background-color: var(--accent-blue);
-    border-color: var(--accent-blue);
-    color: #fff;
+    background-color: var(--bg-card);
+    border-color: var(--border-color);
+    color: var(--text-main);
 }
+
 .btn-primary:hover {
-    background-color: var(--accent-blue-hover);
-    border-color: var(--accent-blue-hover);
+    background-color: var(--bg-hover);
 }
 
 .btn-secondary {
@@ -249,18 +238,16 @@ body {
     border-color: var(--border-color);
     color: var(--text-main);
 }
-.btn-secondary:hover {
-    background-color: var(--bg-hover);
-}
 
 .btn-danger {
-    background-color: rgba(207, 34, 46, 0.2);
-    border-color: var(--accent-red);
-    color: #f85149;
+    background-color: var(--bg-card);
+    border-color: var(--border-color);
+    color: var(--text-main);
 }
+
 .btn-danger:hover {
-    background-color: var(--accent-red);
-    color: #fff;
+    background-color: var(--bg-hover);
+    border-color: rgba(255, 255, 255, 0.2);
 }
 
 .btn-sm {
@@ -280,18 +267,18 @@ body {
 .tree-container {
     background: var(--bg-primary);
     border: 1px solid var(--border-color);
-    padding: 10px;
+    padding: 8px;
     min-height: 200px;
 }
 
 .tree-node {
-    margin-bottom: 4px;
+    margin-bottom: 3px;
 }
 
 .node-card {
     background: var(--bg-secondary);
     border: 1px solid var(--border-subtle);
-    padding: 6px 10px;
+    padding: 5px 8px;
     display: flex;
     justify-content: space-between;
     align-items: center;
@@ -320,7 +307,7 @@ body {
 }
 
 .node-title {
-    font-weight: 600;
+    font-weight: 500;
     font-size: 13px;
 }
 
@@ -346,15 +333,15 @@ body {
 }
 
 .node-children {
-    padding-left: 20px;
-    margin-top: 4px;
+    padding-left: 18px;
+    margin-top: 3px;
     border-left: 1px solid var(--border-subtle);
     margin-left: 6px;
 }
 
 .session-list {
-    margin-top: 4px;
-    padding-left: 20px;
+    margin-top: 3px;
+    padding-left: 18px;
     border-left: 1px solid var(--border-subtle);
     margin-left: 6px;
     display: flex;
@@ -415,19 +402,18 @@ body {
 
 .panel-header {
     background: var(--bg-card);
-    padding: 6px 12px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border-color);
 }
 
 .panel-header h3 {
     font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    font-weight: 500;
+    color: var(--text-main);
 }
 
 .panel-body {
-    padding: 10px;
+    padding: 8px;
     max-height: 480px;
     overflow-y: auto;
 }
@@ -435,11 +421,11 @@ body {
 .trash-item {
     background: var(--bg-primary);
     border: 1px solid var(--border-subtle);
-    padding: 6px 10px;
+    padding: 5px 8px;
     display: flex;
     justify-content: space-between;
     align-items: center;
-    margin-bottom: 4px;
+    margin-bottom: 3px;
 }
 
 .trash-item-info {
@@ -471,18 +457,16 @@ body {
 
 .data-table th,
 .data-table td {
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border-subtle);
     text-align: left;
 }
 
 .data-table th {
     background: var(--bg-card);
-    font-weight: 600;
+    font-weight: 500;
     color: var(--text-muted);
     font-size: 11px;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
     border-bottom: 1px solid var(--border-color);
 }
 
@@ -506,30 +490,28 @@ body {
    -------------------------------------------------------------------------- */
 .telemetry-grid {
     display: grid;
-    grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
-    gap: 10px;
+    grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+    gap: 8px;
 }
 
 .metric-card {
     background: var(--bg-secondary);
     border: 1px solid var(--border-color);
-    padding: 12px;
+    padding: 10px;
 }
 
 .metric-title {
     font-size: 11px;
-    text-transform: uppercase;
     color: var(--text-muted);
-    font-weight: 600;
-    letter-spacing: 0.5px;
+    font-weight: 500;
     margin-bottom: 4px;
 }
 
 .metric-value {
-    font-size: 20px;
-    font-weight: 700;
+    font-size: 18px;
+    font-weight: 600;
     font-family: var(--font-mono);
-    color: #fff;
+    color: var(--text-main);
 }
 
 .metric-sub {
@@ -542,7 +524,7 @@ body {
 .code-block {
     background: var(--bg-primary);
     border: 1px solid var(--border-subtle);
-    padding: 10px;
+    padding: 8px;
     font-family: var(--font-mono);
     font-size: 11px;
     overflow-x: auto;
@@ -578,7 +560,7 @@ body {
 
 .modal-header {
     background: var(--bg-card);
-    padding: 8px 12px;
+    padding: 6px 10px;
     border-bottom: 1px solid var(--border-color);
     display: flex;
     justify-content: space-between;
@@ -587,9 +569,7 @@ body {
 
 .modal-header h3 {
     font-size: 12px;
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.5px;
+    font-weight: 500;
 }
 
 .modal-close {
@@ -606,10 +586,10 @@ body {
 }
 
 .modal-body {
-    padding: 12px;
+    padding: 10px;
     display: flex;
     flex-direction: column;
-    gap: 10px;
+    gap: 8px;
 }
 
 .form-group {
@@ -625,7 +605,7 @@ body {
 }
 
 .form-group .req {
-    color: var(--accent-red);
+    color: var(--text-dim);
 }
 
 .form-input {
@@ -633,7 +613,7 @@ body {
     border: 1px solid var(--border-color);
     border-radius: var(--radius-sm);
     color: var(--text-main);
-    padding: 6px 8px;
+    padding: 5px 8px;
     font-size: 12px;
     font-family: inherit;
 }
@@ -644,7 +624,7 @@ body {
 }
 
 .modal-footer {
-    padding: 8px 12px;
+    padding: 6px 10px;
     background: var(--bg-card);
     border-top: 1px solid var(--border-color);
     display: flex;
@@ -668,15 +648,15 @@ body {
 .toast {
     background: var(--bg-card);
     border: 1px solid var(--border-color);
-    padding: 6px 12px;
-    font-size: 12px;
-    color: #fff;
+    padding: 5px 10px;
+    font-size: 11px;
+    color: var(--text-main);
     display: flex;
     align-items: center;
     gap: 6px;
-    min-width: 200px;
+    min-width: 180px;
     font-family: var(--font-mono);
 }
 
 .toast.success { border-color: var(--accent-green); }
-.toast.error { border-color: var(--accent-red); }
+.toast.error { border-color: var(--border-color); }
