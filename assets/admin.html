@@ -14,7 +14,7 @@
         <div class="header-controls">
             <div class="token-container">
                 <input type="password" id="api-token-input" placeholder="X-API-Token" title="API Authentication Token" autocomplete="off" />
-                <button id="save-token-btn" class="btn btn-secondary btn-sm">Save Token</button>
+                <button id="save-token-btn" class="btn btn-secondary btn-sm">Save</button>
             </div>
             <div class="status-pill" id="server-status-pill">
                 <span class="status-dot"></span>
@@ -38,7 +38,7 @@
         <section id="tab-tree" class="tab-pane active">
             <div class="section-toolbar">
                 <div class="toolbar-actions">
-                    <button id="btn-new-root-project" class="btn btn-primary">+ New Root Project</button>
+                    <button id="btn-new-root-project" class="btn btn-primary">+ Root Project</button>
                     <button id="btn-refresh-tree" class="btn btn-secondary">Refresh</button>
                 </div>
             </div>
@@ -52,7 +52,7 @@
         <section id="tab-trash" class="tab-pane">
             <div class="section-toolbar">
                 <div class="toolbar-actions">
-                    <button id="btn-purge-trash" class="btn btn-secondary">Purge All Deleted Records</button>
+                    <button id="btn-purge-trash" class="btn btn-secondary">Purge All</button>
                     <button id="btn-refresh-trash" class="btn btn-secondary">Refresh</button>
                 </div>
             </div>
@@ -86,7 +86,7 @@
                         <tr>
                             <th>Operation</th>
                             <th>Description</th>
-                            <th style="width: 220px;">Action</th>
+                            <th style="width: 180px;">Action</th>
                         </tr>
                     </thead>
                     <tbody>
@@ -94,7 +94,7 @@
                             <td>Physical SQLite Snapshot</td>
                             <td class="text-muted">Online binary backup into the <code>backup/</code> directory using SQLite native backup API.</td>
                             <td>
-                                <button id="btn-snapshot-backup" class="btn btn-primary btn-sm">Take Snapshot</button>
+                                <button id="btn-snapshot-backup" class="btn btn-primary btn-sm">Snapshot</button>
                                 <span id="snapshot-status" class="status-msg"></span>
                             </td>
                         </tr>
@@ -102,14 +102,14 @@
                             <td>Logical SQL Dump</td>
                             <td class="text-muted">Direct streaming SQL schema and data export for archiving.</td>
                             <td>
-                                <button id="btn-sql-dump" class="btn btn-secondary btn-sm">Download dump.sql</button>
+                                <button id="btn-sql-dump" class="btn btn-secondary btn-sm">Download SQL</button>
                             </td>
                         </tr>
                         <tr>
                             <td>Vacuum and Optimize</td>
                             <td class="text-muted">Reclaims unused disk pages and runs <code>PRAGMA optimize</code> in a worker thread.</td>
                             <td>
-                                <button id="btn-vacuum-db" class="btn btn-secondary btn-sm">Run Vacuum and Optimize</button>
+                                <button id="btn-vacuum-db" class="btn btn-secondary btn-sm">Optimize</button>
                                 <span id="vacuum-status" class="status-msg"></span>
                             </td>
                         </tr>
@@ -173,20 +173,20 @@
                 
                 <div class="form-group">
                     <label for="project-title-input">Title <span class="req">*</span></label>
-                    <input type="text" id="project-title-input" class="form-input" placeholder="Title" required />
+                    <input type="text" id="project-title-input" class="form-input" required />
                 </div>
                 <div class="form-group">
                     <label for="project-slug-input">Slug (optional)</label>
-                    <input type="text" id="project-slug-input" class="form-input" placeholder="slug" />
+                    <input type="text" id="project-slug-input" class="form-input" />
                 </div>
                 <div class="form-group">
                     <label for="project-desc-input">Description</label>
-                    <textarea id="project-desc-input" class="form-input" rows="3" placeholder="Description..."></textarea>
+                    <textarea id="project-desc-input" class="form-input" rows="3"></textarea>
                 </div>
             </div>
             <div class="modal-footer">
                 <button id="btn-modal-cancel" class="btn btn-secondary">Cancel</button>
-                <button id="btn-modal-save" class="btn btn-primary">Save Project</button>
+                <button id="btn-modal-save" class="btn btn-primary">Save</button>
             </div>
         </div>
     </div>
@@ -195,7 +195,7 @@
     <div id="link-session-modal" class="modal-overlay hidden">
         <div class="modal-card">
             <div class="modal-header">
-                <h3>Link Session to Project</h3>
+                <h3>Link Session</h3>
                 <button class="modal-close" id="btn-link-modal-close">[x]</button>
             </div>
             <div class="modal-body">
@@ -209,7 +209,7 @@
             </div>
             <div class="modal-footer">
                 <button id="btn-link-modal-cancel" class="btn btn-secondary">Cancel</button>
-                <button id="btn-link-modal-save" class="btn btn-primary">Link Session</button>
+                <button id="btn-link-modal-save" class="btn btn-primary">Link</button>
             </div>
         </div>
     </div>

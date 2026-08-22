@@ -89,7 +89,7 @@ function initAuthToken() {
     saveTokenBtn.addEventListener('click', () => {
         state.token = tokenInput.value.trim();
         localStorage.setItem('kardenwort_api_token', state.token);
-        showToast('API Token saved', 'success');
+        showToast('Token saved', 'success');
         checkServerHealth();
         refreshCurrentTab();
     });
@@ -157,7 +157,7 @@ async function loadProjectTree() {
 
 function renderProjectTree(nodes, container) {
     if (!nodes || nodes.length === 0) {
-        container.innerHTML = `<div class="empty-state">No projects found. Click "+ New Root Project" to create a book or collection.</div>`;
+        container.innerHTML = `<div class="empty-state">No projects found.</div>`;
         return;
     }
 
@@ -188,8 +188,8 @@ function createNodeElement(node) {
             ${node.description ? `<span class="node-desc">${escapeHtml(node.description)}</span>` : ''}
         </div>
         <div class="node-actions">
-            <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Sub-Chapter">+ Sub-Chapter</button>
-            <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link Session</button>
+            <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Sub-Chapter">+ Sub</button>
+            <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link</button>
             <button class="btn btn-secondary btn-sm btn-edit-node" data-id="${node.id}" title="Edit Project">[Edit]</button>
             <button class="btn btn-danger btn-sm btn-delete-node" data-id="${node.id}" title="Delete Project">[Delete]</button>
         </div>
@@ -253,7 +253,7 @@ function createSessionElement(session, projectId, index, total) {
         <div class="session-actions">
             <button class="btn btn-icon btn-move-up" ${index === 0 ? 'disabled' : ''} title="Move Up">[Up]</button>
             <button class="btn btn-icon btn-move-down" ${index === total - 1 ? 'disabled' : ''} title="Move Down">[Down]</button>
-            <button class="btn btn-icon btn-unlink" title="Unlink from Chapter">[Unlink]</button>
+            <button class="btn btn-icon btn-unlink" title="Unlink">[Unlink]</button>
         </div>
     `;
 
@@ -297,13 +297,11 @@ async function moveSessionOrder(projectId, currentIndex, delta) {
         });
         showToast('Session order updated', 'success');
         loadProjectTree();
-    } catch (e) {
-        // error toast shown by apiFetch
-    }
+    } catch (e) {}
 }
 
 async function unlinkSession(projectId, sessionZid) {
-    if (!confirm(`Unlink session ${sessionZid} from this chapter?`)) return;
+    if (!confirm(`Unlink session ${sessionZid}?`)) return;
     try {
         await apiFetch('/api/v1/admin/projects/unlink', {
             method: 'POST',
@@ -318,13 +316,13 @@ async function unlinkSession(projectId, sessionZid) {
 }
 
 async function deleteProject(projectId, title) {
-    if (!confirm(`Are you sure you want to delete project "${title}"? All sub-chapters will also be moved to the recycle bin.`)) return;
+    if (!confirm(`Delete project "${title}"?`)) return;
     try {
         await apiFetch('/api/v1/admin/projects/delete', {
             method: 'POST',
             body: JSON.stringify({ project_id: projectId })
         });
-        showToast(`Project "${title}" moved to Recycle Bin`, 'success');
+        showToast(`Project moved to Recycle Bin`, 'success');
         loadProjectTree();
         loadTrash();
     } catch (e) {}
@@ -385,13 +383,12 @@ async function saveProjectModal() {
     const description = document.getElementById('project-desc-input').value.trim();
 
     if (!title) {
-        showToast('Project title is required', 'error');
+        showToast('Title is required', 'error');
         return;
     }
 
     try {
         if (id) {
-            // Update
             await apiFetch('/api/v1/admin/projects/update', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -403,7 +400,6 @@ async function saveProjectModal() {
             });
             showToast('Project updated', 'success');
         } else {
-            // Create
             await apiFetch('/api/v1/admin/projects', {
                 method: 'POST',
                 body: JSON.stringify({
@@ -446,7 +442,7 @@ async function saveLinkSessionModal() {
     const projectId = document.getElementById('link-modal-project-id').value;
     const sessionZid = document.getElementById('link-session-select').value;
     if (!sessionZid) {
-        showToast('Please select a session', 'error');
+        showToast('Select a session', 'error');
         return;
     }
 
@@ -458,7 +454,7 @@ async function saveLinkSessionModal() {
                 session_zid: sessionZid
             })
         });
-        showToast('Session linked successfully', 'success');
+        showToast('Session linked', 'success');
         document.getElementById('link-session-modal').classList.add('hidden');
         loadProjectTree();
     } catch (e) {}
@@ -528,17 +524,17 @@ window.restoreTrash = async function(type, id) {
             method: 'POST',
             body: JSON.stringify(payload)
         });
-        showToast(`Restored ${type} successfully`, 'success');
+        showToast(`Restored ${type}`, 'success');
         loadTrash();
         loadProjectTree();
     } catch (e) {}
 };
 
 document.getElementById('btn-purge-trash').addEventListener('click', async () => {
-    if (!confirm('Permanently purge all deleted records? This action cannot be undone!')) return;
+    if (!confirm('Permanently purge all deleted records?')) return;
     try {
         const res = await apiFetch('/api/v1/admin/trash/purge', { method: 'POST', body: JSON.stringify({}) });
-        showToast(`Purged ${res.purged_sessions || 0} sessions and ${res.purged_projects || 0} projects`, 'success');
+        showToast(`Purged ${res.purged_sessions || 0} sessions, ${res.purged_projects || 0} projects`, 'success');
         loadTrash();
     } catch (e) {}
 });
@@ -557,10 +553,10 @@ function initMaintenance() {
         snapStatus.textContent = 'Creating snapshot...';
         try {
             const res = await apiFetch('/api/v1/admin/backup/snapshot', { method: 'POST', body: JSON.stringify({}) });
-            snapStatus.textContent = `Saved: ${res.filename} (${(res.bytes / 1024 / 1024).toFixed(2)} MB)`;
-            showToast(`Snapshot created: ${res.filename}`, 'success');
+            snapStatus.textContent = `${res.filename} (${(res.bytes / 1024 / 1024).toFixed(2)} MB)`;
+            showToast(`Snapshot created`, 'success');
         } catch (e) {
-            snapStatus.textContent = 'Snapshot failed';
+            snapStatus.textContent = 'Failed';
         }
     });
 
@@ -573,13 +569,13 @@ function initMaintenance() {
     });
 
     btnVacuum.addEventListener('click', async () => {
-        vacStatus.textContent = 'Vacuum dispatched...';
+        vacStatus.textContent = 'Dispatched...';
         try {
             const res = await apiFetch('/api/v1/admin/db/vacuum', { method: 'POST', body: JSON.stringify({}) });
-            vacStatus.textContent = `Status: ${res.status || 'Running in background'}`;
-            showToast('Database VACUUM triggered in worker thread', 'success');
+            vacStatus.textContent = `${res.status || 'Running'}`;
+            showToast('Vacuum triggered', 'success');
         } catch (e) {
-            vacStatus.textContent = 'Vacuum failed';
+            vacStatus.textContent = 'Failed';
         }
     });
 }
