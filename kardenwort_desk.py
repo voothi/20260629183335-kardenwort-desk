@@ -3720,7 +3720,12 @@ def deduplicate_rows_by_lemma(
                         if part not in merged_inflected:
                             merged_inflected.append(part)
         if col_inflected != -1 and merged_inflected:
-            merged_row[col_inflected] = ", ".join(merged_inflected)
+            merged_row[col_inflected] = ", ".join(sort_inflected_forms(
+                merged_inflected,
+                apostrophe_chars=("'", "’", "‘", "`", "´", "ʼ"),
+                order='contractions_first',
+                prefer_lowercase=True,
+            ))
         unique_rows.append(merged_row)
 
     return unique_rows

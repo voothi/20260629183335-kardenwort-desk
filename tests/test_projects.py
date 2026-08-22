@@ -604,4 +604,53 @@ def test_synthesize_project_materials_frequency_sorting(temp_project_env, monkey
     assert lemmas == ["the", "button", "attribute", "modal"]
 
 
+def test_deduplicate_and_represent_different_inflected_forms():
+    from kardenwort_desk import deduplicate_rows_by_lemma
+
+    headers = ["Quotation", "WordSource", "WordSourceInflectedForm", "SentenceSourceIndex"]
+
+    # 1. Test multiple English forms merging into single lemma (e.g. 'goes', 'went', 'gone' -> 'go', 'the', 'The' -> 'the')
+    en_rows = [
+        ["The", "the", "The", "1"],
+        ["the", "the", "the", "2"],
+        ["goes", "go", "goes", "1"],
+        ["went", "go", "went", "2"],
+        ["gone", "go", "gone", "3"],
+        ["e. g.", "example", "e. g.", "1"],
+        ["for example", "example", "for example", "2"],
+    ]
+
+    deduped_en = deduplicate_rows_by_lemma(en_rows, headers)
+    assert len(deduped_en) == 3  # 'the', 'go', 'example'
+
+    the_row = next(r for r in deduped_en if r[1] == "the")
+    assert the_row[2] == "the"  # Lowercase preferred
+
+    go_row = next(r for r in deduped_en if r[1] == "go")
+    # All distinct inflected forms are represented
+    assert "goes" in go_row[2] and "went" in go_row[2] and "gone" in go_row[2]
+
+    example_row = next(r for r in deduped_en if r[1] == "example")
+    assert "e. g." in example_row[2] and "for example" in example_row[2]
+
+    # 2. Test German forms merging into single lemma ('ging', 'geht', 'gegangen' -> 'gehen', 'z. B.' -> 'Beispiel')
+    de_rows = [
+        ["geht", "gehen", "geht", "1"],
+        ["ging", "gehen", "ging", "2"],
+        ["gegangen", "gehen", "gegangen", "3"],
+        ["z. B.", "Beispiel", "z. B.", "1"],
+        ["zum Beispiel", "Beispiel", "zum Beispiel", "2"],
+    ]
+
+    deduped_de = deduplicate_rows_by_lemma(de_rows, headers)
+    assert len(deduped_de) == 2
+
+    gehen_row = next(r for r in deduped_de if r[1] == "gehen")
+    assert "geht" in gehen_row[2] and "ging" in gehen_row[2] and "gegangen" in gehen_row[2]
+
+    beispiel_row = next(r for r in deduped_de if r[1] == "Beispiel")
+    assert "z. B." in beispiel_row[2] and "zum Beispiel" in beispiel_row[2]
+
+
+
 
