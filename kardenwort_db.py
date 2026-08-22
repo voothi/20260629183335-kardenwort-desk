@@ -1998,7 +1998,13 @@ class KardenwortDB:
                 (session_zid, slug, source_lang, target_lang, text_mode, source_raw_text, created_at, updated_at),
             )
 
-            # 2. Insert sentences
+            # 2. Clear previous session words and sentences first in correct FK order
+            if words or sentences:
+                conn.execute("DELETE FROM words WHERE session_zid = ?;", (session_zid,))
+            if sentences:
+                conn.execute("DELETE FROM sentences WHERE session_zid = ?;", (session_zid,))
+
+            # 3. Insert sentences
             if sentences:
                 sent_sql = """
                     INSERT INTO sentences (
@@ -2026,9 +2032,8 @@ class KardenwortDB:
                 ]
                 conn.executemany(sent_sql, sent_records)
 
-            # 3. Insert words (clear previous session words first to guarantee no duplicate rows)
+            # 4. Insert words
             if words:
-                conn.execute("DELETE FROM words WHERE session_zid = ?;", (session_zid,))
                 word_sql = """
                     INSERT INTO words (
                         session_zid, sentence_index, token_order, quotation, inflected_form,

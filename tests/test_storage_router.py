@@ -215,7 +215,7 @@ def test_sqlite_storage_adapter_save_session_normalization(tmp_path):
         working_tsv_path=tsv_out,
     )
     assert res_zid == session_zid
-    assert tsv_out.exists()
+    assert not tsv_out.exists()
 
     # Query SQLite database to verify normalization
     bundle = adapter.db.get_session_bundle(session_zid)

@@ -1871,23 +1871,31 @@ def build_field_mapping(mapping, mode):
 
 def get_role_fields(mapping, headers):
     role_fields = {}
+    headers_lower = {h.lower(): h for h in headers}
     if mapping and 'desk_columns' in mapping:
-        headers_lower = {h.lower(): h for h in headers}
         for field, role in mapping['desk_columns'].items():
             field_lower = field.lower()
             if field_lower in headers_lower:
                 role_fields[role] = headers_lower[field_lower]
                 
-    if 'WordSource' in headers and 'lemma' not in role_fields:
-        role_fields['lemma'] = 'WordSource'
-    if 'WordSourceMorphologyAI' in headers and 'morphology' not in role_fields:
-        role_fields['morphology'] = 'WordSourceMorphologyAI'
-    if 'WordSourceIPA' in headers and 'ipa' not in role_fields:
-        role_fields['ipa'] = 'WordSourceIPA'
-    if 'DeskSelected' in headers and 'selected' not in role_fields:
-        role_fields['selected'] = 'DeskSelected'
+    if 'lemma' not in role_fields:
+        if 'wordsource' in headers_lower:
+            role_fields['lemma'] = headers_lower['wordsource']
+        elif 'lemma' in headers_lower:
+            role_fields['lemma'] = headers_lower['lemma']
+    if 'word_translation' not in role_fields:
+        if 'worddestination' in headers_lower:
+            role_fields['word_translation'] = headers_lower['worddestination']
+        elif 'word_translation' in headers_lower:
+            role_fields['word_translation'] = headers_lower['word_translation']
+    if 'morphology' not in role_fields and 'wordsourcemorphologyai' in headers_lower:
+        role_fields['morphology'] = headers_lower['wordsourcemorphologyai']
+    if 'ipa' not in role_fields and 'wordsourceipa' in headers_lower:
+        role_fields['ipa'] = headers_lower['wordsourceipa']
+    if 'selected' not in role_fields and 'deskselected' in headers_lower:
+        role_fields['selected'] = headers_lower['deskselected']
         
-    sentence_index_col = "SentenceSourceIndex"
+    sentence_index_col = headers_lower.get("sentencesourceindex", "SentenceSourceIndex")
     if mapping and 'fields_mapping.word' in mapping:
         for col, role in mapping['fields_mapping.word'].items():
             if role == 'sentence_index':
@@ -1902,10 +1910,10 @@ def get_role_fields(mapping, headers):
             elif role == 'source_sentence':
                 role_fields['sentence_source'] = col
                 
-    if 'sentence_source' not in role_fields and 'SentenceSource' in headers:
-        role_fields['sentence_source'] = 'SentenceSource'
-    if 'sentence_destination' not in role_fields and 'SentenceDestination' in headers:
-        role_fields['sentence_destination'] = 'SentenceDestination'
+    if 'sentence_source' not in role_fields and 'sentencesource' in headers_lower:
+        role_fields['sentence_source'] = headers_lower['sentencesource']
+    if 'sentence_destination' not in role_fields and 'sentencedestination' in headers_lower:
+        role_fields['sentence_destination'] = headers_lower['sentencedestination']
         
     return role_fields
 
@@ -2499,6 +2507,14 @@ class SqliteStorageAdapter(StorageAdapter):
                 "sentencedestination2contextleft", "sentencedestination2contextright",
             }
 
+            existing_sents_by_idx = {}
+            try:
+                ex_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
+                if ex_sents:
+                    existing_sents_by_idx = {s["sentence_index"]: dict(s) for s in ex_sents}
+            except Exception:
+                existing_sents_by_idx = {}
+
             sent_map: Dict[int, Dict[str, Any]] = {}
             word_list: List[Dict[str, Any]] = []
 
@@ -2511,17 +2527,32 @@ class SqliteStorageAdapter(StorageAdapter):
                         s_idx = int(raw_s_idx)
                     else:
                         s_idx = row_idx
+                elif existing_sents_by_idx:
+                    # Fallback to existing sentence index if available
+                    sorted_existing_keys = sorted(existing_sents_by_idx.keys())
+                    if row_idx < len(sorted_existing_keys):
+                        s_idx = sorted_existing_keys[row_idx]
+                    else:
+                        s_idx = sorted_existing_keys[-1]
 
-                if s_idx not in sent_map:
-                    sent_map[s_idx] = {
-                        "session_zid": session_zid,
-                        "sentence_index": s_idx,
-                        "sentence_source": row[col_sent_src] if col_sent_src is not None and col_sent_src < len(row) else "",
-                        "sentence_destination": row[col_sent_dst] if col_sent_dst is not None and col_sent_dst < len(row) else None,
-                        "sentence_destination2": row[col_sent_dst2] if col_sent_dst2 is not None and col_sent_dst2 < len(row) else None,
-                        "sentence_source_ipa": row[col_sent_ipa] if col_sent_ipa is not None and col_sent_ipa < len(row) else None,
-                        "sentence_source_audio": row[col_sent_aud] if col_sent_aud is not None and col_sent_aud < len(row) else None,
-                    }
+                existing_sent = existing_sents_by_idx.get(s_idx, {})
+                src_val = row[col_sent_src] if col_sent_src is not None and col_sent_src < len(row) and str(row[col_sent_src]).strip() else existing_sent.get("sentence_source", "")
+                dst_val = row[col_sent_dst] if col_sent_dst is not None and col_sent_dst < len(row) and str(row[col_sent_dst]).strip() else existing_sent.get("sentence_destination")
+                dst2_val = row[col_sent_dst2] if col_sent_dst2 is not None and col_sent_dst2 < len(row) and str(row[col_sent_dst2]).strip() else existing_sent.get("sentence_destination2")
+                ipa_val = row[col_sent_ipa] if col_sent_ipa is not None and col_sent_ipa < len(row) and str(row[col_sent_ipa]).strip() else existing_sent.get("sentence_source_ipa")
+                aud_val = row[col_sent_aud] if col_sent_aud is not None and col_sent_aud < len(row) and str(row[col_sent_aud]).strip() else existing_sent.get("sentence_source_audio")
+
+                if src_val or s_idx in existing_sents_by_idx:
+                    if s_idx not in sent_map:
+                        sent_map[s_idx] = {
+                            "session_zid": session_zid,
+                            "sentence_index": s_idx,
+                            "sentence_source": src_val,
+                            "sentence_destination": dst_val,
+                            "sentence_destination2": dst2_val,
+                            "sentence_source_ipa": ipa_val,
+                            "sentence_source_audio": aud_val,
+                        }
 
                 # Extract word fields
                 quotation = get_col_val(row, "quotation") or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, "wordsource") or ""
@@ -2570,7 +2601,17 @@ class SqliteStorageAdapter(StorageAdapter):
                 }
                 word_list.append(word_entry)
 
-            norm_sentences = list(sent_map.values())
+            if not sent_map:
+                try:
+                    existing_sents = self.db.get_sentences_by_session(session_zid, zid=zid)
+                    if existing_sents:
+                        norm_sentences = [dict(s) for s in existing_sents]
+                    else:
+                        norm_sentences = []
+                except Exception:
+                    norm_sentences = []
+            else:
+                norm_sentences = list(sent_map.values())
             norm_words = word_list
 
         with TraceTimer("sqlite_save", session_zid, self.config, self.resolved_paths):
@@ -2580,10 +2621,7 @@ class SqliteStorageAdapter(StorageAdapter):
                 words=norm_words,
                 zid=zid or session_zid,
             )
-
-        # Also write TSV file for flat-file parity / tooling compatibility
-        if working_tsv_path and headers is not None and data_rows is not None:
-            self._tsv_fallback.save_tsv_rows_safely(working_tsv_path, comments or [], headers, data_rows)
+            # SQLite persistence is complete and authoritative (zero mirror TSV written to results/)
 
         return session_zid
 
@@ -2653,6 +2691,12 @@ class SqliteStorageAdapter(StorageAdapter):
                     mapping = load_anki_mapping(mapping_path)
                     if "fields" in mapping:
                         headers = list(mapping["fields"].keys())
+                    if "desk_columns" in mapping:
+                        existing_h = {h.lower() for h in headers}
+                        for dc in mapping["desk_columns"].keys():
+                            if dc.lower() not in existing_h:
+                                headers.append(dc)
+                                existing_h.add(dc.lower())
                 except Exception:
                     pass
 
@@ -2683,6 +2727,15 @@ class SqliteStorageAdapter(StorageAdapter):
                     "SentenceSourceIndex", "Deck", "LeitnerBox", "LeitnerDue", "DeskSelected",
                     "ClassificationOxford", "ClassificationGoethe",
                 ]
+            else:
+                existing_h = {h.lower() for h in headers}
+                if db_sentences or any(w.get("sentence_index") for w in db_words):
+                    if "sentencesourceindex" not in existing_h:
+                        headers.append("SentenceSourceIndex")
+                        existing_h.add("sentencesourceindex")
+                    if "sentencesource" not in existing_h:
+                        headers.append("SentenceSource")
+                        existing_h.add("sentencesource")
 
             # Preserve and append any unmapped custom columns found in extra_fields
             extra_headers = []
@@ -2900,12 +2953,28 @@ class SqliteStorageAdapter(StorageAdapter):
         tsv_path: Path,
         **kwargs,
     ) -> Tuple[List[str], List[str], List[List[str]]]:
+        if tsv_path:
+            sess_zid = extract_zid(tsv_path)
+            if sess_zid:
+                try:
+                    restored = self.restore_session(sess_zid)
+                    if restored and restored.get("data_rows"):
+                        return (
+                            restored.get("comments", []),
+                            restored.get("headers", []),
+                            restored.get("data_rows", []),
+                        )
+                except Exception:
+                    pass
         return self._tsv_fallback.load_tsv_rows(tsv_path)
 
     @contextlib.contextmanager
     def file_lock(self, file_path: Path):
-        with self._tsv_fallback.file_lock(file_path):
+        if file_path and not file_path.exists():
             yield
+        else:
+            with self._tsv_fallback.file_lock(file_path):
+                yield
 
     def update_word(
         self,
@@ -5229,48 +5298,59 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     kw_config = load_kardenwort_config(kardenwort_workspace)
     
     results_dir = resolve_results_dir(resolved_paths, kw_config)
-    results_dir.mkdir(parents=True, exist_ok=True)
-    
     working_tsv_path = results_dir / cache_key
     
-    import time
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
     
-    # Clean up stale .updates directories (> 5 minutes old) to prevent clutter
-    try:
-        import shutil, time
-        now = time.time()
-        for d in results_dir.rglob("*.updates"):
-            if d.is_dir() and (now - d.stat().st_mtime) > 300:
-                try:
-                    shutil.rmtree(d)
-                except OSError:
-                    pass
-    except Exception:
-        pass
-        
+    import time
     import re
     
-    if working_tsv_path.exists():
-        if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
-            return working_tsv_path
-            
-    if ttl_seconds > 0:
-        m = re.match(r'^\d{14}-(.+)', cache_key)
-        if m:
-            slug_part = m.group(1)
-            for cached_file in results_dir.glob(f"*-{slug_part}"):
-                if cached_file.is_file():
-                    if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
-                        return cached_file
-            
-    # Clean up any leftover .updates from previous sessions to avoid polling stale data
-    updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
-    if updates_dir.exists():
+    if not is_sqlite:
+        results_dir.mkdir(parents=True, exist_ok=True)
+        # Clean up stale .updates directories (> 5 minutes old) to prevent clutter
         try:
             import shutil
-            shutil.rmtree(updates_dir)
-        except OSError:
+            now = time.time()
+            for d in results_dir.rglob("*.updates"):
+                if d.is_dir() and (now - d.stat().st_mtime) > 300:
+                    try:
+                        shutil.rmtree(d)
+                    except OSError:
+                        pass
+        except Exception:
             pass
+            
+        if working_tsv_path.exists():
+            if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
+                return working_tsv_path
+                
+        if ttl_seconds > 0:
+            m = re.match(r'^\d{14}-(.+)', cache_key)
+            if m:
+                slug_part = m.group(1)
+                for cached_file in results_dir.glob(f"*-{slug_part}"):
+                    if cached_file.is_file():
+                        if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
+                            return cached_file
+                
+        # Clean up any leftover .updates from previous sessions to avoid polling stale data
+        updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
+        if updates_dir.exists():
+            try:
+                import shutil
+                shutil.rmtree(updates_dir)
+            except OSError:
+                pass
+    else:
+        # SQLite caching check
+        if ttl_seconds > 0:
+            m = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', cache_key, re.IGNORECASE)
+            slug_part = m.group(1) if m else generate_slug(text)
+            cached_bundle = storage_adapter.get_cached_session(slug_part, language, ttl_seconds, zid=zid)
+            if cached_bundle and cached_bundle.get("session"):
+                cached_zid = cached_bundle["session"].get("zid")
+                return results_dir / f"{cached_zid}-{slug_part}.{language}.tsv"
             
     stem = cache_key
     if stem.endswith('.tsv'):
@@ -5280,7 +5360,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
     save_source_text = config.getboolean(SEC_SETTINGS, 'save_source_text', fallback=True)
-    if save_source_text:
+    if not is_sqlite and save_source_text:
         if eff_mode == 'single':
             source_text_path.write_text(text, encoding='utf-8')
         elif not source_text_path.exists():
@@ -5299,8 +5379,8 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
     
-    text_file_to_pass = source_text_path
     temp_file_path = None
+    temp_dir_obj = None
     
     try:
         sbc = SentenceBoundaryConfig.from_config(config)
@@ -5310,20 +5390,35 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         dedup_scope = workflow_res.dedup_scope
         combine_source_words = workflow_res.combine_source_words
 
-        use_temp = (eff_mode == 'single') or (not save_source_text)
-        if use_temp:
+        if is_sqlite:
+            temp_dir_obj = tempfile.TemporaryDirectory()
+            temp_dir_path = Path(temp_dir_obj.name)
             if eff_mode == 'single':
                 split_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
                 temp_content = "\n".join(split_lines)
             else:
                 temp_content = text
-            temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
-            temp_file_path = Path(temp_file.name)
-            try:
-                temp_file.write(temp_content)
-            finally:
-                temp_file.close()
-            text_file_to_pass = temp_file_path
+            temp_src_file = temp_dir_path / f"{stem}.txt"
+            temp_src_file.write_text(temp_content, encoding='utf-8')
+            text_file_to_pass = temp_src_file
+            out_file_to_pass = temp_dir_path / cache_key
+        else:
+            text_file_to_pass = source_text_path
+            out_file_to_pass = working_tsv_path
+            use_temp = (eff_mode == 'single') or (not save_source_text)
+            if use_temp:
+                if eff_mode == 'single':
+                    split_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
+                    temp_content = "\n".join(split_lines)
+                else:
+                    temp_content = text
+                temp_file = tempfile.NamedTemporaryFile(mode='w', suffix='.txt', encoding='utf-8', delete=False)
+                temp_file_path = Path(temp_file.name)
+                try:
+                    temp_file.write(temp_content)
+                finally:
+                    temp_file.close()
+                text_file_to_pass = temp_file_path
             
         use_simplemma_correction = config.getboolean(SEC_SETTINGS, 'use_simplemma_correction', fallback=False)
         simplemma_after_spacy = config.getboolean(SEC_SETTINGS, 'simplemma_after_spacy', fallback=False)
@@ -5341,7 +5436,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             "--sentence-context-size", "0",
             "--anki-csv-header", json.dumps(fields),
             "--anki-field-mapping", json.dumps(field_mapping),
-            "--output-file", str(working_tsv_path),
+            "--output-file", str(out_file_to_pass),
             "--text1-file", str(text_file_to_pass),
             "--tts-destination-lang", target_lang
         ]
@@ -5439,37 +5534,57 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             elif sbc.context_mode == eff_mode:
                 apply_padding = True
 
-        if apply_padding and working_tsv_path.exists():
+        if out_file_to_pass.exists():
             try:
-                comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+                comments, headers, data_rows = load_tsv_rows(out_file_to_pass)
                 role_fields = get_role_fields(mapping, headers)
                 col_src_idx = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 col_src_sent = headers.index(role_fields.get('sentence_source', 'SentenceSource')) if role_fields.get('sentence_source', 'SentenceSource') in headers else -1
-                if col_src_idx != -1 and col_src_sent != -1:
+                if apply_padding and col_src_idx != -1 and col_src_sent != -1:
                     if eff_mode == 'single':
                         sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
                     else:
                         sentences = [ln.strip() for ln in text.splitlines()]
                     padded_sentences = pad_sentences(sentences, text, sbc.words_before, sbc.words_after, max_words=sbc.max_words)
-                    modified = False
                     for row in data_rows:
                         if len(row) > col_src_idx and len(row) > col_src_sent:
                             try:
                                 idx = int(row[col_src_idx]) - 1
                                 if 0 <= idx < len(padded_sentences):
                                     row[col_src_sent] = padded_sentences[idx]
-                                    modified = True
                             except ValueError:
                                 pass
-                    if modified:
+                if is_sqlite:
+                    slug_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', cache_key, re.IGNORECASE)
+                    slug_val = slug_match.group(1) if slug_match else generate_slug(text)
+                    storage_adapter.save_session(
+                        session_zid=zid,
+                        slug=slug_val,
+                        source_language=language,
+                        target_language=target_lang,
+                        text_mode=text_mode,
+                        source_raw_text=text,
+                        comments=comments,
+                        headers=headers,
+                        data_rows=data_rows,
+                        working_tsv_path=None,
+                        zid=zid,
+                    )
+                else:
+                    if apply_padding:
                         save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
             except Exception as e:
-                logger.error(f"Failed to apply sentence context padding: {e}")
+                logger.error(f"Failed to process prepared TSV tokens: {e}")
     finally:
         if temp_file_path is not None:
             try:
                 os.remove(temp_file_path)
             except OSError:
+                pass
+        if temp_dir_obj is not None:
+            try:
+                temp_dir_obj.cleanup()
+            except Exception:
                 pass
 
     return working_tsv_path
@@ -6064,7 +6179,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         if apply_translated_padding:
             padded_translated_sentences = pad_translated_sentences(translated_sentences, sbc.translated_words_before, sbc.translated_words_after, max_words=sbc.translated_max_words)
         
-        comments, headers, data_rows = load_tsv_rows(master_tsv_path)
+        storage_adapter = get_storage_adapter(config, resolved_paths)
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(master_tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
         
@@ -6104,24 +6220,43 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
 
         # STRICT CONTRACT WARNING: DO NOT append `# Children` tags or any other arbitrary metadata to `comments` here!
         # The TSV format must remain clean. Child relationships are strictly resolved via filenames.
-        save_tsv_rows_safely(master_tsv_path, comments, headers, master_data_rows)
+        storage_adapter = get_storage_adapter(config, resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+        if is_sqlite:
+            storage_adapter.save_session(
+                session_zid=zid,
+                slug=master_slug,
+                source_language=language,
+                target_language=target_lang,
+                text_mode="multi" if text_mode == "multi" else "single",
+                source_raw_text=text,
+                comments=comments,
+                headers=headers,
+                data_rows=master_data_rows,
+                working_tsv_path=None,
+                zid=zid,
+            )
+        else:
+            save_tsv_rows_safely(master_tsv_path, comments, headers, master_data_rows)
 
         kardenwort_workspace = resolved_paths['kardenwort_workspace']
         kw_config = load_kardenwort_config(kardenwort_workspace)
         results_dir = resolve_results_dir(resolved_paths, kw_config)
-        results_dir.mkdir(parents=True, exist_ok=True)
-        
-        # Cleanup old markers from previous runs with the same ZID to prevent race conditions
-        for marker in results_dir.glob(f"{zid[:14]}*"):
-            if marker.suffix in ['.base_translation_done', '.enrichment_done', '.the_cut_done']:
-                try:
-                    marker.unlink()
-                except Exception:
-                    pass
-        
-        # Write master translation file
-        master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
-        master_trans_path.write_text(translated_paragraph, encoding='utf-8')
+        if not is_sqlite:
+            results_dir.mkdir(parents=True, exist_ok=True)
+            
+            # Cleanup old markers from previous runs with the same ZID to prevent race conditions
+            for marker in results_dir.glob(f"{zid[:14]}*"):
+                if marker.suffix in ['.base_translation_done', '.enrichment_done', '.the_cut_done']:
+                    try:
+                        marker.unlink()
+                    except Exception:
+                        pass
+            
+            # Write master translation file
+            master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
+            master_trans_path.write_text(translated_paragraph, encoding='utf-8')
         
         with TraceTimer("the_cut", zid, config, resolved_paths):
             sub_tsv_paths = []
@@ -6142,11 +6277,12 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 
                 sub_slug = generate_slug(sub_text)
                 
-                sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.txt"
-                sub_txt_path.write_text(sub_text, encoding='utf-8')
-                
-                sub_trans_path = results_dir / f"{sub_zid}-{sub_slug}.{target_lang}.txt"
-                sub_trans_path.write_text(sub_trans, encoding='utf-8')
+                if not is_sqlite:
+                    sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.txt"
+                    sub_txt_path.write_text(sub_text, encoding='utf-8')
+                    
+                    sub_trans_path = results_dir / f"{sub_zid}-{sub_slug}.{target_lang}.txt"
+                    sub_trans_path.write_text(sub_trans, encoding='utf-8')
                 
                 sub_rows = []
                 sub_tokens = tok.build_word_list_internal(sub_text, keep_spaces=True)
@@ -6212,7 +6348,22 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths)
                     
                 sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
-                save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
+                if is_sqlite:
+                    storage_adapter.save_session(
+                        session_zid=sub_zid,
+                        slug=sub_slug,
+                        source_language=language,
+                        target_language=target_lang,
+                        text_mode="single",
+                        source_raw_text=sub_text,
+                        comments=comments,
+                        headers=headers,
+                        data_rows=sub_rows,
+                        working_tsv_path=None,
+                        zid=sub_zid,
+                    )
+                else:
+                    save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
                 sub_tsv_paths.append(sub_tsv_path)
             
 
@@ -6222,33 +6373,34 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         paths_to_spawn = [(master_seq + i + 1, path) for i, path in enumerate(sub_tsv_paths)]
         if spawn_order == 'reverse':
             paths_to_spawn.reverse()
-        for child_seq, path in paths_to_spawn:
-            ahk_args.extend(["--seq-num", str(child_seq), "--restore", str(path)])
-        spawn_ahk(ahk_args, resolved_paths['base_dir'])
+        base_dir = resolved_paths.get('base_dir') if resolved_paths else Path('.')
+        spawn_ahk(ahk_args, base_dir)
         
-        try:
-            master_tsv_path.with_suffix('.the_cut_done').touch(exist_ok=True)
-        except Exception:
-            pass
+        if not is_sqlite:
+            try:
+                master_tsv_path.with_suffix('.the_cut_done').touch(exist_ok=True)
+            except Exception:
+                pass
         
         if parent_mode == 'stub':
-            try:
-                if master_tsv_path.exists():
-                    master_tsv_path.unlink()
-            except Exception:
-                pass
-            try:
-                master_txt_path = results_dir / f"{zid}-{master_slug}.{language}.txt"
-                if master_txt_path.exists():
-                    master_txt_path.unlink()
-            except Exception:
-                pass
-            try:
-                master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
-                if master_trans_path.exists():
-                    master_trans_path.unlink()
-            except Exception:
-                pass
+            if not is_sqlite:
+                try:
+                    if master_tsv_path.exists():
+                        master_tsv_path.unlink()
+                except Exception:
+                    pass
+                try:
+                    master_txt_path = results_dir / f"{zid}-{master_slug}.{language}.txt"
+                    if master_txt_path.exists():
+                        master_txt_path.unlink()
+                except Exception:
+                    pass
+                try:
+                    master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
+                    if master_trans_path.exists():
+                        master_trans_path.unlink()
+                except Exception:
+                    pass
             try:
                 # Clean up orphaned .updates/ directory created by write_update_js for progressive mode.
                 # Without this, stub-mode TSV deletions leave empty directories accumulating in results/.
@@ -6347,7 +6499,8 @@ html, body {{
         tsv_slug = tsv_match.group(1)
     
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
@@ -6409,11 +6562,15 @@ html, body {{
     base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
     enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
     
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
     source_text_path = working_tsv_path.with_suffix('.txt')
-    if eff_mode == 'single':
-        source_text_path.write_text(text, encoding='utf-8')
-    elif not source_text_path.exists():
-        source_text_path.write_text(text, encoding='utf-8')
+    if not is_sqlite:
+        if eff_mode == 'single':
+            source_text_path.write_text(text, encoding='utf-8')
+        elif not source_text_path.exists():
+            source_text_path.write_text(text, encoding='utf-8')
             
     sentence_translated = False
     if col_sentence_dest != -1:
@@ -6449,12 +6606,27 @@ html, body {{
                 resolve_translations(
                     text, text_mode, data_rows, col_index, col_sentence_dest,
                     sentence_translations_raw, working_tsv_path, comments, headers,
-                    persist=True, return_single=False
+                    persist=(not is_sqlite), return_single=False
                 )
-                eff_mode = _effective_text_mode(text, text_mode)
-                translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
-                save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
-                _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
+                if is_sqlite:
+                    storage_adapter.save_session(
+                        session_zid=zid,
+                        slug=tsv_slug,
+                        source_language=language,
+                        target_language=target_lang,
+                        text_mode=text_mode,
+                        source_raw_text=text,
+                        comments=comments,
+                        headers=headers,
+                        data_rows=data_rows,
+                        working_tsv_path=None,
+                        zid=zid,
+                    )
+                if not is_sqlite:
+                    eff_mode = _effective_text_mode(text, text_mode)
+                    translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
+                    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
+                    _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
                 
  
         except TranslationAlignmentError as tae:
@@ -6463,12 +6635,27 @@ html, body {{
             resolve_translations(
                 text, text_mode, data_rows, col_index, col_sentence_dest,
                 sentence_translations_raw, working_tsv_path, comments, headers,
-                persist=True, return_single=False
+                persist=(not is_sqlite), return_single=False
             )
-            eff_mode = _effective_text_mode(text, text_mode)
-            translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
-            save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
-            _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
+            if is_sqlite:
+                storage_adapter.save_session(
+                    session_zid=zid,
+                    slug=tsv_slug,
+                    source_language=language,
+                    target_language=target_lang,
+                    text_mode=text_mode,
+                    source_raw_text=text,
+                    comments=comments,
+                    headers=headers,
+                    data_rows=data_rows,
+                    working_tsv_path=None,
+                    zid=zid,
+                )
+            if not is_sqlite:
+                eff_mode = _effective_text_mode(text, text_mode)
+                translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
+                save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
+                _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
                 
         if has_untranslated_lemmas and not children_tsv_paths:
@@ -6483,11 +6670,18 @@ html, body {{
                             selected_rows_to_enrich.append(i)
                             
                 if selected_rows_to_enrich:
-                    with file_lock(working_tsv_path):
-                        save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
-                    prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-                    run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_enrich, reprocess=True)
-                    comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+                    if is_sqlite:
+                        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+                        storage_adapter.enrich_session_intellifiller(
+                            session_zid=zid, prompt_name=prompt_name, selected_rows=selected_rows_to_enrich, reprocess=True, zid=zid
+                        )
+                        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+                    else:
+                        with file_lock(working_tsv_path):
+                            save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+                        run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_enrich, reprocess=True)
+                        comments, headers, data_rows = load_tsv_rows(working_tsv_path)
             else:
                 lemmas_to_translate = []
                 for row in data_rows:
@@ -6553,10 +6747,11 @@ html, body {{
                 else:
                     sentence_translations[a_idx] = ""
             
-    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
-    translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
-    eff_mode = _effective_text_mode(text, text_mode)
-    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
+    if not is_sqlite:
+        save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
+        translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
+        eff_mode = _effective_text_mode(text, text_mode)
+        _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
             
     worker_launched = False
     if not llm_filled:
@@ -9814,10 +10009,21 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
         persist=False, return_single=True
     )
     
-    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
-    translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
-    eff_mode = _effective_text_mode(text, text_mode)
-    _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=True)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+    if is_sqlite and isinstance(sentence_translations, dict):
+        for s_idx_raw, trans in sentence_translations.items():
+            if trans and isinstance(trans, str):
+                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                try:
+                    storage_adapter.update_sentence_translation(zid, s_idx, trans, zid=zid)
+                except Exception:
+                    pass
+
+    if not is_sqlite:
+        save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
+        translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
+        eff_mode = _effective_text_mode(text, text_mode)
+        _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=True)
     
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
@@ -9843,11 +10049,34 @@ def run_lookup_flow(text, language, target_lang, fmt, config, resolved_paths, go
                         row[col_word_dest] = trans
 
     if run_intellifiller:
-        with storage_adapter.file_lock(working_tsv_path):
-            storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
-        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-        run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
-        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+        if is_sqlite:
+            storage_adapter.save_session(
+                session_zid=zid,
+                slug=slug,
+                source_language=language,
+                target_language=target_lang,
+                text_mode=text_mode,
+                source_raw_text=text,
+                comments=comments,
+                headers=headers,
+                data_rows=data_rows,
+                working_tsv_path=working_tsv_path,
+                zid=zid,
+            )
+            prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+            storage_adapter.enrich_session_intellifiller(
+                session_zid=zid,
+                prompt_name=prompt_name,
+                reprocess=True,
+                zid=zid,
+            )
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+        else:
+            with storage_adapter.file_lock(working_tsv_path):
+                storage_adapter.save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+            prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     else:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
@@ -11994,6 +12223,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
     run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
     
@@ -12007,72 +12239,82 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         translated_text_emitted = False
         if not sentence_translated and run_text == 'auto':
             source_txt_path = tsv_path.with_suffix('.txt')
+            text = ""
             if source_txt_path.exists():
                 text = source_txt_path.read_text(encoding='utf-8')
+            elif is_sqlite:
+                restored = storage_adapter.restore_session(zid)
+                text = restored.get("source_raw_text") or restored.get("source_text", "")
+
+            if text:
                 main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
                 col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 try:
                     def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest):
-                        c, h, curr_rows = load_tsv_rows(tsv_path)
+                        c, h, curr_rows = storage_adapter.load_tsv_rows(tsv_path)
                         resolve_translations(
-                            _text, args.text_mode, curr_rows, _col_index, _col_sentence_dest,
+                            _text, getattr(args, 'text_mode', 'single'), curr_rows, _col_index, _col_sentence_dest,
                             partial_translations, tsv_path, c, h,
-                            persist=True, return_single=False
+                            persist=(not is_sqlite), return_single=False
                         )
-                        # Use stage=None to push only table row data.
-                        # The TRANSLATE section (paragraph) is updated once at the end
-                        # after the full .ru.txt file is written, avoiding blink/flicker.
                         safe_write_update_js(tsv_path, curr_rows, h, role_fields, stage=None, zid=zid, trace_id=trace_id)
 
                     sentence_translations_raw = translate_source_text(
-                        text, args.language, args.target_lang, args.text_mode, config, resolved_paths, main_text_provider, zid=zid, trace_id=trace_id, chunk_callback=on_chunk_done)
-                    comments, headers, current_rows = load_tsv_rows(tsv_path)
-                    resolve_translations(
-                        text, args.text_mode, current_rows, col_index, col_sentence_dest,
-                        sentence_translations_raw, tsv_path, comments, headers,
-                        persist=True, return_single=False
-                    )
-                    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
-                    slug = generate_slug(text)
-                    translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
-                    eff_mode = _effective_text_mode(text, args.text_mode)
-                    _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
+                        text, getattr(args, 'language', 'en'), args.target_lang, getattr(args, 'text_mode', 'single'), config, resolved_paths, main_text_provider, zid=zid, trace_id=trace_id, chunk_callback=on_chunk_done)
                     
-                    data_rows = current_rows
-                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id)
-                    translated_text_emitted = True
-                except TranslationAlignmentError as tae:
-                    logger.error(f"Progressive translation alignment error: {tae}")
-                    comments, headers, current_rows = load_tsv_rows(tsv_path)
-                    resolve_translations(
-                        text, args.text_mode, current_rows, col_index, col_sentence_dest,
-                        tae.partial_dict, tsv_path, comments, headers,
-                        persist=True, return_single=False
-                    )
-                    save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
-                    slug = generate_slug(text)
-                    translation_text_path = tsv_path.parent / f"{zid}-{slug}.{args.target_lang}.txt"
-                    eff_mode = _effective_text_mode(text, args.text_mode)
-                    _write_translation_txt(text, eff_mode, tae.partial_dict, translation_text_path, save_flag=save_translation_text, overwrite=True)
-                    
-                    data_rows = current_rows
-                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", status="partial_persisted", zid=zid, trace_id=trace_id)
-                    translated_text_emitted = True
-                    
-                    sys.exit(EXIT_PARTIAL_TRANSLATION_PERSISTED)
-        
-        # Advance stage unconditionally to allow JS frontend to clear skeleton loaders properly
-        if not translated_text_emitted:
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id)
+                    # Update sentences table directly in SQLite mode
+                    if is_sqlite and isinstance(sentence_translations_raw, dict):
+                        for s_idx_raw, trans in sentence_translations_raw.items():
+                            if trans and isinstance(trans, str):
+                                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                                try:
+                                    storage_adapter.update_sentence_translation(zid, s_idx, trans, zid=zid)
+                                except Exception:
+                                    pass
 
+                    c, h, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                    resolve_translations(
+                        text, getattr(args, 'text_mode', 'single'), data_rows, col_index, col_sentence_dest,
+                        sentence_translations_raw, tsv_path, c, h,
+                        persist=(not is_sqlite), return_single=False
+                    )
+                    if is_sqlite:
+                        slug_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', tsv_path.name, re.IGNORECASE)
+                        slug_val = slug_match.group(1) if slug_match else ""
+                        storage_adapter.save_session(
+                            session_zid=zid,
+                            slug=slug_val,
+                            source_language=getattr(args, 'language', 'en'),
+                            target_language=args.target_lang,
+                            text_mode=getattr(args, 'text_mode', 'single'),
+                            source_raw_text=text,
+                            comments=c,
+                            headers=h,
+                            data_rows=data_rows,
+                            working_tsv_path=tsv_path,
+                            zid=zid,
+                        )
+                        
+                    norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
+                    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in sentence_translations_raw.values() if isinstance(line, str)]
+                    is_single = (getattr(args, 'text_mode', 'single') == 'single') and ('\n' not in text and '\r' not in text)
+                    if is_single:
+                        translated_text_str = f"<div>{' '.join(lines)}</div>"
+                    else:
+                        translated_text_str = "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+                        
+                    safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated_text", translated_text=translated_text_str, zid=zid, trace_id=trace_id)
+                    translated_text_emitted = True
+                except Exception as e:
+                    logger.error(f"Failed to translate main text in background: {e}")
+                    raise e
+                    
         # check if lemmas need translation
-        word_translations_empty = args.word_empty.lower() == 'true'
-        if word_translations_empty and col_lemma != -1 and run_base == 'auto':
-            # Preserve row order while deduplicating (set() destroys order via hash)
+        lemmas_to_translate = []
+        if col_lemma != -1:
             seen = set()
-            lemmas_to_translate = []
             for row in data_rows:
-                if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                if len(row) > col_lemma and row[col_lemma].strip():
                     if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
                         if 'skeleton-loader' not in row[col_word_dest]:
                             continue
@@ -12108,34 +12350,48 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                 else:
                     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
-                        chunk_size = 15  # Fallback to 15 to prevent huge chunks from freezing the progressive loading
+                        chunk_size = 15
                     if chunk_size > 0:
                         chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
                     else:
                         chunks = [lemmas_to_translate]
                         
                     for chunk in chunks:
-                        lemma_translations = translate_lemmas_fast_path(chunk, args.language, args.target_lang, config, resolved_paths, provider)
+                        lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), args.target_lang, config, resolved_paths, provider)
                         
-                        with file_lock(tsv_path):
-                            comments, headers, current_rows = load_tsv_rows(tsv_path)
-                            for row in current_rows:
+                        if is_sqlite:
+                            updates = []
+                            for row_idx, row in enumerate(data_rows):
                                 if col_lemma != -1 and len(row) > col_lemma:
                                     lemma_val = row[col_lemma]
-                                    if col_word_dest != -1:
+                                    if lemma_val in lemma_translations and col_word_dest != -1:
+                                        trans_val = lemma_translations[lemma_val]
                                         while len(row) <= col_word_dest:
                                             row.append("")
-                                        curr_dest = row[col_word_dest].strip()
-                                        if not curr_dest or 'skeleton-loader' in curr_dest:
-                                            if lemma_val in lemma_translations and lemma_translations[lemma_val]:
+                                        row[col_word_dest] = trans_val
+                                        updates.append({
+                                            "token_order": row_idx,
+                                            "field": "word_destination",
+                                            "value": trans_val,
+                                        })
+                            if updates:
+                                storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
+                        else:
+                            with file_lock(tsv_path):
+                                comments, headers, current_rows = load_tsv_rows(tsv_path)
+                                for row in current_rows:
+                                    if col_lemma != -1 and len(row) > col_lemma:
+                                        lemma_val = row[col_lemma]
+                                        if col_word_dest != -1:
+                                            while len(row) <= col_word_dest:
+                                                row.append("")
+                                            if lemma_val in lemma_translations:
                                                 row[col_word_dest] = lemma_translations[lemma_val]
-                            save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
-                            data_rows = current_rows
-                            
-                        # Push table row updates only — don't rebuild TRANSLATE section on each chunk
+                                save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
+                                data_rows = current_rows
+                        
                         safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id)
                         
-                    # Final update with stage=translated to render TRANSLATE section once all lemmas are done
                     safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
             else:
                 safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
@@ -12160,10 +12416,9 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
     m = re.match(r'^(\d{14})', tsv_path.name)
     zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
     trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:{stage_name}"
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
     try:
-        # Fallback: 30 (larger than the reprocess worker's default of 5).
-        # Progressive enrichment runs fully in the background without blocking the UI,
-        # so larger batches are fine for throughput. Config key: intellifiller_batch_size.
         batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=30)
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
@@ -12180,15 +12435,12 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         for r in selected_rows:
             if r < len(data_rows):
                 row = data_rows[r]
-                # Check if row is not completely empty
                 if not any(str(cell).strip() for cell in row):
                     continue
-                # If we have a source column, ensure it's not empty
                 if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
                     continue
                 
                 has_dest = col_word_dest != -1 and len(row) > col_word_dest and str(row[col_word_dest]).strip()
-                
                 has_ipa = col_ipa != -1 and len(row) > col_ipa and str(row[col_ipa]).strip()
                 has_morph = col_morph != -1 and len(row) > col_morph and str(row[col_morph]).strip()
                 
@@ -12202,17 +12454,27 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 
         selected_rows = valid_selected
         
-        for i in range(0, len(selected_rows), batch_size):
-            batch = selected_rows[i:i + batch_size]
-            logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
-            # We explicitly pass reprocess=True here because Kardenwort Desk already carefully filtered this batch 
-            # to only include rows that actually need processing. Without reprocess=True, IntelliFiller's headless
-            # script would skip rows that already have WordDestination populated, ignoring our explicit selection.
-            run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch, reprocess=True)
-            
-            # reload data rows after each batch
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
+
+        if is_sqlite:
+            storage_adapter.enrich_session_intellifiller(
+                session_zid=zid,
+                prompt_name=prompt_val,
+                selected_rows=selected_rows,
+                reprocess=True,
+                zid=zid,
+                trace_id=trace_id,
+            )
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
+        else:
+            for i in range(0, len(selected_rows), batch_size):
+                batch = selected_rows[i:i + batch_size]
+                logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
+                run_headless_intellifiller(tsv_path, prompt_val, config, resolved_paths, selected_rows=batch, reprocess=True)
+                
+                comments, headers, data_rows = load_tsv_rows(tsv_path)
+                safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
     except Exception as e:
         logger.error(f"Failing in {stage_name} stage: {e}")
         err_obj = getattr(e, 'envelope', None) or {
@@ -12751,6 +13013,8 @@ def cmd_progressive_worker(args):
             
         logger.info("Progressive-worker subcommand invoked")
         config, resolved_paths, goldendict, _wordfill = load_config(args.config)
+        storage_adapter = get_storage_adapter(config, resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
         results_dir = resolve_results_dir(resolved_paths, config)
         sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
         if sess_logger:
@@ -12758,13 +13022,15 @@ def cmd_progressive_worker(args):
         import os
         os.environ["KARDEN_ACTIVE_TEXT_MODE"] = getattr(args, 'text_mode', 'single')
         
-        if not tsv_path.exists():
+        if not is_sqlite and not tsv_path.exists():
             return
             
         comments, headers, data_rows = [], [], []
         role_fields = {}
-        with file_lock(tsv_path):
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        with storage_adapter.file_lock(tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+            if not data_rows:
+                return
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             
@@ -12787,10 +13053,11 @@ def cmd_progressive_worker(args):
             if run_base == 'auto' or run_text == 'auto':
                 data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                 
-            try:
-                tsv_path.with_suffix('.base_translation_done').touch()
-            except Exception:
-                pass
+            if not is_sqlite:
+                try:
+                    tsv_path.with_suffix('.base_translation_done').touch()
+                except Exception:
+                    pass
                     
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
@@ -12821,13 +13088,14 @@ def cmd_progressive_worker(args):
             try:
                 run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
                 if run_base == 'auto':
-                    with file_lock(tsv_path):
-                        comments, headers_latest, current_rows = load_tsv_rows(tsv_path)
+                    with storage_adapter.file_lock(tsv_path):
+                        comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(tsv_path)
                         col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
                         col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
                         
                         modified_sweep = False
-                        for row in current_rows:
+                        updates = []
+                        for row_idx, row in enumerate(current_rows):
                             if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                                 if col_word_dest != -1:
                                     if len(row) <= col_word_dest:
@@ -12835,26 +13103,38 @@ def cmd_progressive_worker(args):
                                     if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
                                         row[col_word_dest] = "[FAILED]"
                                         modified_sweep = True
+                                        if is_sqlite:
+                                            updates.append({
+                                                "token_order": row_idx,
+                                                "field": "word_destination",
+                                                "value": "[FAILED]",
+                                            })
                         if modified_sweep:
-                            save_tsv_rows_safely(tsv_path, comments, headers_latest, current_rows)
+                            if is_sqlite:
+                                if updates:
+                                    storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
+                            else:
+                                save_tsv_rows_safely(tsv_path, comments, headers_latest, current_rows)
                             data_rows = current_rows
             except Exception as e:
                 logger.error(f"Error in progressive worker FAILED sweep: {e}")
 
             # 3. Finished Event
-            try:
-                tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
-            except Exception:
-                pass
-            try:
-                tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
-            except Exception:
-                pass
+            if not is_sqlite:
+                try:
+                    tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
+                except Exception:
+                    pass
+                try:
+                    tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
+                except Exception:
+                    pass
             try:
                 status_val = "failed" if worker_error else "success"
                 safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id)
-                import os
-                os.utime(tsv_path, None)
+                if tsv_path.exists():
+                    import os
+                    os.utime(tsv_path, None)
                 if sess_logger:
                     sess_logger.info(f"Progressive worker finished (status={status_val})")
             except Exception as e:
@@ -13576,8 +13856,11 @@ def get_ahk_executable():
                 
     return None
 
-def spawn_ahk(args_list, base_dir):
-    ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None)
+def spawn_ahk(args_list, base_dir=None):
+    if not base_dir:
+        base_dir = Path(__file__).resolve().parent
+    base_dir = Path(base_dir)
+    ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None) if base_dir.parent else None
     if not ahk_repo:
         logger.error("Could not find autohotkey repository in parent directory.")
         return False
