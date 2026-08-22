@@ -3671,6 +3671,61 @@ def aggregate_project_materials(
     }
 
 
+def deduplicate_rows_by_lemma(
+    data_rows: List[List[str]],
+    headers: List[str],
+    role_fields: Optional[Dict[str, Any]] = None,
+) -> List[List[str]]:
+    """
+    Deduplicates data rows by lemma, preserving first occurrence order and merging non-empty fields & inflected forms.
+    """
+    if not data_rows or not headers:
+        return data_rows
+
+    lemma_col = role_fields.get('lemma', 'WordSource') if isinstance(role_fields, dict) else 'WordSource'
+    inflected_col = role_fields.get('inflected', 'WordSourceInflectedForm') if isinstance(role_fields, dict) else 'WordSourceInflectedForm'
+    col_lemma = headers.index(lemma_col) if lemma_col in headers else -1
+    col_inflected = headers.index(inflected_col) if inflected_col in headers else -1
+    col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
+
+    if col_lemma == -1:
+        return data_rows
+
+    seen_lemmas: List[str] = []
+    grouped_rows: Dict[str, List[List[str]]] = {}
+    for row in data_rows:
+        lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
+        if not lemma_val:
+            continue
+        if lemma_val not in grouped_rows:
+            grouped_rows[lemma_val] = []
+            seen_lemmas.append(lemma_val)
+        grouped_rows[lemma_val].append(row)
+
+    unique_rows: List[List[str]] = []
+    for lem in seen_lemmas:
+        rows_list = grouped_rows[lem]
+        merged_row = list(rows_list[0])
+        merged_inflected: List[str] = []
+        for r in rows_list:
+            for i, cell in enumerate(r):
+                if i < len(merged_row) and not merged_row[i].strip() and cell.strip():
+                    merged_row[i] = cell
+            if col_inflected != -1:
+                inf_val = r[col_inflected].strip() if len(r) > col_inflected else ""
+                if not inf_val and col_quotation != -1 and len(r) > col_quotation:
+                    inf_val = r[col_quotation].strip()
+                if inf_val:
+                    for part in [p.strip() for p in inf_val.split(',') if p.strip()]:
+                        if part not in merged_inflected:
+                            merged_inflected.append(part)
+        if col_inflected != -1 and merged_inflected:
+            merged_row[col_inflected] = ", ".join(merged_inflected)
+        unique_rows.append(merged_row)
+
+    return unique_rows
+
+
 def sort_rows_by_frequency(
     data_rows: List[List[str]],
     headers: List[str],
@@ -3892,6 +3947,7 @@ def synthesize_project_materials(
         ]
 
     combined_text = "\n\n".join(t for t in source_texts if t.strip())
+    all_data_rows = deduplicate_rows_by_lemma(all_data_rows, headers)
     all_data_rows = sort_rows_by_frequency(all_data_rows, headers, lang, config, resolved_paths)
 
     return {
@@ -6879,6 +6935,7 @@ html, body {{
     main_text_provider = text_base_provider
     lemma_base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
     role_fields = get_role_fields(mapping, headers)
+    data_rows = deduplicate_rows_by_lemma(data_rows, headers, role_fields=role_fields)
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
@@ -10798,6 +10855,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
+    data_rows = deduplicate_rows_by_lemma(data_rows, headers, role_fields=role_fields)
     data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
 
     effective_server_enabled = server_enabled or goldendict.get('server_enabled', False)

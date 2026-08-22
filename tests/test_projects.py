@@ -455,7 +455,7 @@ def test_synthesize_project_materials_and_reader_view(temp_project_env):
     assert synthesized["project_id"] == book_id
     assert synthesized["project_title"] == "Faust"
     assert synthesized["total_sessions"] == 2
-    assert synthesized["total_words"] == 4  # 2 words in ch1 + 2 words in ch2
+    assert synthesized["total_words"] == 3  # 3 unique lemmas: erst, Satz, zweit (Satz merged)
 
     # Check continuous text contains both chapter texts
     assert "Erster Satz" in synthesized["source_text"]
