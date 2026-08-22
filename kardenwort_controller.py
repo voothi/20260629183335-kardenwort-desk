@@ -1152,38 +1152,68 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         if (s.get("sentence_destination") or s.get("sentence_destination2"))
                     ])
                 fingerprint = compute_content_fingerprint(data_rows)
+                slug = synthesized.get("slug") or ""
                 req_theme = qs.get('theme', [None])[0]
                 view_mode = qs.get('view', [None])[0]
-                synth_zid = synthesized.get("session_zid") or f"project_{project_id}"
+                raw_zid = synthesized.get("session_zid") or ""
+                synth_zid = raw_zid if re.match(r'^\d{14}$', raw_zid) else generate_unique_zid()
+                if view_mode == 'goldendict':
+                    goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
+                    goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
+                    goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+                    goldendict['theme'] = req_theme or 'compact'
+                    goldendict.setdefault('heading_source', '__default__')
+                    goldendict.setdefault('heading_translation', '__default__')
+                    goldendict.setdefault('heading_lemmas', '__default__')
+                    goldendict.setdefault('run_intellifiller', False)
+                    goldendict['server_enabled'] = True
+                    goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
 
-                goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
-                goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
-                goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
-                goldendict['theme'] = req_theme or ('dark' if view_mode != 'goldendict' else 'compact')
-                goldendict.setdefault('heading_source', '__default__')
-                goldendict.setdefault('heading_translation', '__default__')
-                goldendict.setdefault('heading_lemmas', '__default__')
-                goldendict.setdefault('run_intellifiller', False)
-                goldendict['server_enabled'] = True
-                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
-
-                html = render_lookup_html(
-                    text=source_text,
-                    language=sess_lang,
-                    target_lang=target_lang,
-                    config=self.server.config,
-                    resolved_paths=self.server.resolved_paths,
-                    zid=synth_zid,
-                    goldendict=goldendict,
-                    comments=comments,
-                    headers=headers,
-                    data_rows=data_rows,
-                    sentence_translation=sentence_translation,
-                    session_zid=synth_zid,
-                    api_token=getattr(self.server, 'api_key', ''),
-                    server_enabled=True,
-                    fingerprint=fingerprint,
-                )
+                    html = render_lookup_html(
+                        text=source_text,
+                        language=sess_lang,
+                        target_lang=target_lang,
+                        config=self.server.config,
+                        resolved_paths=self.server.resolved_paths,
+                        zid=synth_zid,
+                        goldendict=goldendict,
+                        comments=comments,
+                        headers=headers,
+                        data_rows=data_rows,
+                        sentence_translation=sentence_translation,
+                        session_zid=synth_zid,
+                        api_token=getattr(self.server, 'api_key', ''),
+                        server_enabled=True,
+                        fingerprint=fingerprint,
+                    )
+                else:
+                    adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+                    adapter.save_session(
+                        session_zid=synth_zid,
+                        slug=slug,
+                        source_language=sess_lang,
+                        target_language=target_lang,
+                        text_mode="multi",
+                        source_raw_text=source_text,
+                        headers=headers,
+                        data_rows=data_rows,
+                        sentences=synthesized.get("sentences"),
+                    )
+                    results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
+                    results_dir.mkdir(parents=True, exist_ok=True)
+                    slug_suffix = f"-{slug}" if slug else ""
+                    tsv_path = results_dir / f"{synth_zid}{slug_suffix}.{sess_lang}.tsv"
+                    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                    html = run_render_flow(
+                        text=source_text,
+                        language=sess_lang,
+                        zid=synth_zid,
+                        text_mode="multi",
+                        config=self.server.config,
+                        resolved_paths=self.server.resolved_paths,
+                        theme=req_theme or 'dark',
+                        tsv_path=tsv_path,
+                    )
                 body = html.encode('utf-8')
                 self.send_response(200)
                 self._send_cors_headers()

@@ -3749,18 +3749,27 @@ def synthesize_project_materials(
 
                 all_data_rows.append(row_copy)
 
-            for sent in sess_sents:
-                sent_copy = dict(sent)
-                orig_s_idx = sent_copy.get("sentence_index", 1)
-                sent_copy["sentence_index"] = orig_s_idx + global_sentence_offset
-                sent_copy["project_id"] = p_id
-                sent_copy["deck"] = deck_path
-                all_sentences.append(sent_copy)
-
+            target_synth_zid = zid or f"project_{project_id}"
             if sess_sents:
+                for sent in sess_sents:
+                    sent_copy = dict(sent)
+                    orig_s_idx = sent_copy.get("sentence_index", 1)
+                    sent_copy["session_zid"] = target_synth_zid
+                    sent_copy["sentence_index"] = orig_s_idx + global_sentence_offset
+                    sent_copy["project_id"] = p_id
+                    sent_copy["deck"] = deck_path
+                    all_sentences.append(sent_copy)
                 max_s = max(s.get("sentence_index", 1) for s in sess_sents)
                 global_sentence_offset += max_s
             elif sess_rows:
+                all_sentences.append({
+                    "session_zid": target_synth_zid,
+                    "sentence_index": 1 + global_sentence_offset,
+                    "sentence_source": sess_text or "",
+                    "sentence_destination": "",
+                    "project_id": p_id,
+                    "deck": deck_path,
+                })
                 global_sentence_offset += 1
 
             chapters.append({

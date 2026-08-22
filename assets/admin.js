@@ -202,7 +202,8 @@ function createNodeElement(node) {
             ${node.description ? `<span class="node-desc">${escapeHtml(node.description)}</span>` : ''}
         </div>
         <div class="node-actions">
-            <button class="btn btn-primary btn-sm btn-open-reader" data-id="${node.id}" title="Open in Reader">Read</button>
+            <button class="btn btn-primary btn-sm btn-open-desk" data-id="${node.id}" title="Open Desk View">Desk</button>
+            <button class="btn btn-secondary btn-sm btn-open-dict" data-id="${node.id}" title="Open Dict View">Dict</button>
             <button class="btn btn-secondary btn-sm btn-export-deck" data-id="${node.id}" title="Export Deck">Export Deck</button>
             <button class="btn btn-secondary btn-sm btn-add-child" data-id="${node.id}" title="Add Child Node">+ Child</button>
             <button class="btn btn-secondary btn-sm btn-link-session" data-id="${node.id}" title="Link Session">+ Link</button>
@@ -221,8 +222,12 @@ function createNodeElement(node) {
         }
     });
 
-    card.querySelector('.btn-open-reader').addEventListener('click', () => {
+    card.querySelector('.btn-open-desk').addEventListener('click', () => {
         const url = `/?project_id=${node.id}${state.token ? '&token=' + encodeURIComponent(state.token) : ''}`;
+        window.open(url, '_blank');
+    });
+    card.querySelector('.btn-open-dict').addEventListener('click', () => {
+        const url = `/?project_id=${node.id}&view=goldendict${state.token ? '&token=' + encodeURIComponent(state.token) : ''}`;
         window.open(url, '_blank');
     });
     card.querySelector('.btn-export-deck').addEventListener('click', () => exportProjectDeck(node.id, node.title));
