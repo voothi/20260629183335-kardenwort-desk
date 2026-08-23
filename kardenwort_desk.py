@@ -3884,6 +3884,99 @@ def deduplicate_rows_by_lemma(
     return unique_rows
 
 
+_LEMMA_FREQUENCY_INDEX_CACHE: Dict[str, Tuple[float, Dict[str, int]]] = {}
+
+
+def load_lemma_frequency_index_cached(file_path: Union[str, Path]) -> Dict[str, int]:
+    """
+    Loads and caches a lemma frequency index dictionary mapping word/lemma string -> frequency rank index.
+    Automatically invalidates and reloads if the underlying file modification time (mtime) changes.
+    """
+    path_obj = Path(file_path)
+    if not path_obj.exists():
+        return {}
+    try:
+        mtime = path_obj.stat().st_mtime
+    except Exception:
+        return {}
+
+    resolved_key = str(path_obj.resolve())
+    cached = _LEMMA_FREQUENCY_INDEX_CACHE.get(resolved_key)
+    if cached and cached[0] == mtime:
+        return cached[1]
+
+    index: Dict[str, int] = {}
+    try:
+        with open(path_obj, "r", encoding="utf-8") as f:
+            for line_number, line in enumerate(f):
+                word = line.strip()
+                if word and word not in index:
+                    index[word] = line_number
+        _LEMMA_FREQUENCY_INDEX_CACHE[resolved_key] = (mtime, index)
+    except Exception as err:
+        logger.warning(f"Error reading lemma frequency index {file_path}: {err}")
+        return {}
+    return index
+
+
+def get_lemma_sort_key(word: str, lemma_index: Dict[str, int], language: str = "en", case_sensitive: Optional[bool] = None) -> Tuple[bool, int, str]:
+    """
+    Generates a deterministic sort key tuple (is_unranked: bool, rank: int, lemma_lower: str)
+    matching kardenwort core lemma frequency sorting.
+    """
+    language = language or "en"
+    if case_sensitive is None:
+        case_sensitive = (language == "de")
+
+    def get_variations(w: str) -> List[str]:
+        vars_set: List[str] = []
+        w_clean = w.strip()
+        vars_set.append(w_clean)
+        if not case_sensitive:
+            vars_set.append(w_clean.lower())
+
+        w_straight = w_clean.replace("’", "'")
+        vars_set.append(w_straight)
+        if not case_sensitive:
+            vars_set.append(w_straight.lower())
+
+        w_no_apo = w_clean.replace("’", "").replace("'", "").replace("`", "")
+        vars_set.append(w_no_apo)
+        if not case_sensitive:
+            vars_set.append(w_no_apo.lower())
+
+        seen = set()
+        res = []
+        for v in vars_set:
+            if v not in seen:
+                seen.add(v)
+                res.append(v)
+        return res
+
+    for var in get_variations(word):
+        if var in lemma_index:
+            return (False, lemma_index[var], word.lower())
+
+    parts = []
+    if ',' in word:
+        parts = [p.strip() for p in word.split(',') if p.strip()]
+    elif '/' in word:
+        parts = [p.strip() for p in word.split('/') if p.strip()]
+
+    if parts:
+        found_indices = []
+        for p in parts:
+            for var in get_variations(p):
+                if var in lemma_index:
+                    found_indices.append(lemma_index[var])
+                    break
+        if found_indices:
+            val = min(found_indices)
+            return (False, val, word.lower())
+
+    return (True, 0, word.lower())
+
+
 def sort_rows_by_frequency(
     data_rows: List[List[str]],
     headers: List[str],
@@ -3895,6 +3988,7 @@ def sort_rows_by_frequency(
     """
     Sorts data rows globally by word frequency ranking in the configured language frequency dictionary index.
     Known words are ordered by increasing frequency rank index (top 1 to N), followed by unranked words.
+    Uses in-memory caching to avoid subprocess spawning.
     """
     if not data_rows or not headers:
         return data_rows
@@ -3904,54 +3998,30 @@ def sort_rows_by_frequency(
     if col_lemma == -1:
         return data_rows
 
-    lemmas_to_sort = sorted(list(set(
-        row[col_lemma].strip()
-        for row in data_rows
-        if len(row) > col_lemma and row[col_lemma].strip()
-    )))
-    if not lemmas_to_sort:
-        return data_rows
-
     try:
-        python_exe = resolved_paths.get('kardenwort_python') if resolved_paths else None
         kardenwort_workspace = resolved_paths.get('kardenwort_workspace') if resolved_paths else None
-        if not python_exe or not kardenwort_workspace:
-            return data_rows
-
-        kardenwort_script = Path(kardenwort_workspace) / "src" / "kardenwort" / "core" / "kardenwort.py"
         lemma_index_rel = config.get(SEC_LANGUAGES, f'{lang}_lemma_index', fallback="") if config and hasattr(config, "get") else ""
         if not lemma_index_rel:
             return data_rows
 
-        lemma_index_file = Path(kardenwort_workspace) / lemma_index_rel
+        if kardenwort_workspace:
+            lemma_index_file = Path(kardenwort_workspace) / lemma_index_rel
+        else:
+            lemma_index_file = Path(lemma_index_rel)
+
         if not lemma_index_file.exists():
             return data_rows
 
-        cmd = [
-            str(python_exe),
-            str(kardenwort_script),
-            "--type", "sort-frequency",
-            "--language", lang,
-            "--lemma-index-file", str(lemma_index_file)
-        ]
-        stdin_data = "\n".join(lemmas_to_sort)
-        res = subprocess.run(
-            cmd,
-            input=stdin_data,
-            capture_output=True,
-            text=True,
-            encoding='utf-8',
-            check=True
-        )
-        sorted_lemmas = [line.strip() for line in res.stdout.splitlines() if line.strip()]
-        sorted_order = {word.lower(): idx for idx, word in enumerate(sorted_lemmas)}
+        lemma_index = load_lemma_frequency_index_cached(lemma_index_file)
+        if not lemma_index:
+            return data_rows
 
         sorted_rows = list(data_rows)
         sorted_rows.sort(
-            key=lambda r: (
-                r[col_lemma].strip().lower() not in sorted_order if len(r) > col_lemma else True,
-                sorted_order.get(r[col_lemma].strip().lower(), 0) if len(r) > col_lemma else 0,
-                r[col_lemma].strip().lower() if len(r) > col_lemma else ""
+            key=lambda r: get_lemma_sort_key(
+                r[col_lemma].strip() if len(r) > col_lemma else "",
+                lemma_index,
+                language=lang
             )
         )
         return sorted_rows
