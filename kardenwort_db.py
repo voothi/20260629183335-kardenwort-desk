@@ -232,6 +232,7 @@ class KardenwortDB:
 
         _GLOBAL_DB_LOGGER.set_log_path(results_dir / "db.log", max_mb=max_mb)
         self.logger = _GLOBAL_DB_LOGGER
+        self._wal_initialized: bool = False
 
     @property
     def wal_path(self) -> Path:
@@ -263,7 +264,9 @@ class KardenwortDB:
             if read_only:
                 cursor.execute("PRAGMA query_only = ON;")
             else:
-                cursor.execute("PRAGMA journal_mode = WAL;")
+                if not self._wal_initialized:
+                    cursor.execute("PRAGMA journal_mode = WAL;")
+                    self._wal_initialized = True
                 cursor.execute("PRAGMA synchronous = NORMAL;")
 
             cursor.execute(f"PRAGMA busy_timeout = {self.busy_timeout_ms};")
@@ -2267,20 +2270,42 @@ class KardenwortDB:
         self, session_zid: str, parse_json: bool = True, zid: Optional[str] = None
     ) -> Optional[Dict[str, Any]]:
         """
-        Retrieves the complete bundle for a session: session record, sentences, and words.
+        Retrieves the complete bundle for a session: session record, sentences, and words
+        within a single atomic read connection/transaction.
         """
-        session = self.get_session(session_zid, zid=zid)
-        if not session:
-            return None
+        with self.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
 
-        sentences = self.get_sentences_by_session(session_zid, zid=zid)
-        words = self.get_words_by_session(session_zid, parse_json=parse_json, zid=zid)
+            # 1. Fetch session record
+            cursor.execute("SELECT * FROM sessions WHERE zid = ? AND deleted_at IS NULL;", (session_zid,))
+            session_row = cursor.fetchone()
+            if not session_row:
+                return None
+            session = dict(session_row)
 
-        return {
-            "session": session,
-            "sentences": sentences,
-            "words": words,
-        }
+            # 2. Fetch sentences
+            cursor.execute(
+                "SELECT * FROM sentences WHERE session_zid = ? ORDER BY sentence_index ASC;",
+                (session_zid,),
+            )
+            sentences = [dict(r) for r in cursor.fetchall()]
+
+            # 3. Fetch words
+            cursor.execute(
+                "SELECT * FROM words WHERE session_zid = ? ORDER BY sentence_index ASC, token_order ASC, id ASC;",
+                (session_zid,),
+            )
+            word_rows = [dict(r) for r in cursor.fetchall()]
+            if parse_json:
+                words = [self._deserialize_extra_fields(r) for r in word_rows]
+            else:
+                words = word_rows
+
+            return {
+                "session": session,
+                "sentences": sentences,
+                "words": words,
+            }
 
 
 # ---------------------------------------------------------------------------

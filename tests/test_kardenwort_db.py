@@ -443,3 +443,47 @@ def test_concurrent_readers_and_writer_under_wal(temp_db):
     assert len(errors) == 0
     words = temp_db.get_words_by_session(sess_zid)
     assert len(words) == 25
+
+
+def test_get_session_bundle_single_connection(temp_db):
+    """Verify that get_session_bundle retrieves all items within exactly one connection."""
+    temp_db.run_migrations()
+    sess_zid = "20260823021500"
+    session_data = {"zid": sess_zid, "slug": "atomic-bundle", "source_language": "en"}
+    sentences_data = [{"sentence_index": 0, "sentence_source": "Fast test."}]
+    words_data = [{"sentence_index": 0, "token_order": 0, "quotation": "Fast", "lemma": "fast"}]
+    temp_db.save_session_bundle(session_data, sentences_data, words_data)
+
+    connection_count = 0
+    orig_get_connection = temp_db.get_connection
+
+    def counting_get_connection(*args, **kwargs):
+        nonlocal connection_count
+        connection_count += 1
+        return orig_get_connection(*args, **kwargs)
+
+    temp_db.get_connection = counting_get_connection
+
+    bundle = temp_db.get_session_bundle(sess_zid)
+    assert bundle is not None
+    assert bundle["session"]["slug"] == "atomic-bundle"
+    assert len(bundle["sentences"]) == 1
+    assert len(bundle["words"]) == 1
+    assert connection_count == 1
+
+    connection_count = 0
+    missing = temp_db.get_session_bundle("non_existent_zid")
+    assert missing is None
+    assert connection_count == 1
+
+
+def test_wal_pragma_optimization(temp_db):
+    """Verify that PRAGMA journal_mode=WAL is executed once and cached via _wal_initialized."""
+    assert temp_db._wal_initialized is False
+    conn1 = temp_db.get_connection(read_only=False)
+    conn1.close()
+    assert temp_db._wal_initialized is True
+
+    conn_ro = temp_db.get_connection(read_only=True)
+    conn_ro.close()
+    assert temp_db._wal_initialized is True
