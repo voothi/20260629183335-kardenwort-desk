@@ -7141,7 +7141,17 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         
                 if col_word_source != -1 and dedup_scope_cfg == 'sentence':
                     sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths)
-                    
+
+                # Pre-sort child sentence rows by lemma frequency so restore_session() is an immediate O(1) load
+                sub_rows = sort_rows_by_frequency(
+                    data_rows=sub_rows,
+                    headers=headers,
+                    lang=language,
+                    config=config,
+                    resolved_paths=resolved_paths,
+                    role_fields=role_fields,
+                )
+
                 sub_tsv_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.tsv"
                 if is_sqlite:
                     child_sentences = [{

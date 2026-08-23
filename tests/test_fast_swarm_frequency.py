@@ -106,3 +106,88 @@ def test_sort_rows_by_frequency_graceful_on_missing_index(tmp_path):
         resolved_paths=resolved_paths
     )
     assert result == data_rows
+
+
+def test_the_cut_preserves_pre_computed_frequency_order_and_restores_instantly(tmp_path):
+    from kardenwort_db import KardenwortDB
+    from kardenwort_desk import SqliteStorageAdapter
+
+    db_path = tmp_path / "kardenwort.db"
+    idx_file = tmp_path / "en_index.txt"
+    idx_file.write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section(SEC_LANGUAGES)
+    cfg.set(SEC_LANGUAGES, "en_lemma_index", str(idx_file))
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_path))
+
+    resolved_paths = {
+        "sqlite_db_path": str(db_path),
+        "kardenwort_workspace": str(tmp_path),
+    }
+
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths)
+
+    headers = [
+        "Quotation", "WordSource", "WordSourceInflectedForm", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "DeskSelected"
+    ]
+    # Unsorted rows for the child window: gamma, zebra, alpha, beta
+    sub_rows = [
+        ["gamma", "gamma", "gamma", "1", "Sentence", "Sent Trans", "1"],
+        ["zebra", "zebra", "zebra", "1", "Sentence", "Sent Trans", "1"],
+        ["alpha", "alpha", "alpha", "1", "Sentence", "Sent Trans", "1"],
+        ["beta", "beta", "beta", "1", "Sentence", "Sent Trans", "1"],
+    ]
+    role_fields = {
+        "lemma": "WordSource",
+        "sentence_source": "SentenceSource",
+        "sentence_destination": "SentenceDestination",
+    }
+
+    # Pre-sort as done in the_cut
+    sorted_sub_rows = sort_rows_by_frequency(
+        data_rows=sub_rows,
+        headers=headers,
+        lang="en",
+        config=cfg,
+        resolved_paths=resolved_paths,
+        role_fields=role_fields,
+    )
+
+    child_zid = "20260823021700"
+    child_sentences = [{
+        "session_zid": child_zid,
+        "sentence_index": 1,
+        "sentence_source": "Alpha beta gamma zebra sentence.",
+        "sentence_destination": "Alpha beta gamma zebra translation.",
+    }]
+
+    adapter.save_session(
+        session_zid=child_zid,
+        slug="child-sentence",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Alpha beta gamma zebra sentence.",
+        headers=headers,
+        data_rows=sorted_sub_rows,
+        sentences=child_sentences,
+        zid=child_zid,
+    )
+
+    # Measure restore_session timing and verify order preservation
+    t0 = time.perf_counter()
+    restored = adapter.restore_session(child_zid)
+    elapsed_ms = (time.perf_counter() - t0) * 1000
+
+    assert restored is not None
+    restored_lemmas = [r[headers.index("WordSource")] for r in restored["data_rows"]]
+    assert restored_lemmas == ["alpha", "beta", "gamma", "zebra"]
+    assert elapsed_ms < 10.0
+
