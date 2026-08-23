@@ -184,6 +184,25 @@ class TestHTTPServerRunning(unittest.TestCase):
             err_data = json.loads(e.read().decode('utf-8'))
             self.assertEqual(err_data["error_code"], "ROW_STALE")
 
+    def test_07b_render_endpoint(self):
+        url = f"http://127.0.0.1:{TEST_PORT}/api/v1/render"
+        payload = json.dumps({
+            "text": "Hello world from http render test.",
+            "language": "en",
+            "text_mode": "single",
+        }).encode('utf-8')
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+            "X-API-Token": TEST_TOKEN,
+        })
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            res = json.loads(resp.read().decode('utf-8'))
+            self.assertEqual(res["status"], "success")
+            self.assertTrue(res["data"]["ok"])
+            self.assertIn("html_b64", res["data"])
+            self.assertTrue(len(res["data"]["html_b64"]) > 0)
+
     def test_08_shutdown_endpoint(self):
         url = f"http://127.0.0.1:{TEST_PORT}/api/v1/shutdown"
         req = urllib.request.Request(url, data=b"{}", headers={

@@ -1126,6 +1126,102 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, safe_sess)
             return
 
+        # Render endpoint (HTTP Fast-Path for AutoHotkey & Client UI)
+        if path in ('/api/v1/render', '/render'):
+            if method not in ('GET', 'POST'):
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+
+            body = self._read_json_body() if method == 'POST' else {}
+
+            session_zid = body.get('session_zid') or body.get('zid') or qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
+            language = body.get('language') or body.get('lang') or qs.get('language', [None])[0] or qs.get('lang', [None])[0]
+            text = body.get('text') or qs.get('text', [None])[0]
+            text_mode = body.get('text_mode') or body.get('text-mode') or qs.get('text_mode', ['single'])[0]
+            theme = body.get('theme') or qs.get('theme', ['dark'])[0]
+            zoom = body.get('zoom') or qs.get('zoom', ['100'])[0]
+            seq_num = body.get('seq_num') or body.get('seq-num') or qs.get('seq_num', [None])[0]
+            split_gap = body.get('split_gap_limit') or body.get('split-gap-limit') or qs.get('split_gap_limit', [None])[0]
+            tsv_path = body.get('tsv') or qs.get('tsv', [None])[0]
+            bypass_lang_check = body.get('bypass_lang_check', False) or (
+                qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1') or
+                qs.get('force-language', ['false'])[0].lower() in ('true', '1')
+            )
+
+            if not language and not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' or 'session_zid'")
+
+            html_result = ""
+            active_zid = session_zid or generate_unique_zid()
+
+            if session_zid:
+                adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+                try:
+                    restored = adapter.restore_session(session_zid)
+                    source_text = restored.get("source_text", "")
+                    sess_lang = restored.get("source_language") or language or "de"
+                    t_mode = restored.get("text_mode") or text_mode or "single"
+                    slug = restored.get("slug") or ""
+                    results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
+                    slug_suffix = f"-{slug}" if slug else ""
+                    resolved_tsv = Path(tsv_path) if tsv_path else (results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv")
+
+                    html_result = run_render_flow(
+                        text=source_text,
+                        language=sess_lang,
+                        zid=session_zid,
+                        text_mode=t_mode,
+                        config=self.server.config,
+                        resolved_paths=self.server.resolved_paths,
+                        zoom_level=str(zoom),
+                        theme=theme,
+                        tsv_path=resolved_tsv,
+                        split_gap_limit=int(split_gap) if split_gap else None,
+                        seq_num=int(seq_num) if seq_num else None,
+                        trace_id=f"{session_zid}:render:init",
+                    )
+                except Exception:
+                    if text and language:
+                        html_result = run_render_flow(
+                            text=text,
+                            language=language,
+                            zid=active_zid,
+                            text_mode=text_mode,
+                            config=self.server.config,
+                            resolved_paths=self.server.resolved_paths,
+                            zoom_level=str(zoom),
+                            theme=theme,
+                            tsv_path=Path(tsv_path) if tsv_path else None,
+                            split_gap_limit=int(split_gap) if split_gap else None,
+                            seq_num=int(seq_num) if seq_num else None,
+                            trace_id=f"{active_zid}:render:init",
+                        )
+                    else:
+                        raise
+            elif text and language:
+                html_result = run_render_flow(
+                    text=text,
+                    language=language,
+                    zid=active_zid,
+                    text_mode=text_mode,
+                    config=self.server.config,
+                    resolved_paths=self.server.resolved_paths,
+                    zoom_level=str(zoom),
+                    theme=theme,
+                    tsv_path=Path(tsv_path) if tsv_path else None,
+                    split_gap_limit=int(split_gap) if split_gap else None,
+                    seq_num=int(seq_num) if seq_num else None,
+                    trace_id=f"{active_zid}:render:init",
+                )
+
+            b64_html = encode(html_result)
+            self._send_json(200, {
+                "ok": True,
+                "zid": active_zid,
+                "html_b64": b64_html,
+                "html": html_result,
+            })
+            return
+
         # 4. Consolidated Legacy & Reader Endpoints (from http_server.py & web reader)
         if path in ('/', '/lookup', '/session/render'):
             if method != 'GET':

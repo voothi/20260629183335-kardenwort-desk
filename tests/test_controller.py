@@ -266,3 +266,24 @@ def test_latency_benchmark_sse_vs_file_polling(tmp_path):
     assert sse_avg_ms < 1.0, f"SSE in-memory dispatch must be <1ms, got {sse_avg_ms:.4f}ms"
     assert sse_avg_ms < disk_avg_ms, "SSE in-memory dispatch must be significantly faster than disk polling"
 
+
+def test_controller_render_fast_path_endpoint(running_controller):
+    server_url, _ = running_controller
+    url = f"{server_url}/api/v1/render"
+    payload = json.dumps({
+        "text": "Hello world from controller render fast-path test.",
+        "language": "en",
+        "text_mode": "single",
+        "theme": "dark",
+        "bypass_lang_check": True,
+    }).encode('utf-8')
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10.0) as resp:
+        assert resp.status == 200
+        res = json.loads(resp.read().decode('utf-8'))
+        assert res["status"] == "success"
+        assert res["data"]["ok"] is True
+        assert "html_b64" in res["data"]
+        assert len(res["data"]["html_b64"]) > 0
+
+
