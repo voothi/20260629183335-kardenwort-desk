@@ -329,4 +329,63 @@ def test_controller_render_language_mismatch_with_bypass(running_controller):
         assert len(res["data"]["html_b64"]) > 0
 
 
+def test_controller_session_retext_writes_updates_js(running_controller):
+    server_url, server = running_controller
 
+    # 1. Create a session
+    create_url = f"{server_url}/session/create"
+    create_payload = json.dumps({
+        "text": "apple",
+        "language": "en",
+        "bypass_lang_check": True
+    }).encode('utf-8')
+    req_create = urllib.request.Request(
+        create_url,
+        data=create_payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Token": "test-controller-api-key"
+        }
+    )
+    with urllib.request.urlopen(req_create, timeout=10.0) as resp:
+        assert resp.status == 200
+        create_res = json.loads(resp.read().decode('utf-8'))
+        session_zid = create_res["data"]["session_zid"]
+
+    # 2. Trigger /session/retext
+    retext_url = f"{server_url}/session/retext"
+    payload = json.dumps({
+        "session_zid": session_zid,
+        "language": "en",
+        "text_mode": "single"
+    }).encode('utf-8')
+    req_retext = urllib.request.Request(
+        retext_url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Token": "test-controller-api-key"
+        }
+    )
+    with urllib.request.urlopen(req_retext, timeout=10.0) as resp:
+        assert resp.status == 200
+        retext_res = json.loads(resp.read().decode('utf-8'))
+        assert retext_res["status"] == "success"
+        assert "translated_text" in retext_res["data"]
+        assert len(retext_res["data"]["translated_text"]) > 0
+
+    # 3. Verify .updates/*.js written
+    results_dir = kardenwort_desk.resolve_results_dir(server.resolved_paths, server.config)
+    tsv_path = kardenwort_desk.find_working_tsv(results_dir, session_zid, "en")
+    assert tsv_path is not None and tsv_path.exists()
+
+    updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
+    assert updates_dir.exists()
+    js_files = sorted(updates_dir.glob("*.js"))
+    assert len(js_files) > 0
+
+    latest_js = js_files[-1].read_text(encoding="utf-8")
+    assert "window.receiveUpdate(" in latest_js
+    assert '"stage": "finished"' in latest_js
+    assert '"status": "success"' in latest_js
+    assert '"translatedText":' in latest_js

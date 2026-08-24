@@ -53,6 +53,8 @@ from kardenwort_desk import (
     synthesize_project_materials,
     aggregate_project_materials,
     resolve_project_deck_path,
+    safe_write_update_js,
+    format_translated_html,
     SessionLogger,
     SEC_SETTINGS,
     SEC_LANGUAGES,
@@ -725,16 +727,46 @@ class SessionArbiter:
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
         target_lang = self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
 
-        results_dir = resolve_results_dir(self.resolved_paths, self.config)
-        tsv_path = find_working_tsv(results_dir, session_zid, lang)
+        tsv_path = None
+        session_text = ""
+        with self._lock:
+            if session_zid in self.sessions:
+                sess = self.sessions[session_zid]
+                session_text = sess.get("text", "")
+                if sess.get("tsv_path"):
+                    cand = Path(sess["tsv_path"])
+                    if cand.exists():
+                        tsv_path = cand
+                    else:
+                        tsv_path = cand
+                        comments = sess.get("comments", [])
+                        headers = sess.get("headers", [])
+                        data_rows = sess.get("data_rows", [])
+                        if headers and data_rows:
+                            try:
+                                tsv_path.parent.mkdir(parents=True, exist_ok=True)
+                                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                            except Exception:
+                                pass
+
+        if not tsv_path or not tsv_path.exists():
+            results_dir = resolve_results_dir(self.resolved_paths, self.config)
+            tsv_path = find_working_tsv(results_dir, session_zid, lang)
+
         if not tsv_path or not tsv_path.exists():
             raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
 
         source_txt = tsv_path.with_suffix('.txt')
-        if not source_txt.exists():
+        if source_txt.exists():
+            text = source_txt.read_text(encoding='utf-8')
+        elif session_text:
+            text = session_text
+            try:
+                source_txt.write_text(text, encoding='utf-8')
+            except Exception:
+                pass
+        else:
             raise StructuredError(ErrorCode.DESK_FAILED, f"Source text file missing for session {session_zid}")
-
-        text = source_txt.read_text(encoding='utf-8')
         provider = self.config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
 
         # Translate in-memory
@@ -758,19 +790,35 @@ class SessionArbiter:
                 self.sessions[session_zid]["data_rows"] = data_rows
                 self.sessions[session_zid]["fingerprint"] = new_fp
 
+        translated_html = format_translated_html(sentence_trans, text_mode=text_mode, text=text, config=self.config)
+        safe_write_update_js(
+            tsv_path,
+            data_rows,
+            headers,
+            role_fields,
+            stage="finished",
+            status="success",
+            source_text="",
+            translated_text=translated_html,
+            zid=session_zid,
+            config=self.config
+        )
+
         self.emit_event(session_zid, {
             "type": "update",
             "stage": "translated_text",
             "status": "success",
             "fingerprint": new_fp,
-            "rows": data_rows
+            "rows": data_rows,
+            "translated_text": translated_html
         })
 
         return {
             "status": "success",
             "session_zid": session_zid,
             "fingerprint": new_fp,
-            "data_rows": data_rows
+            "data_rows": data_rows,
+            "translated_text": translated_html
         }
 
     def reword_session(

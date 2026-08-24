@@ -5440,6 +5440,38 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         return sentence_translations_raw.get(0, "")
     return None
 
+def format_translated_html(sentence_translations, text_mode="single", text="", config=None):
+    if not sentence_translations:
+        return ""
+    if isinstance(sentence_translations, str):
+        raw_lines = [sentence_translations]
+    elif isinstance(sentence_translations, dict):
+        sorted_keys = [k for k in sorted(sentence_translations.keys()) if isinstance(k, int)]
+        raw_lines = [sentence_translations[k] for k in sorted_keys if sentence_translations[k]]
+        if not raw_lines and sentence_translations:
+            raw_lines = [str(v) for v in sentence_translations.values() if v]
+    elif isinstance(sentence_translations, (list, tuple)):
+        raw_lines = [str(v) for v in sentence_translations if v]
+    else:
+        raw_lines = [str(sentence_translations)]
+
+    norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
+    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in raw_lines]
+
+    eff_mode = _effective_text_mode(text, text_mode) if text else text_mode
+    is_single = (eff_mode == 'single')
+    if text and ('\n' in text.strip() or '\r' in text.strip()):
+        is_single = False
+
+    if is_single:
+        non_empty = [s for s in lines if s]
+        if non_empty and all(s == non_empty[0] for s in non_empty):
+            lines = [non_empty[0]]
+        return f"<div>{' '.join(lines)}</div>"
+    else:
+        return "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+
+
 def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None, zid=None, trace_id=None):
     import time
     
@@ -13801,6 +13833,8 @@ def cmd_retext_worker(args):
     sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
     
     worker_error = None
+    sentence_translations = None
+    translated_html = None
     if sess_logger:
         sess_logger.info("Retext worker started")
     
@@ -13862,6 +13896,8 @@ def cmd_retext_worker(args):
                 sess_logger.error(f"Retext translation failed: {te_other}")
             raise te_other
             
+        translated_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
+
         if not is_sqlite:
             target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
             eff_mode = _effective_text_mode(text, text_mode)
@@ -13899,7 +13935,7 @@ def cmd_retext_worker(args):
             # source_text="" because retext never changes the source text;
             # sending it would cause receiveUpdate to wipe the span DOM.
             status_val = "failed" if worker_error else "success"
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, source_text="", error=worker_error, zid=zid, trace_id=trace_id)
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id, config=config)
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
 def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
