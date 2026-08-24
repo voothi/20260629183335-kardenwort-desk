@@ -4608,12 +4608,15 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
 
 
 
-def find_working_tsv(results_dir, zid, language):
+def find_working_tsv(results_dir, zid, language="en", storage_adapter=None):
     if not zid:
         return None
     p = Path(zid)
     if p.exists() and p.is_file():
         return p
+    if results_dir is None:
+        return None
+    results_dir = Path(results_dir)
     if (results_dir / zid).exists() and (results_dir / zid).is_file():
         return results_dir / zid
     if not str(zid).endswith('.tsv') and (results_dir / f"{zid}.tsv").exists():
@@ -4626,6 +4629,40 @@ def find_working_tsv(results_dir, zid, language):
         files = list(results_dir.glob(f"*{zid}*.tsv"))
     if files:
         return files[0]
+
+    # Check for matching .updates directories
+    update_dirs = [d for d in results_dir.glob(f"{zid}-*.{language}.updates") if d.is_dir()]
+    if not update_dirs:
+        update_dirs = [d for d in results_dir.glob(f"{zid}-*.updates") if d.is_dir()]
+    if not update_dirs:
+        update_dirs = [d for d in results_dir.glob(f"*{zid}*.updates") if d.is_dir()]
+    if update_dirs:
+        first_dir = update_dirs[0]
+        base_stem = first_dir.name[:-8] if first_dir.name.endswith('.updates') else first_dir.stem
+        return results_dir / f"{base_stem}.tsv"
+
+    # Fallback to query SQLite session slug if storage adapter is available
+    adapter = storage_adapter
+    if adapter is None:
+        try:
+            adapter = get_storage_adapter()
+        except Exception:
+            adapter = None
+
+    if adapter and getattr(adapter, 'backend_name', '') == 'sqlite':
+        try:
+            bundle = adapter.db.get_session_bundle(str(zid)) if hasattr(adapter, 'db') and hasattr(adapter.db, 'get_session_bundle') else None
+            if bundle and bundle.get("session"):
+                sess = bundle["session"]
+                slug = sess.get("slug") or ""
+                source_lang = sess.get("source_language") or language or "en"
+                if slug:
+                    return results_dir / f"{zid}-{slug}.{source_lang}.tsv"
+                else:
+                    return results_dir / f"{zid}.{source_lang}.tsv"
+        except Exception:
+            pass
+
     return None
 
 def run_google_translation(text, source, target, config, resolved_paths, zid=None, trace_id=None):

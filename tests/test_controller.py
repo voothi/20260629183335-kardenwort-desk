@@ -389,3 +389,49 @@ def test_controller_session_retext_writes_updates_js(running_controller):
     assert '"stage": "finished"' in latest_js
     assert '"status": "success"' in latest_js
     assert '"translatedText":' in latest_js
+
+
+def test_find_working_tsv_updates_dir_discovery(tmp_path):
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    zid = "20260824213158"
+    
+    # Create updates directory without any .tsv file on disk
+    updates_dir = results_dir / f"{zid}-the-investor-letter.en.updates"
+    updates_dir.mkdir(parents=True, exist_ok=True)
+
+    resolved = kardenwort_desk.find_working_tsv(results_dir, zid, "en")
+    assert resolved is not None
+    assert resolved.name == f"{zid}-the-investor-letter.en.tsv"
+    assert resolved.parent == results_dir
+
+
+def test_find_working_tsv_sqlite_slug_resolution(tmp_path):
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    zid = "20260824213158"
+    
+    # Create a mock sqlite adapter
+    class MockDb:
+        def get_session_bundle(self, session_zid):
+            if session_zid == zid:
+                return {
+                    "session": {
+                        "zid": zid,
+                        "slug": "custom-sqlite-slug",
+                        "source_language": "en"
+                    }
+                }
+            return None
+
+    class MockSqliteAdapter:
+        backend_name = "sqlite"
+        def __init__(self):
+            self.db = MockDb()
+
+    adapter = MockSqliteAdapter()
+    resolved = kardenwort_desk.find_working_tsv(results_dir, zid, "en", storage_adapter=adapter)
+    assert resolved is not None
+    assert resolved.name == f"{zid}-custom-sqlite-slug.en.tsv"
+    assert resolved.parent == results_dir
+

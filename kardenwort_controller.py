@@ -756,7 +756,8 @@ class SessionArbiter:
 
         if not tsv_path or not tsv_path.exists():
             results_dir = resolve_results_dir(self.resolved_paths, self.config)
-            tsv_path = find_working_tsv(results_dir, session_zid, lang)
+            storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+            tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
 
         if not tsv_path or not tsv_path.exists():
             raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
@@ -842,7 +843,7 @@ class SessionArbiter:
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
         results_dir = resolve_results_dir(self.resolved_paths, self.config)
-        tsv_path = find_working_tsv(results_dir, session_zid, lang)
+        tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
         if not tsv_path:
             tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
 
