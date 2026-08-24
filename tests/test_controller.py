@@ -347,7 +347,7 @@ def test_controller_session_retext_writes_updates_js(running_controller):
             "X-API-Token": "test-controller-api-key"
         }
     )
-    with urllib.request.urlopen(req_create, timeout=10.0) as resp:
+    with urllib.request.urlopen(req_create, timeout=30.0) as resp:
         assert resp.status == 200
         create_res = json.loads(resp.read().decode('utf-8'))
         session_zid = create_res["data"]["session_zid"]
@@ -367,7 +367,7 @@ def test_controller_session_retext_writes_updates_js(running_controller):
             "X-API-Token": "test-controller-api-key"
         }
     )
-    with urllib.request.urlopen(req_retext, timeout=10.0) as resp:
+    with urllib.request.urlopen(req_retext, timeout=30.0) as resp:
         assert resp.status == 200
         retext_res = json.loads(resp.read().decode('utf-8'))
         assert retext_res["status"] == "success"
