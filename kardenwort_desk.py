@@ -7905,13 +7905,11 @@ html, body {{
         row_direct_candidates[row_id] = direct_cands
 
         has_compound = any(_has_comp_marker(f) for f in forms)
-        if clean_lemma and _has_comp_marker(clean_lemma):
-            has_compound = True
-                
-        if has_compound:
+        is_composite_row = bool(clean_lemma and _has_comp_marker(clean_lemma))
+        if has_compound or is_composite_row:
             compound_rows.add(row_id)
 
-        if has_compound or not forms:
+        if has_compound or is_composite_row or not forms:
             vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
         else:
             vals_to_check = forms
@@ -7924,7 +7922,7 @@ html, body {{
                         node_subs = tok.decompose_identifier(node)
                         clean_node_subs = [tok.utf8_to_lower("".join(ch for ch in s if ch.isalnum() or ch in apo_set)) for s in node_subs]
                         clean_node = tok.utf8_to_lower("".join(ch for ch in node if ch.isalnum() or ch in apo_set))
-                        node_matches = (not clean_lemma_lower or has_compound or clean_lemma_lower in clean_node or
+                        node_matches = (not clean_lemma_lower or is_composite_row or clean_lemma_lower in clean_node or
                                         any(s == clean_lemma_lower or
                                             (len(clean_lemma_lower) >= 3 and s.startswith(clean_lemma_lower)) or
                                             (len(s) >= 3 and clean_lemma_lower.startswith(s)) or
@@ -7934,25 +7932,16 @@ html, body {{
                             _add_cand(clean_node)
                             for sub in node_subs:
                                 clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                                lemma_subs = [tok.utf8_to_lower("".join(ch for ch in s if ch.isalnum() or ch in apo_set)) for s in tok.decompose_identifier(clean_lemma_lower)] if clean_lemma_lower else []
-                                lemma_sub_matches = any(
-                                    clean_sub == l_s or
-                                    (len(l_s) >= 3 and clean_sub.startswith(l_s)) or
-                                    (len(clean_sub) >= 3 and l_s.startswith(clean_sub)) or
-                                    (len(l_s) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == l_s[:4])
-                                    for l_s in lemma_subs if l_s
-                                )
                                 sub_matches = (not clean_lemma_lower or
-                                               has_compound or
+                                               is_composite_row or
                                                clean_sub == clean_lemma_lower or
                                                clean_lemma_lower == clean_node or
-                                               lemma_sub_matches or
                                                (len(clean_lemma_lower) >= 3 and clean_sub.startswith(clean_lemma_lower)) or
                                                (len(clean_sub) >= 3 and clean_lemma_lower.startswith(clean_sub)) or
                                                (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
                                 if sub_matches:
                                     _add_cand(clean_sub)
-                                    if not _has_comp_marker(clean_lemma):
+                                    if not is_composite_row:
                                         direct_cands.add(clean_sub)
                                         clean_sub_stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", clean_sub, flags=re.IGNORECASE)
                                         if clean_sub_stem and clean_sub_stem != clean_sub:
@@ -7966,25 +7955,16 @@ html, body {{
                     subtokens = tok.decompose_identifier(val)
                     for sub in subtokens:
                         clean_sub = tok.utf8_to_lower("".join(ch for ch in sub if ch.isalnum() or ch in apo_set))
-                        lemma_subs = [tok.utf8_to_lower("".join(ch for ch in s if ch.isalnum() or ch in apo_set)) for s in tok.decompose_identifier(clean_lemma_lower)] if clean_lemma_lower else []
-                        lemma_sub_matches = any(
-                            clean_sub == l_s or
-                            (len(l_s) >= 3 and clean_sub.startswith(l_s)) or
-                            (len(clean_sub) >= 3 and l_s.startswith(clean_sub)) or
-                            (len(l_s) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == l_s[:4])
-                            for l_s in lemma_subs if l_s
-                        )
                         sub_matches = (not clean_lemma_lower or
-                                       has_compound or
+                                       is_composite_row or
                                        clean_sub == clean_lemma_lower or
                                        clean_lemma_lower == clean_val or
-                                       lemma_sub_matches or
                                        (len(clean_lemma_lower) >= 3 and clean_sub.startswith(clean_lemma_lower)) or
                                        (len(clean_sub) >= 3 and clean_lemma_lower.startswith(clean_sub)) or
                                        (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
                         if sub_matches:
                             _add_cand(clean_sub)
-                            if not _has_comp_marker(clean_lemma):
+                            if not is_composite_row:
                                 direct_cands.add(clean_sub)
                                 clean_sub_stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", clean_sub, flags=re.IGNORECASE)
                                 if clean_sub_stem and clean_sub_stem != clean_sub:
