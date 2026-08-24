@@ -1726,11 +1726,19 @@ def resolve_wordfill_config(config, resolved_paths=None):
     Parse and resolve wordfill configuration dictionary from config (ConfigParser or dict)
     and optional resolved_paths.
     Returns a dict with: enabled, scan_roots, scan_depth, scan_scope, scan_sort_order,
-    scan_match_language, scan_max_files, target_quality, target_fallback, sqlite_db_path.
+    scan_match_language, scan_max_files, target_quality, target_fallback, sqlite_db_path,
+    backend, storage_backend.
     """
     base_dir = Path('.')
     if isinstance(resolved_paths, dict) and 'base_dir' in resolved_paths and resolved_paths['base_dir']:
         base_dir = Path(resolved_paths['base_dir'])
+
+    storage_backend = 'tsv'
+    if isinstance(resolved_paths, dict) and 'storage_backend' in resolved_paths and resolved_paths['storage_backend']:
+        storage_backend = str(resolved_paths['storage_backend']).strip().lower()
+    elif config is not None and SEC_STORAGE in config:
+        st = config[SEC_STORAGE]
+        storage_backend = str(st.get('backend', 'tsv') if hasattr(st, 'get') else st.get('backend', 'tsv')).strip().lower()
 
     wordfill = {
         'enabled': False,
@@ -1743,6 +1751,8 @@ def resolve_wordfill_config(config, resolved_paths=None):
         'target_quality': 'any',
         'target_fallback': True,
         'sqlite_db_path': None,
+        'backend': storage_backend,
+        'storage_backend': storage_backend,
     }
 
     if config is None:
@@ -12058,6 +12068,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     target_fallback = wordfill_cfg.get('target_fallback', True)
 
     target_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(target_quality, 0)
+    backend = str(wordfill_cfg.get('storage_backend') or wordfill_cfg.get('backend') or 'tsv').strip().lower()
 
     word_lower = word.strip().lower()
     if not word_lower:
@@ -12069,6 +12080,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     exclude_zid = extract_zid(Path(exclude_path)) if exclude_path else None
 
     # --- Phase 1: SQLite Indexed Search (< 1ms) ---
+    is_sqlite_active = (backend == 'sqlite') or ('db' in wordfill_cfg and wordfill_cfg['db'] is not None)
     try:
         db = wordfill_cfg.get('db')
         db_path = wordfill_cfg.get('sqlite_db_path')
@@ -12077,6 +12089,7 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
             db = KardenwortDB(db_path=db_path)
 
         if db and db.db_path and db.db_path.exists():
+            is_sqlite_active = True
             search_lang = language if scan_match_language else None
             candidates = db.find_wordfill_candidates(
                 word=word,
@@ -12113,7 +12126,13 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
     except Exception as e:
         logger.warning(f"Failed SQLite wordfill search for '{word}': {e}")
 
-    # --- Phase 2: Hybrid Fallback to External TSV Scanning ---
+    # If SQLite storage is active, do not fall back to scanning disk TSVs in scan_roots
+    if is_sqlite_active and backend != 'tsv':
+        if target_fallback:
+            return best_fallback_match
+        return None
+
+    # --- Phase 2: Hybrid Fallback to External TSV Scanning (for TSV storage mode) ---
     if scan_roots:
         candidates = collect_candidate_files(
             scan_roots, scan_depth, scan_scope, language,
@@ -12234,6 +12253,10 @@ def core_lookup(
     if storage:
         resolved_paths = dict(resolved_paths)
         resolved_paths['storage_backend'] = storage
+        if wordfill_cfg:
+            wordfill_cfg = dict(wordfill_cfg)
+            wordfill_cfg['storage_backend'] = storage
+            wordfill_cfg['backend'] = storage
 
     if not bypass_lang_check:
 
@@ -14101,7 +14124,9 @@ def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
     siblings.sort(key=lambda x: x[0])
     return [p for _, p in siblings]
 
-def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0):
+def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0, is_sqlite=False):
+    if is_sqlite:
+        return
     import time
     from datetime import datetime
     import threading
@@ -14198,7 +14223,9 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
         observer.stop()
         observer.join()
 
-def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_count=0):
+def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_count=0, is_sqlite=False):
+    if is_sqlite:
+        return
     import time
     from datetime import datetime
     import threading
@@ -14312,7 +14339,7 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
         observer.stop()
         observer.join()
 
-def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fields):
+def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fields, storage_adapter=None, is_sqlite=False):
     if not data_rows:
         return data_rows
         
@@ -14340,45 +14367,122 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
 
     modified = False
     
-    for sibling in get_batch_sibling_tsvs(working_tsv_path):
+    if is_sqlite:
+        db = getattr(storage_adapter, 'db', None)
+        if not db:
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB()
+
+        sibling_zids = []
         try:
-            with file_lock(sibling):
-                sib_comments, sib_headers, sib_rows = load_tsv_rows(sibling)
-        except Exception:
-            continue
-            
-        sib_col_lemma = sib_headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in sib_headers else -1
-        if sib_col_lemma == -1: continue
+            from datetime import datetime
+            dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
+            with db.get_connection(read_only=True) as conn:
+                cursor = conn.cursor()
+                cursor.execute("SELECT zid FROM sessions WHERE deleted_at IS NULL AND zid != ?;", (my_zid,))
+                for row in cursor.fetchall():
+                    szid = row["zid"] if isinstance(row, dict) or hasattr(row, 'keys') else row[0]
+                    if not re.match(r'^\d{14}', str(szid)):
+                        continue
+                    try:
+                        dt_sib = datetime.strptime(str(szid)[:14], '%Y%m%d%H%M%S')
+                        if abs((dt_sib - dt_my).total_seconds()) <= 120:
+                            sibling_zids.append((str(szid), dt_sib))
+                    except Exception:
+                        continue
+            sibling_zids.sort(key=lambda x: x[0])
+        except Exception as e:
+            logger.warning(f"Failed to query SQLite sibling sessions for cross-pollination: {e}")
 
-        col_map = {}
-        for sib_c, h in enumerate(sib_headers):
-            if h in headers and sib_c != sib_col_lemma and is_wordfill_eligible(h):
-                col_map[sib_c] = headers.index(h)
-
-        for sib_row in sib_rows:
-            if len(sib_row) > sib_col_lemma:
-                sib_lemma = sib_row[sib_col_lemma].strip()
-                if sib_lemma in missing_lemmas:
-                    for target_row_idx in missing_lemmas[sib_lemma]:
-                        target_row = data_rows[target_row_idx]
+        for sib_zid, _ in sibling_zids:
+            try:
+                sib_words = db.get_words_by_session(sib_zid, parse_json=True)
+                for w in sib_words:
+                    sib_lemma = str(w.get("lemma") or "").strip()
+                    if not sib_lemma or sib_lemma not in missing_lemmas:
+                        continue
+                    
+                    # Prepare list of eligible word-level attributes to transfer
+                    field_val_pairs = []
+                    if w.get("word_destination"):
+                        field_val_pairs.append(("WordDestination", w["word_destination"]))
+                    if w.get("morphology"):
+                        field_val_pairs.append(("WordSourceMorphologyAI", w["morphology"]))
+                    if w.get("ipa"):
+                        field_val_pairs.append(("WordSourceIPA", w["ipa"]))
+                    
+                    extra = w.get("extra_fields") or {}
+                    if isinstance(extra, dict):
+                        for k, v in extra.items():
+                            if is_wordfill_eligible(k) and v:
+                                field_val_pairs.append((k, v))
+                    
+                    for col_name, sib_val in field_val_pairs:
+                        if not is_wordfill_eligible(col_name):
+                            continue
+                        if col_name not in headers:
+                            continue
+                        target_c = headers.index(col_name)
                         
-                        max_target_col = max(col_map.values()) if col_map else -1
-                        if len(target_row) <= max_target_col:
-                            target_row.extend([''] * (max_target_col - len(target_row) + 1))
-                            
-                        for sib_c, target_c in col_map.items():
-                            if len(sib_row) > sib_c:
-                                sib_val = sib_row[sib_c].strip()
-                                if sib_val and 'skeleton-loader' not in sib_val and sib_val != '[FAILED]' and not sib_val.startswith('[Error'):
-                                    target_val = target_row[target_c].strip()
-                                    if not target_val or 'skeleton-loader' in target_val or target_val == '[FAILED]' or target_val.startswith('[Error'):
-                                        target_row[target_c] = sib_row[sib_c]
-                                        modified = True
+                        sib_val_str = str(sib_val).strip()
+                        if sib_val_str and 'skeleton-loader' not in sib_val_str and sib_val_str != '[FAILED]' and not sib_val_str.startswith('[Error'):
+                            for target_row_idx in missing_lemmas[sib_lemma]:
+                                target_row = data_rows[target_row_idx]
+                                if len(target_row) <= target_c:
+                                    target_row.extend([''] * (target_c - len(target_row) + 1))
+                                target_val = target_row[target_c].strip()
+                                if not target_val or 'skeleton-loader' in target_val or target_val == '[FAILED]' or target_val.startswith('[Error'):
+                                    target_row[target_c] = sib_val_str
+                                    modified = True
+            except Exception as e:
+                logger.warning(f"Failed to cross-pollinate from SQLite sibling {sib_zid}: {e}")
 
-    if modified:
-        with file_lock(working_tsv_path):
-            comments, headers_latest, _ = load_tsv_rows(working_tsv_path)
-            save_tsv_rows_safely(working_tsv_path, comments, headers_latest, data_rows)
+        if modified and storage_adapter:
+            try:
+                storage_adapter.save_session(session_zid=my_zid, headers=headers, data_rows=data_rows)
+            except Exception as e:
+                logger.warning(f"Failed to save cross-pollinated SQLite session {my_zid}: {e}")
+
+    else:
+        for sibling in get_batch_sibling_tsvs(working_tsv_path):
+            try:
+                with file_lock(sibling):
+                    sib_comments, sib_headers, sib_rows = load_tsv_rows(sibling)
+            except Exception:
+                continue
+                
+            sib_col_lemma = sib_headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in sib_headers else -1
+            if sib_col_lemma == -1: continue
+
+            col_map = {}
+            for sib_c, h in enumerate(sib_headers):
+                if h in headers and sib_c != sib_col_lemma and is_wordfill_eligible(h):
+                    col_map[sib_c] = headers.index(h)
+
+            for sib_row in sib_rows:
+                if len(sib_row) > sib_col_lemma:
+                    sib_lemma = sib_row[sib_col_lemma].strip()
+                    if sib_lemma in missing_lemmas:
+                        for target_row_idx in missing_lemmas[sib_lemma]:
+                            target_row = data_rows[target_row_idx]
+                            
+                            max_target_col = max(col_map.values()) if col_map else -1
+                            if len(target_row) <= max_target_col:
+                                target_row.extend([''] * (max_target_col - len(target_row) + 1))
+                                
+                            for sib_c, target_c in col_map.items():
+                                if len(sib_row) > sib_c:
+                                    sib_val = sib_row[sib_c].strip()
+                                    if sib_val and 'skeleton-loader' not in sib_val and sib_val != '[FAILED]' and not sib_val.startswith('[Error'):
+                                        target_val = target_row[target_c].strip()
+                                        if not target_val or 'skeleton-loader' in target_val or target_val == '[FAILED]' or target_val.startswith('[Error'):
+                                            target_row[target_c] = sib_row[sib_c]
+                                            modified = True
+
+        if modified:
+            with file_lock(working_tsv_path):
+                comments, headers_latest, _ = load_tsv_rows(working_tsv_path)
+                save_tsv_rows_safely(working_tsv_path, comments, headers_latest, data_rows)
 
     return data_rows
 
@@ -14427,10 +14531,10 @@ def cmd_progressive_worker(args):
         safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
             
         base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
-        has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi'
+        has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi' or is_sqlite
         if has_siblings:
-            wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows))
-            data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
+            wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite)
+            data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
             
         try:
             run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
@@ -14451,10 +14555,10 @@ def cmd_progressive_worker(args):
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
             if has_siblings:
-                wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows))
+                wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows), is_sqlite=is_sqlite)
                 zid_part = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
                 with TraceTimer("cross_pollinate_from_siblings", zid_part, config, resolved_paths):
-                    data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields)
+                    data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
             if not skip_intellifiller:
                 data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
 
