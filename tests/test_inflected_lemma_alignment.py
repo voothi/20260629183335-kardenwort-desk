@@ -238,3 +238,50 @@ def test_js_render_row_includes_token_order_lookup_and_inflected_sync(tmp_path):
     assert "rowData.token_order" in html
     assert "rowData.hasOwnProperty('inflected')" in html
 
+
+def test_subtoken_candidate_isolation_and_compound_highlighting(tmp_path):
+    """Verify that short-prefix matching works for atomic lemmas without leaking to sibling subtokens."""
+    config, resolved_paths = _create_render_test_env(tmp_path)
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_file = res_dir / "20260824192029-compcheck.en.tsv"
+    tsv_content = (
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tTokenOrder\n"
+        "record-setting\tset\trecord-setting\tустанавливать\t7\n"
+        "record-setting\trecord\trecord-setting\tзапись\t9\n"
+        "record-setting\trecord-set\trecord-setting\tустановление рекорда\t21\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = run_render_flow(
+        text="A record-setting achievement.",
+        language="en",
+        zid="20260824192029",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+
+    import json
+    import re
+    m = re.search(r'<script id="token-map" type="application/json">(.*?)</script>', html, re.DOTALL)
+    assert m is not None
+    token_map = json.loads(m.group(1))
+
+    record_tok = next((t for t in token_map if t.get("text") == "record"), None)
+    setting_tok = next((t for t in token_map if t.get("text") == "setting"), None)
+
+    assert record_tok is not None
+    assert setting_tok is not None
+
+    # Atomic row isolation
+    assert 1 in record_tok["atomic_row_ids"]  # row 1 is lemma 'record'
+    assert 0 not in record_tok["atomic_row_ids"]  # row 0 is lemma 'set'
+    assert 0 in setting_tok["atomic_row_ids"]  # row 0 is lemma 'set'
+    assert 1 not in setting_tok["atomic_row_ids"]  # row 1 is lemma 'record'
+
+    # Composite row mapping
+    assert 2 in record_tok["compound_row_ids"]  # row 2 is composite 'record-set'
+    assert 2 in setting_tok["compound_row_ids"]  # row 2 is composite 'record-set'
+
