@@ -56,6 +56,9 @@ from kardenwort_desk import (
     safe_write_update_js,
     format_translated_html,
     SessionLogger,
+    find_wordfill_match,
+    apply_wordfill_to_rows,
+    resolve_wordfill_config,
     SEC_SETTINGS,
     SEC_LANGUAGES,
     SEC_PIPELINE,
@@ -569,9 +572,10 @@ class SessionArbiter:
     and manages Server-Sent Events (SSE) subscriber channels.
     """
 
-    def __init__(self, config: Any, resolved_paths: Dict[str, Any]):
+    def __init__(self, config: Any, resolved_paths: Dict[str, Any], wordfill_cfg: Optional[Dict[str, Any]] = None):
         self.config = config
         self.resolved_paths = resolved_paths
+        self.wordfill_cfg = wordfill_cfg or resolve_wordfill_config(config, resolved_paths)
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.subscribers: Dict[str, List[queue.Queue]] = {}
         self._lock = threading.Lock()
@@ -632,6 +636,7 @@ class SessionArbiter:
             sections=sections,
             theme=theme,
             zid=req_zid,
+            wordfill_cfg=self.wordfill_cfg,
             config=self.config,
             resolved_paths=self.resolved_paths,
             goldendict=getattr(self, 'goldendict', {}),
@@ -838,9 +843,43 @@ class SessionArbiter:
         if not tsv_path or not tsv_path.exists():
             raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
 
-        run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
-
         comments, headers, data_rows = load_tsv_rows(tsv_path)
+        mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, headers)
+        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+
+        wordfill_cfg = getattr(self, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
+        if wordfill_cfg and wordfill_cfg.get('enabled', False) and col_lemma != -1:
+            target_quality = wordfill_cfg.get('target_quality', 'any')
+            target_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(target_quality, 0)
+            remaining_selected = []
+            for row_id in selected_rows:
+                if 0 <= row_id < len(data_rows):
+                    row = data_rows[row_id]
+                    if len(row) > col_lemma and row[col_lemma].strip():
+                        lemma_val = row[col_lemma].strip()
+                        match = find_wordfill_match(lemma_val, lang, wordfill_cfg, exclude_path=tsv_path)
+                        if match:
+                            has_ipa = bool(match.get('WordSourceIPA', '').strip())
+                            has_morph = bool(match.get('WordSourceMorphologyAI', '').strip())
+                            tier = 2 if (has_ipa and has_morph) else (1 if (has_ipa or has_morph) else 0)
+                            if tier >= target_quality_tier:
+                                apply_wordfill_to_rows([row], headers, match)
+                                logger.info(
+                                    f"wordfill (reword_session): pre-filled quality tier {tier} for row {row_id} lemma '{lemma_val}' "
+                                    f"from corpus; skipping IntelliFiller."
+                                )
+                                continue
+                remaining_selected.append(row_id)
+
+            if len(remaining_selected) < len(selected_rows):
+                with file_lock(tsv_path):
+                    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                selected_rows = remaining_selected
+
+        if selected_rows:
+            run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
+            comments, headers, data_rows = load_tsv_rows(tsv_path)
         new_fp = compute_content_fingerprint(data_rows)
 
         with self._lock:
@@ -2389,6 +2428,7 @@ def run_controller(args=None):
     server.config = config
     server.resolved_paths = resolved_paths
     server.goldendict = goldendict
+    server.wordfill_cfg = _wordfill
     server.api_key = goldendict.get('server_api_key', '')
     server.seq_counter = 0
     server.seq_lock = threading.Lock()
@@ -2396,7 +2436,7 @@ def run_controller(args=None):
     server.server_port = port
 
     # Initialize in-memory SessionArbiter
-    server.arbiter = SessionArbiter(config, resolved_paths)
+    server.arbiter = SessionArbiter(config, resolved_paths, wordfill_cfg=_wordfill)
     server.arbiter.goldendict = goldendict
 
     # Initialize & start sidecar supervisor

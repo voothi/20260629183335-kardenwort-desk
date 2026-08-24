@@ -1721,6 +1721,95 @@ def _migrate_config(config):
             val_gap = 60
     config.set(SEC_SETTINGS, 'split_gap_limit', str(val_gap))
 
+def resolve_wordfill_config(config, resolved_paths=None):
+    """
+    Parse and resolve wordfill configuration dictionary from config (ConfigParser or dict)
+    and optional resolved_paths.
+    Returns a dict with: enabled, scan_roots, scan_depth, scan_scope, scan_sort_order,
+    scan_match_language, scan_max_files, target_quality, target_fallback, sqlite_db_path.
+    """
+    base_dir = Path('.')
+    if isinstance(resolved_paths, dict) and 'base_dir' in resolved_paths and resolved_paths['base_dir']:
+        base_dir = Path(resolved_paths['base_dir'])
+
+    wordfill = {
+        'enabled': False,
+        'scan_roots': [],
+        'scan_depth': 1,
+        'scan_scope': 'merged',
+        'scan_sort_order': 'chronological',
+        'scan_match_language': True,
+        'scan_max_files': 500,
+        'target_quality': 'any',
+        'target_fallback': True,
+        'sqlite_db_path': None,
+    }
+
+    if config is None:
+        return wordfill
+
+    if SEC_WORDFILL in config:
+        wf = config[SEC_WORDFILL]
+        if hasattr(wf, 'getboolean'):
+            wordfill['enabled'] = wf.getboolean('enabled', fallback=False)
+            raw_roots = wf.get('scan_roots', '')
+            wordfill['scan_depth'] = wf.getint('scan_depth', fallback=1)
+            wordfill['scan_scope'] = wf.get('scan_scope', 'merged').strip().lower()
+            wordfill['scan_sort_order'] = wf.get('scan_sort_order', 'chronological').strip().lower()
+            wordfill['scan_match_language'] = wf.getboolean('scan_match_language', fallback=True)
+            wordfill['scan_max_files'] = wf.getint('scan_max_files', fallback=500)
+            wordfill['target_quality'] = wf.get('target_quality', 'any').strip().lower()
+            wordfill['target_fallback'] = wf.getboolean('target_fallback', fallback=True)
+        elif isinstance(wf, dict):
+            wordfill['enabled'] = bool(wf.get('enabled', False))
+            raw_roots = wf.get('scan_roots', '')
+            wordfill['scan_depth'] = int(wf.get('scan_depth', 1))
+            wordfill['scan_scope'] = str(wf.get('scan_scope', 'merged')).strip().lower()
+            wordfill['scan_sort_order'] = str(wf.get('scan_sort_order', 'chronological')).strip().lower()
+            wordfill['scan_match_language'] = bool(wf.get('scan_match_language', True))
+            wordfill['scan_max_files'] = int(wf.get('scan_max_files', 500))
+            wordfill['target_quality'] = str(wf.get('target_quality', 'any')).strip().lower()
+            wordfill['target_fallback'] = bool(wf.get('target_fallback', True))
+        else:
+            raw_roots = ''
+
+        parsed_roots = []
+        if isinstance(raw_roots, list):
+            for r in raw_roots:
+                if not Path(r).is_absolute():
+                    parsed_roots.append((base_dir / r).resolve())
+                else:
+                    parsed_roots.append(Path(r).resolve())
+        elif isinstance(raw_roots, str):
+            import re
+            for raw_root in re.split(r'[\n,]+', raw_roots):
+                raw_root = raw_root.strip()
+                if not raw_root:
+                    continue
+                if not Path(raw_root).is_absolute():
+                    parsed_roots.append((base_dir / raw_root).resolve())
+                else:
+                    parsed_roots.append(Path(raw_root).resolve())
+        wordfill['scan_roots'] = parsed_roots
+
+    # Resolve sqlite_db_path
+    if isinstance(resolved_paths, dict) and 'sqlite_db_path' in resolved_paths and resolved_paths['sqlite_db_path']:
+        wordfill['sqlite_db_path'] = Path(resolved_paths['sqlite_db_path']).resolve()
+    elif SEC_STORAGE in config:
+        st = config[SEC_STORAGE]
+        db_p = st.get('sqlite_db_path', 'data/kardenwort.db') if hasattr(st, 'get') else st.get('sqlite_db_path', 'data/kardenwort.db')
+        if db_p:
+            db_p = str(db_p).strip()
+            if not Path(db_p).is_absolute():
+                wordfill['sqlite_db_path'] = (base_dir / db_p).resolve()
+            else:
+                wordfill['sqlite_db_path'] = Path(db_p).resolve()
+    else:
+        wordfill['sqlite_db_path'] = (base_dir / 'data' / 'kardenwort.db').resolve()
+
+    return wordfill
+
+
 def load_config(config_path=None):
     """
     Loads config.ini.
@@ -1841,40 +1930,6 @@ def load_config(config_path=None):
         goldendict['sentence_match_strategy'] = 'normalized'
         goldendict['allow_checksum_fallback'] = True
 
-    wordfill = {}
-    if SEC_WORDFILL in config:
-        wf = config[SEC_WORDFILL]
-        wordfill['enabled'] = wf.getboolean('enabled', fallback=False)
-        raw_roots = wf.get('scan_roots', '')
-        parsed_roots = []
-        import re
-        for raw_root in re.split(r'[\n,]+', raw_roots):
-            raw_root = raw_root.strip()
-            if not raw_root:
-                continue
-            if not Path(raw_root).is_absolute():
-                parsed_roots.append((base_dir / raw_root).resolve())
-            else:
-                parsed_roots.append(Path(raw_root).resolve())
-        wordfill['scan_roots'] = parsed_roots
-        wordfill['scan_depth'] = wf.getint('scan_depth', fallback=1)
-        wordfill['scan_scope'] = wf.get('scan_scope', 'merged').strip().lower()
-        wordfill['scan_sort_order'] = wf.get('scan_sort_order', 'chronological').strip().lower()
-        wordfill['scan_match_language'] = wf.getboolean('scan_match_language', fallback=True)
-        wordfill['scan_max_files'] = wf.getint('scan_max_files', fallback=500)
-        wordfill['target_quality'] = wf.get('target_quality', 'any').strip().lower()
-        wordfill['target_fallback'] = wf.getboolean('target_fallback', fallback=True)
-    else:
-        wordfill['enabled'] = False
-        wordfill['scan_roots'] = []
-        wordfill['scan_depth'] = 1
-        wordfill['scan_scope'] = 'merged'
-        wordfill['scan_sort_order'] = 'chronological'
-        wordfill['scan_match_language'] = True
-        wordfill['scan_max_files'] = 500
-        wordfill['target_quality'] = 'any'
-        wordfill['target_fallback'] = True
-
     # 4. Storage configuration
     if SEC_STORAGE in config:
         st = config[SEC_STORAGE]
@@ -1891,7 +1946,7 @@ def load_config(config_path=None):
         resolved_paths['sqlite_db_path'] = (base_dir / 'data' / 'kardenwort.db').resolve()
         resolved_paths['storage_fallback_to_tsv'] = True
 
-    wordfill['sqlite_db_path'] = resolved_paths.get('sqlite_db_path')
+    wordfill = resolve_wordfill_config(config, resolved_paths)
 
     _migrate_config(config)
     _validate_translation_config(config)
@@ -6764,6 +6819,8 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             _ACTIVE_ZIDS.discard(zid)
 
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None):
+    if wordfill_cfg is None and config is not None:
+        wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
     normalize_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
     if text:
         text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
@@ -10938,6 +10995,8 @@ def run_lookup_flow(
     text_mode='single', wordfill_cfg=None, sentence_match_strategy=None,
     allow_checksum_fallback=None, no_checksum_lookup=False
 ):
+    if wordfill_cfg is None and config is not None:
+        wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     import hashlib
     import time
@@ -10951,8 +11010,8 @@ def run_lookup_flow(
     
     working_tsv_path = results_dir / cache_key
     
-    ttl_seconds = goldendict['lookup_ttl_seconds']
-    run_intellifiller = goldendict['run_intellifiller']
+    ttl_seconds = goldendict.get('lookup_ttl_seconds', 300) if isinstance(goldendict, dict) else 300
+    run_intellifiller = goldendict.get('run_intellifiller', False) if isinstance(goldendict, dict) else False
 
     if no_checksum_lookup:
         effective_strategy = "none"
@@ -11457,8 +11516,8 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
         return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
 
 def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
-    sections = goldendict['sections']
-    column_tokens = goldendict['lemma_columns']
+    sections = goldendict.get('sections', ['translation', 'lemmas']) if isinstance(goldendict, dict) else ['translation', 'lemmas']
+    column_tokens = goldendict.get('lemma_columns', ['inflected', 'lemma', 'translation']) if isinstance(goldendict, dict) else ['inflected', 'lemma', 'translation']
     
     headings = {
         'source': goldendict.get('heading_source', ''),
@@ -11490,7 +11549,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         'data_rows': data_rows,
         'language': language,
         'target_lang': target_lang,
-        'run_intellifiller': goldendict['run_intellifiller'],
+        'run_intellifiller': goldendict.get('run_intellifiller', False) if isinstance(goldendict, dict) else False,
         'column_tokens': column_tokens,
         'headings': headings,
         'role_fields': role_fields,
@@ -12169,6 +12228,8 @@ def core_lookup(
         config, resolved_paths, goldendict = c_tuple[0], c_tuple[1], c_tuple[2]
         if wordfill_cfg is None:
             wordfill_cfg = c_tuple[3]
+    elif wordfill_cfg is None:
+        wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
 
     if storage:
         resolved_paths = dict(resolved_paths)
@@ -13106,15 +13167,49 @@ def cmd_reprocess_worker(args):
             for row_id in selected_rows:
                 if 0 <= row_id < len(data_rows):
                     original_lemmas[row_id] = data_rows[row_id][col_lemma]
+
+        wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
+        if wordfill_cfg and wordfill_cfg.get('enabled', False) and col_lemma != -1:
+            target_quality = wordfill_cfg.get('target_quality', 'any')
+            target_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(target_quality, 0)
+            remaining_selected = []
+            for row_id in selected_rows:
+                if 0 <= row_id < len(data_rows):
+                    row = data_rows[row_id]
+                    if len(row) > col_lemma and row[col_lemma].strip():
+                        lemma_val = row[col_lemma].strip()
+                        match = find_wordfill_match(lemma_val, language, wordfill_cfg, exclude_path=tsv_path)
+                        if match:
+                            has_ipa = bool(match.get('WordSourceIPA', '').strip())
+                            has_morph = bool(match.get('WordSourceMorphologyAI', '').strip())
+                            tier = 2 if (has_ipa and has_morph) else (1 if (has_ipa or has_morph) else 0)
+                            if tier >= target_quality_tier:
+                                apply_wordfill_to_rows([row], headers, match)
+                                logger.info(
+                                    f"wordfill (reprocess): pre-filled quality tier {tier} for row {row_id} lemma '{lemma_val}' "
+                                    f"from corpus; skipping IntelliFiller."
+                                )
+                                continue
+                remaining_selected.append(row_id)
+
+            if len(remaining_selected) < len(selected_rows):
+                if is_sqlite:
+                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                else:
+                    with storage_adapter.file_lock(tsv_path):
+                        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id)
+                selected_rows = remaining_selected
         
-        if lemmas_provider in ('combined', 'google', 'deepl'):
+        if selected_rows and lemmas_provider in ('combined', 'google', 'deepl'):
             try:
                 data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang, zid=zid, trace_id=trace_id)
                 safe_write_update_js(tsv_path, data_rows, headers, role_fields, zid=zid, trace_id=trace_id)
             except Exception as e:
                 logger.error(f"Failed fast-path translation during reprocess: {e}")
 
-        if lemmas_provider in ('intellifiller', 'combined'):
+        if selected_rows and lemmas_provider in ('intellifiller', 'combined'):
             try:
                 data_rows = _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, selected_rows, zid=zid, trace_id=trace_id)
             except Exception as e:
@@ -13537,12 +13632,51 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     
         if run_base == 'auto' and col_lemma != -1:
             lang = getattr(args, 'language', 'en')
+            wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
+            if wordfill_cfg and wordfill_cfg.get('enabled', False):
+                try:
+                    wf_applied = False
+                    for i, row in enumerate(data_rows):
+                        if len(row) > col_lemma and row[col_lemma].strip():
+                            lemma_val = row[col_lemma].strip()
+                            is_translated = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
+                            if not is_translated:
+                                match = find_wordfill_match(lemma_val, lang, wordfill_cfg, exclude_path=tsv_path)
+                                if match:
+                                    apply_wordfill_to_rows([row], headers, match)
+                                    wf_applied = True
+                                    logger.info(
+                                        f"wordfill (progressive): pre-filled {len(match)} field(s) for lemma '{lemma_val}' from corpus."
+                                    )
+                    if wf_applied:
+                        if is_sqlite:
+                            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+                            updates = []
+                            for row_idx, row in enumerate(data_rows):
+                                if col_lemma != -1 and len(row) > col_lemma:
+                                    if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
+                                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                                        updates.append({
+                                            "token_order": t_ord,
+                                            "field": "word_destination",
+                                            "value": row[col_word_dest],
+                                        })
+                            if updates:
+                                storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
+                        else:
+                            with file_lock(tsv_path):
+                                comments, h_curr, _ = load_tsv_rows(tsv_path)
+                                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                except Exception as wf_err:
+                    logger.warning(f"wordfill (progressive): translation pre-fill step failed: {wf_err}")
+
             lemmas_to_translate = []
             seen = set()
             for row in data_rows:
                 if len(row) > col_lemma and row[col_lemma].strip():
-                    val = row[col_lemma]
-                    if val not in seen:
+                    val = row[col_lemma].strip()
+                    is_translated = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
+                    if not is_translated and val not in seen:
                         seen.add(val)
                         lemmas_to_translate.append(val)
             
