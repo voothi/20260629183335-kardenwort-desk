@@ -13302,8 +13302,8 @@ def cmd_reprocess_worker(args):
                     classifications = load_classification_dictionaries(classify_args)
                     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
                     if col_lemma != -1:
-                        with file_lock(tsv_path):
-                            comments, headers, data_rows = load_tsv_rows(tsv_path)
+                        with storage_adapter.file_lock(tsv_path):
+                            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
                             for name, c_dict in classifications.items():
                                 if name in role_fields and role_fields[name] in headers:
                                     col_idx = headers.index(role_fields[name])
@@ -13316,7 +13316,7 @@ def cmd_reprocess_worker(args):
                                                 data_rows[row_id].append("")
                                             data_rows[row_id][col_idx] = val
                                             
-                            save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                            storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             except Exception as e_class:
                 logger.error(f"Failed to update classification fields during reprocess: {e_class}")
                 if sess_logger:

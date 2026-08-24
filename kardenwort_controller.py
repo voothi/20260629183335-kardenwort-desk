@@ -838,12 +838,20 @@ class SessionArbiter:
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
         prompt_name = prompt or self.config.get(SEC_LANGUAGES, f"{lang}_prompt", fallback="")
 
+        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
         results_dir = resolve_results_dir(self.resolved_paths, self.config)
         tsv_path = find_working_tsv(results_dir, session_zid, lang)
-        if not tsv_path or not tsv_path.exists():
+        if not tsv_path:
+            tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
+
+        if not is_sqlite and (not tsv_path or not tsv_path.exists()):
             raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
 
-        comments, headers, data_rows = load_tsv_rows(tsv_path)
+        with storage_adapter.file_lock(tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+
         mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
@@ -873,19 +881,41 @@ class SessionArbiter:
                 remaining_selected.append(row_id)
 
             if len(remaining_selected) < len(selected_rows):
-                with file_lock(tsv_path):
-                    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                with storage_adapter.file_lock(tsv_path):
+                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 selected_rows = remaining_selected
 
         if selected_rows:
-            run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+            if is_sqlite:
+                storage_adapter.enrich_session_intellifiller(
+                    session_zid=session_zid,
+                    prompt_name=prompt_name,
+                    selected_rows=selected_rows,
+                    reprocess=True,
+                    zid=req_zid,
+                )
+                comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+            else:
+                run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
+                comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+
         new_fp = compute_content_fingerprint(data_rows)
 
         with self._lock:
             if session_zid in self.sessions:
                 self.sessions[session_zid]["data_rows"] = data_rows
                 self.sessions[session_zid]["fingerprint"] = new_fp
+
+        safe_write_update_js(
+            tsv_path,
+            data_rows,
+            headers,
+            role_fields,
+            stage="finished",
+            status="success",
+            zid=session_zid,
+            config=self.config
+        )
 
         self.emit_event(session_zid, {
             "type": "update",

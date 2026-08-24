@@ -300,3 +300,61 @@ def test_reword_and_reprocess_prefill_and_filter_intellifiller(tmp_path, monkeyp
     # In reword_session, row 0 meets target_quality and is excluded; only row 1 is sent to intellifiller
     assert len(intellifiller_calls) == 1
     assert intellifiller_calls[0] == [1]
+
+
+def test_cmd_reprocess_worker_sqlite_mode_classification(tmp_path, monkeypatch):
+    """
+    Verifies that in SQLite storage mode, cmd_reprocess_worker executes dictionary classification
+    without encountering FileNotFoundError on physical TSV paths.
+    """
+    config, resolved_paths = _create_test_config(tmp_path, enabled=False)
+    config.set('storage', 'backend', 'sqlite')
+    config.set('storage', 'sqlite_db_path', str(tmp_path / 'kardenwort.db'))
+    resolved_paths['storage_backend'] = 'sqlite'
+
+    config.add_section('classification')
+    config.set('classification', 'enabled', 'true')
+
+    storage_adapter = desk.get_storage_adapter(config, resolved_paths)
+    sess_zid = "20260824215000"
+    sentences = [
+        {"sentence_index": 1, "sentence_source": "We invest in startups.", "sentence_destination": "Мы инвестируем в стартапы."}
+    ]
+    words = [
+        {"sentence_index": 1, "token_order": 0, "quotation": "invest", "lemma": "invest", "selected": 1}
+    ]
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="test",
+        source_language="en",
+        target_language="ru",
+        source_raw_text="We invest in startups.",
+        sentences=sentences,
+        words=words,
+        working_tsv_path=None,
+        zid=sess_zid
+    )
+
+    # Mock intellifiller to return updated rows
+    monkeypatch.setattr(storage_adapter, 'enrich_session_intellifiller', lambda *a, **kw: True)
+    monkeypatch.setattr(desk, 'get_storage_adapter', lambda *a, **kw: storage_adapter)
+    monkeypatch.setattr(desk, 'safe_write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'load_config', lambda *a, **kw: (config, resolved_paths, {}, {}))
+
+    class ReprocessArgs:
+        config = None
+        tsv = str(tmp_path / "results" / f"{sess_zid}.en.tsv")
+        rows = "0"
+        zid = sess_zid
+        prompt = None
+
+    # Should complete cleanly without raising FileNotFoundError
+    desk.cmd_reprocess_worker(ReprocessArgs())
+
+    # Verify session is intact in SQLite
+    restored = storage_adapter.restore_session(sess_zid)
+    assert len(restored["data_rows"]) == 1
+    lemma_idx = restored["headers"].index("WordSource")
+    assert restored["data_rows"][0][lemma_idx] == "invest"
+
