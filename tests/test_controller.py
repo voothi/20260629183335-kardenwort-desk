@@ -287,3 +287,46 @@ def test_controller_render_fast_path_endpoint(running_controller):
         assert len(res["data"]["html_b64"]) > 0
 
 
+def test_controller_render_language_mismatch_returns_422(running_controller):
+    server_url, _ = running_controller
+    url = f"{server_url}/api/v1/render"
+    payload = json.dumps({
+        "text": "Das ist ein schönes deutsches Haus für den Sprachtest.",
+        "language": "en",
+        "text_mode": "single",
+        "theme": "dark",
+        "bypass_lang_check": False,
+    }).encode('utf-8')
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req, timeout=10.0)
+    assert exc_info.value.code == 422
+    err_body = json.loads(exc_info.value.read().decode('utf-8'))
+    assert err_body["status"] == "error"
+    assert err_body["error_code"] == "LANGUAGE_MISMATCH"
+    assert err_body["details"]["detected_language"] == "de"
+    assert err_body["details"]["expected_language"] == "en"
+    assert err_body["details"]["action"] in ("prompt", "block")
+
+
+def test_controller_render_language_mismatch_with_bypass(running_controller):
+    server_url, _ = running_controller
+    url = f"{server_url}/api/v1/render"
+    payload = json.dumps({
+        "text": "Das ist ein schönes deutsches Haus für den Sprachtest.",
+        "language": "en",
+        "text_mode": "single",
+        "theme": "dark",
+        "bypass_lang_check": True,
+    }).encode('utf-8')
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=10.0) as resp:
+        assert resp.status == 200
+        res = json.loads(resp.read().decode('utf-8'))
+        assert res["status"] == "success"
+        assert res["data"]["ok"] is True
+        assert "html_b64" in res["data"]
+        assert len(res["data"]["html_b64"]) > 0
+
+
+

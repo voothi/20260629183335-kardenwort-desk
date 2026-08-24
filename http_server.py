@@ -22,6 +22,9 @@ from kardenwort_desk import (
     ErrorCode,
     generate_unique_zid,
     find_working_tsv,
+    verify_language,
+    run_render_flow,
+    get_storage_adapter,
 )
 from kardenwort_controller import ProcessSupervisor
 
@@ -283,9 +286,32 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             seq_num = body.get('seq_num') or body.get('seq-num') or qs.get('seq_num', [None])[0]
             split_gap = body.get('split_gap_limit') or body.get('split-gap-limit') or qs.get('split_gap_limit', [None])[0]
             tsv_path = body.get('tsv') or qs.get('tsv', [None])[0]
+            raw_bypass = body.get('bypass_lang_check')
+            if raw_bypass is None:
+                raw_bypass = body.get('bypass-lang-check')
+            if raw_bypass is None:
+                raw_bypass = body.get('force_language')
+            if raw_bypass is None:
+                raw_bypass = body.get('force-language')
+
+            if raw_bypass is not None:
+                if isinstance(raw_bypass, bool):
+                    bypass_lang_check = raw_bypass
+                elif isinstance(raw_bypass, (int, float)):
+                    bypass_lang_check = bool(raw_bypass)
+                elif isinstance(raw_bypass, str):
+                    bypass_lang_check = raw_bypass.strip().lower() in ('true', '1', 'yes')
+                else:
+                    bypass_lang_check = bool(raw_bypass)
+            else:
+                bypass_lang_check = (
+                    qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1', 'yes') or
+                    qs.get('bypass_lang_check', ['false'])[0].lower() in ('true', '1', 'yes') or
+                    qs.get('force-language', ['false'])[0].lower() in ('true', '1', 'yes') or
+                    qs.get('force_language', ['false'])[0].lower() in ('true', '1', 'yes')
+                )
 
             active_zid = session_zid or generate_unique_zid()
-            from kardenwort_desk import run_render_flow, get_storage_adapter
 
             html_result = ""
             if session_zid:
@@ -311,6 +337,23 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     )
                 except Exception:
                     if text and language:
+                        if not bypass_lang_check:
+                            lang_res = verify_language(text, language, self.server.config, bypass=False)
+                            if not lang_res.is_match:
+                                if lang_res.action in ("block", "prompt"):
+                                    raise StructuredError(
+                                        ErrorCode.LANGUAGE_MISMATCH,
+                                        lang_res.message,
+                                        details={
+                                            "detected_language": lang_res.detected_lang,
+                                            "expected_language": lang_res.expected_lang,
+                                            "confidence": lang_res.confidence,
+                                            "action": lang_res.action,
+                                        }
+                                    )
+                                elif lang_res.action == "warn":
+                                    logger.warning(lang_res.message)
+
                         html_result = run_render_flow(
                             text=text,
                             language=language,
@@ -328,6 +371,23 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     else:
                         raise
             elif text and language:
+                if not bypass_lang_check:
+                    lang_res = verify_language(text, language, self.server.config, bypass=False)
+                    if not lang_res.is_match:
+                        if lang_res.action in ("block", "prompt"):
+                            raise StructuredError(
+                                ErrorCode.LANGUAGE_MISMATCH,
+                                lang_res.message,
+                                details={
+                                    "detected_language": lang_res.detected_lang,
+                                    "expected_language": lang_res.expected_lang,
+                                    "confidence": lang_res.confidence,
+                                    "action": lang_res.action,
+                                }
+                            )
+                        elif lang_res.action == "warn":
+                            logger.warning(lang_res.message)
+
                 html_result = run_render_flow(
                     text=text,
                     language=language,

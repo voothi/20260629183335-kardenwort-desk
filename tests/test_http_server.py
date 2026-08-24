@@ -203,6 +203,50 @@ class TestHTTPServerRunning(unittest.TestCase):
             self.assertIn("html_b64", res["data"])
             self.assertTrue(len(res["data"]["html_b64"]) > 0)
 
+    def test_07c_render_language_mismatch_returns_422(self):
+        url = f"http://127.0.0.1:{TEST_PORT}/api/v1/render"
+        payload = json.dumps({
+            "text": "Das ist ein schönes deutsches Haus für den HTTP Sprachtest.",
+            "language": "en",
+            "text_mode": "single",
+            "bypass_lang_check": False,
+        }).encode('utf-8')
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+            "X-API-Token": TEST_TOKEN,
+        })
+        try:
+            with urllib.request.urlopen(req) as resp:
+                self.fail("Expected HTTP 422 LANGUAGE_MISMATCH for mismatched language")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 422)
+            err_data = json.loads(e.read().decode('utf-8'))
+            self.assertEqual(err_data["status"], "error")
+            self.assertEqual(err_data["error_code"], "LANGUAGE_MISMATCH")
+            self.assertEqual(err_data["details"]["detected_language"], "de")
+            self.assertEqual(err_data["details"]["expected_language"], "en")
+            self.assertIn(err_data["details"]["action"], ("prompt", "block"))
+
+    def test_07d_render_language_mismatch_with_bypass(self):
+        url = f"http://127.0.0.1:{TEST_PORT}/api/v1/render"
+        payload = json.dumps({
+            "text": "Das ist ein schönes deutsches Haus für den HTTP Sprachtest.",
+            "language": "en",
+            "text_mode": "single",
+            "bypass_lang_check": True,
+        }).encode('utf-8')
+        req = urllib.request.Request(url, data=payload, headers={
+            "Content-Type": "application/json",
+            "X-API-Token": TEST_TOKEN,
+        })
+        with urllib.request.urlopen(req) as resp:
+            self.assertEqual(resp.status, 200)
+            res = json.loads(resp.read().decode('utf-8'))
+            self.assertEqual(res["status"], "success")
+            self.assertTrue(res["data"]["ok"])
+            self.assertIn("html_b64", res["data"])
+            self.assertTrue(len(res["data"]["html_b64"]) > 0)
+
     def test_08_shutdown_endpoint(self):
         url = f"http://127.0.0.1:{TEST_PORT}/api/v1/shutdown"
         req = urllib.request.Request(url, data=b"{}", headers={

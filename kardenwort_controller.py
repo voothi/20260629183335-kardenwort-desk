@@ -49,6 +49,7 @@ from kardenwort_desk import (
     parse_tsv_to_bundle,
     render_lookup_html,
     run_render_flow,
+    verify_language,
     synthesize_project_materials,
     aggregate_project_materials,
     resolve_project_deck_path,
@@ -1142,10 +1143,30 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             seq_num = body.get('seq_num') or body.get('seq-num') or qs.get('seq_num', [None])[0]
             split_gap = body.get('split_gap_limit') or body.get('split-gap-limit') or qs.get('split_gap_limit', [None])[0]
             tsv_path = body.get('tsv') or qs.get('tsv', [None])[0]
-            bypass_lang_check = body.get('bypass_lang_check', False) or (
-                qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1') or
-                qs.get('force-language', ['false'])[0].lower() in ('true', '1')
-            )
+            raw_bypass = body.get('bypass_lang_check')
+            if raw_bypass is None:
+                raw_bypass = body.get('bypass-lang-check')
+            if raw_bypass is None:
+                raw_bypass = body.get('force_language')
+            if raw_bypass is None:
+                raw_bypass = body.get('force-language')
+
+            if raw_bypass is not None:
+                if isinstance(raw_bypass, bool):
+                    bypass_lang_check = raw_bypass
+                elif isinstance(raw_bypass, (int, float)):
+                    bypass_lang_check = bool(raw_bypass)
+                elif isinstance(raw_bypass, str):
+                    bypass_lang_check = raw_bypass.strip().lower() in ('true', '1', 'yes')
+                else:
+                    bypass_lang_check = bool(raw_bypass)
+            else:
+                bypass_lang_check = (
+                    qs.get('bypass-lang-check', ['false'])[0].lower() in ('true', '1', 'yes') or
+                    qs.get('bypass_lang_check', ['false'])[0].lower() in ('true', '1', 'yes') or
+                    qs.get('force-language', ['false'])[0].lower() in ('true', '1', 'yes') or
+                    qs.get('force_language', ['false'])[0].lower() in ('true', '1', 'yes')
+                )
 
             if not language and not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' or 'session_zid'")
@@ -1181,6 +1202,23 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     )
                 except Exception:
                     if text and language:
+                        if not bypass_lang_check:
+                            lang_res = verify_language(text, language, self.server.config, bypass=False)
+                            if not lang_res.is_match:
+                                if lang_res.action in ("block", "prompt"):
+                                    raise StructuredError(
+                                        ErrorCode.LANGUAGE_MISMATCH,
+                                        lang_res.message,
+                                        details={
+                                            "detected_language": lang_res.detected_lang,
+                                            "expected_language": lang_res.expected_lang,
+                                            "confidence": lang_res.confidence,
+                                            "action": lang_res.action,
+                                        }
+                                    )
+                                elif lang_res.action == "warn":
+                                    logger.warning(lang_res.message)
+
                         html_result = run_render_flow(
                             text=text,
                             language=language,
@@ -1198,6 +1236,23 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     else:
                         raise
             elif text and language:
+                if not bypass_lang_check:
+                    lang_res = verify_language(text, language, self.server.config, bypass=False)
+                    if not lang_res.is_match:
+                        if lang_res.action in ("block", "prompt"):
+                            raise StructuredError(
+                                ErrorCode.LANGUAGE_MISMATCH,
+                                lang_res.message,
+                                details={
+                                    "detected_language": lang_res.detected_lang,
+                                    "expected_language": lang_res.expected_lang,
+                                    "confidence": lang_res.confidence,
+                                    "action": lang_res.action,
+                                }
+                            )
+                        elif lang_res.action == "warn":
+                            logger.warning(lang_res.message)
+
                 html_result = run_render_flow(
                     text=text,
                     language=language,
@@ -1212,6 +1267,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     seq_num=int(seq_num) if seq_num else None,
                     trace_id=f"{active_zid}:render:init",
                 )
+            else:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid'")
 
             b64_html = encode(html_result)
             self._send_json(200, {
