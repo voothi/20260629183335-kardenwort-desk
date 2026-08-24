@@ -7925,7 +7925,10 @@ html, body {{
                         clean_node_subs = [tok.utf8_to_lower("".join(ch for ch in s if ch.isalnum() or ch in apo_set)) for s in node_subs]
                         clean_node = tok.utf8_to_lower("".join(ch for ch in node if ch.isalnum() or ch in apo_set))
                         node_matches = (not clean_lemma_lower or clean_lemma_lower in clean_node or
-                                        any(s == clean_lemma_lower or (len(clean_lemma_lower) >= 4 and len(s) >= 4 and s[:4] == clean_lemma_lower[:4])
+                                        any(s == clean_lemma_lower or
+                                            (len(clean_lemma_lower) >= 3 and s.startswith(clean_lemma_lower)) or
+                                            (len(s) >= 3 and clean_lemma_lower.startswith(s)) or
+                                            (len(clean_lemma_lower) >= 4 and len(s) >= 4 and s[:4] == clean_lemma_lower[:4])
                                             for s in clean_node_subs if s))
                         if node_matches:
                             _add_cand(clean_node)
@@ -7934,6 +7937,8 @@ html, body {{
                                 sub_matches = (not clean_lemma_lower or
                                                clean_sub == clean_lemma_lower or
                                                clean_lemma_lower == clean_node or
+                                               (len(clean_lemma_lower) >= 3 and clean_sub.startswith(clean_lemma_lower)) or
+                                               (len(clean_sub) >= 3 and clean_lemma_lower.startswith(clean_sub)) or
                                                (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
                                 if sub_matches:
                                     _add_cand(clean_sub)
@@ -7954,6 +7959,8 @@ html, body {{
                         sub_matches = (not clean_lemma_lower or
                                        clean_sub == clean_lemma_lower or
                                        clean_lemma_lower == clean_val or
+                                       (len(clean_lemma_lower) >= 3 and clean_sub.startswith(clean_lemma_lower)) or
+                                       (len(clean_sub) >= 3 and clean_lemma_lower.startswith(clean_sub)) or
                                        (len(clean_lemma_lower) >= 4 and len(clean_sub) >= 4 and clean_sub[:4] == clean_lemma_lower[:4]))
                         if sub_matches:
                             _add_cand(clean_sub)
