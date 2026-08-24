@@ -14527,8 +14527,10 @@ def cmd_progressive_worker(args):
             mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             
+        lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
         # Write initial source stage immediately so UI renders without delay
-        safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
+        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
             
         base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
         has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi' or is_sqlite
@@ -14585,6 +14587,7 @@ def cmd_progressive_worker(args):
                         comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(tsv_path)
                         col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
                         col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
+                        col_token_order = headers_latest.index("TokenOrder") if "TokenOrder" in headers_latest else -1
                         
                         modified_sweep = False
                         updates = []
@@ -14597,8 +14600,9 @@ def cmd_progressive_worker(args):
                                         row[col_word_dest] = ""
                                         modified_sweep = True
                                         if is_sqlite:
+                                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
                                             updates.append({
-                                                "token_order": row_idx,
+                                                "token_order": t_ord,
                                                 "field": "word_destination",
                                                 "value": "",
                                             })
@@ -14608,7 +14612,7 @@ def cmd_progressive_worker(args):
                                     storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
                             else:
                                 save_tsv_rows_safely(tsv_path, comments, headers_latest, current_rows)
-                            data_rows = current_rows
+                        data_rows = current_rows
             except Exception as e:
                 logger.error(f"Error in progressive worker FAILED sweep: {e}")
 
@@ -14624,7 +14628,8 @@ def cmd_progressive_worker(args):
                     pass
             try:
                 status_val = "failed" if worker_error else "success"
-                safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id)
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id)
                 if tsv_path.exists():
                     import os
                     os.utime(tsv_path, None)
