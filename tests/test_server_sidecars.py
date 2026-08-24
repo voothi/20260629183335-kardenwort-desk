@@ -272,3 +272,92 @@ def test_supervisor_interpreter_prioritization_intellifiller():
     assert sup_empty.services["spacy"].launch_cmd[0] == sys.executable
     assert sup_empty.services["translation"].launch_cmd[0] == sys.executable
 
+
+# ---------------------------------------------------------------------------
+# 6. Translation Supervisor CLI Args & Rate Limiter / Cache Integration Tests
+# ---------------------------------------------------------------------------
+def test_supervisor_translation_cli_args_parsing():
+    config = configparser.ConfigParser()
+    config.add_section("services")
+    config.set("services", "translation_server_url", "http://127.0.0.1:8082")
+    config.add_section("translation")
+    config.set("translation", "google_max_concurrency", "2")
+    config.set("translation", "google_request_delay", "0.5")
+    config.set("translation", "enable_translation_cache", "false")
+    config.set("translation", "cache_size", "5000")
+    config.set("translation", "auto_provider_failover", "true")
+
+    sup = ProcessSupervisor(config, {}, enabled=False)
+    cmd = sup.services["translation"].launch_cmd
+    assert "--google-concurrency" in cmd
+    assert cmd[cmd.index("--google-concurrency") + 1] == "2"
+    assert "--google-delay" in cmd
+    assert cmd[cmd.index("--google-delay") + 1] == "0.5"
+    assert "--no-cache" in cmd
+    assert "--cache-size" in cmd
+    assert cmd[cmd.index("--cache-size") + 1] == "5000"
+    assert "--auto-failover" in cmd
+
+
+def test_simulated_swarm_concurrent_translation_requests():
+    sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "20241122093311-deep-translator"))
+    import translate_server
+    from translate_server import TranslationHTTPServer, TranslationRequestHandler
+    from unittest.mock import patch
+
+    server = TranslationHTTPServer(("127.0.0.1", 0), TranslationRequestHandler,
+                                   google_delay=0.01, google_concurrency=2,
+                                   cache_size=1000, enable_cache=True)
+    port = server.server_address[1]
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    server_url = f"http://127.0.0.1:{port}"
+
+    try:
+        # Simulate 20 concurrent requests across worker threads translating repeated lemmas
+        num_requests = 20
+        results = []
+        errors = []
+
+        with patch.object(TranslationRequestHandler, "_translate_google", side_effect=lambda text, *args, **kwargs: f"[TR] {text}"):
+            def worker_task(idx):
+                word = "Baum" if idx % 2 == 0 else "Himmel"
+                payload = {
+                    "text": word,
+                    "source": "de",
+                    "target": "en",
+                    "provider": "google",
+                    "zid": f"2026082412000{idx:02d}",
+                    "trace_id": f"trace-{idx}"
+                }
+                try:
+                    req = urllib.request.Request(
+                        f"{server_url}/translate",
+                        data=json.dumps(payload).encode('utf-8'),
+                        headers={"Content-Type": "application/json"}
+                    )
+                    with urllib.request.urlopen(req, timeout=5.0) as resp:
+                        data = json.loads(resp.read().decode('utf-8'))
+                        results.append(data)
+                except Exception as e:
+                    errors.append(e)
+
+            threads = [threading.Thread(target=worker_task, args=(i,)) for i in range(num_requests)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=5.0)
+
+        assert len(errors) == 0
+        assert len(results) == num_requests
+        cached_results = [r for r in results if r.get("cached") is True]
+        assert len(cached_results) > 0
+        for r in results:
+            assert r["status"] == "success"
+            assert r["translated_text"] in ("[TR] Baum", "[TR] Himmel")
+    finally:
+        server.shutdown()
+        server.server_close()
+
+

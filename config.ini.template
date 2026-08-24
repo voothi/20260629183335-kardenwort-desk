@@ -381,6 +381,22 @@ translation_verbose_validation_errors = false
 ; Maximum characters before wrapping single-mode paragraphs
 translation_wrap_max_chars = 90
 
+; Server-side rate limiter and concurrency settings for translate_server.py
+; Google Translate concurrency limit (1 = serial processing to prevent IP rate-limiting)
+google_max_concurrency = 1
+
+; Pacing delay between consecutive requests to Google Translate (in seconds)
+google_request_delay = 0.35
+
+; In-memory LRU cache for translations (deduplicates repeated sentence and lemma requests across swarm windows)
+enable_translation_cache = true
+
+; Maximum number of items in the in-memory translation cache
+cache_size = 10000
+
+; Automatic failover to secondary provider (DeepL / Argos) when Google Translate encounters rate limiting
+auto_provider_failover = true
+
 [wordfill]
 ; Enable the word-fill engine: pre-fills IPA, morphology, morpheme and definition fields
 ; in lookup results from the accumulated local TSV corpus before rendering.

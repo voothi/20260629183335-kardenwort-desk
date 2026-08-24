@@ -59,6 +59,7 @@ from kardenwort_desk import (
     SEC_PIPELINE,
     SEC_TRIGGERS,
     SEC_SERVICES,
+    SEC_TRANSLATION,
 )
 
 logger = logging.getLogger("kardenwort.desk.controller")
@@ -297,6 +298,48 @@ class ProcessSupervisor:
                 trans_script = trans_fork
 
         trans_cmd = [str(trans_python), str(trans_script), "--port", str(trans_port)]
+        if self.config:
+            try:
+                g_conc = self.config.get(SEC_TRANSLATION, 'google_max_concurrency', fallback=None)
+                if g_conc is not None and str(g_conc).strip():
+                    trans_cmd.extend(["--google-concurrency", str(g_conc).strip()])
+            except Exception:
+                pass
+
+            try:
+                g_delay = self.config.get(SEC_TRANSLATION, 'google_request_delay', fallback=None)
+                if g_delay is not None and str(g_delay).strip():
+                    trans_cmd.extend(["--google-delay", str(g_delay).strip()])
+            except Exception:
+                pass
+
+            try:
+                if hasattr(self.config, 'getboolean'):
+                    enable_cache = self.config.getboolean(SEC_TRANSLATION, 'enable_translation_cache', fallback=True)
+                else:
+                    enable_cache = True
+                if not enable_cache:
+                    trans_cmd.append("--no-cache")
+            except Exception:
+                pass
+
+            try:
+                cache_sz = self.config.get(SEC_TRANSLATION, 'cache_size', fallback=None)
+                if cache_sz is not None and str(cache_sz).strip():
+                    trans_cmd.extend(["--cache-size", str(cache_sz).strip()])
+            except Exception:
+                pass
+
+            try:
+                if hasattr(self.config, 'getboolean'):
+                    auto_fail = self.config.getboolean(SEC_TRANSLATION, 'auto_provider_failover', fallback=True)
+                else:
+                    auto_fail = True
+                if auto_fail:
+                    trans_cmd.append("--auto-failover")
+            except Exception:
+                pass
+
         self.services["translation"] = SidecarService(
             name="translation",
             port=trans_port,
