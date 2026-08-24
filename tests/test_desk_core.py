@@ -3227,6 +3227,144 @@ show_import_window=false
     assert cmd[cmd.index("--trace-id") + 1] == "20260818190300:export:selection"
 
 
+# =============================================================================
+# Translation Dict Key Sorting Parity (Mixed Keys / Single-Mode Re-text)
+# =============================================================================
+
+def test_format_translated_html_mixed_keys():
+    """Verify format_translated_html handles mixed integer and string metadata keys without TypeError."""
+    # Mixed int and str metadata key
+    payload = {
+        0: "First sentence.",
+        1: "Second sentence.",
+        "FULL_TEXT": "First sentence. Second sentence."
+    }
+    html_out = desk.format_translated_html(payload, text_mode="single", text="First sentence. Second sentence.")
+    assert "First sentence." in html_out
+    assert "Second sentence." in html_out
+    assert html_out.startswith("<div>") and html_out.endswith("</div>")
+
+    # Mixed string digits and metadata keys
+    payload_str_keys = {
+        "0": "Sentence A.",
+        "1": "Sentence B.",
+        "FULL_TEXT": "Sentence A. Sentence B."
+    }
+    html_out_str = desk.format_translated_html(payload_str_keys, text_mode="single", text="Sentence A. Sentence B.")
+    assert "Sentence A." in html_out_str
+    assert "Sentence B." in html_out_str
+
+
+def test_resolve_translations_mixed_keys(tmp_path):
+    """Verify resolve_translations handles mixed integer and string metadata keys."""
+    data_rows = [["1", "Apple", ""]]
+    headers = ["Index", "WordSource", "SentenceDestination"]
+    comments = []
+    tsv_path = tmp_path / "test.tsv"
+
+    # With FULL_TEXT
+    payload_with_ft = {
+        0: "Part one.",
+        1: "Part two.",
+        "FULL_TEXT": "Part one. Part two."
+    }
+    res = desk.resolve_translations(
+        text="Part one. Part two.",
+        text_mode="single",
+        data_rows=data_rows,
+        col_index=0,
+        col_sentence_dest=2,
+        sentence_translations_raw=payload_with_ft,
+        tsv_path=tsv_path,
+        comments=comments,
+        headers=headers,
+        return_single=True,
+    )
+    assert res == "Part one. Part two."
+
+    # Without FULL_TEXT (falling back to joined integer keys)
+    payload_no_ft = {
+        1: "Second part.",
+        0: "First part.",
+        "METADATA_KEY": "ignored"
+    }
+    res_no_ft = desk.resolve_translations(
+        text="First part. Second part.",
+        text_mode="single",
+        data_rows=data_rows,
+        col_index=0,
+        col_sentence_dest=2,
+        sentence_translations_raw=payload_no_ft,
+        tsv_path=tsv_path,
+        comments=comments,
+        headers=headers,
+        return_single=True,
+    )
+    assert res_no_ft == "First part. Second part."
+
+
+def test_write_translation_txt_mixed_keys(tmp_path):
+    """Verify _write_translation_txt handles mixed integer and metadata keys without TypeError."""
+    out_path = tmp_path / "trans.txt"
+    payload = {
+        1: "Sentence 2.",
+        0: "Sentence 1.",
+        "FULL_TEXT": "Sentence 1. Sentence 2."
+    }
+    desk._write_translation_txt(
+        text="Sentence 1. Sentence 2.",
+        effective_text_mode="single",
+        sentence_translations_raw=payload,
+        out_path=out_path,
+        save_flag=True,
+        overwrite=True
+    )
+    assert out_path.exists()
+    assert out_path.read_text(encoding="utf-8") == "Sentence 1. Sentence 2."
+
+    # Without FULL_TEXT fallback
+    out_path_fallback = tmp_path / "trans_fallback.txt"
+    payload_fallback = {
+        1: "Sentence 2.",
+        0: "Sentence 1.",
+        "EXTRA": "extra info"
+    }
+    desk._write_translation_txt(
+        text="Sentence 1. Sentence 2.",
+        effective_text_mode="single",
+        sentence_translations_raw=payload_fallback,
+        out_path=out_path_fallback,
+        save_flag=True,
+        overwrite=True
+    )
+    assert out_path_fallback.exists()
+    assert out_path_fallback.read_text(encoding="utf-8") == "Sentence 1. Sentence 2."
+
+
+def test_translate_source_text_single_mode_long_text_sorting(monkeypatch):
+    """Verify translate_source_text on single-mode text exceeding wrap_max_chars succeeds without TypeError."""
+    long_text = "This is a long introductory sentence that definitely exceeds ninety characters in length. And this is the second sentence."
+    cp = configparser.ConfigParser()
+    cp.add_section(desk.SEC_TRANSLATION)
+    cp.set(desk.SEC_TRANSLATION, "translation_wrap_max_chars", "50")
+
+    monkeypatch.setattr(desk, "translate_text", lambda text, *a, **kw: f"Trans({text})")
+
+    res = desk.translate_source_text(
+        text=long_text,
+        source_lang="en",
+        target_lang="ru",
+        text_mode="single",
+        config=cp,
+        resolved_paths={},
+        provider="google"
+    )
+    assert isinstance(res, dict)
+    assert "FULL_TEXT" in res
+    assert 0 in res
+
+
+
 
 
 

@@ -391,6 +391,58 @@ def test_controller_session_retext_writes_updates_js(running_controller):
     assert '"translatedText":' in latest_js
 
 
+def test_controller_session_retext_long_single_mode_text(running_controller):
+    """Regression test: verify retext on long single-mode text (> wrap_max_chars) succeeds without TypeError."""
+    server_url, server = running_controller
+
+    long_text = (
+        "The quick brown fox jumps over the lazy dog in a very scenic forest near the mountains. "
+        "Every single observer was deeply impressed by the spectacular agility and swiftness."
+    )
+
+    # 1. Create session with long text
+    create_url = f"{server_url}/session/create"
+    create_payload = json.dumps({
+        "text": long_text,
+        "language": "en",
+        "bypass_lang_check": True
+    }).encode('utf-8')
+    req_create = urllib.request.Request(
+        create_url,
+        data=create_payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Token": "test-controller-api-key"
+        }
+    )
+    with urllib.request.urlopen(req_create, timeout=30.0) as resp:
+        assert resp.status == 200
+        create_res = json.loads(resp.read().decode('utf-8'))
+        session_zid = create_res["data"]["session_zid"]
+
+    # 2. Trigger /session/retext in single mode
+    retext_url = f"{server_url}/session/retext"
+    payload = json.dumps({
+        "session_zid": session_zid,
+        "language": "en",
+        "text_mode": "single"
+    }).encode('utf-8')
+    req_retext = urllib.request.Request(
+        retext_url,
+        data=payload,
+        headers={
+            "Content-Type": "application/json",
+            "X-API-Token": "test-controller-api-key"
+        }
+    )
+    with urllib.request.urlopen(req_retext, timeout=30.0) as resp:
+        assert resp.status == 200
+        retext_res = json.loads(resp.read().decode('utf-8'))
+        assert retext_res["status"] == "success"
+        assert "translated_text" in retext_res["data"]
+        assert len(retext_res["data"]["translated_text"]) > 0
+
+
 def test_find_working_tsv_updates_dir_discovery(tmp_path):
     results_dir = tmp_path / "results"
     results_dir.mkdir(parents=True, exist_ok=True)

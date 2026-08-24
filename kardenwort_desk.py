@@ -5509,7 +5509,8 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         if 'FULL_TEXT' in sentence_translations_raw:
             translation_text_out = sentence_translations_raw['FULL_TEXT']
         else:
-            translation_text_out = " ".join(sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if isinstance(i, int) and sentence_translations_raw.get(i, ""))
+            sorted_keys = sorted([k for k in sentence_translations_raw.keys() if isinstance(k, int) or (isinstance(k, str) and k.isdigit())], key=int)
+            translation_text_out = " ".join(sentence_translations_raw.get(i, "").strip() for i in sorted_keys if sentence_translations_raw.get(i, ""))
     else:
         num_lines = len(text.splitlines())
         translation_lines = [sentence_translations_raw.get(i, "").strip() for i in range(num_lines)]
@@ -5560,7 +5561,8 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
         if text_mode == 'single':
             if 'FULL_TEXT' in sentence_translations_raw:
                 return sentence_translations_raw['FULL_TEXT']
-            return " ".join([sentence_translations_raw.get(i, "").strip() for i in sorted(sentence_translations_raw.keys()) if isinstance(i, int) and sentence_translations_raw.get(i, "")])
+            sorted_keys = sorted([k for k in sentence_translations_raw.keys() if isinstance(k, int) or (isinstance(k, str) and k.isdigit())], key=int)
+            return " ".join([sentence_translations_raw.get(i, "").strip() for i in sorted_keys if sentence_translations_raw.get(i, "")])
         return sentence_translations_raw.get(0, "")
     return None
 
@@ -5570,7 +5572,7 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
     if isinstance(sentence_translations, str):
         raw_lines = [sentence_translations]
     elif isinstance(sentence_translations, dict):
-        sorted_keys = [k for k in sorted(sentence_translations.keys()) if isinstance(k, int)]
+        sorted_keys = sorted([k for k in sentence_translations.keys() if isinstance(k, int) or (isinstance(k, str) and k.isdigit())], key=int)
         raw_lines = [sentence_translations[k] for k in sorted_keys if sentence_translations[k]]
         if not raw_lines and sentence_translations:
             raw_lines = [str(v) for v in sentence_translations.values() if v]
@@ -5647,16 +5649,17 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid, trace_id=trace_id
                 )
 
+                sorted_int_keys = sorted([i for i in unpadded_translations.keys() if isinstance(i, int) or (isinstance(i, str) and i.isdigit())], key=int)
                 full_text_trans = " ".join(
                     unpadded_translations.get(i, "").strip()
-                    for i in sorted(unpadded_translations.keys())
-                    if isinstance(i, int) and unpadded_translations.get(i, "")
+                    for i in sorted_int_keys
+                    if unpadded_translations.get(i, "")
                 )
 
                 if apply_translated_padding:
                     # Native Python Subtitle Padding Algorithm.
                     # We pad the already-translated array natively, avoiding a second network call.
-                    translated_array = [unpadded_translations.get(i, "").strip() for i in sorted(unpadded_translations.keys()) if isinstance(i, int)]
+                    translated_array = [unpadded_translations.get(i, "").strip() for i in sorted_int_keys]
                     padded_translated_array = pad_translated_sentences(
                         translated_array,
                         words_before=sbc.translated_words_before,
