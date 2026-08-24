@@ -435,3 +435,88 @@ def test_find_working_tsv_sqlite_slug_resolution(tmp_path):
     assert resolved.name == f"{zid}-custom-sqlite-slug.en.tsv"
     assert resolved.parent == results_dir
 
+
+def test_controller_session_reword_frequency_sorted_parity(running_controller, tmp_path, monkeypatch):
+    server_url, server = running_controller
+    sess_zid = f"2026082422{int(time.time() * 100) % 10000:04d}"
+
+    # 1. Create lemma index where 'apple' is rank 1 and 'zebra' is rank 2
+    idx_file = tmp_path / "en_index.txt"
+    idx_file.write_text("apple\nzebra\n", encoding="utf-8")
+    server.config.set("languages", "en_lemma_index", str(idx_file))
+
+    # 2. Seed session via storage_adapter in reverse order: row 0 is 'zebra', row 1 is 'apple'
+    headers = [
+        "Quotation", "WordSource", "WordDestination", "WordSourceInflectedForm",
+        "WordSourceMorphologyAI", "WordSourceIPA", "DeskSelected",
+        "SentenceSourceIndex", "SentenceSource", "SentenceDestination"
+    ]
+    data_rows = [
+        ["zebra", "zebra", "", "", "", "", "0", "1", "A zebra is striped.", ""],
+        ["apple", "apple", "", "", "", "", "0", "1", "An apple is sweet.", ""],
+    ]
+    storage_adapter = getattr(server.arbiter, "storage_adapter", None) or kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="animals",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="A zebra is striped. An apple is sweet.",
+        headers=headers,
+        data_rows=data_rows,
+        comments=["# test"],
+    )
+
+    try:
+        # 3. Track intellifiller invocations
+        dispatched_selected_rows = []
+        def fake_headless_ifiller(tsv_path, *args, **kwargs):
+            selected_rows = kwargs.get("selected_rows")
+            dispatched_selected_rows.append(list(selected_rows or []))
+            _, h, r = kardenwort_desk.load_tsv_rows(tsv_path)
+            dest_col = h.index("WordDestination")
+            for s_idx in (selected_rows or []):
+                if s_idx < len(r):
+                    r[s_idx][dest_col] = f"reworded_{r[s_idx][1]}"
+            kardenwort_desk.save_tsv_rows_safely(tsv_path, ["# test"], h, r)
+            return True
+
+        monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless_ifiller)
+        import kardenwort_controller
+        monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless_ifiller)
+
+        # In frequency-sorted order: row 0 is 'apple', row 1 is 'zebra'
+        # Selecting row 0 targets 'apple'
+        req_body = {
+            "session_zid": sess_zid,
+            "row_ids": [0],
+            "language": "en"
+        }
+        req_data = json.dumps(req_body).encode("utf-8")
+        req = urllib.request.Request(
+            f"{server_url}/session/reword",
+            data=req_data,
+            headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
+        )
+
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode("utf-8"))
+            assert res["status"] == "success"
+            returned_rows = res["data"]["data_rows"]
+            _, restored_headers, _ = storage_adapter.load_tsv_rows(sess_zid)
+            col_lemma = restored_headers.index("WordSource")
+            col_dest = restored_headers.index("WordDestination")
+
+            assert returned_rows[0][col_lemma] == "apple"
+            assert returned_rows[0][col_dest] == "reworded_apple"
+            assert returned_rows[1][col_lemma] == "zebra"
+            assert returned_rows[1][col_dest] == ""
+    finally:
+        try:
+            storage_adapter.delete_session(sess_zid)
+        except Exception:
+            pass
+
+

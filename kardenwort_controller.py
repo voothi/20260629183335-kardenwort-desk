@@ -59,6 +59,7 @@ from kardenwort_desk import (
     find_wordfill_match,
     apply_wordfill_to_rows,
     resolve_wordfill_config,
+    sort_rows_by_frequency,
     SEC_SETTINGS,
     SEC_LANGUAGES,
     SEC_PIPELINE,
@@ -857,6 +858,9 @@ class SessionArbiter:
         role_fields = get_role_fields(mapping, headers)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
 
+        # Enforce frequency sort parity so selected_rows match displayed UI table rows
+        data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+
         wordfill_cfg = getattr(self, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
         if wordfill_cfg and wordfill_cfg.get('enabled', False) and col_lemma != -1:
             target_quality = wordfill_cfg.get('target_quality', 'any')
@@ -896,9 +900,11 @@ class SessionArbiter:
                     zid=req_zid,
                 )
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
             else:
                 run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
         new_fp = compute_content_fingerprint(data_rows)
 

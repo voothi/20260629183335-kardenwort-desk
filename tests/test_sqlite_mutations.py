@@ -412,3 +412,75 @@ class TestCliLifecycleCommands:
             with pytest.raises(SystemExit) as exc:
                 desk.cmd_vacuum_db(args)
             assert exc.value.code == 0
+
+    def test_sqlite_enrich_session_intellifiller_frequency_sort_parity(self, temp_env, tmp_path):
+        adapter = SqliteStorageAdapter(
+            config=temp_env["config"],
+            resolved_paths=temp_env["resolved_paths"],
+            db_path=temp_env["db_path"],
+        )
+        session_zid = "20260824223000"
+
+        # 1. Frequency index where 'apple' is rank 1, 'zebra' is rank 2
+        idx_file = tmp_path / "en_index.txt"
+        idx_file.write_text("apple\nzebra\n", encoding="utf-8")
+
+        # Configure config to return en_lemma_index
+        orig_side_effect = temp_env["config"].get.side_effect
+        def custom_config_get(sec, opt, fallback=None):
+            if (sec, opt) == ("languages", "en_lemma_index"):
+                return str(idx_file)
+            return orig_side_effect(sec, opt, fallback=fallback)
+        temp_env["config"].get.side_effect = custom_config_get
+
+        # 2. Seed session with zebra as token 0, apple as token 1
+        headers = [
+            "Quotation", "WordSource", "WordSourceInflectedForm", "WordDestination",
+            "WordSourceMorphologyAI", "WordSourceIPA", "DeskSelected",
+            "SentenceSourceIndex", "SentenceSource", "SentenceDestination"
+        ]
+        data_rows = [
+            ["zebra", "zebra", "zebra", "", "", "", "0", "1", "A zebra is striped.", ""],
+            ["apple", "apple", "apple", "", "", "", "0", "1", "An apple is sweet.", ""],
+        ]
+        adapter.save_session(
+            session_zid=session_zid,
+            slug="parity-test",
+            source_language="en",
+            target_language="ru",
+            text_mode="single",
+            source_raw_text="A zebra is striped. An apple is sweet.",
+            headers=headers,
+            data_rows=data_rows,
+            comments=["# test"],
+        )
+
+        # 3. Mock run_headless_intellifiller
+        # In frequency sorted order: row 0 is 'apple', row 1 is 'zebra'
+        # When caller selects row 0 (apple), intellifiller enriches row 0
+        def fake_headless_ifiller(tsv_path, *args, **kwargs):
+            comments, headers, data_rows = desk.load_tsv_rows(tsv_path)
+            assert data_rows[0][headers.index("WordSource")] == "apple"
+            assert data_rows[1][headers.index("WordSource")] == "zebra"
+
+            dest_idx = headers.index("WordDestination")
+            data_rows[0][dest_idx] = "яблоко"
+            desk.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            return True
+
+        with patch("kardenwort_desk.run_headless_intellifiller", side_effect=fake_headless_ifiller):
+            success = adapter.enrich_session_intellifiller(
+                session_zid=session_zid,
+                prompt_name="morphology_and_ipa",
+                selected_rows=[0],
+            )
+            assert success is True
+
+        # 4. Verify in DB that apple (token_order 1) was updated, zebra (token_order 0) remains unchanged
+        db_words = adapter.db.get_words_by_session(session_zid)
+        w_zebra = next(w for w in db_words if w["lemma"] == "zebra")
+        w_apple = next(w for w in db_words if w["lemma"] == "apple")
+
+        assert w_apple["word_destination"] == "яблоко"
+        assert w_zebra["word_destination"] in ("", None)
+

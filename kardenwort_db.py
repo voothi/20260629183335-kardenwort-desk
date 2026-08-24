@@ -2107,7 +2107,8 @@ class KardenwortDB:
                             except (ValueError, TypeError):
                                 direct_cols[col_name] = 1
                         else:
-                            direct_cols[col_name] = f_v
+                            if col_name not in direct_cols or (f_v and not direct_cols[col_name]):
+                                direct_cols[col_name] = f_v
                     else:
                         custom_fields[f_k] = f_v
 

@@ -2997,43 +2997,43 @@ class SqliteStorageAdapter(StorageAdapter):
                     h_lower = h.lower()
                     if h_lower == "quotation":
                         row_cells.append(str(word.get("quotation") or ""))
-                    elif h_lower == "wordsource":
+                    elif h_lower in ("wordsource", "lemma"):
                         row_cells.append(str(word.get("lemma") or ""))
                     elif h_lower == "wordsource2":
                         val = extra_fields.get(h) if h in extra_fields else (word.get("lemma") or "")
                         row_cells.append(str(val or ""))
-                    elif h_lower == "wordsourceinflectedform":
+                    elif h_lower in ("wordsourceinflectedform", "inflected_form", "inflectedform"):
                         row_cells.append(str(word.get("inflected_form") or ""))
                     elif h_lower == "wordsourceinflectedform2":
                         val = extra_fields.get(h) if h in extra_fields else (word.get("inflected_form") or "")
                         row_cells.append(str(val or ""))
-                    elif h_lower == "worddestination":
+                    elif h_lower in ("worddestination", "word_destination", "word_translation"):
                         w_dest = str(word.get("word_destination") or "")
                         if w_dest.strip() == "[FAILED]":
                             w_dest = ""
                         row_cells.append(w_dest)
-                    elif h_lower == "worddestinationinflectedform":
+                    elif h_lower in ("worddestinationinflectedform", "word_destination_inflected"):
                         w_dest_inf = str(word.get("word_destination_inflected") or "")
                         if w_dest_inf.strip() == "[FAILED]":
                             w_dest_inf = ""
                         row_cells.append(w_dest_inf)
                     elif h_lower == "tokenorder":
                         row_cells.append(str(word.get("token_order", 0)))
-                    elif h_lower == "wordsourcemorphologyai":
+                    elif h_lower in ("wordsourcemorphologyai", "morphology", "morphologyai"):
                         row_cells.append(str(word.get("morphology") or ""))
-                    elif h_lower == "wordsourceipa":
+                    elif h_lower in ("wordsourceipa", "ipa"):
                         row_cells.append(str(word.get("ipa") or ""))
-                    elif h_lower == "deskselected":
+                    elif h_lower in ("deskselected", "selected"):
                         row_cells.append(str(word.get("selected", 0)))
-                    elif h_lower == "leitnerbox":
+                    elif h_lower in ("leitnerbox", "leitner_box"):
                         row_cells.append(str(word.get("leitner_box", 1)))
-                    elif h_lower == "leitnerdue":
+                    elif h_lower in ("leitnerdue", "leitner_due"):
                         row_cells.append(str(word.get("leitner_due") or ""))
                     elif h_lower == "deck":
                         row_cells.append(str(word.get("deck") or ""))
-                    elif h_lower == "classificationoxford":
+                    elif h_lower in ("classificationoxford", "classification_oxford"):
                         row_cells.append(str(word.get("classification_oxford") or ""))
-                    elif h_lower == "classificationgoethe":
+                    elif h_lower in ("classificationgoethe", "classification_goethe"):
                         row_cells.append(str(word.get("classification_goethe") or ""))
                     elif h_lower == "sentencesourceindex":
                         row_cells.append(str(s_idx))
@@ -3431,6 +3431,28 @@ class SqliteStorageAdapter(StorageAdapter):
 
         if not data_rows:
             return True
+
+        session = restored.get("session", {})
+        lang = restored.get("source_language") or (session.get("source_language") if isinstance(session, dict) else None) or (self.config.get(SEC_SETTINGS, "default_language", fallback="en") if self.config and hasattr(self.config, "get") else "en")
+
+        mapping = None
+        if self.resolved_paths and "anki_mapping_file" in self.resolved_paths:
+            mapping = load_anki_mapping(self.resolved_paths["anki_mapping_file"])
+        elif self.config and hasattr(self.config, "get"):
+            raw_mp = self.config.get(SEC_SETTINGS, "anki_mapping_file", fallback="./anki-mapping.ini")
+            if raw_mp and Path(raw_mp).exists():
+                mapping = load_anki_mapping(Path(raw_mp))
+        role_fields = get_role_fields(mapping, headers) if mapping else {}
+
+        # Frequency sort data_rows and align db_words in lockstep to ensure selected_rows parity
+        headers_with_idx = list(headers) + ["__temp_sort_idx__"]
+        data_rows_with_idx = [list(r) + [str(i)] for i, r in enumerate(data_rows)]
+        sorted_rows_with_idx = sort_rows_by_frequency(
+            data_rows_with_idx, headers_with_idx, lang, self.config, self.resolved_paths, role_fields=role_fields
+        )
+        sorted_indices = [int(r[-1]) for r in sorted_rows_with_idx]
+        data_rows = [r[:-1] for r in sorted_rows_with_idx]
+        db_words = [db_words[idx] if idx < len(db_words) else {} for idx in sorted_indices]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_tsv_path = Path(temp_dir) / f"{session_zid}-ephemeral.tsv"
@@ -13133,6 +13155,7 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
             
             with storage_adapter.file_lock(tsv_path):
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
                 col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
                 col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
                 if col_lemma != -1 and col_word_dest != -1:
@@ -13172,7 +13195,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
         safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="enrichment", zid=zid, trace_id=trace_id)
-        return data_rows
+        return sorted_rows
 
     batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=5)
     for i in range(0, len(selected_rows), batch_size):
@@ -13184,10 +13207,11 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         try:
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
+            sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
-                sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=batch_trace_id)
+            data_rows = sorted_rows
         except Exception as e:
             logger.error(f"Failed to write update JS after IntelliFiller batch: {e}")
     return data_rows
@@ -13226,6 +13250,9 @@ def cmd_reprocess_worker(args):
             
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
+
+        # Enforce frequency sort parity so selected_rows match displayed UI table rows
+        data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
         
         run_lemmatizer = config.getboolean(SEC_PIPELINE, 'run_lemmatizer', fallback=True)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
@@ -13294,6 +13321,7 @@ def cmd_reprocess_worker(args):
             if not run_lemmatizer and col_lemma != -1 and original_lemmas:
                 with storage_adapter.file_lock(tsv_path):
                     comments_latest, headers_latest, data_rows_latest = storage_adapter.load_tsv_rows(tsv_path)
+                    data_rows_latest = sort_rows_by_frequency(data_rows_latest, headers_latest, language, config, resolved_paths, role_fields=role_fields)
                     for row_id, orig_val in original_lemmas.items():
                         if 0 <= row_id < len(data_rows_latest):
                             data_rows_latest[row_id][col_lemma] = orig_val
@@ -13341,6 +13369,7 @@ def cmd_reprocess_worker(args):
                     if col_lemma != -1:
                         with storage_adapter.file_lock(tsv_path):
                             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                            data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
                             for name, c_dict in classifications.items():
                                 if name in role_fields and role_fields[name] in headers:
                                     col_idx = headers.index(role_fields[name])
@@ -13372,7 +13401,8 @@ def cmd_reprocess_worker(args):
     finally:
         try:
             status_val = "failed" if worker_error else "success"
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id)
+            sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id)
             if sess_logger:
                 sess_logger.info("Reprocess finished event emitted")
         except Exception as e:
