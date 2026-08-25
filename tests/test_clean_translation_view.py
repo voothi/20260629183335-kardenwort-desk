@@ -264,3 +264,111 @@ def test_child_sentence_windows_isolate_clean_translation(mock_clean_context_env
     dest2_idx = restored["headers"].index("SentenceDestination2")
     assert restored["data_rows"][0][dest1_idx] == "He went home."
     assert restored["data_rows"][0][dest2_idx] == "ContextBefore He went home. ContextAfter"
+
+
+def test_single_mode_multi_sentence_unified_div_and_matches_write_update_js(mock_clean_context_env):
+    """Verifies that multi-sentence single mode initial HTML produces a single unified <div> paragraph and matches write_update_js output without layout shifting."""
+    env = mock_clean_context_env
+    config = env["config"]
+    resolved_paths = env["resolved_paths"]
+
+    adapter = desk.get_storage_adapter(config, resolved_paths)
+    session_zid = "20260825184501"
+
+    headers = [
+        "Quotation", "WordSource", "WordDestination", "SentenceSource",
+        "SentenceDestination", "SentenceDestination2", "SentenceSourceIndex", "DeskSelected"
+    ]
+    data_rows = [
+        ["", "Erste", "first", "Erster Satz.", "First sentence.", "", "1", "1"],
+        ["", "Zweite", "second", "Zweiter Satz.", "Second sentence.", "", "2", "1"]
+    ]
+
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="multi-sent",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text="Erster Satz. Zweiter Satz.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[
+            {
+                "session_zid": session_zid,
+                "sentence_index": 1,
+                "sentence_source": "Erster Satz.",
+                "sentence_destination": "First sentence.",
+                "sentence_destination2": "Padded First sentence.",
+            },
+            {
+                "session_zid": session_zid,
+                "sentence_index": 2,
+                "sentence_source": "Zweiter Satz.",
+                "sentence_destination": "Second sentence.",
+                "sentence_destination2": "Padded Second sentence.",
+            }
+        ],
+        zid=session_zid,
+    )
+
+    tsv_path = env["results_dir"] / f"{session_zid}-multi-sent.de.tsv"
+    role_fields = {
+        "sentence_destination": "SentenceDestination",
+        "sentence_index": "SentenceSourceIndex",
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+    }
+
+    # 1. Initial render HTML
+    with patch.object(desk, "run_progressive_worker_async"):
+        html = desk._run_render_flow_impl(
+            text="Erster Satz. Zweiter Satz.",
+            language="de",
+            zid=session_zid,
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    # Initial HTML #translation-container must contain a single unified <div> paragraph
+    expected_unified_html = "<div>First sentence. Second sentence.</div>"
+    assert f'<div class="translation-text" id="translation-container">{expected_unified_html}</div>' in html
+    assert "<div>First sentence.</div><div>Second sentence.</div>" not in html
+
+    # 2. write_update_js output
+    desk.write_update_js(
+        tsv_path=tsv_path,
+        data_rows=data_rows,
+        headers=headers,
+        role_fields=role_fields,
+        stage="finished",
+        config=config,
+        zid=session_zid,
+    )
+
+    updates_dir = env["results_dir"] / f"{tsv_path.stem}.updates"
+    update_files = sorted(updates_dir.glob("*.js"))
+    assert len(update_files) > 0
+
+    latest_js = update_files[-1].read_text(encoding="utf-8")
+    payload_str = latest_js[len("if (typeof window.receiveUpdate === 'function') { window.receiveUpdate("):-4]
+    payload = json.loads(payload_str)
+
+    # write_update_js output MUST match the initial HTML unified paragraph exactly
+    assert payload["translatedText"] == expected_unified_html
+
+
+def test_multi_mode_preserves_stacked_divs(mock_clean_context_env):
+    """Verifies that multi text mode preserves line-by-line stacked <div> tags."""
+    sentence_trans = {
+        0: "First line.",
+        1: "Second line."
+    }
+    html_single = desk.format_translated_html(sentence_trans, text_mode="single", text="First line. Second line.")
+    assert html_single == "<div>First line. Second line.</div>"
+
+    html_multi = desk.format_translated_html(sentence_trans, text_mode="multi", text="First line.\nSecond line.")
+    assert html_multi == "<div>First line.</div><div>Second line.</div>"
+

@@ -5590,10 +5590,10 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
         is_single = False
 
     if is_single:
-        non_empty = [s for s in lines if s]
-        if non_empty and all(s == non_empty[0] for s in non_empty):
-            lines = [non_empty[0]]
-        return f"<div>{' '.join(lines)}</div>"
+        valid_lines = [s for s in lines if s]
+        if valid_lines and all(s == valid_lines[0] for s in valid_lines):
+            valid_lines = [valid_lines[0]]
+        return f"<div>{' '.join(valid_lines)}</div>" if valid_lines else ""
     else:
         return "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
 
@@ -5670,10 +5670,6 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     pseudo_translations = {i: padded_translated_array[i] for i in range(len(padded_translated_array))}
                     if full_text_trans:
                         pseudo_translations['FULL_TEXT'] = full_text_trans
-                    # Fire callback with the final padded result so progressive workers
-                    # receive context-enriched values in their final TSV write.
-                    if chunk_callback:
-                        chunk_callback(pseudo_translations)
                     return pseudo_translations
                     
                 elif apply_source_padding:
@@ -5681,9 +5677,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     padded_lines = pad_sentences(pseudo_lines, text, sbc.words_before, sbc.words_after, max_words=sbc.max_words)
                     
                     # 1. Translate the padded sentences for the TSV (SentenceDestination)
+                    # Pass chunk_callback=None so padded sentences do not leak into intermediate UI streaming callbacks
                     pseudo_translations = translate_source_text(
                         "\n".join(padded_lines), source_lang, target_lang, 'multi',
-                        config, resolved_paths, provider, chunk_callback=chunk_callback, zid=zid, trace_id=trace_id
+                        config, resolved_paths, provider, chunk_callback=None, zid=zid, trace_id=trace_id
                     )
                     
                     if full_text_trans:
@@ -8189,24 +8186,11 @@ html, body {{
                 
     source_html = "".join(span_htmls)
     
-    sentence_htmls = []
     has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
     if is_progressive and run_text == 'auto' and not has_real_text:
         sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
     else:
-        max_non_empty_idx = -1
-        for idx, trans in sentence_translations.items():
-            if trans and str(trans).strip():
-                if idx > max_non_empty_idx:
-                    max_non_empty_idx = idx
-        for idx in range(max_non_empty_idx + 1):
-            trans = sentence_translations.get(idx)
-            if trans:
-                safe_trans = html.escape(normalize_bracket_spacing(trans) if normalize_brackets else trans)
-                sentence_htmls.append(f"<div>{safe_trans}</div>")
-            else:
-                sentence_htmls.append("<div>&nbsp;</div>")
-        sentence_html = "".join(sentence_htmls)
+        sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
     
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
