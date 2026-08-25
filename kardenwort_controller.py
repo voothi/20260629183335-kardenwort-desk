@@ -959,7 +959,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
     def setup(self):
         super().setup()
-        self.connection.settimeout(5.0)
+        self.connection.settimeout(30.0)
 
     def address_string(self):
         # Override to bypass reverse DNS lookups (<1ms localhost dispatch)
@@ -2457,6 +2457,7 @@ def run_controller(args=None):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"Controller host must be loopback (127.0.0.1). Specified: {host}")
 
+    ThreadingHTTPServer.request_queue_size = 64
     server = ThreadingHTTPServer((host, port), ControllerRequestHandler)
     server.allow_reuse_address = True
     server.daemon_threads = True

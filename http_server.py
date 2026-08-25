@@ -67,8 +67,8 @@ class APIRequestHandler(BaseHTTPRequestHandler):
 
     def setup(self):
         super().setup()
-        # Enforce strict 5-second socket timeout to prevent Slowloris-style thread hangs
-        self.connection.settimeout(5.0)
+        # Generous 30-second socket timeout to prevent connection drops during heavy concurrent render bursts
+        self.connection.settimeout(30.0)
 
     def address_string(self):
         # Override to bypass reverse DNS lookups (prevents multi-second request delays)
@@ -512,6 +512,7 @@ def cmd_server(args):
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"HTTP Server host must be loopback (127.0.0.1). Specified: {host}")
 
+    ThreadingHTTPServer.request_queue_size = 64
     server = ThreadingHTTPServer((host, port), APIRequestHandler)
     server.allow_reuse_address = False
     server.daemon_threads = True
