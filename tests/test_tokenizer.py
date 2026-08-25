@@ -89,6 +89,11 @@ def test_split_camel_case():
     assert tok.split_camel_case("CPUs") == ["CPUs"]
     assert tok.split_camel_case("SDKs") == ["SDKs"]
     assert tok.split_camel_case("URLs") == ["URLs"]
+    assert tok.split_camel_case("AI's") == ["AI's"]
+    assert tok.split_camel_case("GPU's") == ["GPU's"]
+    assert tok.split_camel_case("LLM's") == ["LLM's"]
+    assert tok.split_camel_case("USA's") == ["USA's"]
+    assert tok.split_camel_case("GPU’s") == ["GPU’s"]
 
 def test_decompose_identifier():
     assert tok.decompose_identifier("") == []
