@@ -86,6 +86,9 @@ ERROR_STATUS_MATRIX = {
     "INVALID_STATE": 500,
 }
 
+_DRAFT_SESSIONS: Dict[str, dict] = {}
+_DRAFT_SESSIONS_LOCK = threading.Lock()
+
 
 # ---------------------------------------------------------------------------
 # Windows Job Object Helper for Process Supervision
@@ -1381,6 +1384,25 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             lang_res = verify_language(text, language, self.server.config, bypass=False)
                             if not lang_res.is_match:
                                 if lang_res.action in ("block", "prompt"):
+                                    with _DRAFT_SESSIONS_LOCK:
+                                        _DRAFT_SESSIONS[active_zid] = {
+                                            "text": text,
+                                            "language": language,
+                                            "text_mode": text_mode,
+                                            "theme": theme,
+                                            "zoom": zoom,
+                                            "tsv_path": tsv_path,
+                                            "seq_num": seq_num,
+                                            "mismatch_info": {
+                                                "is_mismatch": True,
+                                                "detected_language": lang_res.detected_lang,
+                                                "expected_language": lang_res.expected_lang,
+                                                "confidence": lang_res.confidence,
+                                                "action": lang_res.action,
+                                                "text": text,
+                                                "session_zid": active_zid,
+                                            }
+                                        }
                                     raise StructuredError(
                                         ErrorCode.LANGUAGE_MISMATCH,
                                         lang_res.message,
@@ -1389,6 +1411,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                             "expected_language": lang_res.expected_lang,
                                             "confidence": lang_res.confidence,
                                             "action": lang_res.action,
+                                            "session_zid": active_zid,
                                         }
                                     )
                                 elif lang_res.action == "warn":
@@ -1422,6 +1445,25 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     lang_res = verify_language(text, language, self.server.config, bypass=False)
                     if not lang_res.is_match:
                         if lang_res.action in ("block", "prompt"):
+                            with _DRAFT_SESSIONS_LOCK:
+                                _DRAFT_SESSIONS[active_zid] = {
+                                    "text": text,
+                                    "language": language,
+                                    "text_mode": text_mode,
+                                    "theme": theme,
+                                    "zoom": zoom,
+                                    "tsv_path": tsv_path,
+                                    "seq_num": seq_num,
+                                    "mismatch_info": {
+                                        "is_mismatch": True,
+                                        "detected_language": lang_res.detected_lang,
+                                        "expected_language": lang_res.expected_lang,
+                                        "confidence": lang_res.confidence,
+                                        "action": lang_res.action,
+                                        "text": text,
+                                        "session_zid": active_zid,
+                                    }
+                                }
                             raise StructuredError(
                                 ErrorCode.LANGUAGE_MISMATCH,
                                 lang_res.message,
@@ -1430,6 +1472,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                     "expected_language": lang_res.expected_lang,
                                     "confidence": lang_res.confidence,
                                     "action": lang_res.action,
+                                    "session_zid": active_zid,
                                 }
                             )
                         elif lang_res.action == "warn":
@@ -1580,6 +1623,30 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 try:
                     restored = adapter.restore_session(session_zid)
                 except Exception as e:
+                    with _DRAFT_SESSIONS_LOCK:
+                        draft = _DRAFT_SESSIONS.get(session_zid)
+                    if draft:
+                        req_theme = qs.get('theme', [None])[0] or draft.get("theme", "dark")
+                        seq_num = qs.get('seq_num', [None])[0] or qs.get('seq-num', [None])[0] or draft.get("seq_num")
+                        html = run_render_flow(
+                            text=draft.get("text", ""),
+                            language=draft.get("language", language or "en"),
+                            zid=session_zid,
+                            text_mode=draft.get("text_mode", "single"),
+                            config=self.server.config,
+                            resolved_paths=self.server.resolved_paths,
+                            theme=req_theme,
+                            seq_num=int(seq_num) if seq_num else None,
+                            mismatch_info=draft.get("mismatch_info"),
+                        )
+                        body = html.encode('utf-8')
+                        self.send_response(200)
+                        self._send_cors_headers()
+                        self.send_header('Content-Type', 'text/html; charset=utf-8')
+                        self.send_header('Content-Length', str(len(body)))
+                        self.end_headers()
+                        self.wfile.write(body)
+                        return
                     raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{session_zid}' not found: {e}")
 
                 source_text = restored.get("source_text", "")

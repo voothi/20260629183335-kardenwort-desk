@@ -47,6 +47,10 @@ ERROR_STATUS_MATRIX = {
     "INVALID_STATE": 500,
 }
 
+_DRAFT_SESSIONS: dict = {}
+_DRAFT_SESSIONS_LOCK = threading.Lock()
+
+
 
 def generate_server_zid(server) -> str:
     """
@@ -429,6 +433,25 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                             lang_res = verify_language(text, language, self.server.config, bypass=False)
                             if not lang_res.is_match:
                                 if lang_res.action in ("block", "prompt"):
+                                    with _DRAFT_SESSIONS_LOCK:
+                                        _DRAFT_SESSIONS[active_zid] = {
+                                            "text": text,
+                                            "language": language,
+                                            "text_mode": text_mode,
+                                            "theme": theme,
+                                            "zoom": zoom,
+                                            "tsv_path": tsv_path,
+                                            "seq_num": seq_num,
+                                            "mismatch_info": {
+                                                "is_mismatch": True,
+                                                "detected_language": lang_res.detected_lang,
+                                                "expected_language": lang_res.expected_lang,
+                                                "confidence": lang_res.confidence,
+                                                "action": lang_res.action,
+                                                "text": text,
+                                                "session_zid": active_zid,
+                                            }
+                                        }
                                     raise StructuredError(
                                         ErrorCode.LANGUAGE_MISMATCH,
                                         lang_res.message,
@@ -437,6 +460,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                                             "expected_language": lang_res.expected_lang,
                                             "confidence": lang_res.confidence,
                                             "action": lang_res.action,
+                                            "session_zid": active_zid,
                                         }
                                     )
                                 elif lang_res.action == "warn":
@@ -470,6 +494,25 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     lang_res = verify_language(text, language, self.server.config, bypass=False)
                     if not lang_res.is_match:
                         if lang_res.action in ("block", "prompt"):
+                            with _DRAFT_SESSIONS_LOCK:
+                                _DRAFT_SESSIONS[active_zid] = {
+                                    "text": text,
+                                    "language": language,
+                                    "text_mode": text_mode,
+                                    "theme": theme,
+                                    "zoom": zoom,
+                                    "tsv_path": tsv_path,
+                                    "seq_num": seq_num,
+                                    "mismatch_info": {
+                                        "is_mismatch": True,
+                                        "detected_language": lang_res.detected_lang,
+                                        "expected_language": lang_res.expected_lang,
+                                        "confidence": lang_res.confidence,
+                                        "action": lang_res.action,
+                                        "text": text,
+                                        "session_zid": active_zid,
+                                    }
+                                }
                             raise StructuredError(
                                 ErrorCode.LANGUAGE_MISMATCH,
                                 lang_res.message,
@@ -478,6 +521,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                                     "expected_language": lang_res.expected_lang,
                                     "confidence": lang_res.confidence,
                                     "action": lang_res.action,
+                                    "session_zid": active_zid,
                                 }
                             )
                         elif lang_res.action == "warn":

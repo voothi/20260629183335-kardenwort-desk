@@ -6884,7 +6884,31 @@ def parse_source_sentences(text, text_mode, config):
                 source_sentences = text.splitlines()
     return source_sentences, text, smc
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False):
+
+LANGUAGE_NAMES_MAP: Dict[str, str] = {
+    "en": "English",
+    "de": "German",
+    "ru": "Russian",
+    "fr": "French",
+    "es": "Spanish",
+    "it": "Italian",
+    "zh": "Chinese",
+    "ja": "Japanese",
+    "pt": "Portuguese",
+    "nl": "Dutch",
+    "pl": "Polish",
+    "uk": "Ukrainian",
+}
+
+
+def get_language_display_name(code: Optional[str]) -> str:
+    if not code:
+        return ""
+    clean = code.strip().lower()
+    return LANGUAGE_NAMES_MAP.get(clean, code.strip().capitalize())
+
+
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
             logger.warning(f"[{zid}] Concurrent render skipped — already active. Rapid duplicate hotkey fire detected.")
@@ -6893,12 +6917,12 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             return ""
         _ACTIVE_ZIDS.add(zid)
     try:
-        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children)
+        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children, mismatch_info=mismatch_info)
     finally:
         with _ACTIVE_ZIDS_LOCK:
             _ACTIVE_ZIDS.discard(zid)
 
-def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False):
+def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
     if wordfill_cfg is None and config is not None:
         wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
     normalize_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
@@ -8999,6 +9023,130 @@ html, body {{
     color: #cf222e;
     border: 1px solid #ff8182;
   }
+  /* Language Verification Modal */
+  .kw-modal-backdrop {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.65);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 3000;
+    backdrop-filter: blur(2px);
+  }
+  .kw-modal-backdrop.hidden,
+  .kw-modal-backdrop[style*="display: none"] {
+    display: none !important;
+  }
+  .kw-modal-box {
+    background: {modal_bg};
+    border: 1px solid {modal_border};
+    border-radius: 8px;
+    width: 90%;
+    max-width: 480px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+    padding: 22px 24px;
+    color: {text_color};
+    font-family: inherit;
+    box-sizing: border-box;
+    animation: kwModalIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes kwModalIn {
+    from { opacity: 0; transform: scale(0.95) translateY(-8px); }
+    to { opacity: 1; transform: scale(1) translateY(0); }
+  }
+  .kw-modal-header {
+    font-size: 16px;
+    font-weight: 600;
+    margin-bottom: 14px;
+    color: {text_color};
+  }
+  .kw-modal-body {
+    font-size: 13.5px;
+    line-height: 1.6;
+    margin-bottom: 22px;
+    color: {text_color};
+    white-space: pre-wrap;
+    word-break: break-word;
+  }
+  .kw-modal-actions {
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+  }
+  .kw-modal-actions button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    min-width: 75px;
+    height: 32px;
+    padding: 4px 16px;
+    border-radius: 4px;
+    border: 1px solid {section_border};
+    background: {input_bg};
+    color: {text_color};
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .kw-modal-actions button:hover:not(:disabled) {
+    background: {row_hover};
+    border-color: {text_muted};
+  }
+  .kw-modal-actions button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .kw-modal-actions button.btn-primary {
+    background: #1f6feb;
+    border-color: #388bfd;
+    color: #ffffff;
+  }
+  .kw-modal-actions button.btn-primary:hover:not(:disabled) {
+    background: #388bfd;
+  }
+  body.theme-light .kw-modal-box,
+  body.theme-white .kw-modal-box {
+    background: #ffffff;
+    border-color: #d0d7de;
+    color: #24292f;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+  }
+  body.theme-light .kw-modal-header,
+  body.theme-white .kw-modal-header,
+  body.theme-light .kw-modal-body,
+  body.theme-white .kw-modal-body {
+    color: #24292f;
+  }
+  body.theme-light .kw-modal-actions button,
+  body.theme-white .kw-modal-actions button {
+    background: #f6f8fa;
+    border-color: #d0d7de;
+    color: #24292f;
+  }
+  body.theme-light .kw-modal-actions button:hover:not(:disabled),
+  body.theme-white .kw-modal-actions button:hover:not(:disabled) {
+    background: #eaeef2;
+    border-color: #afb8c1;
+  }
+  body.theme-light .kw-modal-actions button.btn-primary,
+  body.theme-white .kw-modal-actions button.btn-primary {
+    background: #1f6feb;
+    border-color: #388bfd;
+    color: #ffffff;
+  }
+  body.theme-light .kw-modal-actions button.btn-primary:hover:not(:disabled),
+  body.theme-white .kw-modal-actions button.btn-primary:hover:not(:disabled) {
+    background: #388bfd;
+  }
 </style>
 </head>
 <body class="{theme_class}">
@@ -9032,7 +9180,21 @@ html, body {{
   <button type="button" id="kw-btn-hand-tool" title="Toggle Text Selection / Hand Tool (Ctrl+Shift+A)">Hand Tool</button>
   <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">Delete</button>
 </div>
+<div class="kw-modal-backdrop" id="kw-lang-modal" style="{lang_modal_display}">
+  <div class="kw-modal-box">
+    <div class="kw-modal-header" id="kw-lang-modal-title">Language Verification</div>
+    <div class="kw-modal-body" id="kw-lang-modal-body">{lang_mismatch_body}</div>
+    <div class="kw-modal-actions">
+      <button type="button" id="kw-btn-lang-yes" class="btn-primary">Yes</button>
+      <button type="button" id="kw-btn-lang-no">No</button>
+      <button type="button" id="kw-btn-lang-cancel">Cancel</button>
+    </div>
+  </div>
+</div>
 <div class="kw-toast-container" id="kw-toast-container"></div>
+<script id="mismatch-info" type="application/json">
+{mismatch_info_json}
+</script>
 <script id="token-map" type="application/json">
 {token_manifest}
 </script>
@@ -12060,6 +12222,168 @@ html, body {{
             window.showToast("Deleted " + rows.length + " rows (Ctrl+Z to undo)", "info", 2000);
         };
 
+        var LANGUAGE_NAME_MAP = {
+            "en": "English",
+            "de": "German",
+            "ru": "Russian",
+            "fr": "French",
+            "es": "Spanish",
+            "it": "Italian",
+            "zh": "Chinese",
+            "ja": "Japanese",
+            "pt": "Portuguese",
+            "nl": "Dutch",
+            "pl": "Polish",
+            "uk": "Ukrainian"
+        };
+
+        function getLanguageName(code) {
+            if (!code) return "";
+            return LANGUAGE_NAME_MAP[code.toLowerCase()] || code.toUpperCase();
+        }
+
+        function getTheme() {
+            if (document.body && document.body.classList) {
+                if (document.body.classList.contains('theme-light')) return 'light';
+                if (document.body.classList.contains('theme-white')) return 'white';
+            }
+            return 'dark';
+        }
+
+        function getTextMode() {
+            var el = document.getElementById('display-mode');
+            return el ? (el.textContent || el.innerText || 'single').trim() : 'single';
+        }
+
+        window.showLanguageVerificationModal = function(info) {
+            info = info || {};
+            var detCode = info.detected_language || "";
+            var expCode = info.expected_language || getSessionLang() || "";
+            var detName = info.detected_name || getLanguageName(detCode) || detCode;
+            var expName = info.expected_name || getLanguageName(expCode) || expCode;
+            var detLabel = detName + (detCode ? " (" + detCode + ")" : "");
+            var expLabel = expName + (expCode ? " (" + expCode + ")" : "");
+            var promptMsg = "The text appears to be " + detLabel + ", but the active profile is " + expLabel + ".\\n\\nSwitch language to " + detName + "?";
+
+            var modal = document.getElementById('kw-lang-modal');
+            var bodyEl = document.getElementById('kw-lang-modal-body');
+            if (bodyEl) bodyEl.textContent = promptMsg;
+            if (modal) {
+                modal.style.display = 'flex';
+                window.__langMismatchInfo = info;
+                var yesBtn = document.getElementById('kw-btn-lang-yes');
+                if (yesBtn) yesBtn.focus();
+            }
+        };
+
+        window.hideLanguageVerificationModal = function() {
+            var modal = document.getElementById('kw-lang-modal');
+            if (modal) modal.style.display = 'none';
+        };
+
+        window.onLangYes = function() {
+            var info = window.__langMismatchInfo || {};
+            var detLang = info.detected_language;
+            if (!detLang) {
+                window.hideLanguageVerificationModal();
+                return;
+            }
+            var sZid = getSessionZid() || info.session_zid || "";
+            var srcContainer = document.getElementById('source-container');
+            var srcText = info.text || info.source_text || (srcContainer ? (srcContainer.textContent || srcContainer.innerText || "") : "");
+            var detName = info.detected_name || getLanguageName(detLang) || detLang;
+            window.showToast("Switching language to " + detName + "...", "info");
+            window.hideLanguageVerificationModal();
+
+            if (typeof fetch !== 'undefined') {
+                fetch('/api/v1/render', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_zid: sZid,
+                        zid: sZid,
+                        language: detLang,
+                        text: srcText,
+                        bypass_lang_check: true,
+                        theme: getTheme(),
+                        text_mode: getTextMode()
+                    })
+                })
+                .then(function(res) {
+                    return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
+                })
+                .then(function(resObj) {
+                    if (resObj.ok && resObj.data) {
+                        var html = resObj.data.html || (resObj.data.html_b64 ? decodeURIComponent(escape(atob(resObj.data.html_b64))) : null);
+                        if (html) {
+                            document.open();
+                            document.write(html);
+                            document.close();
+                            return;
+                        }
+                    }
+                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true';
+                })
+                .catch(function(err) {
+                    window.showToast("Language switch failed: " + (err.message || String(err)), "error");
+                });
+            } else {
+                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true';
+            }
+        };
+
+        window.onLangNo = function() {
+            var info = window.__langMismatchInfo || {};
+            var expLang = info.expected_language || getSessionLang() || "en";
+            var sZid = getSessionZid() || info.session_zid || "";
+            var srcContainer = document.getElementById('source-container');
+            var srcText = info.text || info.source_text || (srcContainer ? (srcContainer.textContent || srcContainer.innerText || "") : "");
+            var expName = info.expected_name || getLanguageName(expLang) || expLang;
+            window.showToast("Processing in " + expName + "...", "info");
+            window.hideLanguageVerificationModal();
+
+            if (typeof fetch !== 'undefined') {
+                fetch('/api/v1/render', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        session_zid: sZid,
+                        zid: sZid,
+                        language: expLang,
+                        text: srcText,
+                        bypass_lang_check: true,
+                        theme: getTheme(),
+                        text_mode: getTextMode()
+                    })
+                })
+                .then(function(res) {
+                    return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
+                })
+                .then(function(resObj) {
+                    if (resObj.ok && resObj.data) {
+                        var html = resObj.data.html || (resObj.data.html_b64 ? decodeURIComponent(escape(atob(resObj.data.html_b64))) : null);
+                        if (html) {
+                            document.open();
+                            document.write(html);
+                            document.close();
+                            return;
+                        }
+                    }
+                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true';
+                })
+                .catch(function(err) {
+                    window.showToast("Render failed: " + (err.message || String(err)), "error");
+                });
+            } else {
+                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true';
+            }
+        };
+
+        window.onLangCancel = function() {
+            window.hideLanguageVerificationModal();
+            window.showToast("Language verification cancelled.", "info");
+        };
+
         var btnSave = document.getElementById('kw-btn-save');
         if (btnSave) addEvent(btnSave, 'click', window.onSaveClick);
         var btnUpdate = document.getElementById('kw-btn-update');
@@ -12075,10 +12399,43 @@ html, body {{
         var btnDelete = document.getElementById('kw-btn-delete');
         if (btnDelete) addEvent(btnDelete, 'click', window.onDeleteClick);
 
+        var btnLangYes = document.getElementById('kw-btn-lang-yes');
+        if (btnLangYes) addEvent(btnLangYes, 'click', window.onLangYes);
+        var btnLangNo = document.getElementById('kw-btn-lang-no');
+        if (btnLangNo) addEvent(btnLangNo, 'click', window.onLangNo);
+        var btnLangCancel = document.getElementById('kw-btn-lang-cancel');
+        if (btnLangCancel) addEvent(btnLangCancel, 'click', window.onLangCancel);
+
         addEvent(document, 'keydown', function(e) {
             e = e || window.event;
             var target = e.target || e.srcElement;
             var isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+
+            var langModal = document.getElementById('kw-lang-modal');
+            var isModalOpen = langModal && langModal.style.display !== 'none' && !langModal.classList.contains('hidden');
+            if (isModalOpen) {
+                if (e.key === 'Escape' || e.keyCode === 27) {
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                    window.onLangCancel();
+                    return false;
+                }
+                if (e.key === 'Enter' || e.keyCode === 13) {
+                    var focused = document.activeElement;
+                    if (focused === btnLangNo) {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.onLangNo();
+                        return false;
+                    } else if (focused === btnLangCancel) {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.onLangCancel();
+                        return false;
+                    } else {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.onLangYes();
+                        return false;
+                    }
+                }
+            }
 
             // Ctrl+S -> Save
             if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.keyCode === 83)) {
@@ -12121,6 +12478,16 @@ html, body {{
                 return msg;
             }
         });
+
+        var mismatchScript = document.getElementById('mismatch-info');
+        if (mismatchScript) {
+            try {
+                var mData = JSON.parse(mismatchScript.textContent || mismatchScript.innerText || 'null');
+                if (mData && (mData.is_mismatch || mData.detected_language)) {
+                    window.showLanguageVerificationModal(mData);
+                }
+            } catch(e) {}
+        }
 
         updateToolbarState();
 
@@ -12223,6 +12590,23 @@ setTimeout(function() {{
     html_page = html_page.replace("{hover_highlight_rainbow}", "1" if hover_highlight_rainbow else "0")
     html_page = html_page.replace("{hover_highlight_enabled}", "1" if hover_highlight_enabled else "0")
 
+    if mismatch_info and mismatch_info.get("is_mismatch"):
+        det_code = mismatch_info.get("detected_language") or ""
+        exp_code = mismatch_info.get("expected_language") or language or ""
+        det_name = mismatch_info.get("detected_name") or get_language_display_name(det_code) or det_code
+        exp_name = mismatch_info.get("expected_name") or get_language_display_name(exp_code) or exp_code
+        det_label = f"{det_name} ({det_code})" if det_code else det_name
+        exp_label = f"{exp_name} ({exp_code})" if exp_code else exp_name
+        lang_mismatch_body = f"The text appears to be {det_label}, but the active profile is {exp_label}.\n\nSwitch language to {det_name}?"
+        lang_modal_display = "display: flex;"
+    else:
+        lang_mismatch_body = ""
+        lang_modal_display = "display: none;"
+
+    html_page = html_page.replace("{lang_mismatch_body}", lang_mismatch_body)
+    html_page = html_page.replace("{lang_modal_display}", lang_modal_display)
+    html_page = html_page.replace("{mismatch_info_json}", json.dumps(mismatch_info) if mismatch_info else "null")
+
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{target_language}", target_lang)
     html_page = html_page.replace("{lemma_col_name}", lemma_col_name)
@@ -12259,9 +12643,9 @@ setTimeout(function() {{
 
     theme = theme.lower()
     
-    light_defaults = {'bg_color': '#f6f8fa', 'text_color': '#24292f', 'section_bg': '#ffffff', 'section_border': '#d0d7de', 'text_muted': '#57606a', 'table_border': '#d8dee4', 'table_th_border': '#d0d7de', 'table_text': '#24292f', 'row_hover': '#f3f4f6', 'word_hover': 'rgba(0, 0, 0, 0.05)', 'highlight_orange_active_bg': 'rgba(255, 225, 105, 0.4)', 'highlight_orange_active_text': '#b07e00', 'highlight_orange_active_hover_bg': 'rgba(255, 225, 105, 0.6)', 'highlight_purple_active_bg': '#dcd0ff', 'highlight_purple_active_text': '#24292f', 'highlight_purple_active_hover_bg': '#b89bf8', 'selected_orange_row_bg': 'rgba(255, 225, 105, 0.3)', 'selected_orange_row_text': '#b07e00', 'selected_purple_row_bg': 'rgba(220, 208, 255, 0.3)', 'selected_purple_row_text': '#6f42c1', 'flipped_bg': 'rgba(56, 166, 255, 0.15)', 'flipped_text': '#0969da', 'flipped_border': 'rgba(9, 105, 218, 0.6)', 'input_bg': '#ffffff', 'input_border': '#0969da', 'scrollbar_track': '#f6f8fa', 'scrollbar_thumb': '#d0d7de', 'scrollbar_thumb_hover': '#afb8c1', 'not_connected_bg': 'rgba(175, 184, 193, 0.15)', 'not_connected_text': '#57606a', 'level_3k_color': '#0969da', 'level_5k_color': '#bc4c00', 'level_goethe_color': '#1a7f37'}
+    light_defaults = {'bg_color': '#f6f8fa', 'text_color': '#24292f', 'section_bg': '#ffffff', 'section_border': '#d0d7de', 'text_muted': '#57606a', 'table_border': '#d8dee4', 'table_th_border': '#d0d7de', 'table_text': '#24292f', 'row_hover': '#f3f4f6', 'word_hover': 'rgba(0, 0, 0, 0.05)', 'highlight_orange_active_bg': 'rgba(255, 225, 105, 0.4)', 'highlight_orange_active_text': '#b07e00', 'highlight_orange_active_hover_bg': 'rgba(255, 225, 105, 0.6)', 'highlight_purple_active_bg': '#dcd0ff', 'highlight_purple_active_text': '#24292f', 'highlight_purple_active_hover_bg': '#b89bf8', 'selected_orange_row_bg': 'rgba(255, 225, 105, 0.3)', 'selected_orange_row_text': '#b07e00', 'selected_purple_row_bg': 'rgba(220, 208, 255, 0.3)', 'selected_purple_row_text': '#6f42c1', 'flipped_bg': 'rgba(56, 166, 255, 0.15)', 'flipped_text': '#0969da', 'flipped_border': 'rgba(9, 105, 218, 0.6)', 'input_bg': '#ffffff', 'input_border': '#0969da', 'scrollbar_track': '#f6f8fa', 'scrollbar_thumb': '#d0d7de', 'scrollbar_thumb_hover': '#afb8c1', 'not_connected_bg': 'rgba(175, 184, 193, 0.15)', 'not_connected_text': '#57606a', 'level_3k_color': '#0969da', 'level_5k_color': '#bc4c00', 'level_goethe_color': '#1a7f37', 'modal_bg': '#ffffff', 'modal_border': '#d0d7de'}
     
-    dark_defaults = {'bg_color': '#0d0f12', 'text_color': '#e3e6eb', 'section_bg': 'rgba(255, 255, 255, 0.03)', 'section_border': 'rgba(255, 255, 255, 0.1)', 'text_muted': '#8b949e', 'table_border': 'rgba(255, 255, 255, 0.05)', 'table_th_border': 'rgba(255, 255, 255, 0.1)', 'table_text': '#e3e6eb', 'row_hover': 'rgba(255, 255, 255, 0.02)', 'word_hover': 'rgba(255, 255, 255, 0.1)', 'highlight_orange_active_bg': 'rgba(255, 204, 0, 0.25)', 'highlight_orange_active_text': '#ffcc00', 'highlight_orange_active_hover_bg': 'rgba(255, 204, 0, 0.4)', 'highlight_purple_active_bg': '#9370db', 'highlight_purple_active_text': '#ffffff', 'highlight_purple_active_hover_bg': '#7b59c4', 'selected_orange_row_bg': 'rgba(255, 204, 0, 0.15)', 'selected_orange_row_text': '#ffcc00', 'selected_purple_row_bg': 'rgba(147, 112, 219, 0.15)', 'selected_purple_row_text': '#b39ddb', 'flipped_bg': 'rgba(56, 166, 255, 0.22)', 'flipped_text': '#a5d6ff', 'flipped_border': 'rgba(165, 214, 255, 0.6)', 'input_bg': '#1c1f24', 'input_border': '#58a6ff', 'scrollbar_track': '#0d0f12', 'scrollbar_thumb': '#30363d', 'scrollbar_thumb_hover': '#8b949e', 'not_connected_bg': 'rgba(139, 148, 158, 0.15)', 'not_connected_text': '#8b949e', 'level_3k_color': '#58a6ff', 'level_5k_color': '#ff9d5c', 'level_goethe_color': '#3fb950'}
+    dark_defaults = {'bg_color': '#0d0f12', 'text_color': '#e3e6eb', 'section_bg': 'rgba(255, 255, 255, 0.03)', 'section_border': 'rgba(255, 255, 255, 0.1)', 'text_muted': '#8b949e', 'table_border': 'rgba(255, 255, 255, 0.05)', 'table_th_border': 'rgba(255, 255, 255, 0.1)', 'table_text': '#e3e6eb', 'row_hover': 'rgba(255, 255, 255, 0.02)', 'word_hover': 'rgba(255, 255, 255, 0.1)', 'highlight_orange_active_bg': 'rgba(255, 204, 0, 0.25)', 'highlight_orange_active_text': '#ffcc00', 'highlight_orange_active_hover_bg': 'rgba(255, 204, 0, 0.4)', 'highlight_purple_active_bg': '#9370db', 'highlight_purple_active_text': '#ffffff', 'highlight_purple_active_hover_bg': '#7b59c4', 'selected_orange_row_bg': 'rgba(255, 204, 0, 0.15)', 'selected_orange_row_text': '#ffcc00', 'selected_purple_row_bg': 'rgba(147, 112, 219, 0.15)', 'selected_purple_row_text': '#b39ddb', 'flipped_bg': 'rgba(56, 166, 255, 0.22)', 'flipped_text': '#a5d6ff', 'flipped_border': 'rgba(165, 214, 255, 0.6)', 'input_bg': '#1c1f24', 'input_border': '#58a6ff', 'scrollbar_track': '#0d0f12', 'scrollbar_thumb': '#30363d', 'scrollbar_thumb_hover': '#8b949e', 'not_connected_bg': 'rgba(139, 148, 158, 0.15)', 'not_connected_text': '#8b949e', 'level_3k_color': '#58a6ff', 'level_5k_color': '#ff9d5c', 'level_goethe_color': '#3fb950', 'modal_bg': '#161b22', 'modal_border': 'rgba(255, 255, 255, 0.15)'}
     
     if theme in ("light", "white"):
         theme_colors = dict(light_defaults)
