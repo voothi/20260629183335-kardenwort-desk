@@ -285,6 +285,42 @@ def test_controller_render_fast_path_endpoint(running_controller):
         assert res["data"]["ok"] is True
         assert "html_b64" in res["data"]
         assert len(res["data"]["html_b64"]) > 0
+        assert res["data"].get("children") == []
+
+
+def test_controller_render_multi_sentence_returns_children_and_suppresses_spawn(running_controller, monkeypatch):
+    server_url, server = running_controller
+    spawn_calls = []
+
+    def mock_spawn_ahk(args, base_dir=None):
+        spawn_calls.append(list(args))
+
+    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', mock_spawn_ahk)
+
+    url = f"{server_url}/api/v1/render"
+    multi_text = "This is the first sentence. This is the second sentence. This is the third sentence."
+    payload = json.dumps({
+        "text": multi_text,
+        "language": "en",
+        "text_mode": "single",
+        "theme": "dark",
+        "bypass_lang_check": True,
+    }).encode('utf-8')
+    req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+    with urllib.request.urlopen(req, timeout=15.0) as resp:
+        assert resp.status == 200
+        res = json.loads(resp.read().decode('utf-8'))
+        assert res["status"] == "success"
+        assert res["data"]["ok"] is True
+        assert "html_b64" in res["data"]
+        assert len(res["data"]["html_b64"]) > 0
+        children = res["data"].get("children")
+        assert isinstance(children, list)
+        assert len(children) > 0
+        assert "--seq-num" in children
+        assert "--restore" in children
+        # Verify external AutoHotkey process spawning was suppressed by controller
+        assert len(spawn_calls) == 0, f"spawn_ahk should NOT be called in server mode, but was called {len(spawn_calls)} times"
 
 
 def test_controller_render_language_mismatch_returns_422(running_controller):

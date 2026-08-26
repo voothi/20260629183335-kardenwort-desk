@@ -6875,19 +6875,21 @@ def parse_source_sentences(text, text_mode, config):
                 source_sentences = text.splitlines()
     return source_sentences, text, smc
 
-def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None):
+def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
             logger.warning(f"[{zid}] Concurrent render skipped — already active. Rapid duplicate hotkey fire detected.")
+            if return_children:
+                return "", []
             return ""
         _ACTIVE_ZIDS.add(zid)
     try:
-        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id)
+        return _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level, theme, tsv_path, split_gap_limit, wordfill_cfg, seq_num, trace_id=trace_id, spawn_children=spawn_children, return_children=return_children)
     finally:
         with _ACTIVE_ZIDS_LOCK:
             _ACTIVE_ZIDS.discard(zid)
 
-def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None):
+def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False):
     if wordfill_cfg is None and config is not None:
         wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
     normalize_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
@@ -6906,6 +6908,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         
     progressive_timeout_seconds = config.getint(SEC_PIPELINE, 'progressive_timeout_seconds', fallback=15)
     children_tsv_paths = []
+    ahk_args = []
     
     if tsv_path:
         try:
@@ -7349,7 +7352,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             ahk_args.extend(["--seq-num", str(seq), "--restore", str(path)])
 
         base_dir = resolved_paths.get('base_dir') if resolved_paths else Path('.')
-        if ahk_args:
+        if ahk_args and spawn_children:
             spawn_ahk(ahk_args, base_dir)
         
         if not is_sqlite:
@@ -7423,6 +7426,8 @@ html, body {{
 </body>
 </html>
 """
+            if return_children:
+                return stub_html, ahk_args
             return stub_html
 
         # Override tsv_path and children_tsv_paths to let the render flow continue
@@ -11037,6 +11042,8 @@ setTimeout(function() {{
         html_page = html_page.replace("</body>", f"{children_div}</body>")
     
     _html_gen_timer.__exit__(None, None, None)
+    if return_children:
+        return html_page, ahk_args
     return html_page
 
 class LookupResultTuple(tuple):

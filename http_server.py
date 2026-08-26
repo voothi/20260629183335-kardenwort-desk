@@ -314,6 +314,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
             active_zid = session_zid or generate_unique_zid()
 
             html_result = ""
+            child_args = []
             if session_zid:
                 adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
                 try:
@@ -321,7 +322,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     source_text = restored.get("source_text", "")
                     sess_lang = restored.get("source_language") or language or "de"
                     t_mode = restored.get("text_mode") or text_mode or "single"
-                    html_result = run_render_flow(
+                    render_out = run_render_flow(
                         text=source_text,
                         language=sess_lang,
                         zid=session_zid,
@@ -334,7 +335,14 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                         split_gap_limit=int(split_gap) if split_gap else None,
                         seq_num=int(seq_num) if seq_num else None,
                         trace_id=f"{session_zid}:render:init",
+                        spawn_children=False,
+                        return_children=True,
                     )
+                    if isinstance(render_out, tuple):
+                        html_result, child_args = render_out
+                    else:
+                        html_result = render_out
+                        child_args = getattr(render_out, 'children', [])
                 except Exception:
                     if text and language:
                         if not bypass_lang_check:
@@ -354,7 +362,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                                 elif lang_res.action == "warn":
                                     logger.warning(lang_res.message)
 
-                        html_result = run_render_flow(
+                        render_out = run_render_flow(
                             text=text,
                             language=language,
                             zid=active_zid,
@@ -367,7 +375,14 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                             split_gap_limit=int(split_gap) if split_gap else None,
                             seq_num=int(seq_num) if seq_num else None,
                             trace_id=f"{active_zid}:render:init",
+                            spawn_children=False,
+                            return_children=True,
                         )
+                        if isinstance(render_out, tuple):
+                            html_result, child_args = render_out
+                        else:
+                            html_result = render_out
+                            child_args = getattr(render_out, 'children', [])
                     else:
                         raise
             elif text and language:
@@ -388,7 +403,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                         elif lang_res.action == "warn":
                             logger.warning(lang_res.message)
 
-                html_result = run_render_flow(
+                render_out = run_render_flow(
                     text=text,
                     language=language,
                     zid=active_zid,
@@ -401,7 +416,14 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     split_gap_limit=int(split_gap) if split_gap else None,
                     seq_num=int(seq_num) if seq_num else None,
                     trace_id=f"{active_zid}:render:init",
+                    spawn_children=False,
+                    return_children=True,
                 )
+                if isinstance(render_out, tuple):
+                    html_result, child_args = render_out
+                else:
+                    html_result = render_out
+                    child_args = getattr(render_out, 'children', [])
             else:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid'")
 
@@ -412,6 +434,7 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                 "zid": active_zid,
                 "html_b64": b64_html,
                 "html": html_result,
+                "children": child_args or [],
             })
             return
 

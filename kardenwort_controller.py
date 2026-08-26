@@ -1339,6 +1339,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'language' or 'session_zid'")
 
             html_result = ""
+            child_args = []
             active_zid = session_zid or generate_unique_zid()
 
             if session_zid:
@@ -1353,7 +1354,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     slug_suffix = f"-{slug}" if slug else ""
                     resolved_tsv = Path(tsv_path) if tsv_path else (results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv")
 
-                    html_result = run_render_flow(
+                    render_out = run_render_flow(
                         text=source_text,
                         language=sess_lang,
                         zid=session_zid,
@@ -1366,7 +1367,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         split_gap_limit=int(split_gap) if split_gap else None,
                         seq_num=int(seq_num) if seq_num else None,
                         trace_id=f"{session_zid}:render:init",
+                        spawn_children=False,
+                        return_children=True,
                     )
+                    if isinstance(render_out, tuple):
+                        html_result, child_args = render_out
+                    else:
+                        html_result = render_out
+                        child_args = getattr(render_out, 'children', [])
                 except Exception:
                     if text and language:
                         if not bypass_lang_check:
@@ -1386,7 +1394,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                 elif lang_res.action == "warn":
                                     logger.warning(lang_res.message)
 
-                        html_result = run_render_flow(
+                        render_out = run_render_flow(
                             text=text,
                             language=language,
                             zid=active_zid,
@@ -1399,7 +1407,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             split_gap_limit=int(split_gap) if split_gap else None,
                             seq_num=int(seq_num) if seq_num else None,
                             trace_id=f"{active_zid}:render:init",
+                            spawn_children=False,
+                            return_children=True,
                         )
+                        if isinstance(render_out, tuple):
+                            html_result, child_args = render_out
+                        else:
+                            html_result = render_out
+                            child_args = getattr(render_out, 'children', [])
                     else:
                         raise
             elif text and language:
@@ -1420,7 +1435,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         elif lang_res.action == "warn":
                             logger.warning(lang_res.message)
 
-                html_result = run_render_flow(
+                render_out = run_render_flow(
                     text=text,
                     language=language,
                     zid=active_zid,
@@ -1433,7 +1448,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     split_gap_limit=int(split_gap) if split_gap else None,
                     seq_num=int(seq_num) if seq_num else None,
                     trace_id=f"{active_zid}:render:init",
+                    spawn_children=False,
+                    return_children=True,
                 )
+                if isinstance(render_out, tuple):
+                    html_result, child_args = render_out
+                else:
+                    html_result = render_out
+                    child_args = getattr(render_out, 'children', [])
             else:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid'")
 
@@ -1443,6 +1465,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "zid": active_zid,
                 "html_b64": b64_html,
                 "html": html_result,
+                "children": child_args or [],
             })
             return
 
