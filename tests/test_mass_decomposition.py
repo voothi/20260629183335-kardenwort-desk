@@ -138,6 +138,138 @@ en_prompt=
     assert seq_nums == expected_seqs, f"Sequence numbers mismatch. Got: {seq_nums}, Expected: {expected_seqs}"
 
 
+def test_mass_decomposition_reverse_spawn_order(monkeypatch, tmp_path):
+    """
+    Test decomposing a multi-sentence paragraph when spawn_order is set to 'reverse'.
+    Verifies that:
+    1. Child sessions are passed to spawn_ahk in reverse sequence (e.g. 36 down to 2).
+    2. Sequence numbers and restore paths match in reversed order.
+    3. Window #2 (sentence 1) is dispatched last so it remains top-of-stack in Windows OS Z-order.
+    """
+    config = configparser.ConfigParser()
+    config.read_string("""
+[settings]
+default_target_language=ru
+[rendering]
+display_mode=progressive
+[pipeline]
+progressive_text_translation=true
+progressive_timeout_seconds=15
+lemma_base_provider=google
+lemma_reprocess_provider=intellifiller
+[triggers]
+run_text_translation=auto
+run_lemma_base_translation=auto
+run_lemma_enrichment=manual
+[sentences_mode]
+enabled=true
+parent_mode=table
+spawn_order=reverse
+[languages]
+en_prompt=
+[fields]
+""")
+
+    mapping_file = tmp_path / "mapping.ini"
+    mapping_file.write_text(
+        "[fields]\n"
+        "WordSource=\nWordDestination=\nWordSourceInflectedForm=\n"
+        "SentenceSourceIndex=\nSentenceDestination=\nDeskSelected=\n"
+        "[fields_mapping.word]\n"
+        "WordSource=lemma\nWordDestination=word_translation\n"
+        "WordSourceInflectedForm=inflected\n"
+        "SentenceSourceIndex=sentence_index\n"
+        "SentenceDestination=sentence_destination\nDeskSelected=selected\n",
+        encoding="utf-8",
+    )
+
+    resolved_paths = {
+        'results_dir': tmp_path,
+        'kardenwort_core_py': tmp_path / 'dummy.py',
+        'kardenwort_python': tmp_path / 'python',
+        'anki_mapping_file': mapping_file,
+        'kardenwort_workspace': tmp_path,
+        'settings_file': tmp_path / 'settings.ini',
+        'base_dir': tmp_path,
+    }
+
+    headers = [
+        "WordSource", "WordDestination", "WordSourceInflectedForm",
+        "SentenceSourceIndex", "SentenceDestination", "DeskSelected"
+    ]
+
+    num_sentences = 35
+    sentences = [f"This is sentence number {i} with some unique content." for i in range(1, num_sentences + 1)]
+    full_text = "\n".join(sentences)
+
+    data_rows = []
+    for i in range(1, num_sentences + 1):
+        data_rows.append([f"word{i}", f"trans{i}", f"Word{i}", str(i), f"Sentence trans {i}", "0"])
+
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "inflected": "WordSourceInflectedForm",
+        "sentence_index": "SentenceSourceIndex",
+        "sentence_destination": "SentenceDestination",
+        "selected": "DeskSelected",
+    }
+
+    master_tsv = tmp_path / "20260826000000-master.en.tsv"
+    master_tsv.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in data_rows) + "\n", encoding="utf-8")
+
+    spawn_calls = []
+
+    def mock_spawn_ahk(args, base_dir):
+        spawn_calls.append(list(args))
+
+    monkeypatch.setattr(desk, 'load_anki_mapping', lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'is_tsv_llm_filled', lambda *a, **kw: False)
+    monkeypatch.setattr(desk, 'get_role_fields', lambda m, h: role_fields)
+    monkeypatch.setattr(desk, 'load_kardenwort_config', lambda w: configparser.ConfigParser())
+    monkeypatch.setattr(desk, 'resolve_results_dir', lambda rp, kw: tmp_path)
+    monkeypatch.setattr(desk, 'prepare_lookup_tsv', lambda *a, **kw: master_tsv)
+    monkeypatch.setattr(desk, 'run_progressive_worker_async', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'spawn_ahk', mock_spawn_ahk)
+    monkeypatch.setattr(desk, 'translate_source_text', lambda *a, **kw: {i: f"Перевод предложения {i+1}" for i in range(num_sentences)})
+    monkeypatch.setattr(desk, 'resolve_translations', lambda *a, **kw: None)
+
+    desk.run_render_flow(
+        full_text,
+        "en",
+        "20260826000000",
+        "multi",
+        config,
+        resolved_paths,
+        seq_num=1,
+        tsv_path=None,
+    )
+
+    # Verify spawn_ahk was called
+    assert len(spawn_calls) == 1, f"Expected 1 call to spawn_ahk, got {len(spawn_calls)}"
+    args = spawn_calls[0]
+
+    # Verify 35 items spawned in reverse order
+    seq_nums = []
+    restore_paths = []
+    i = 0
+    while i < len(args):
+        assert args[i] == "--seq-num"
+        seq_nums.append(int(args[i + 1]))
+        assert args[i + 2] == "--restore"
+        restore_paths.append(args[i + 3])
+        i += 4
+
+    assert len(seq_nums) == num_sentences, f"Expected {num_sentences} sequence numbers, got {len(seq_nums)}"
+    assert len(restore_paths) == num_sentences, f"Expected {num_sentences} restore paths, got {len(restore_paths)}"
+
+    # Check sequence is reversed: 36, 35, ..., 2
+    expected_reverse_seqs = list(range(2 + num_sentences - 1, 1, -1))
+    assert seq_nums == expected_reverse_seqs, f"Reverse sequence numbers mismatch. Got: {seq_nums}, Expected: {expected_reverse_seqs}"
+    assert seq_nums[0] == 36 and seq_nums[-1] == 2, "First dispatched must be highest seq (36) and last must be window #2"
+
+
 def test_concurrent_render_burst_handling(monkeypatch, tmp_path):
     """
     Test that the HTTP server handles a burst of 35 simultaneous /api/v1/render requests
