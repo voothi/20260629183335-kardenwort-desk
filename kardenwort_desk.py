@@ -7611,6 +7611,9 @@ html, body {{
         except Exception:
             pass
     auto_inject_updates = config.getboolean(SEC_RENDERING, 'auto_inject_updates', fallback=True)
+    hover_highlight_enabled = config.getboolean(SEC_RENDERING, 'hover_highlight', fallback=True)
+    hover_highlight_bookmarks = config.getint(SEC_RENDERING, 'hover_highlight_bookmarks', fallback=3)
+    hover_highlight_rainbow = config.getboolean(SEC_RENDERING, 'hover_highlight_rainbow', fallback=True)
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
     run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
@@ -8407,10 +8410,9 @@ html, body {{
 <head>
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
-<style>
+<style id="hl-mvp-style">
   
-
-  
+ 
 
   *, *:before, *:after {
     -webkit-box-sizing: border-box;
@@ -8483,7 +8485,9 @@ html, body {{
     -ms-user-select: none;
     user-select: none;
   }
-  .source-text span.word {
+  .source-text span.word,
+  #source-container span.word,
+  #translation-container span.word {
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     border-radius: 3px;
@@ -8500,6 +8504,128 @@ html, body {{
   }
   .source-text span.word:hover {
     background-color: {word_hover};
+  }
+  body.theme-dark #translation-container span.word:hover {
+    background-color: rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+  }
+  body.theme-light #translation-container span.word:hover,
+  body.theme-white #translation-container span.word:hover {
+    background-color: rgba(0, 0, 0, 0.06);
+    border-radius: 4px;
+  }
+  body.theme-dark #source-container span.word.hl-mvp-pin,
+  body.theme-dark #translation-container span.word.hl-mvp-pin,
+  body.theme-dark #source-container span.word.hl-mvp-hover,
+  body.theme-dark #translation-container span.word.hl-mvp-hover,
+  body.theme-white #source-container span.word.hl-mvp-pin,
+  body.theme-white #translation-container span.word.hl-mvp-pin,
+  body.theme-white #source-container span.word.hl-mvp-hover,
+  body.theme-white #translation-container span.word.hl-mvp-hover {
+    border: 2px solid #39c5ff !important;
+    border-radius: 4px !important;
+    margin: -2px !important;
+  }
+  body.theme-light #source-container span.word.hl-mvp-pin,
+  body.theme-light #translation-container span.word.hl-mvp-pin,
+  body.theme-light #source-container span.word.hl-mvp-hover,
+  body.theme-light #translation-container span.word.hl-mvp-hover {
+    border: 2px solid #0969da !important;
+    border-radius: 4px !important;
+    margin: -2px !important;
+  }
+  body.theme-dark #source-container span.word.hl-mvp-pin-0,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-0 { border: 2px solid #39d353 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #source-container span.word.hl-mvp-pin-1,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-1 { border: 2px solid #b78cf7 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #source-container span.word.hl-mvp-pin-2,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-2 { border: 2px solid #ff9c3a !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #source-container span.word.hl-mvp-pin-3,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-3 { border: 2px solid #ff79c6 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #source-container span.word.hl-mvp-pin-4,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-4 { border: 2px solid #f2ca30 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #source-container span.word.hl-mvp-pin-5,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-5 { border: 2px solid #39c5ff !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #source-container span.word.hl-mvp-pin-6,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-6 { border: 2px solid #ff7b72 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #source-container span.word.hl-mvp-pin-7,
+  body.theme-dark #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #a5b4fc !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-0,
+  body.theme-light #translation-container span.word.hl-mvp-pin-0,
+  body.theme-white #source-container span.word.hl-mvp-pin-0,
+  body.theme-white #translation-container span.word.hl-mvp-pin-0 { border: 2px solid #1a7f37 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-1,
+  body.theme-light #translation-container span.word.hl-mvp-pin-1,
+  body.theme-white #source-container span.word.hl-mvp-pin-1,
+  body.theme-white #translation-container span.word.hl-mvp-pin-1 { border: 2px solid #8250df !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-2,
+  body.theme-light #translation-container span.word.hl-mvp-pin-2,
+  body.theme-white #source-container span.word.hl-mvp-pin-2,
+  body.theme-white #translation-container span.word.hl-mvp-pin-2 { border: 2px solid #bc4c00 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-3,
+  body.theme-light #translation-container span.word.hl-mvp-pin-3,
+  body.theme-white #source-container span.word.hl-mvp-pin-3,
+  body.theme-white #translation-container span.word.hl-mvp-pin-3 { border: 2px solid #cf222e !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-4,
+  body.theme-light #translation-container span.word.hl-mvp-pin-4,
+  body.theme-white #source-container span.word.hl-mvp-pin-4,
+  body.theme-white #translation-container span.word.hl-mvp-pin-4 { border: 2px solid #b08800 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-5,
+  body.theme-light #translation-container span.word.hl-mvp-pin-5,
+  body.theme-white #source-container span.word.hl-mvp-pin-5,
+  body.theme-white #translation-container span.word.hl-mvp-pin-5 { border: 2px solid #0891b2 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-6,
+  body.theme-light #translation-container span.word.hl-mvp-pin-6,
+  body.theme-white #source-container span.word.hl-mvp-pin-6,
+  body.theme-white #translation-container span.word.hl-mvp-pin-6 { border: 2px solid #e11d48 !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #source-container span.word.hl-mvp-pin-7,
+  body.theme-light #translation-container span.word.hl-mvp-pin-7,
+  body.theme-white #source-container span.word.hl-mvp-pin-7,
+  body.theme-white #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #7c3aed !important; border-radius: 4px !important; margin: -2px !important; }
+  body.text-selection-mode-active .source-text,
+  body.text-selection-mode-active .source-text *,
+  body.text-selection-mode-active #source-container,
+  body.text-selection-mode-active #source-container *,
+  body.text-selection-mode-active #translation-container,
+  body.text-selection-mode-active #translation-container *,
+  body.text-selection-mode-active #lemma-table,
+  body.text-selection-mode-active #lemma-table *,
+  body.text-selection-mode-active #lemma-table td,
+  body.text-selection-mode-active #lemma-table th {
+    -webkit-user-select: text !important;
+    -moz-user-select: text !important;
+    -ms-user-select: text !important;
+    user-select: text !important;
+    cursor: text !important;
+  }
+  body.text-selection-mode-active #lemma-table tr:hover td {
+    background: transparent !important;
+  }
+  body.text-selection-mode-active #lemma-table tr.selected td {
+    background: transparent !important;
+    color: inherit !important;
+  }
+  body.text-selection-mode-active span.word,
+  body.text-selection-mode-active span.token,
+  body.text-selection-mode-active #source-container span.word,
+  body.text-selection-mode-active #translation-container span.word,
+  body.text-selection-mode-active #source-container span.token,
+  body.text-selection-mode-active #translation-container span.token {
+    cursor: text !important;
+    background-color: transparent !important;
+    background: transparent !important;
+    color: inherit !important;
+    border: none !important;
+    outline: none !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    text-decoration: none !important;
+    border-radius: 0 !important;
+    box-shadow: none !important;
+  }
+  body.text-selection-mode-active span.word:hover,
+  body.text-selection-mode-active #translation-container span.word:hover {
+    background-color: transparent !important;
   }
   .source-text span.highlight-orange {
   }
@@ -8717,6 +8843,7 @@ html, body {{
 <script id="auto-inject-updates" type="text/plain">{auto_inject_updates_js}</script>
 <script id="run-enrichment" type="text/plain">{run_enrichment_js}</script>
 <script id="worker-launched" type="text/plain">{worker_launched_js}</script>
+<script id="hl-mvp-script" type="text/plain" data-bookmarks="{hover_highlight_bookmarks}" data-rainbow="{hover_highlight_rainbow}" data-enabled="{hover_highlight_enabled}"></script>
 
 
 <script type="text/javascript">
@@ -8737,7 +8864,427 @@ html, body {{
         }
     };
 
+    window.__mvpInitialized = true;
+
+    function removeClass(el, name) {
+        try { if (el && el.classList) el.classList.remove(name); } catch(e) {}
+    }
+    function addClass(el, name) {
+        try { if (el && el.classList) el.classList.add(name); } catch(e) {}
+    }
+    function isAttached(el) {
+        while (el) {
+            if (el === document.documentElement) return true;
+            el = el.parentNode;
+        }
+        return false;
+    }
+    function escapeHtml(str) {
+        if (!str) return '';
+        return str
+            .replace(/&/g, '&amp;')
+            .replace(/</g, '&lt;')
+            .replace(/>/g, '&gt;')
+            .replace(/"/g, '&quot;')
+            .replace(/'/g, '&#039;');
+    }
+
+    var mvpBookmarks = [];
+    var sourceSpansArray = [];
+    var transSpansArray = [];
+    var mvpN = 3;
+    var isMvpIndexBuilt = false;
+    var mvpRainbowMode = true;
+    var mvpHighlightEnabled = true;
+
+    var scriptEl = document.getElementById('hl-mvp-script');
+    if (scriptEl) {
+        var dr = scriptEl.getAttribute('data-rainbow');
+        if (dr !== null) mvpRainbowMode = (dr === '1' || dr === 'true');
+        var db = scriptEl.getAttribute('data-bookmarks');
+        if (db) mvpN = parseInt(db, 10);
+        var de = scriptEl.getAttribute('data-enabled');
+        if (de !== null) mvpHighlightEnabled = (de === '1' || de === 'true');
+    }
+    if (window.__mvpBookmarks) mvpN = parseInt(window.__mvpBookmarks, 10);
+    if (isNaN(mvpN) || mvpN < 1) mvpN = 3;
+
+    function refreshBookmarkClasses() {
+        for (var i = 0; i < sourceSpansArray.length; i++) {
+            var span = sourceSpansArray[i];
+            removeClass(span, 'hl-mvp-pin');
+            for (var k = 0; k < 8; k++) {
+                removeClass(span, 'hl-mvp-pin-' + k);
+            }
+        }
+        for (var j = 0; j < transSpansArray.length; j++) {
+            var span = transSpansArray[j];
+            removeClass(span, 'hl-mvp-pin');
+            for (var k = 0; k < 8; k++) {
+                removeClass(span, 'hl-mvp-pin-' + k);
+            }
+        }
+        for (var m = 0; m < mvpBookmarks.length; m++) {
+            var b = mvpBookmarks[m];
+            if (b.srcSpan) {
+                addClass(b.srcSpan, 'hl-mvp-pin');
+                if (mvpRainbowMode && b.slot !== undefined) {
+                    addClass(b.srcSpan, 'hl-mvp-pin-' + b.slot);
+                }
+            }
+            if (b.transSpan) {
+                addClass(b.transSpan, 'hl-mvp-pin');
+                if (mvpRainbowMode && b.slot !== undefined) {
+                    addClass(b.transSpan, 'hl-mvp-pin-' + b.slot);
+                }
+            }
+        }
+    }
+
+    function tokenizeText(text) {
+        var rx = /([a-zA-Z0-9'\u00C0-\u024F\u0400-\u04FF\u0500-\u052F\u1E00-\u1EFF]+)/g;
+        return text.split(rx);
+    }
+
+    function tokenizeTranslation() {
+        var tc = document.getElementById('translation-container');
+        if (!tc) return;
+        if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader')) {
+            return;
+        }
+        var divs = tc.getElementsByTagName('div');
+        if (divs.length === 0) {
+            var firstChild = tc.firstChild;
+            if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
+                if (!firstChild.classList.contains('hl-mvp')) {
+                    var childSpans = tc.getElementsByTagName('span');
+                    for (var j = 0; j < childSpans.length; j++) {
+                        var span = childSpans[j];
+                        if (span.classList && span.classList.contains('word')) {
+                            addClass(span, 'hl-mvp');
+                            span.setAttribute('data-line-idx', '0');
+                        }
+                    }
+                }
+            } else {
+                var text = tc.textContent || tc.innerText || '';
+                var parts = tokenizeText(text);
+                var html = '';
+                for (var k = 0; k < parts.length; k++) {
+                    var part = parts[k];
+                    if (!part) continue;
+                    if (k % 2 === 1) {
+                        var lc = part.toLowerCase();
+                        html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="0">' + escapeHtml(part) + '</span>';
+                    } else {
+                        html += escapeHtml(part);
+                    }
+                }
+                tc.innerHTML = html;
+            }
+            return;
+        }
+        for (var i = 0; i < divs.length; i++) {
+            var div = divs[i];
+            var firstChild = div.firstChild;
+            if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
+                if (firstChild.classList.contains('hl-mvp')) continue;
+                var childSpans = div.getElementsByTagName('span');
+                for (var j = 0; j < childSpans.length; j++) {
+                    var span = childSpans[j];
+                    if (span.classList && span.classList.contains('word')) {
+                        addClass(span, 'hl-mvp');
+                        span.setAttribute('data-line-idx', String(i));
+                    }
+                }
+            } else {
+                var text = div.textContent || div.innerText || '';
+                var parts = tokenizeText(text);
+                var html = '';
+                for (var k = 0; k < parts.length; k++) {
+                    var part = parts[k];
+                    if (!part) continue;
+                    if (k % 2 === 1) {
+                        var lc = part.toLowerCase();
+                        html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + i + '">' + escapeHtml(part) + '</span>';
+                    } else {
+                        html += escapeHtml(part);
+                    }
+                }
+                div.innerHTML = html;
+            }
+        }
+    }
+
+    function buildLcIndex() {
+        sourceSpansArray = [];
+        transSpansArray = [];
+        var sc = document.getElementById('source-container');
+        if (sc) {
+            var srcSpans = sc.getElementsByTagName('span');
+            if (srcSpans.length > 0) isMvpIndexBuilt = true;
+            for (var i = 0; i < srcSpans.length; i++) {
+                var span = srcSpans[i];
+                if (span.classList && span.classList.contains('word')) {
+                    span.setAttribute('data-mvp-idx', String(sourceSpansArray.length));
+                    span.setAttribute('data-mvp-type', 'source');
+                    sourceSpansArray.push(span);
+                }
+            }
+        }
+        var tc = document.getElementById('translation-container');
+        if (tc) {
+            var transSpans = tc.getElementsByTagName('span');
+            for (var j = 0; j < transSpans.length; j++) {
+                var span = transSpans[j];
+                if (span.classList && span.classList.contains('hl-mvp')) {
+                    span.setAttribute('data-mvp-idx', String(transSpansArray.length));
+                    span.setAttribute('data-mvp-type', 'trans');
+                    transSpansArray.push(span);
+                }
+            }
+        }
+    }
+
+    function getTargetIdx(idx, isSource) {
+        var sourceArray = isSource ? sourceSpansArray : transSpansArray;
+        var targetArray = isSource ? transSpansArray : sourceSpansArray;
+        var span = sourceArray[idx];
+        if (!span) return -1;
+        var lineIdx = span.getAttribute('data-line-idx');
+        if (!lineIdx) {
+            lineIdx = "0";
+        }
+        var sourceLineSpans = [];
+        var sourcePos = 0;
+        for (var i = 0; i < sourceArray.length; i++) {
+            var sLine = sourceArray[i].getAttribute('data-line-idx') || "0";
+            if (sLine === lineIdx) {
+                sourceLineSpans.push(i);
+                if (i === idx) sourcePos = sourceLineSpans.length - 1;
+            }
+        }
+        var targetLineSpans = [];
+        for (var j = 0; j < targetArray.length; j++) {
+            var tLine = targetArray[j].getAttribute('data-line-idx') || "0";
+            if (tLine === lineIdx) {
+                targetLineSpans.push(j);
+            }
+        }
+        if (targetLineSpans.length === 0) return -1;
+        if (sourceLineSpans.length <= 1 || targetLineSpans.length <= 1) return targetLineSpans[0];
+        var ratio = sourcePos / (sourceLineSpans.length - 1);
+        var targetPos = Math.round(ratio * (targetLineSpans.length - 1));
+        return targetLineSpans[targetPos];
+    }
+
+    function wireMvpEvents() {
+        if (!mvpHighlightEnabled) return;
+        var ensureIndex = function() {
+            if (!isMvpIndexBuilt) buildLcIndex();
+        };
+        var handleMouseOver = function() {
+            if (window.__selectableTextMode) return;
+            ensureIndex();
+            var idxStr = this.getAttribute('data-mvp-idx');
+            if (idxStr !== null && idxStr !== '') {
+                var idx = parseInt(idxStr, 10);
+                var isSource = (this.getAttribute('data-mvp-type') === 'source');
+                var targetIdx = getTargetIdx(idx, isSource);
+                var targetSpan = isSource ? transSpansArray[targetIdx] : sourceSpansArray[targetIdx];
+                if (targetSpan) {
+                    addClass(targetSpan, 'hl-mvp-hover');
+                }
+            }
+        };
+        var handleMouseOut = function() {
+            if (window.__selectableTextMode) return;
+            ensureIndex();
+            var idxStr = this.getAttribute('data-mvp-idx');
+            if (idxStr !== null && idxStr !== '') {
+                var idx = parseInt(idxStr, 10);
+                var isSource = (this.getAttribute('data-mvp-type') === 'source');
+                var targetIdx = getTargetIdx(idx, isSource);
+                var targetSpan = isSource ? transSpansArray[targetIdx] : sourceSpansArray[targetIdx];
+                if (targetSpan && !targetSpan.classList.contains('hl-mvp-pin')) {
+                    removeClass(targetSpan, 'hl-mvp-hover');
+                }
+            }
+        };
+        var handleClick = function(e) {
+            if (window.__selectableTextMode) return;
+            ensureIndex();
+            e = e || window.event;
+            var btn = (e.button !== undefined) ? e.button : e.which;
+            if (btn !== 0 && btn !== 1) return;
+            var idxStr = this.getAttribute('data-mvp-idx');
+            if (idxStr === null || idxStr === '') return;
+            var idx = parseInt(idxStr, 10);
+            var isSource = (this.getAttribute('data-mvp-type') === 'source');
+            var bKey = (isSource ? 's' : 't') + idxStr;
+            var bIdx = -1;
+            for (var i = 0; i < mvpBookmarks.length; i++) {
+                if (mvpBookmarks[i].srcSpan === this || mvpBookmarks[i].transSpan === this) { bIdx = i; break; }
+            }
+            var targetIdx = getTargetIdx(idx, isSource);
+            var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
+            var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
+            if (bIdx !== -1) {
+                var entry = mvpBookmarks[bIdx];
+                if (entry.srcSpan) removeClass(entry.srcSpan, 'hl-mvp-hover');
+                if (entry.transSpan) removeClass(entry.transSpan, 'hl-mvp-hover');
+                mvpBookmarks.splice(bIdx, 1);
+            } else {
+                while (mvpBookmarks.length >= mvpN) {
+                    var oldest = mvpBookmarks.shift();
+                    if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
+                    if (oldest.transSpan) removeClass(oldest.transSpan, 'hl-mvp-hover');
+                }
+                var slot = 0;
+                if (mvpRainbowMode) {
+                    var usedSlots = {};
+                    for (var i = 0; i < mvpBookmarks.length; i++) {
+                        if (mvpBookmarks[i].slot !== undefined) {
+                            usedSlots[mvpBookmarks[i].slot] = true;
+                        }
+                    }
+                    for (var s = 0; s < mvpN; s++) {
+                        if (!usedSlots[s]) {
+                            slot = s;
+                            break;
+                        }
+                    }
+                }
+                mvpBookmarks.push({ idx: bKey, srcSpan: srcSpan, transSpan: transSpan, slot: slot });
+            }
+            refreshBookmarkClasses();
+        };
+
+        var sc = document.getElementById('source-container');
+        if (sc) {
+            var srcSpans = sc.getElementsByTagName('span');
+            for (var i = 0; i < srcSpans.length; i++) {
+                var span = srcSpans[i];
+                if (span.classList && span.classList.contains('word')) {
+                    if (span.getAttribute('data-mvp-wired')) continue;
+                    span.setAttribute('data-mvp-wired', '1');
+                    addEvent(span, 'mouseover', handleMouseOver);
+                    addEvent(span, 'mouseout', handleMouseOut);
+                    addEvent(span, 'click', handleClick);
+                }
+            }
+        }
+        var tc = document.getElementById('translation-container');
+        if (tc) {
+            var transSpans = tc.getElementsByTagName('span');
+            for (var j = 0; j < transSpans.length; j++) {
+                var span = transSpans[j];
+                if (span.classList && span.classList.contains('hl-mvp')) {
+                    if (span.getAttribute('data-mvp-wired')) continue;
+                    span.setAttribute('data-mvp-wired', '1');
+                    addEvent(span, 'mouseover', handleMouseOver);
+                    addEvent(span, 'mouseout', handleMouseOut);
+                    addEvent(span, 'click', handleClick);
+                }
+            }
+        }
+    }
+
+    window.clearMVPBookmarks = function() {
+        var cleared = false;
+        if (mvpBookmarks && mvpBookmarks.length > 0) {
+            cleared = true;
+            for (var i = 0; i < mvpBookmarks.length; i++) {
+                var entry = mvpBookmarks[i];
+                try {
+                    if (entry.srcSpan && isAttached(entry.srcSpan)) {
+                        removeClass(entry.srcSpan, 'hl-mvp-hover');
+                    }
+                } catch(e) {}
+                try {
+                    if (entry.transSpan && isAttached(entry.transSpan)) {
+                        removeClass(entry.transSpan, 'hl-mvp-hover');
+                    }
+                } catch(e) {}
+            }
+            mvpBookmarks = [];
+            refreshBookmarkClasses();
+        }
+        return cleared;
+    };
+
+    window.getBookmarkIndices = function() {
+        var indices = [];
+        if (mvpBookmarks) {
+            for (var i = 0; i < mvpBookmarks.length; i++) {
+                indices.push(mvpBookmarks[i].idx);
+            }
+        }
+        return indices.join(',');
+    };
+
+    window.restoreBookmarksByIndices = function(indicesStr) {
+        mvpBookmarks = [];
+        if (!indicesStr) {
+            refreshBookmarkClasses();
+            return;
+        }
+        var indices = indicesStr.split(',');
+        if (!isMvpIndexBuilt) buildLcIndex();
+        for (var i = 0; i < indices.length; i++) {
+            var bKey = indices[i];
+            if (bKey === '') continue;
+            var prefix = bKey.charAt(0);
+            var idx, isSource;
+            if (prefix === 's' || prefix === 't') {
+                idx = parseInt(bKey.substring(1), 10);
+                isSource = (prefix === 's');
+            } else {
+                idx = parseInt(bKey, 10);
+                isSource = true;
+            }
+            var targetIdx = getTargetIdx(idx, isSource);
+            var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
+            var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
+            var slot = 0;
+            if (mvpRainbowMode) {
+                var usedSlots = {};
+                for (var m = 0; m < mvpBookmarks.length; m++) {
+                    if (mvpBookmarks[m].slot !== undefined) {
+                        usedSlots[mvpBookmarks[m].slot] = true;
+                    }
+                }
+                for (var s = 0; s < mvpN; s++) {
+                    if (!usedSlots[s]) {
+                        slot = s;
+                        break;
+                    }
+                }
+            }
+            mvpBookmarks.push({ idx: bKey, srcSpan: srcSpan, transSpan: transSpan, slot: slot });
+        }
+        refreshBookmarkClasses();
+    };
+
+    window.setSelectableTextMode = function(active) {
+        window.__selectableTextMode = !!active;
+        if (active) {
+            if (document.body && document.body.classList) document.body.classList.add('text-selection-mode-active');
+        } else {
+            if (document.body && document.body.classList) document.body.classList.remove('text-selection-mode-active');
+        }
+    };
+
+    window.rebindMVPBookmarks = function() {
+        tokenizeTranslation();
+        buildLcIndex();
+        wireMvpEvents();
+    };
+
+    var isInitialized = false;
     function init() {
+        if (isInitialized) return;
+        isInitialized = true;
         var tableRows = [];
         var selectedRowIdsMap = {};
         var initialHighlights = {};
@@ -10287,6 +10834,7 @@ html, body {{
                 return;
             }
             if (keyCode === 27) { // Escape key
+                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
                 clearAllSelections();
                 updateBidirectionalHighlights();
                 notifyAHKSelection();
@@ -10919,6 +11467,10 @@ html, body {{
                 document.execCommand('copy');
             } catch(e) {}
         };
+        
+        if (window.rebindMVPBookmarks) {
+            window.rebindMVPBookmarks();
+        }
     }
 
     function handleHorizontalScroll(e) {
@@ -10952,11 +11504,15 @@ html, body {{
     addEvent(document, 'DOMMouseScroll', handleHorizontalScroll);
 
     if (window.addEventListener) {
+        window.addEventListener('DOMContentLoaded', init, false);
         window.addEventListener('load', init, false);
     } else if (window.attachEvent) {
         window.attachEvent('onload', init);
     } else {
         window.onload = init;
+    }
+    if (document.readyState === 'complete' || document.readyState === 'interactive') {
+        init();
     }
 })();
 </script>
@@ -11007,6 +11563,9 @@ setTimeout(function() {{
     html_page = html_page.replace("{auto_inject_updates_js}", "true" if auto_inject_updates else "false")
     html_page = html_page.replace("{run_enrichment_js}", run_enrich)
     html_page = html_page.replace("{worker_launched_js}", "true" if worker_launched else "false")
+    html_page = html_page.replace("{hover_highlight_bookmarks}", str(hover_highlight_bookmarks))
+    html_page = html_page.replace("{hover_highlight_rainbow}", "1" if hover_highlight_rainbow else "0")
+    html_page = html_page.replace("{hover_highlight_enabled}", "1" if hover_highlight_enabled else "0")
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{target_language}", target_lang)
