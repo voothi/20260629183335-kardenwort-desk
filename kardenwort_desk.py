@@ -6923,6 +6923,7 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
             _ACTIVE_ZIDS.discard(zid)
 
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
+    is_mismatch = bool(mismatch_info and mismatch_info.get("is_mismatch"))
     if wordfill_cfg is None and config is not None:
         wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
     normalize_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
@@ -7022,7 +7023,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     spawn_order = smc.spawn_order
     parent_mode = smc.parent_mode
     multi_mode_decompose = smc.multi_mode_decompose
-    will_split = not tsv_path and (
+    will_split = not is_mismatch and not tsv_path and (
         smc.should_split_sentences(len(source_sentences)) or 
         # legacy_spawn_children only fires when sentences_mode is enabled to avoid
         # unexpected splits from old config files migrated with enabled=false.
@@ -7514,24 +7515,33 @@ html, body {{
                 zid=zid,
             )
 
-    if cached_session_bundle and cached_session_bundle.get("session"):
+    if is_mismatch:
+        working_tsv_path = Path(tsv_path) if tsv_path else (results_dir / f"{zid}-{slug}.{language}.tsv")
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file']) if (resolved_paths and 'anki_mapping_file' in resolved_paths) else {}
+        comments = []
+        headers = ["WordSource", "WordDestination", "WordSourceInflectedForm", "WordSourceIPA", "WordSourceMorphologyAI", "DeskSelected"]
+        data_rows = []
+    elif cached_session_bundle and cached_session_bundle.get("session"):
         cached_zid = cached_session_bundle["session"].get("zid")
         working_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     elif tsv_path and (Path(tsv_path).exists() or is_sqlite):
         working_tsv_path = Path(tsv_path)
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     else:
         working_tsv_path = prepare_lookup_tsv(
             text, language, target_lang, config, resolved_paths, zid,
             ttl_seconds=0, cache_key=cache_key, text_mode=eff_mode
         )
-    
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+
     tsv_slug = slug
     tsv_match = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', working_tsv_path.name, re.IGNORECASE)
     if tsv_match:
         tsv_slug = tsv_match.group(1)
-    
-    mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-    comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
 
     if is_sqlite and (not text or not text.strip()):
         try:
@@ -7582,7 +7592,7 @@ html, body {{
     col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
     
     # --- Word-fill early pre-fill step ---
-    if wordfill_cfg and wordfill_cfg.get('enabled', False):
+    if not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
         try:
             col_lemma_wf = col_lemma if col_lemma != -1 else (headers.index('WordSource') if 'WordSource' in headers else -1)
             if col_lemma_wf != -1:
@@ -7648,7 +7658,7 @@ html, body {{
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
     source_text_path = working_tsv_path.with_suffix('.txt')
-    if not is_sqlite:
+    if not is_sqlite and not is_mismatch:
         if eff_mode == 'single':
             source_text_path.write_text(text, encoding='utf-8')
         elif not source_text_path.exists():
@@ -7680,7 +7690,7 @@ html, body {{
             has_untranslated_lemmas = True
             
     # If monolithic mode and run_base is auto, run base translation synchronously
-    if not is_progressive and run_base == 'auto':
+    if not is_mismatch and not is_progressive and run_base == 'auto':
         try:
             if not sentence_translated:
                 with TraceTimer("monolithic_text_translation", zid, config, resolved_paths):
@@ -7857,14 +7867,14 @@ html, body {{
                 else:
                     sentence_translations[a_idx] = ""
             
-    if not is_sqlite:
+    if not is_sqlite and not is_mismatch:
         save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
         translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
         eff_mode = _effective_text_mode(text, text_mode)
         _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
             
     worker_launched = False
-    if not llm_filled:
+    if not is_mismatch and not llm_filled:
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt')
         
         is_master_window = bool(children_tsv_paths)
@@ -8225,13 +8235,16 @@ html, body {{
             else:
                 span_htmls.append(text_escaped)
                 
-    source_html = "".join(span_htmls)
+    source_html = "" if is_mismatch else "".join(span_htmls)
     
-    has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
-    if is_progressive and run_text == 'auto' and not has_real_text:
-        sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
+    if is_mismatch:
+        sentence_html = ""
     else:
-        sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
+        has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
+        if is_progressive and run_text == 'auto' and not has_real_text:
+            sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
+        else:
+            sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
     
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
@@ -8349,7 +8362,7 @@ html, body {{
             f'{dynamic_tds}'
             f'</tr>'
         )
-    table_rows_html = "\n".join(table_rows)
+    table_rows_html = "" if is_mismatch else "\n".join(table_rows)
     
     token_manifest = []
     word_counter = 0
@@ -8424,6 +8437,9 @@ html, body {{
                 tok_data["compound_row_ids"] = compound_cand_rows
             word_counter += 1
         token_manifest.append(tok_data)
+        
+    if is_mismatch:
+        token_manifest = []
         
     _html_gen_timer = TraceTimer("html_generation", zid, config, resolved_paths)
     _html_gen_timer.__enter__()
@@ -9204,6 +9220,7 @@ html, body {{
 <script id="session-lang" type="text/plain">{language}</script>
 <script id="session-target-lang" type="text/plain">{target_language}</script>
 <script id="display-mode" type="text/plain">{display_mode_js}</script>
+<script id="text-mode" type="text/plain">{text_mode_js}</script>
 <script id="auto-inject-updates" type="text/plain">{auto_inject_updates_js}</script>
 <script id="run-enrichment" type="text/plain">{run_enrichment_js}</script>
 <script id="worker-launched" type="text/plain">{worker_launched_js}</script>
@@ -12251,7 +12268,7 @@ html, body {{
         }
 
         function getTextMode() {
-            var el = document.getElementById('display-mode');
+            var el = document.getElementById('text-mode');
             return el ? (el.textContent || el.innerText || 'single').trim() : 'single';
         }
 
@@ -12281,7 +12298,67 @@ html, body {{
             if (modal) modal.style.display = 'none';
         };
 
+        function setLangModalLoading(loading) {
+            var yesBtn = document.getElementById('kw-btn-lang-yes');
+            var noBtn = document.getElementById('kw-btn-lang-no');
+            var cancelBtn = document.getElementById('kw-btn-lang-cancel');
+            if (yesBtn) yesBtn.disabled = !!loading;
+            if (noBtn) noBtn.disabled = !!loading;
+            if (cancelBtn) cancelBtn.disabled = !!loading;
+        }
+
+        function extractChildSessions(children) {
+            var results = [];
+            if (!children || !Array.isArray(children)) return results;
+            var curSeq = null;
+            for (var i = 0; i < children.length; i++) {
+                var item = children[i];
+                if (typeof item === 'string') {
+                    if (item === '--seq-num' && i + 1 < children.length) {
+                        curSeq = children[i + 1];
+                        i++;
+                    } else if (item === '--restore' && i + 1 < children.length) {
+                        var curTsv = children[i + 1];
+                        i++;
+                        if (curTsv) {
+                            var zidMatch = curTsv.match(/(\d{14})/);
+                            var childZid = zidMatch ? zidMatch[1] : null;
+                            if (childZid) {
+                                results.push({ zid: childZid, seq_num: curSeq || '1' });
+                            }
+                            curSeq = null;
+                        }
+                    } else if (item.match && item.match(/(\d{14})/)) {
+                        var zidMatch = item.match(/(\d{14})/);
+                        results.push({ zid: zidMatch[1], seq_num: '1' });
+                    }
+                } else if (typeof item === 'object' && item !== null) {
+                    var z = item.zid || item.session_zid;
+                    if (z) {
+                        results.push({ zid: z, seq_num: item.seq_num || '1' });
+                    }
+                }
+            }
+            return results;
+        }
+
+        function spawnChildTabs(children) {
+            var childSessions = extractChildSessions(children);
+            for (var i = 0; i < childSessions.length; i++) {
+                var c = childSessions[i];
+                var childUrl = '/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true';
+                try {
+                    window.open(childUrl, '_blank');
+                } catch(e) {
+                    console.error("Failed spawning child tab", e);
+                }
+            }
+        }
+
         window.onLangYes = function() {
+            var yesBtn = document.getElementById('kw-btn-lang-yes');
+            if (yesBtn && yesBtn.disabled) return;
+
             var info = window.__langMismatchInfo || {};
             var detLang = info.detected_language;
             if (!detLang) {
@@ -12292,8 +12369,11 @@ html, body {{
             var srcContainer = document.getElementById('source-container');
             var srcText = info.text || info.source_text || (srcContainer ? (srcContainer.textContent || srcContainer.innerText || "") : "");
             var detName = info.detected_name || getLanguageName(detLang) || detLang;
+            var effMode = getTextMode();
+
+            document.title = "Kardenwort - " + detLang + " (" + effMode + ")";
             window.showToast("Switching language to " + detName + "...", "info");
-            window.hideLanguageVerificationModal();
+            setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
                 fetch('/api/v1/render', {
@@ -12306,14 +12386,20 @@ html, body {{
                         text: srcText,
                         bypass_lang_check: true,
                         theme: getTheme(),
-                        text_mode: getTextMode()
+                        text_mode: effMode
                     })
                 })
                 .then(function(res) {
                     return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
                 })
                 .then(function(resObj) {
+                    setLangModalLoading(false);
+                    window.hideLanguageVerificationModal();
                     if (resObj.ok && resObj.data) {
+                        var childrenList = resObj.data.children || (resObj.data.data && resObj.data.data.children) || [];
+                        if (childrenList && childrenList.length > 0) {
+                            spawnChildTabs(childrenList);
+                        }
                         var html = resObj.data.html || (resObj.data.html_b64 ? decodeURIComponent(escape(atob(resObj.data.html_b64))) : null);
                         if (html) {
                             document.open();
@@ -12325,22 +12411,31 @@ html, body {{
                     window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true';
                 })
                 .catch(function(err) {
+                    setLangModalLoading(false);
                     window.showToast("Language switch failed: " + (err.message || String(err)), "error");
                 });
             } else {
+                setLangModalLoading(false);
+                window.hideLanguageVerificationModal();
                 window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true';
             }
         };
 
         window.onLangNo = function() {
+            var noBtn = document.getElementById('kw-btn-lang-no');
+            if (noBtn && noBtn.disabled) return;
+
             var info = window.__langMismatchInfo || {};
             var expLang = info.expected_language || getSessionLang() || "en";
             var sZid = getSessionZid() || info.session_zid || "";
             var srcContainer = document.getElementById('source-container');
             var srcText = info.text || info.source_text || (srcContainer ? (srcContainer.textContent || srcContainer.innerText || "") : "");
             var expName = info.expected_name || getLanguageName(expLang) || expLang;
+            var effMode = getTextMode();
+
+            document.title = "Kardenwort - " + expLang + " (" + effMode + ")";
             window.showToast("Processing in " + expName + "...", "info");
-            window.hideLanguageVerificationModal();
+            setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
                 fetch('/api/v1/render', {
@@ -12353,14 +12448,20 @@ html, body {{
                         text: srcText,
                         bypass_lang_check: true,
                         theme: getTheme(),
-                        text_mode: getTextMode()
+                        text_mode: effMode
                     })
                 })
                 .then(function(res) {
                     return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
                 })
                 .then(function(resObj) {
+                    setLangModalLoading(false);
+                    window.hideLanguageVerificationModal();
                     if (resObj.ok && resObj.data) {
+                        var childrenList = resObj.data.children || (resObj.data.data && resObj.data.data.children) || [];
+                        if (childrenList && childrenList.length > 0) {
+                            spawnChildTabs(childrenList);
+                        }
                         var html = resObj.data.html || (resObj.data.html_b64 ? decodeURIComponent(escape(atob(resObj.data.html_b64))) : null);
                         if (html) {
                             document.open();
@@ -12372,9 +12473,12 @@ html, body {{
                     window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true';
                 })
                 .catch(function(err) {
+                    setLangModalLoading(false);
                     window.showToast("Render failed: " + (err.message || String(err)), "error");
                 });
             } else {
+                setLangModalLoading(false);
+                window.hideLanguageVerificationModal();
                 window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true';
             }
         };
@@ -12583,6 +12687,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
     html_page = html_page.replace("{zid}", zid)
     html_page = html_page.replace("{display_mode_js}", "progressive" if is_progressive else "monolithic")
+    html_page = html_page.replace("{text_mode_js}", eff_mode)
     html_page = html_page.replace("{auto_inject_updates_js}", "true" if auto_inject_updates else "false")
     html_page = html_page.replace("{run_enrichment_js}", run_enrich)
     html_page = html_page.replace("{worker_launched_js}", "true" if worker_launched else "false")
@@ -12620,7 +12725,8 @@ setTimeout(function() {{
     html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))
 
     # Format Title, Favicon, and Sequence Badge
-    page_title = f"Kardenwort - {language}" + (" (multi)" if (eff_mode == "multi" or text_mode == "multi") else "")
+    mode_label = "multi" if (eff_mode == "multi" or text_mode == "multi") else "single"
+    page_title = f"Kardenwort - {language} ({mode_label})"
     if seq_num is not None and str(seq_num).strip():
         try:
             seq_int = int(seq_num)

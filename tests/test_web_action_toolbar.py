@@ -226,7 +226,7 @@ def test_window_sequence_branding_in_web_view(page, tmp_path):
     # 1. Test with seq_num = 1 (Master window) - clean title without bracketed sequence prefix
     html_seq1 = get_desk_page_html(tmp_path, zid="20260826235951", seq_num=1)
     page.set_content(html_seq1)
-    assert page.title() == "Kardenwort - de"
+    assert page.title() == "Kardenwort - de (single)"
     favicon = page.locator("link[rel='icon']")
     assert favicon.get_attribute("href") == "/assets/numbers/1.ico"
     badge = page.locator("#kw-seq-badge")
@@ -236,14 +236,14 @@ def test_window_sequence_branding_in_web_view(page, tmp_path):
     # 2. Test with seq_num = 3 (Child window) - clean title, sequence icon + badge preserved
     html_seq3 = get_desk_page_html(tmp_path, zid="20260826235953", seq_num=3)
     page.set_content(html_seq3)
-    assert page.title() == "Kardenwort - de"
+    assert page.title() == "Kardenwort - de (single)"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/3.ico"
     assert page.locator("#kw-seq-badge").inner_text() == "#3"
 
     # 3. Test without seq_num (Default fallback)
     html_default = get_desk_page_html(tmp_path, zid="20260826235950", seq_num=None)
     page.set_content(html_default)
-    assert page.title() == "Kardenwort - de"
+    assert page.title() == "Kardenwort - de (single)"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/1.ico"
     assert not page.locator("#kw-seq-badge").is_visible()
 

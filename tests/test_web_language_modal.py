@@ -1,4 +1,4 @@
-﻿import json
+import json
 import pytest
 from pathlib import Path
 from kardenwort_desk import (
@@ -210,3 +210,169 @@ def test_language_modal_keyboard_enter_and_escape(page, tmp_path):
     page.keyboard.press("Escape")
     page.wait_for_timeout(50)
     assert not modal.is_visible()
+
+
+def test_language_modal_suppresses_content_on_mismatch(page, tmp_path):
+    mismatch = {
+        "is_mismatch": True,
+        "detected_language": "de",
+        "expected_language": "en",
+        "detected_name": "German",
+        "expected_name": "English",
+        "text": "Das ist ein Haus. Und hier ist ein Garten.",
+        "session_zid": "20260827005722",
+    }
+    html = get_modal_test_page_html(tmp_path, mismatch_info=mismatch)
+    page.set_content(html)
+
+    # 1. Modal must be open
+    assert page.locator("#kw-lang-modal").is_visible()
+
+    # 2. Source text, sentence translation, and table rows must be clean/empty
+    assert page.locator("#source-container").inner_text().strip() == ""
+    assert page.locator("#translation-container").inner_text().strip() == ""
+    assert page.locator("#lemma-table tbody tr").count() == 0
+
+
+def test_language_modal_title_formatting_and_dynamic_update(page, tmp_path):
+    config, resolved, _, _ = load_config()
+    tsv_file = tmp_path / "20260827005722-test.en.tsv"
+    tsv_file.write_text("# Headers\tLemma\tInflected\n# Data\tHaus\tHäuser\n", encoding="utf-8")
+
+    mismatch = {
+        "is_mismatch": True,
+        "detected_language": "de",
+        "expected_language": "en",
+        "detected_name": "German",
+        "expected_name": "English",
+        "text": "Das ist ein Haus.",
+        "session_zid": "20260827005722",
+    }
+
+    # 1. Single mode title formatting
+    html_single = run_render_flow(
+        text="Das ist ein Haus.",
+        language="en",
+        zid="20260827005722",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved,
+        tsv_path=tsv_file,
+        spawn_children=False,
+        mismatch_info=mismatch,
+    )
+    page.set_content(inject_mock_fetch(html_single))
+    assert page.title() == "Kardenwort - en (single)"
+
+    # Clicking Yes updates title immediately to German
+    page.locator("#kw-btn-lang-yes").click()
+    page.wait_for_timeout(50)
+    assert page.title() == "Kardenwort - de (single)"
+
+    # 2. Multi mode title formatting
+    html_multi = run_render_flow(
+        text="Das ist ein Haus.\nUnd ein Garten.",
+        language="en",
+        zid="20260827005723",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved,
+        tsv_path=tsv_file,
+        spawn_children=False,
+        mismatch_info=mismatch,
+    )
+    page.set_content(inject_mock_fetch(html_multi))
+    assert page.title() == "Kardenwort - en (multi)"
+
+    # Clicking No updates title in expected language
+    page.locator("#kw-btn-lang-no").click()
+    page.wait_for_timeout(50)
+    assert page.title() == "Kardenwort - en (multi)"
+
+
+def test_language_modal_button_state_during_inflight_request(page, tmp_path):
+    mismatch = {
+        "is_mismatch": True,
+        "detected_language": "de",
+        "expected_language": "en",
+        "detected_name": "German",
+        "expected_name": "English",
+        "text": "Das ist ein Haus.",
+        "session_zid": "20260827005722",
+    }
+    # Mock fetch with an unresolved promise to keep the request in-flight
+    delayed_fetch_script = """<script>
+    window.fetch = function() {
+        return new Promise(function() {}); // never resolves
+    };
+    </script>"""
+    html = get_modal_test_page_html(tmp_path, mismatch_info=mismatch).replace("<head>", f"<head>\n{delayed_fetch_script}")
+    page.set_content(html)
+
+    btn_yes = page.locator("#kw-btn-lang-yes")
+    btn_no = page.locator("#kw-btn-lang-no")
+    btn_cancel = page.locator("#kw-btn-lang-cancel")
+
+    assert not btn_yes.is_disabled()
+    assert not btn_no.is_disabled()
+    assert not btn_cancel.is_disabled()
+
+    btn_yes.click()
+    page.wait_for_timeout(50)
+
+    # In-flight state: all buttons are disabled
+    assert btn_yes.is_disabled()
+    assert btn_no.is_disabled()
+    assert btn_cancel.is_disabled()
+
+
+def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
+    mismatch = {
+        "is_mismatch": True,
+        "detected_language": "de",
+        "expected_language": "en",
+        "detected_name": "German",
+        "expected_name": "English",
+        "text": "Erste Satz. Zweite Satz.",
+        "session_zid": "20260827005722",
+    }
+    children_args = [
+        "--seq-num", "2", "--restore", "U:\\voothi\\results\\20260827005723-erste.de.tsv",
+        "--seq-num", "3", "--restore", "U:\\voothi\\results\\20260827005724-zweite.de.tsv"
+    ]
+    children_json = json.dumps(children_args)
+    mock_spawn_script = f"""<script>
+    window.__openedTabs = [];
+    window.open = function(url, target) {{
+        window.__openedTabs.push({{ url: url, target: target }});
+        return {{}};
+    }};
+    window.fetch = function(url, options) {{
+        return Promise.resolve({{
+            ok: true,
+            status: 200,
+            json: function() {{
+                return Promise.resolve({{
+                    ok: true,
+                    data: {{
+                        html: null,
+                        children: {children_json}
+                    }}
+                }});
+            }}
+        }});
+    }};
+    </script>"""
+    html = get_modal_test_page_html(tmp_path, mismatch_info=mismatch).replace("<head>", f"<head>\n{mock_spawn_script}")
+    page.set_content(html)
+
+    page.locator("#kw-btn-lang-yes").click()
+    page.wait_for_timeout(50)
+
+    opened = page.evaluate("window.__openedTabs")
+    assert len(opened) == 2
+    assert opened[0]["url"] == "/session/render?session_zid=20260827005723&seq_num=2&bypass_lang_check=true"
+    assert opened[0]["target"] == "_blank"
+    assert opened[1]["url"] == "/session/render?session_zid=20260827005724&seq_num=3&bypass_lang_check=true"
+    assert opened[1]["target"] == "_blank"
+
