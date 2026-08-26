@@ -8844,6 +8844,7 @@ html, body {{
     font-family: inherit;
     font-size: 13px;
     font-weight: 500;
+    min-width: 110px;
     padding: 6px 12px;
     border-radius: 4px;
     border: 1px solid {section_border};
@@ -8853,6 +8854,8 @@ html, body {{
     transition: background-color 0.15s, border-color 0.15s, opacity 0.15s;
     display: inline-flex;
     align-items: center;
+    justify-content: center;
+    text-align: center;
     gap: 6px;
     user-select: none;
     -webkit-user-select: none;
@@ -8988,13 +8991,13 @@ html, body {{
   </div>
 </div>
 <div class="kw-action-toolbar" id="kw-action-toolbar">
-  <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">💾 Save (Ctrl+S)</button>
-  <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">🔄 Update</button>
-  <button type="button" id="kw-btn-retext" title="Re-translate text">📝 Re-text</button>
-  <button type="button" id="kw-btn-reword" title="Re-process selected words">🔤 Re-word</button>
-  <button type="button" id="kw-btn-export" title="Send selected rows to Anki">📦 Send to Anki</button>
-  <button type="button" id="kw-btn-hand-tool" title="Toggle Text Selection / Hand Tool (Ctrl+Shift+A)">✋ Hand Tool</button>
-  <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">🗑️ Delete</button>
+  <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
+  <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
+  <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
+  <button type="button" id="kw-btn-reword" title="Re-process selected words">Re-word</button>
+  <button type="button" id="kw-btn-export" title="Send selected rows to Anki">Send to Anki</button>
+  <button type="button" id="kw-btn-hand-tool" title="Toggle Text Selection / Hand Tool (Ctrl+Shift+A)">Hand Tool</button>
+  <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">Delete</button>
 </div>
 <div class="kw-toast-container" id="kw-toast-container"></div>
 <script id="token-map" type="application/json">
@@ -11687,9 +11690,9 @@ html, body {{
             var toast = document.createElement('div');
             toast.className = 'kw-toast kw-toast-' + type;
             
-            var icon = 'ℹ️';
+            var icon = 'i';
             if (type === 'success') icon = '✓';
-            else if (type === 'warning') icon = '⚠️';
+            else if (type === 'warning') icon = '!';
             else if (type === 'error') icon = '✕';
             
             toast.innerHTML = '<span class="kw-toast-icon">' + icon + '</span><span class="kw-toast-msg">' + escapeHtml(msg) + '</span>';

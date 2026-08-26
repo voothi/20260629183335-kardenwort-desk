@@ -57,20 +57,24 @@ window.fetch = async function(url, options) {
 def test_toolbar_markup_and_styles_rendered(tmp_path):
     html = get_desk_page_html(tmp_path)
     assert 'class="kw-action-toolbar"' in html
-    assert 'id="kw-btn-save"' in html
-    assert 'id="kw-btn-update"' in html
-    assert 'id="kw-btn-retext"' in html
-    assert 'id="kw-btn-reword"' in html
-    assert 'id="kw-btn-export"' in html
-    assert 'id="kw-btn-hand-tool"' in html
-    assert 'id="kw-btn-delete"' in html
+    assert '>Save (Ctrl+S)</button>' in html
+    assert '>Update</button>' in html
+    assert '>Re-text</button>' in html
+    assert '>Re-word</button>' in html
+    assert '>Send to Anki</button>' in html
+    assert '>Hand Tool</button>' in html
+    assert '>Delete</button>' in html
     assert 'id="kw-toast-container"' in html
+    assert 'min-width: 110px;' in html
     assert 'padding-bottom: 70px;' in html
     assert '.kw-toast' in html
     assert '.kw-toast-success' in html
     assert '.kw-toast-warning' in html
     assert '.kw-toast-error' in html
     assert '.kw-toast-info' in html
+    # Ensure no emojis in toolbar buttons
+    for emoji in ['💾', '🔄', '📝', '🔤', '📦', '✋', '🗑️']:
+        assert emoji not in html
 
 def test_toolbar_across_themes(tmp_path):
     for idx, theme in enumerate(["dark", "light", "white"]):
