@@ -3,14 +3,14 @@ import pytest
 from pathlib import Path
 import kardenwort_desk
 
-def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953"):
+def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953", seq_num=None):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     tsv_file = tmp_path / f"{zid}-test.de.tsv"
     tsv_content = (
         "# comment\n"
-        "WordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tOxford\n"
-        "Haus\tдом\t[haʊs]\tNoun\tA1\n"
-        "Baum\tдерево\t[baʊm]\tNoun\tA1\n"
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\tDas Haus\tДом\t\n"
+        "Baum\tBaum\tдерево\t1\tDas Haus\tДом\t\n"
     )
     tsv_file.write_text(tsv_content, encoding="utf-8")
 
@@ -23,6 +23,7 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953"):
         resolved_paths=resolved_paths,
         theme=theme,
         tsv_path=str(tsv_file),
+        seq_num=seq_num,
         spawn_children=False
     )
     return html
@@ -219,3 +220,30 @@ def test_hand_tool_and_delete_and_shortcuts(page, tmp_path):
     page.keyboard.press("Delete")
     assert not row0.is_visible()
     assert page.evaluate("window.isDirty()") is True
+
+
+def test_window_sequence_branding_in_web_view(page, tmp_path):
+    # 1. Test with seq_num = 1 (Master window)
+    html_seq1 = get_desk_page_html(tmp_path, zid="20260826235951", seq_num=1)
+    page.set_content(html_seq1)
+    assert page.title() == "(1) Kardenwort - de"
+    favicon = page.locator("link[rel='icon']")
+    assert favicon.get_attribute("href") == "/assets/numbers/1.ico"
+    badge = page.locator("#kw-seq-badge")
+    assert badge.is_visible()
+    assert badge.inner_text() == "#1"
+
+    # 2. Test with seq_num = 3 (Child window)
+    html_seq3 = get_desk_page_html(tmp_path, zid="20260826235953", seq_num=3)
+    page.set_content(html_seq3)
+    assert page.title() == "(3) Kardenwort - de"
+    assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/3.ico"
+    assert page.locator("#kw-seq-badge").inner_text() == "#3"
+
+    # 3. Test without seq_num (Default fallback)
+    html_default = get_desk_page_html(tmp_path, zid="20260826235950", seq_num=None)
+    page.set_content(html_default)
+    assert page.title() == "Kardenwort - de"
+    assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/1.ico"
+    assert not page.locator("#kw-seq-badge").is_visible()
+

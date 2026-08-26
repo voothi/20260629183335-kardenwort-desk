@@ -608,3 +608,39 @@ def test_controller_session_reword_frequency_sorted_parity(running_controller, t
             pass
 
 
+def test_controller_assets_numbers_ico_serving(running_controller):
+    """
+    Verify that /assets/numbers/<num>.ico serves image/x-icon and falls back gracefully.
+    """
+    server_url, server = running_controller
+
+    # 1. Fetch valid 1.ico
+    url_1 = f"{server_url}/assets/numbers/1.ico"
+    req_1 = urllib.request.Request(url_1)
+    with urllib.request.urlopen(req_1, timeout=5.0) as resp:
+        assert resp.status == 200
+        assert resp.headers.get("Content-Type") == "image/x-icon"
+        content_1 = resp.read()
+        assert len(content_1) > 0
+
+    # 2. Fetch valid 2.ico
+    url_2 = f"{server_url}/assets/numbers/2.ico"
+    req_2 = urllib.request.Request(url_2)
+    with urllib.request.urlopen(req_2, timeout=5.0) as resp:
+        assert resp.status == 200
+        assert resp.headers.get("Content-Type") == "image/x-icon"
+        content_2 = resp.read()
+        assert len(content_2) > 0
+
+    # 3. Fetch out-of-range number (falls back to 1.ico)
+    url_fallback = f"{server_url}/assets/numbers/999.ico"
+    req_fallback = urllib.request.Request(url_fallback)
+    with urllib.request.urlopen(req_fallback, timeout=5.0) as resp:
+        assert resp.status == 200
+        assert resp.headers.get("Content-Type") == "image/x-icon"
+        content_fb = resp.read()
+        assert len(content_fb) > 0
+        assert content_fb == content_1
+
+
+

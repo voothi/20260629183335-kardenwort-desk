@@ -521,6 +521,42 @@ def test_pending_stub_preservation_and_smooth_update(page, tmp_path):
     assert container.locator("[data-pending='true']").count() == 0
 
 
+def test_progressive_skeleton_auto_resolution_polling(page, tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    tsv_file = tmp_path / "20260826235959-skel.de.tsv"
+    tsv_file.write_text(
+        "# comment\n"
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\tDas Haus\tДом\t\n",
+        encoding="utf-8"
+    )
+    html_page = kardenwort_desk.run_render_flow(
+        text="Das Haus",
+        language="de",
+        zid="20260826235959",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False
+    )
+
+    # 1. Page with skeleton loader sets up polling timer
+    html_with_skeleton = html_page.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
+    )
+    page.set_content(html_with_skeleton)
+    has_timer = page.evaluate("window._kwSkeletonPollTimer !== null && window._kwSkeletonPollTimer !== undefined")
+    assert has_timer is True
+
+    # 2. Page without skeleton loader skips background polling
+    page.goto("about:blank")
+    page.set_content(html_page)
+    no_timer = page.evaluate("!window._kwSkeletonPollTimer")
+    assert no_timer is True
+
+
 def test_smooth_partial_cell_update_without_full_rerender(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)

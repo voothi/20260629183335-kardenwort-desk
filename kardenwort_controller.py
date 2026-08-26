@@ -1635,6 +1635,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
                     slug_suffix = f"-{slug}" if slug else ""
                     tsv_path = results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv"
+                    seq_num = qs.get('seq_num', [None])[0] or qs.get('seq-num', [None])[0]
                     html = run_render_flow(
                         text=source_text,
                         language=sess_lang,
@@ -1644,6 +1645,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         resolved_paths=self.server.resolved_paths,
                         theme=req_theme or 'dark',
                         tsv_path=tsv_path,
+                        seq_num=int(seq_num) if seq_num else None,
                     )
                 body = html.encode('utf-8')
                 self.send_response(200)
@@ -1929,10 +1931,45 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 req_rel = path[len('/assets/'):]
 
             target_path = (assets_dir / req_rel).resolve()
+            allowed = False
             try:
                 target_path.relative_to(assets_dir)
+                allowed = True
             except ValueError:
+                pass
+
+            if not target_path.exists() and req_rel.startswith('numbers/'):
+                ahk_dir = getattr(self.server, 'resolved_paths', {}).get('autohotkey_dir')
+                candidates = []
+                if ahk_dir:
+                    candidates.append((Path(ahk_dir) / "assets" / req_rel).resolve())
+                if desk_dir.parent:
+                    ahk_repo = next(desk_dir.parent.glob("*-autohotkey"), None)
+                    if ahk_repo:
+                        candidates.append((ahk_repo / "assets" / req_rel).resolve())
+                    candidates.append((desk_dir.parent / "20240411110510-autohotkey" / "assets" / req_rel).resolve())
+                for cand in candidates:
+                    if cand.exists() and cand.is_file():
+                        target_path = cand
+                        allowed = True
+                        break
+                # Fallback to 1.ico if not found
+                if not target_path.exists():
+                    fallback_cands = [
+                        assets_dir / "numbers" / "1.ico",
+                        (desk_dir.parent / "20240411110510-autohotkey" / "assets" / "numbers" / "1.ico").resolve() if desk_dir.parent else None,
+                    ]
+                    for fb in fallback_cands:
+                        if fb and fb.exists() and fb.is_file():
+                            target_path = fb
+                            allowed = True
+                            break
+
+            if not allowed:
                 raise StructuredError(ErrorCode.UNAUTHORIZED, "Path traversal forbidden")
+
+            if not target_path.exists() or not target_path.is_file():
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Static asset '{req_rel}' not found")
 
             self._serve_static_file(target_path)
             return

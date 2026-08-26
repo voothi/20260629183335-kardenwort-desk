@@ -147,6 +147,35 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         if not provided_token or not hmac.compare_digest(provided_token.strip(), api_key):
             raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
 
+    def _serve_static_file(self, file_path: Path):
+        ext = file_path.suffix.lower()
+        content_types = {
+            ".html": "text/html; charset=utf-8",
+            ".css": "text/css; charset=utf-8",
+            ".js": "application/javascript; charset=utf-8",
+            ".json": "application/json; charset=utf-8",
+            ".png": "image/png",
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".svg": "image/svg+xml",
+            ".ico": "image/x-icon",
+            ".sql": "text/plain; charset=utf-8",
+        }
+        content_type = content_types.get(ext, "application/octet-stream")
+
+        try:
+            with open(file_path, "rb") as f:
+                content = f.read()
+        except Exception as e:
+            raise StructuredError(ErrorCode.SERVER_ERROR, f"Failed to read file: {e}")
+
+        self.send_response(200)
+        self._send_cors_headers()
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(content)))
+        self.end_headers()
+        self.wfile.write(content)
+
     def do_GET(self):
         try:
             self._dispatch_route('GET')
@@ -171,6 +200,57 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         qs = urllib.parse.parse_qs(parsed_url.query)
+
+        # Static assets endpoint
+        if path.startswith('/assets/'):
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            desk_dir = Path(__file__).resolve().parent
+            assets_dir = (desk_dir / "assets").resolve()
+            req_rel = path[len('/assets/'):]
+
+            target_path = (assets_dir / req_rel).resolve()
+            allowed = False
+            try:
+                target_path.relative_to(assets_dir)
+                allowed = True
+            except ValueError:
+                pass
+
+            if not target_path.exists() and req_rel.startswith('numbers/'):
+                ahk_dir = getattr(self.server, 'resolved_paths', {}).get('autohotkey_dir')
+                candidates = []
+                if ahk_dir:
+                    candidates.append((Path(ahk_dir) / "assets" / req_rel).resolve())
+                if desk_dir.parent:
+                    ahk_repo = next(desk_dir.parent.glob("*-autohotkey"), None)
+                    if ahk_repo:
+                        candidates.append((ahk_repo / "assets" / req_rel).resolve())
+                    candidates.append((desk_dir.parent / "20240411110510-autohotkey" / "assets" / req_rel).resolve())
+                for cand in candidates:
+                    if cand.exists() and cand.is_file():
+                        target_path = cand
+                        allowed = True
+                        break
+                if not target_path.exists():
+                    fallback_cands = [
+                        assets_dir / "numbers" / "1.ico",
+                        (desk_dir.parent / "20240411110510-autohotkey" / "assets" / "numbers" / "1.ico").resolve() if desk_dir.parent else None,
+                    ]
+                    for fb in fallback_cands:
+                        if fb and fb.exists() and fb.is_file():
+                            target_path = fb
+                            allowed = True
+                            break
+
+            if not allowed:
+                raise StructuredError(ErrorCode.UNAUTHORIZED, "Path traversal forbidden")
+
+            if not target_path.exists() or not target_path.is_file():
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Static asset '{req_rel}' not found")
+
+            self._serve_static_file(target_path)
+            return
 
         # Health endpoint
         if path == '/api/v1/health':

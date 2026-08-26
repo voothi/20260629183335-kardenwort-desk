@@ -8410,6 +8410,8 @@ html, body {{
 <head>
 <meta charset="utf-8">
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
+<title>{page_title}</title>
+<link rel="icon" type="image/x-icon" href="{favicon_href}">
 <style id="hl-mvp-style">
   
  
@@ -8888,6 +8890,27 @@ html, body {{
     border-color: {flipped_border};
     color: {flipped_text};
   }
+  .kw-seq-badge {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 700;
+    padding: 6px 12px;
+    border-radius: 4px;
+    border: 1px solid {section_border};
+    background: {input_bg};
+    color: {text_muted};
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  body.theme-light .kw-seq-badge,
+  body.theme-white .kw-seq-badge {
+    background: #e1e4e8;
+    color: #24292f;
+    border: 1px solid #d0d7de;
+  }
   /* In-Page Toast Notifications */
   .kw-toast-container {
     position: fixed;
@@ -8991,6 +9014,7 @@ html, body {{
   </div>
 </div>
 <div class="kw-action-toolbar" id="kw-action-toolbar">
+  {seq_badge_html}
   <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
   <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
   <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
@@ -9797,25 +9821,113 @@ html, body {{
             window.AppState.applyDeltas(data);
         };
 
+        // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling)
         try {
             var sessZidEl = document.getElementById('session-zid');
             var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
+            if (!curZid) {
+                var params = new URLSearchParams(window.location.search);
+                curZid = params.get('session_zid') || params.get('zid') || "";
+            }
+
+            var hasSkeletons = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0;
+
+            // 1. SSE Real-time Listener
             if (curZid && typeof EventSource !== 'undefined') {
-                var sseUrl = "http://127.0.0.1:8080/events?zid=" + encodeURIComponent(curZid);
-                var evtSource = new EventSource(sseUrl);
-                evtSource.onmessage = function(e) {
-                    try {
-                        var parsed = JSON.parse(e.data);
-                        if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage)) {
-                            window.receiveUpdate(parsed);
+                try {
+                    var sseUrl = "/events?zid=" + encodeURIComponent(curZid);
+                    var evtSource = new EventSource(sseUrl);
+                    evtSource.onmessage = function(e) {
+                        try {
+                            var parsed = JSON.parse(e.data);
+                            if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage || parsed.is_finished)) {
+                                window.receiveUpdate(parsed);
+                                var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                                if (remaining === 0 || parsed.is_finished || parsed.stage === 'finished') {
+                                    try { evtSource.close(); } catch(err) {}
+                                }
+                            }
+                        } catch(err) {}
+                    };
+                } catch(sseErr) {}
+            }
+
+            // 2. Automated watchdog polling when skeleton loaders are present
+            if (hasSkeletons && curZid) {
+                var startTime = Date.now();
+                var maxBudgetMs = 15000; // 15-second watchdog budget
+                var pollIntervalMs = 500;
+                var isPolling = false;
+                var resolved = false;
+
+                var pollSessionStatus = function() {
+                    if (resolved || (Date.now() - startTime > maxBudgetMs)) {
+                        if (window._kwSkeletonPollTimer) {
+                            clearInterval(window._kwSkeletonPollTimer);
+                            window._kwSkeletonPollTimer = null;
                         }
-                    } catch(err) {}
+                        return;
+                    }
+                    if (isPolling) return;
+                    isPolling = true;
+
+                    var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                    fetch(statusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                        .then(function(res) {
+                            if (res.ok) return res.json();
+                            throw new Error("status endpoint error");
+                        })
+                        .then(function(data) {
+                            isPolling = false;
+                            if (data && (data.is_finished || data.stage === 'finished' || (data.status && data.status.is_finished))) {
+                                resolved = true;
+                                if (window._kwSkeletonPollTimer) {
+                                    clearInterval(window._kwSkeletonPollTimer);
+                                    window._kwSkeletonPollTimer = null;
+                                }
+                                window.location.reload();
+                            } else if (data && data.rows) {
+                                if (window.receiveUpdate) {
+                                    window.receiveUpdate(data);
+                                }
+                                var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                                if (remaining === 0) {
+                                    resolved = true;
+                                    if (window._kwSkeletonPollTimer) {
+                                        clearInterval(window._kwSkeletonPollTimer);
+                                        window._kwSkeletonPollTimer = null;
+                                    }
+                                }
+                            }
+                        })
+                        .catch(function() {
+                            var renderCheckUrl = "/?session_zid=" + encodeURIComponent(curZid);
+                            fetch(renderCheckUrl, { method: 'GET' })
+                                .then(function(res) { return res.text(); })
+                                .then(function(htmlText) {
+                                    isPolling = false;
+                                    if (htmlText && htmlText.indexOf('skeleton-loader') === -1) {
+                                        resolved = true;
+                                        if (window._kwSkeletonPollTimer) {
+                                            clearInterval(window._kwSkeletonPollTimer);
+                                            window._kwSkeletonPollTimer = null;
+                                        }
+                                        window.location.reload();
+                                    }
+                                })
+                                .catch(function() {
+                                    isPolling = false;
+                                });
+                        });
                 };
+
+                window._kwSkeletonPollTimer = setInterval(pollSessionStatus, pollIntervalMs);
+                setTimeout(pollSessionStatus, 200);
             }
         } catch(e) {}
 
         window.startPolling = function() {
-            // Polling fallback when SSE is not available
+            // Manual trigger fallback if needed
         };
 
         var workerLaunched = false;
@@ -12080,6 +12192,25 @@ setTimeout(function() {{
     html_page = html_page.replace("{audio_rmb_chain_mode}", f'"{rmb_chain_mode_val}"')
     html_page = html_page.replace("{audio_anki_tts_cli}", anki_tts_cli_path.replace("\\", "\\\\"))
     html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))
+
+    # Format Title, Favicon, and Sequence Badge
+    if seq_num is not None and str(seq_num).strip():
+        try:
+            seq_int = int(seq_num)
+        except (ValueError, TypeError):
+            seq_int = 1
+        page_title = f"({seq_int}) Kardenwort - {language}"
+        favicon_num = seq_int if 1 <= seq_int <= 99 else 1
+        favicon_href = f"/assets/numbers/{favicon_num}.ico"
+        seq_badge_html = f'<span class="kw-seq-badge" id="kw-seq-badge">#{seq_int}</span>'
+    else:
+        page_title = f"Kardenwort - {language}"
+        favicon_href = "/assets/numbers/1.ico"
+        seq_badge_html = ""
+
+    html_page = html_page.replace("{page_title}", page_title)
+    html_page = html_page.replace("{favicon_href}", favicon_href)
+    html_page = html_page.replace("{seq_badge_html}", seq_badge_html)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if eff_mode == "multi" else "normal")
     html_page = html_page.replace("{selected_col_name}", selected_col_name)
