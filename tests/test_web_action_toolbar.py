@@ -268,4 +268,36 @@ def test_ahk_host_toolbar_suppression(page, tmp_path):
     assert page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
     assert not page.locator("#kw-action-toolbar").is_visible()
 
+def test_mshtml_activex_environment_without_fetch(page, tmp_path):
+    page_errors = []
+    page.on("pageerror", lambda err: page_errors.append(str(err)))
+
+    # Simulate MSHTML/Trident environment: document.documentMode = 11, window.ActiveXObject defined, window.fetch deleted
+    mock_mshtml_env = """<script>
+document.documentMode = 11;
+window.ActiveXObject = function() {};
+delete window.fetch;
+delete window.EventSource;
+</script>"""
+    html = get_desk_page_html(tmp_path, zid="20260827003912", seq_num=2)
+    html_mshtml = html.replace("<head>", f"<head>\n{mock_mshtml_env}")
+
+    page.set_content(html_mshtml)
+
+    # Verify no unhandled JavaScript errors during load/watchdog setup
+    assert len(page_errors) == 0
+
+    # Verify toolbar is suppressed and kw-ahk-native-host class is present
+    assert page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
+    assert not page.locator("#kw-action-toolbar").is_visible()
+
+    # Verify action handlers execute safely with fallback toasts without throwing script errors
+    page.evaluate("window.onSaveClick && window.onSaveClick()")
+    page.evaluate("window.onRetextClick && window.onRetextClick()")
+    page.evaluate("window.onRewordClick && window.onRewordClick()")
+    page.evaluate("window.onSendToAnkiClick && window.onSendToAnkiClick()")
+
+    assert len(page_errors) == 0
+
+
 

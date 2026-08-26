@@ -9050,8 +9050,14 @@ html, body {{
 
 <script type="text/javascript">
 (function() {
+    function isNativeAhkHost() {
+        return window.location.protocol === 'file:' ||
+               typeof window.ahkCall !== 'undefined' ||
+               (window.external && typeof window.external.ahkCall !== 'undefined') ||
+               !!(document.documentMode || window.ActiveXObject);
+    }
     function checkAhkHost() {
-        if (window.ahkCall || (window.external && typeof window.external.ahkCall !== 'undefined')) {
+        if (isNativeAhkHost()) {
             if (document.body && document.body.classList) {
                 document.body.classList.add('kw-ahk-native-host');
             }
@@ -9842,6 +9848,7 @@ html, body {{
 
         // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling)
         try {
+            var isWebMode = (window.location.protocol !== 'file:');
             var sessZidEl = document.getElementById('session-zid');
             var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
             if (!curZid) {
@@ -9851,8 +9858,8 @@ html, body {{
 
             var hasSkeletons = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0;
 
-            // 1. SSE Real-time Listener
-            if (curZid && typeof EventSource !== 'undefined') {
+            // 1. SSE Real-time Listener (only in web mode with EventSource support)
+            if (isWebMode && curZid && typeof EventSource !== 'undefined') {
                 try {
                     var sseUrl = "/events?zid=" + encodeURIComponent(curZid);
                     var evtSource = new EventSource(sseUrl);
@@ -9871,8 +9878,8 @@ html, body {{
                 } catch(sseErr) {}
             }
 
-            // 2. Automated watchdog polling when skeleton loaders are present
-            if (hasSkeletons && curZid) {
+            // 2. Automated watchdog polling when skeleton loaders are present (only in web mode with fetch support)
+            if (isWebMode && typeof fetch !== 'undefined' && hasSkeletons && curZid) {
                 var startTime = Date.now();
                 var maxBudgetMs = 15000; // 15-second watchdog budget
                 var pollIntervalMs = 500;
@@ -11864,6 +11871,10 @@ html, body {{
                 window.showToast("No changes to save.", "info");
                 return;
             }
+            if (typeof fetch === 'undefined') {
+                window.showToast("Network save unavailable in this environment.", "warning");
+                return;
+            }
             var sZid = getSessionZid();
             if (!sZid) {
                 window.showToast("Session ZID missing, cannot save.", "error");
@@ -11912,6 +11923,10 @@ html, body {{
 
         window.onRetextClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
+            if (typeof fetch === 'undefined') {
+                window.showToast("Retext unavailable in this environment.", "warning");
+                return;
+            }
             var sZid = getSessionZid();
             if (!sZid) {
                 window.showToast("Session ZID missing.", "error");
@@ -11946,6 +11961,10 @@ html, body {{
             var rows = getSelectedRowsArray();
             if (!rows.length) {
                 window.showToast("Please select rows to re-word.", "warning");
+                return;
+            }
+            if (typeof fetch === 'undefined') {
+                window.showToast("Reword unavailable in this environment.", "warning");
                 return;
             }
             var sZid = getSessionZid();
@@ -11983,6 +12002,10 @@ html, body {{
             var rows = getSelectedRowsArray();
             if (!rows.length) {
                 window.showToast("Please select rows to export.", "warning");
+                return;
+            }
+            if (typeof fetch === 'undefined') {
+                window.showToast("Export unavailable in this environment.", "warning");
                 return;
             }
             var sZid = getSessionZid();
