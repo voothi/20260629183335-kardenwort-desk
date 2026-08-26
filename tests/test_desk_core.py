@@ -3457,6 +3457,53 @@ def test_multi_sentence_lemma_inflection_merging_with_combine_source_words():
     assert "dem" in inflected_tokens or "im" in inflected_tokens
 
 
+def test_suspension_hyphens_deduplicate_and_render_clean_lemmas():
+    """
+    Verify that deduplicate_rows and deduplicate_rows_by_lemma emit clean unhyphenated lemmas
+    for suspension hyphen tokens (e.g. 'Schulungs-', 'pre-') while preserving raw inflected forms.
+    """
+    config = configparser.ConfigParser()
+    config.add_section(desk.SEC_SETTINGS)
+    config.set(desk.SEC_SETTINGS, "combine_source_words", "true")
+    config.set(desk.SEC_SETTINGS, "filter_inflected_by_window", "false")
+
+    # 1. Test deduplicate_rows with suspension hyphen token
+    data_rows = [
+        ["Schulungs-", "Schulungs-", "NOUN"],
+        ["pre-", "pre-", "ADJ"],
+    ]
+
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config
+    )
+
+    for r in deduped:
+        assert not r[1].startswith("-")
+        assert not r[1].endswith("-")
+
+    schulung_row = next(r for r in deduped if r[1] == "Schulungs")
+    assert "Schulungs-" in schulung_row[0]
+
+    pre_row = next(r for r in deduped if r[1] == "pre")
+    assert "pre-" in pre_row[0]
+
+    # 2. Test deduplicate_rows_by_lemma
+    headers = ["WordSource", "WordSourceInflectedForm", "POS"]
+    desk_rows = [
+        ["Schulungs-", "Schulungs-", "NOUN"],
+        ["-basiert", "-basiert", "ADJ"],
+    ]
+    deduped_by_lemma = desk.deduplicate_rows_by_lemma(desk_rows, headers)
+    for r in deduped_by_lemma:
+        assert not r[0].startswith("-")
+        assert not r[0].endswith("-")
+    assert deduped_by_lemma[0][0] == "Schulungs"
+    assert deduped_by_lemma[0][1] == "Schulungs-"
+    assert deduped_by_lemma[1][0] == "basiert"
+    assert deduped_by_lemma[1][1] == "-basiert"
+
+
+
 
 
 
