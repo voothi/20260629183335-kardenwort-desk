@@ -3364,6 +3364,100 @@ def test_translate_source_text_single_mode_long_text_sorting(monkeypatch):
     assert 0 in res
 
 
+def test_prepare_lookup_tsv_multi_sentence_combine_source_words_honored(monkeypatch, tmp_path):
+    """
+    Verify that in multi-sentence mode with deduplication_scope='sentence',
+    when combine_source_words=True, kardenwort.py receives both
+    --deduplication-scope sentence and --combine-source-words.
+    """
+    captured_cmd = None
+
+    def mock_run(cmd, *args, **kwargs):
+        nonlocal captured_cmd
+        captured_cmd = cmd
+        output_file = Path(cmd[cmd.index("--output-file") + 1])
+        output_file.write_text("SentenceSourceIndex\tWordSource\tWordSourceInflectedForm\n", encoding="utf-8")
+        return type("MockProcess", (), {"returncode": 0, "stdout": "", "stderr": ""})()
+
+    monkeypatch.setattr("subprocess.run", mock_run)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.add_section("sentences_mode")
+    config.add_section("languages")
+    config.add_section("pipeline")
+    config.set("settings", "combine_source_words", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "deduplication_scope", "sentence")
+    config.set("languages", "de_lemma_index", "data/de_lemma_index.json")
+    config.set("languages", "de_lemma_override", "data/de_lemma_override.json")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "kardenwort_python": "python",
+        "anki_mapping_file": tmp_path / "anki_mapping.ini",
+    }
+    (tmp_path / "data").mkdir(exist_ok=True)
+    (tmp_path / "data" / "de_lemma_index.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "data" / "de_lemma_override.json").write_text("{}", encoding="utf-8")
+    (tmp_path / "anki_mapping.ini").write_text("""[fields]
+WordSource =
+WordSourceInflectedForm =
+SentenceSourceIndex =
+
+[fields_mapping.word]
+WordSource = WordSource
+WordSourceInflectedForm = WordSourceInflectedForm
+SentenceSourceIndex = SentenceSourceIndex
+
+[desk_columns]
+""", encoding="utf-8")
+
+    desk.prepare_lookup_tsv(
+        "Ich finde die richtigen Fachkräfte. Spezialisiert auf Festanstellungen im Raum Bayern.", "de", "ru",
+        config, resolved_paths, "20260826184941",
+        ttl_seconds=0, cache_key="test_multi_combine.tsv", text_mode="multi"
+    )
+
+    assert captured_cmd is not None
+    assert "--deduplication-scope" in captured_cmd
+    scope_idx = captured_cmd.index("--deduplication-scope")
+    assert captured_cmd[scope_idx + 1] == "sentence"
+    assert "--combine-source-words" in captured_cmd
+
+
+def test_multi_sentence_lemma_inflection_merging_with_combine_source_words():
+    """
+    Verify that multi-sentence extraction rows sharing the same lemma merge their
+    inflected forms into a single table row when combine_source_words is true.
+    """
+    config = configparser.ConfigParser()
+    config.add_section(desk.SEC_SETTINGS)
+    config.set(desk.SEC_SETTINGS, "combine_source_words", "true")
+    config.set(desk.SEC_SETTINGS, "filter_inflected_by_window", "false")
+
+    # Simulating rows extracted from: "die richtigen ... im Raum"
+    # Row 1: inflected='die', lemma='der'
+    # Row 2: inflected='dem, im', lemma='der'
+    # Row 3: inflected='richtigen', lemma='richtig'
+    data_rows = [
+        ["die", "der", "ART"],
+        ["dem, im", "der", "ART"],
+        ["richtigen", "richtig", "ADJ"],
+    ]
+
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config
+    )
+
+    assert len(deduped) == 2
+    der_row = next(r for r in deduped if r[1] == "der")
+    inflected_tokens = set(der_row[0].split(", "))
+    assert "die" in inflected_tokens
+    assert "dem" in inflected_tokens or "im" in inflected_tokens
+
+
+
 
 
 

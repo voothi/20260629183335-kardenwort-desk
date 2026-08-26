@@ -224,8 +224,9 @@ def test_batch_merge_config_matrix_resolution(params):
 @pytest.mark.parametrize("dedup_scope", ["sentence", "global", "none"])
 def test_sentence_deduplication_scope_override_invariant(combine_flag, dedup_scope):
     """
-    Verify that when text_mode = 'multi', sentences_mode.enabled = True, and dedup_scope = 'sentence',
-    the invariant is enforced that source word combining behavior is disabled or cleanly overridden.
+    Verify that when text_mode = 'multi' and sentences_mode.enabled = True,
+    the invariant is enforced that source word combining behavior is preserved from config
+    across all deduplication scopes including sentence-local.
     """
     cp = configparser.ConfigParser()
     cp.add_section(SEC_SETTINGS)
@@ -234,19 +235,11 @@ def test_sentence_deduplication_scope_override_invariant(combine_flag, dedup_sco
     cp.set(SEC_SENTENCES_MODE, "enabled", "true")
     cp.set(SEC_SENTENCES_MODE, "deduplication_scope", dedup_scope)
 
-    text_mode = "multi"
+    ctx = ExecutionContext.from_config("multi", cp)
+    workflow_res = ModeDispatcher.dispatch(ctx)
 
-    combine_source_words = cp.getboolean(SEC_SETTINGS, "combine_source_words", fallback=False)
-    sentences_enabled = cp.getboolean(SEC_SENTENCES_MODE, "enabled", fallback=False)
-    if text_mode == "multi" and sentences_enabled:
-        scope = cp.get(SEC_SENTENCES_MODE, "deduplication_scope", fallback="sentence").strip().lower()
-        if scope == "sentence":
-            combine_source_words = False
-
-    if dedup_scope == "sentence":
-        assert combine_source_words is False
-    else:
-        assert combine_source_words is combine_flag
+    assert ctx.combine_source_words is combine_flag
+    assert workflow_res.combine_source_words is combine_flag
 
 
 @pytest.mark.parametrize("flags", generate_boolean_matrix())
@@ -381,7 +374,7 @@ def test_execution_context_matrix_resolution(params):
     if params["text_mode"] == "multi" and params["sentences_enabled"]:
         if params["dedup_scope"] == "sentence":
             assert ctx.mode == OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
-            assert ctx.combine_source_words is False
+            assert ctx.combine_source_words == params["combine_source_words"]
         else:
             assert ctx.mode == OperationalMode.MULTI_GLOBAL_COMBINED
             assert ctx.combine_source_words == params["combine_source_words"]
@@ -470,8 +463,7 @@ def test_deterministic_strategy_dispatch_routing(params):
     elif ctx.mode == OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP:
         assert isinstance(strategy, SentenceLocalDedupStrategy)
         assert result.dedup_scope == "sentence"
-        # Enforce uncombined source words in local sentence deduplication mode
-        assert result.combine_source_words is False
+        assert result.combine_source_words == params["combine_source_words"]
     elif ctx.mode == OperationalMode.MULTI_GLOBAL_COMBINED:
         assert isinstance(strategy, MultiGlobalCombinedStrategy)
         assert result.dedup_scope == "global"
@@ -1022,7 +1014,7 @@ def test_execution_context_will_split_resolution(will_split, dedup_scope, senten
         if dedup_scope == "sentence":
             assert ctx.mode == OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
             assert workflow_res.dedup_scope == "sentence"
-            assert workflow_res.combine_source_words is False
+            assert workflow_res.combine_source_words is True
         else:
             assert ctx.mode == OperationalMode.MULTI_GLOBAL_COMBINED
             assert workflow_res.dedup_scope == "global"

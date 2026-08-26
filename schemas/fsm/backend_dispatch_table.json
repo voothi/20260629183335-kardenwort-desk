@@ -14,9 +14,9 @@
     {
       "id": "MULTI_SENTENCE_LOCAL_DEDUP",
       "class": "SentenceLocalDedupStrategy",
-      "description": "Multi-sentence pipeline with per-sentence local deduplication. Each sentence boundary creates an isolated deduplication scope. combine_source_words is always forced to false in this mode.",
+      "description": "Multi-sentence pipeline with per-sentence local deduplication. Each sentence boundary creates an isolated deduplication scope. combine_source_words is preserved from config.",
       "dedup_scope": "sentence",
-      "combine_source_words": "FORCE_FALSE"
+      "combine_source_words": "PRESERVE_CONFIG"
     },
     {
       "id": "MULTI_GLOBAL_COMBINED",

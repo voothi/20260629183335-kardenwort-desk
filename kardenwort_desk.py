@@ -1379,7 +1379,6 @@ class ExecutionContext:
         if is_multi_sentence:
             if dedup_scope == 'sentence':
                 mode = OperationalMode.MULTI_SENTENCE_LOCAL_DEDUP
-                combine_source_words = False
             else:
                 mode = OperationalMode.MULTI_GLOBAL_COMBINED
         else:
@@ -1425,7 +1424,7 @@ class SentenceLocalDedupStrategy(PipelineStrategy):
         return OperationalWorkflowResult(
             mode=self.mode,
             dedup_scope="sentence",
-            combine_source_words=False,
+            combine_source_words=exec_ctx.combine_source_words,
         )
 
 
