@@ -223,20 +223,20 @@ def test_hand_tool_and_delete_and_shortcuts(page, tmp_path):
 
 
 def test_window_sequence_branding_in_web_view(page, tmp_path):
-    # 1. Test with seq_num = 1 (Master window)
+    # 1. Test with seq_num = 1 (Master window) - clean title without bracketed sequence prefix
     html_seq1 = get_desk_page_html(tmp_path, zid="20260826235951", seq_num=1)
     page.set_content(html_seq1)
-    assert page.title() == "(1) Kardenwort - de"
+    assert page.title() == "Kardenwort - de"
     favicon = page.locator("link[rel='icon']")
     assert favicon.get_attribute("href") == "/assets/numbers/1.ico"
     badge = page.locator("#kw-seq-badge")
     assert badge.is_visible()
     assert badge.inner_text() == "#1"
 
-    # 2. Test with seq_num = 3 (Child window)
+    # 2. Test with seq_num = 3 (Child window) - clean title, sequence icon + badge preserved
     html_seq3 = get_desk_page_html(tmp_path, zid="20260826235953", seq_num=3)
     page.set_content(html_seq3)
-    assert page.title() == "(3) Kardenwort - de"
+    assert page.title() == "Kardenwort - de"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/3.ico"
     assert page.locator("#kw-seq-badge").inner_text() == "#3"
 
@@ -246,4 +246,26 @@ def test_window_sequence_branding_in_web_view(page, tmp_path):
     assert page.title() == "Kardenwort - de"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/1.ico"
     assert not page.locator("#kw-seq-badge").is_visible()
+
+def test_ahk_host_toolbar_suppression(page, tmp_path):
+    # 1. Standard web browser mode: toolbar is visible, kw-ahk-native-host is absent
+    html = get_desk_page_html(tmp_path, zid="20260826235955", seq_num=1)
+    page.set_content(html)
+    assert not page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
+    assert page.locator("#kw-action-toolbar").is_visible()
+
+    # 2. AutoHotkey ActiveX host mode (window.ahkCall present): toolbar hidden, class added
+    mock_ahk_script = "<script>window.ahkCall = function(cmd, arg) {};</script>"
+    html_ahk = html.replace("<head>", f"<head>\n{mock_ahk_script}")
+    page.set_content(html_ahk)
+    assert page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
+    assert not page.locator("#kw-action-toolbar").is_visible()
+
+    # 3. AutoHotkey external host mode (window.external.ahkCall present): toolbar hidden
+    mock_ext_script = "<script>window.external = { ahkCall: function(cmd, arg) {} };</script>"
+    html_ext = html.replace("<head>", f"<head>\n{mock_ext_script}")
+    page.set_content(html_ext)
+    assert page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
+    assert not page.locator("#kw-action-toolbar").is_visible()
+
 

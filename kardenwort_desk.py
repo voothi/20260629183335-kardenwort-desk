@@ -8842,6 +8842,15 @@ html, body {{
     z-index: 1000;
     box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
   }
+  body.kw-ahk-native-host {
+    padding-bottom: 0px !important;
+  }
+  body.kw-ahk-native-host #kw-action-toolbar {
+    display: none !important;
+  }
+  body.kw-ahk-native-host .container {
+    padding-bottom: 15px !important;
+  }
   .kw-action-toolbar button {
     font-family: inherit;
     font-size: 13px;
@@ -9041,6 +9050,15 @@ html, body {{
 
 <script type="text/javascript">
 (function() {
+    function checkAhkHost() {
+        if (window.ahkCall || (window.external && typeof window.external.ahkCall !== 'undefined')) {
+            if (document.body && document.body.classList) {
+                document.body.classList.add('kw-ahk-native-host');
+            }
+        }
+    }
+    checkAhkHost();
+
     function addEvent(el, type, fn) {
         if (el.addEventListener) {
             el.addEventListener(type, fn, false);
@@ -9508,6 +9526,7 @@ html, body {{
     function init() {
         if (isInitialized) return;
         isInitialized = true;
+        checkAhkHost();
         var tableRows = [];
         var selectedRowIdsMap = {};
         var initialHighlights = {};
@@ -12194,17 +12213,16 @@ setTimeout(function() {{
     html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))
 
     # Format Title, Favicon, and Sequence Badge
+    page_title = f"Kardenwort - {language}" + (" (multi)" if (eff_mode == "multi" or text_mode == "multi") else "")
     if seq_num is not None and str(seq_num).strip():
         try:
             seq_int = int(seq_num)
         except (ValueError, TypeError):
             seq_int = 1
-        page_title = f"({seq_int}) Kardenwort - {language}"
         favicon_num = seq_int if 1 <= seq_int <= 99 else 1
         favicon_href = f"/assets/numbers/{favicon_num}.ico"
         seq_badge_html = f'<span class="kw-seq-badge" id="kw-seq-badge">#{seq_int}</span>'
     else:
-        page_title = f"Kardenwort - {language}"
         favicon_href = "/assets/numbers/1.ico"
         seq_badge_html = ""
 
