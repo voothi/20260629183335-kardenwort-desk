@@ -3928,10 +3928,17 @@ def deduplicate_rows_by_lemma(
     ordered_entries = []
     grouped_rows: Dict[str, List[List[str]]] = {}
     for row in data_rows:
-        lemma_val = row[col_lemma].strip().lower() if len(row) > col_lemma else ""
+        raw_lemma = row[col_lemma].strip() if len(row) > col_lemma else ""
+        if raw_lemma and re.match(r'^\d{14}-', raw_lemma):
+            raw_lemma = re.sub(r'^\d{14}-', '', raw_lemma)
+        clean_lemma = raw_lemma.strip('-')
+        lemma_val = clean_lemma.lower()
         if not lemma_val:
             ordered_entries.append(('row', row))
             continue
+        if len(row) > col_lemma and row[col_lemma].strip() != clean_lemma:
+            row = list(row)
+            row[col_lemma] = clean_lemma
         if lemma_val not in grouped_rows:
             grouped_rows[lemma_val] = []
             ordered_entries.append(('lemma', lemma_val))
@@ -6704,6 +6711,9 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             if re.match(r'^\d{14}-', row[col_word_source]):
                 row = list(row)
                 row[col_word_source] = re.sub(r'^\d{14}-', '', row[col_word_source])
+            if row[col_word_source].strip().startswith('-') or row[col_word_source].strip().endswith('-'):
+                row = list(row)
+                row[col_word_source] = row[col_word_source].strip().strip('-')
             w = row[col_word_source].strip().lower()
             if w in POSSESSIVE_DISCARD_TOKENS:
                 continue
