@@ -8440,6 +8440,7 @@ html, body {{
     color: {text_color};
     margin: 0;
     padding: 0;
+    padding-bottom: 60px;
     font-size: 14px;
     line-height: 1.5;
     zoom: {zoom_level};
@@ -8456,6 +8457,7 @@ html, body {{
   }
   .container {
     padding: 16px;
+    padding-bottom: 70px;
     display: inline-block;
     min-width: 100%;
   }
@@ -8822,6 +8824,146 @@ html, body {{
   td[data-col="goethe"] {
     color: {level_goethe_color};
   }
+  /* Sticky Action Toolbar */
+  .kw-action-toolbar {
+    position: fixed;
+    bottom: 0;
+    left: 0;
+    right: 0;
+    background: {section_bg};
+    border-top: 1px solid {section_border};
+    padding: 8px 16px;
+    display: flex;
+    gap: 8px;
+    justify-content: center;
+    align-items: center;
+    z-index: 1000;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+  }
+  .kw-action-toolbar button {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 12px;
+    border-radius: 4px;
+    border: 1px solid {section_border};
+    background: {input_bg};
+    color: {text_color};
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s, opacity 0.15s;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .kw-action-toolbar button:hover:not(:disabled) {
+    background: {row_hover};
+    border-color: {text_muted};
+  }
+  .kw-action-toolbar button:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+  }
+  .kw-action-toolbar button.btn-primary {
+    background: #1f6feb;
+    border-color: #388bfd;
+    color: #ffffff;
+  }
+  .kw-action-toolbar button.btn-primary:hover:not(:disabled) {
+    background: #388bfd;
+  }
+  .kw-action-toolbar button.btn-danger {
+    color: #ff7b72;
+  }
+  .kw-action-toolbar button.btn-danger:hover:not(:disabled) {
+    background: rgba(248, 81, 73, 0.15);
+    border-color: #f85149;
+  }
+  .kw-action-toolbar button.active {
+    background: {flipped_bg};
+    border-color: {flipped_border};
+    color: {flipped_text};
+  }
+  /* In-Page Toast Notifications */
+  .kw-toast-container {
+    position: fixed;
+    bottom: 60px;
+    right: 20px;
+    z-index: 2000;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+    pointer-events: none;
+  }
+  .kw-toast {
+    pointer-events: auto;
+    min-width: 200px;
+    max-width: 380px;
+    padding: 10px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    line-height: 1.4;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    animation: kwToastIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+    transition: opacity 0.25s ease, transform 0.25s ease;
+    cursor: pointer;
+  }
+  @keyframes kwToastIn {
+    from { opacity: 0; transform: translateY(10px) scale(0.95); }
+    to { opacity: 1; transform: translateY(0) scale(1); }
+  }
+  .kw-toast.kw-toast-hiding {
+    opacity: 0;
+    transform: translateY(10px) scale(0.95);
+  }
+  .kw-toast-info {
+    background: #1f242c;
+    color: #e3e6eb;
+    border: 1px solid #388bfd;
+  }
+  .kw-toast-success {
+    background: #1a2f23;
+    color: #56d364;
+    border: 1px solid #2ea043;
+  }
+  .kw-toast-warning {
+    background: #332512;
+    color: #e3b341;
+    border: 1px solid #d29922;
+  }
+  .kw-toast-error {
+    background: #341a1c;
+    color: #f85149;
+    border: 1px solid #da3633;
+  }
+  body.theme-light .kw-toast-info,
+  body.theme-white .kw-toast-info {
+    background: #ddf4ff;
+    color: #0969da;
+    border: 1px solid #54aeff;
+  }
+  body.theme-light .kw-toast-success,
+  body.theme-white .kw-toast-success {
+    background: #dafbe1;
+    color: #1a7f37;
+    border: 1px solid #4ac26b;
+  }
+  body.theme-light .kw-toast-warning,
+  body.theme-white .kw-toast-warning {
+    background: #fff8c5;
+    color: #9a6700;
+    border: 1px solid #d4a72c;
+  }
+  body.theme-light .kw-toast-error,
+  body.theme-white .kw-toast-error {
+    background: #ffebe9;
+    color: #cf222e;
+    border: 1px solid #ff8182;
+  }
 </style>
 </head>
 <body class="{theme_class}">
@@ -8845,6 +8987,16 @@ html, body {{
     </table>
   </div>
 </div>
+<div class="kw-action-toolbar" id="kw-action-toolbar">
+  <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">💾 Save (Ctrl+S)</button>
+  <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">🔄 Update</button>
+  <button type="button" id="kw-btn-retext" title="Re-translate text">📝 Re-text</button>
+  <button type="button" id="kw-btn-reword" title="Re-process selected words">🔤 Re-word</button>
+  <button type="button" id="kw-btn-export" title="Send selected rows to Anki">📦 Send to Anki</button>
+  <button type="button" id="kw-btn-hand-tool" title="Toggle Text Selection / Hand Tool (Ctrl+Shift+A)">✋ Hand Tool</button>
+  <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">🗑️ Delete</button>
+</div>
+<div class="kw-toast-container" id="kw-toast-container"></div>
 <script id="token-map" type="application/json">
 {token_manifest}
 </script>
@@ -11383,6 +11535,8 @@ html, body {{
                 }
             }
             
+            if (typeof updateToolbarState === 'function') updateToolbarState();
+
             // Force MSHTML repaint/reflow after undo/redo
             if (window.forceRepaint) window.forceRepaint();
         }
@@ -11437,6 +11591,7 @@ html, body {{
                 } catch (e) {
                 }
             }
+            if (typeof updateToolbarState === 'function') updateToolbarState();
         };
         
         window.isDirty = function() {
@@ -11516,6 +11671,302 @@ html, body {{
             } catch(e) {}
         };
         
+        function updateToolbarState() {
+            var saveBtn = document.getElementById('kw-btn-save');
+            if (saveBtn) {
+                saveBtn.disabled = !window.isDirty();
+            }
+        }
+        window.updateToolbarState = updateToolbarState;
+
+        window.showToast = function(msg, type, durationMs) {
+            type = type || 'info';
+            durationMs = durationMs || 3000;
+            var container = document.getElementById('kw-toast-container');
+            if (!container) return;
+            var toast = document.createElement('div');
+            toast.className = 'kw-toast kw-toast-' + type;
+            
+            var icon = 'ℹ️';
+            if (type === 'success') icon = '✓';
+            else if (type === 'warning') icon = '⚠️';
+            else if (type === 'error') icon = '✕';
+            
+            toast.innerHTML = '<span class="kw-toast-icon">' + icon + '</span><span class="kw-toast-msg">' + escapeHtml(msg) + '</span>';
+            
+            function dismiss() {
+                if (toast.classList.contains('kw-toast-hiding')) return;
+                toast.classList.add('kw-toast-hiding');
+                setTimeout(function() {
+                    if (toast.parentNode) toast.parentNode.removeChild(toast);
+                }, 250);
+            }
+            
+            toast.onclick = dismiss;
+            container.appendChild(toast);
+            setTimeout(dismiss, durationMs);
+        };
+
+        function getSessionZid() {
+            var el = document.getElementById('session-zid');
+            var zidVal = el ? (el.textContent || el.innerText || "").trim() : "";
+            if (!zidVal) {
+                try {
+                    var urlParams = new URLSearchParams(window.location.search);
+                    zidVal = urlParams.get('zid') || urlParams.get('session_zid') || "";
+                } catch(e) {}
+            }
+            return zidVal;
+        }
+
+        function getSessionLang() {
+            var el = document.getElementById('session-lang');
+            return el ? (el.textContent || el.innerText || "en").trim() : "en";
+        }
+
+        window.onSaveClick = function() {
+            if (window.commitActiveEdit) window.commitActiveEdit();
+            if (!window.isDirty()) {
+                window.showToast("No changes to save.", "info");
+                return;
+            }
+            var sZid = getSessionZid();
+            if (!sZid) {
+                window.showToast("Session ZID missing, cannot save.", "error");
+                return;
+            }
+            var deltasJson = [];
+            try {
+                deltasJson = JSON.parse(window.getDeltas());
+            } catch(e) {}
+            
+            var saveBtn = document.getElementById('kw-btn-save');
+            if (saveBtn) saveBtn.disabled = true;
+
+            fetch('/session/save', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_zid: sZid,
+                    deltas: deltasJson,
+                    language: getSessionLang()
+                })
+            })
+            .then(function(res) {
+                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+            })
+            .then(function(resObj) {
+                if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success')) {
+                    window.clearDirty();
+                    updateToolbarState();
+                    window.showToast("Edits saved successfully", "success");
+                } else {
+                    updateToolbarState();
+                    window.showToast("Save failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                }
+            })
+            .catch(function(err) {
+                updateToolbarState();
+                window.showToast("Save error: " + (err.message || String(err)), "error");
+            });
+        };
+
+        window.onUpdateClick = function() {
+            if (window.commitActiveEdit) window.commitActiveEdit();
+            window.location.reload();
+        };
+
+        window.onRetextClick = function() {
+            if (window.commitActiveEdit) window.commitActiveEdit();
+            var sZid = getSessionZid();
+            if (!sZid) {
+                window.showToast("Session ZID missing.", "error");
+                return;
+            }
+            window.showToast("Retexting session...", "info");
+            fetch('/session/retext', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_zid: sZid,
+                    language: getSessionLang()
+                })
+            })
+            .then(function(res) {
+                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+            })
+            .then(function(resObj) {
+                if (resObj.ok && (resObj.data.ok || resObj.data.retext_started)) {
+                    window.showToast("Retext started...", "success");
+                } else {
+                    window.showToast("Retext failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                }
+            })
+            .catch(function(err) {
+                window.showToast("Retext error: " + (err.message || String(err)), "error");
+            });
+        };
+
+        window.onRewordClick = function() {
+            if (window.commitActiveEdit) window.commitActiveEdit();
+            var rows = getSelectedRowsArray();
+            if (!rows.length) {
+                window.showToast("Please select rows to re-word.", "warning");
+                return;
+            }
+            var sZid = getSessionZid();
+            if (!sZid) {
+                window.showToast("Session ZID missing.", "error");
+                return;
+            }
+            window.showToast("Re-wording " + rows.length + " rows...", "info");
+            fetch('/session/reword', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_zid: sZid,
+                    row_ids: rows,
+                    language: getSessionLang()
+                })
+            })
+            .then(function(res) {
+                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+            })
+            .then(function(resObj) {
+                if (resObj.ok && (resObj.data.ok || resObj.data.reprocess_started)) {
+                    window.showToast("Re-word started for " + rows.length + " rows", "success");
+                } else {
+                    window.showToast("Re-word failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                }
+            })
+            .catch(function(err) {
+                window.showToast("Re-word error: " + (err.message || String(err)), "error");
+            });
+        };
+
+        window.onSendToAnkiClick = function() {
+            if (window.commitActiveEdit) window.commitActiveEdit();
+            var rows = getSelectedRowsArray();
+            if (!rows.length) {
+                window.showToast("Please select rows to export.", "warning");
+                return;
+            }
+            var sZid = getSessionZid();
+            if (!sZid) {
+                window.showToast("Session ZID missing.", "error");
+                return;
+            }
+            window.showToast("Exporting to Anki...", "info");
+            fetch('/session/export', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    session_zid: sZid,
+                    row_ids: rows,
+                    language: getSessionLang()
+                })
+            })
+            .then(function(res) {
+                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+            })
+            .then(function(resObj) {
+                if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || resObj.data.import_complete || resObj.data.import_started)) {
+                    window.showToast("✓ " + rows.length + " cards exported to Anki", "success");
+                } else {
+                    window.showToast("Export failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                }
+            })
+            .catch(function(err) {
+                window.showToast("Export error: " + (err.message || String(err)), "error");
+            });
+        };
+
+        window.onHandToolClick = function() {
+            var newMode = !window.__persistentSelectableMode;
+            window.setSelectableTextMode(newMode, newMode);
+            var handBtn = document.getElementById('kw-btn-hand-tool');
+            if (handBtn) {
+                if (newMode) handBtn.classList.add('active');
+                else handBtn.classList.remove('active');
+            }
+            window.showToast(newMode ? "Text selection mode active" : "Hand tool / Table interaction active", "info", 1500);
+        };
+
+        window.onDeleteClick = function() {
+            var rows = getSelectedRowsArray();
+            if (!rows.length) {
+                window.showToast("Please select rows to delete.", "warning");
+                return;
+            }
+            window.deleteSelectedRows();
+            updateToolbarState();
+            window.showToast("Deleted " + rows.length + " rows (Ctrl+Z to undo)", "info", 2000);
+        };
+
+        var btnSave = document.getElementById('kw-btn-save');
+        if (btnSave) addEvent(btnSave, 'click', window.onSaveClick);
+        var btnUpdate = document.getElementById('kw-btn-update');
+        if (btnUpdate) addEvent(btnUpdate, 'click', window.onUpdateClick);
+        var btnRetext = document.getElementById('kw-btn-retext');
+        if (btnRetext) addEvent(btnRetext, 'click', window.onRetextClick);
+        var btnReword = document.getElementById('kw-btn-reword');
+        if (btnReword) addEvent(btnReword, 'click', window.onRewordClick);
+        var btnExport = document.getElementById('kw-btn-export');
+        if (btnExport) addEvent(btnExport, 'click', window.onSendToAnkiClick);
+        var btnHand = document.getElementById('kw-btn-hand-tool');
+        if (btnHand) addEvent(btnHand, 'click', window.onHandToolClick);
+        var btnDelete = document.getElementById('kw-btn-delete');
+        if (btnDelete) addEvent(btnDelete, 'click', window.onDeleteClick);
+
+        addEvent(document, 'keydown', function(e) {
+            e = e || window.event;
+            var target = e.target || e.srcElement;
+            var isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA');
+
+            // Ctrl+S -> Save
+            if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.keyCode === 83)) {
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                window.onSaveClick();
+                return false;
+            }
+
+            // Delete key -> Delete selected rows when not typing in input
+            if ((e.key === 'Delete' || e.keyCode === 46) && !isInput) {
+                if (getSelectedRowsArray().length > 0) {
+                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                    window.onDeleteClick();
+                    return false;
+                }
+            }
+
+            // Ctrl+Z -> Undo (when not in input)
+            if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (e.key === 'z' || e.keyCode === 90) && !isInput) {
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                window.undo();
+                updateToolbarState();
+                return false;
+            }
+
+            // Ctrl+Y or Ctrl+Shift+Z -> Redo (when not in input)
+            if (((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.keyCode === 89) || ((e.ctrlKey || e.metaKey) && e.shiftKey && (e.key === 'z' || e.keyCode === 90))) && !isInput) {
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                window.redo();
+                updateToolbarState();
+                return false;
+            }
+        });
+
+        addEvent(window, 'beforeunload', function(e) {
+            if (window.isDirty && window.isDirty()) {
+                e = e || window.event;
+                var msg = 'You have unsaved changes in this session.';
+                if (e) e.returnValue = msg;
+                return msg;
+            }
+        });
+
+        updateToolbarState();
+
         if (window.rebindMVPBookmarks) {
             window.rebindMVPBookmarks();
         }
