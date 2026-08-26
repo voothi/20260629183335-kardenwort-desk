@@ -189,12 +189,42 @@ def test_selectable_text_mode_toggle(page, tmp_path):
     )
     page.set_content(html)
     
-    # Activate text selection mode
+    # Activate text selection mode programmatically
     page.evaluate("window.setSelectableTextMode(true)")
     assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is True
     assert page.evaluate("window.__selectableTextMode") is True
     
-    # Deactivate text selection mode
+    # Deactivate text selection mode programmatically
     page.evaluate("window.setSelectableTextMode(false)")
     assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is False
     assert page.evaluate("window.__selectableTextMode") is False
+
+    # Press Alt key down
+    page.keyboard.down("Alt")
+    assert page.evaluate("window.__selectableTextMode") is True
+    assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is True
+
+    # Release Alt key
+    page.keyboard.up("Alt")
+    assert page.evaluate("window.__selectableTextMode") is False
+    assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is False
+
+    # Transient Alt hold followed by window blur
+    page.keyboard.down("Alt")
+    assert page.evaluate("window.__selectableTextMode") is True
+    page.evaluate("window.dispatchEvent(new Event('blur'))")
+    assert page.evaluate("window.__selectableTextMode") is False
+    assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is False
+    page.keyboard.up("Alt")
+
+    # Persistent mode test
+    page.evaluate("window.setSelectableTextMode(true, true)")
+    assert page.evaluate("window.__selectableTextMode") is True
+    assert page.evaluate("window.__persistentSelectableMode") is True
+    page.keyboard.up("Alt")
+    assert page.evaluate("window.__selectableTextMode") is True
+    page.evaluate("window.dispatchEvent(new Event('blur'))")
+    assert page.evaluate("window.__selectableTextMode") is True
+    page.evaluate("window.setSelectableTextMode(false, false)")
+    assert page.evaluate("window.__selectableTextMode") is False
+

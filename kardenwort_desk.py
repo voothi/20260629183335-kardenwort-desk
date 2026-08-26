@@ -8582,6 +8582,10 @@ html, body {{
   body.theme-light #translation-container span.word.hl-mvp-pin-7,
   body.theme-white #source-container span.word.hl-mvp-pin-7,
   body.theme-white #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #7c3aed !important; border-radius: 4px !important; margin: -2px !important; }
+  body.text-selection-mode-active,
+  body.text-selection-mode-active * {
+    cursor: text !important;
+  }
   body.text-selection-mode-active .source-text,
   body.text-selection-mode-active .source-text *,
   body.text-selection-mode-active #source-container,
@@ -8601,7 +8605,8 @@ html, body {{
   body.text-selection-mode-active #lemma-table tr:hover td {
     background: transparent !important;
   }
-  body.text-selection-mode-active #lemma-table tr.selected td {
+  body.text-selection-mode-active #lemma-table tr.selected td,
+  body.text-selection-mode-active #lemma-table tr.kw-row-selected td {
     background: transparent !important;
     color: inherit !important;
   }
@@ -8610,7 +8615,13 @@ html, body {{
   body.text-selection-mode-active #source-container span.word,
   body.text-selection-mode-active #translation-container span.word,
   body.text-selection-mode-active #source-container span.token,
-  body.text-selection-mode-active #translation-container span.token {
+  body.text-selection-mode-active #translation-container span.token,
+  body.text-selection-mode-active span.flipped,
+  body.text-selection-mode-active span.highlight-orange-active,
+  body.text-selection-mode-active span.highlight-purple-active,
+  body.text-selection-mode-active span.hl-mvp-pin,
+  body.text-selection-mode-active span.hl-mvp-hover,
+  body.text-selection-mode-active span[class*="hl-mvp-"] {
     cursor: text !important;
     background-color: transparent !important;
     background: transparent !important;
@@ -8624,8 +8635,11 @@ html, body {{
     box-shadow: none !important;
   }
   body.text-selection-mode-active span.word:hover,
+  body.text-selection-mode-active #source-container span.word:hover,
   body.text-selection-mode-active #translation-container span.word:hover {
     background-color: transparent !important;
+    border: none !important;
+    outline: none !important;
   }
   .source-text span.highlight-orange {
   }
@@ -9266,7 +9280,13 @@ html, body {{
         refreshBookmarkClasses();
     };
 
-    window.setSelectableTextMode = function(active) {
+    window.__selectableTextMode = false;
+    window.__persistentSelectableMode = false;
+
+    window.setSelectableTextMode = function(active, isPersistent) {
+        if (isPersistent !== undefined) {
+            window.__persistentSelectableMode = !!isPersistent;
+        }
         window.__selectableTextMode = !!active;
         if (active) {
             if (document.body && document.body.classList) document.body.classList.add('text-selection-mode-active');
@@ -9274,6 +9294,30 @@ html, body {{
             if (document.body && document.body.classList) document.body.classList.remove('text-selection-mode-active');
         }
     };
+
+    addEvent(window, 'keydown', function(e) {
+        e = e || window.event;
+        if (e.key === 'Alt' || e.keyCode === 18) {
+            if (!window.__selectableTextMode) {
+                window.setSelectableTextMode(true, false);
+            }
+        }
+    });
+
+    addEvent(window, 'keyup', function(e) {
+        e = e || window.event;
+        if (e.key === 'Alt' || e.keyCode === 18) {
+            if (!window.__persistentSelectableMode) {
+                window.setSelectableTextMode(false, false);
+            }
+        }
+    });
+
+    addEvent(window, 'blur', function() {
+        if (!window.__persistentSelectableMode) {
+            window.setSelectableTextMode(false, false);
+        }
+    });
 
     window.rebindMVPBookmarks = function() {
         tokenizeTranslation();
@@ -10472,6 +10516,7 @@ html, body {{
         var sourceContainer = document.getElementById('source-container');
         if (sourceContainer) {
             addEvent(sourceContainer, 'contextmenu', function(e) {
+                if (window.__selectableTextMode) return;
                 e = e || window.event;
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 return false;
@@ -10607,6 +10652,7 @@ html, body {{
                 });
                 
                 addEvent(row, 'contextmenu', function(e) {
+                    if (window.__selectableTextMode) return;
                     e = e || window.event;
                     if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                     return false;
@@ -10663,6 +10709,7 @@ html, body {{
                                 lastHoveredCell = cell;
                             });
                             addEvent(cell, 'mouseout', function(e) {
+                                if (window.__selectableTextMode) return;
                                 if (lastHoveredCell === cell) {
                                     lastHoveredCell = null;
                                 }
@@ -10797,6 +10844,7 @@ html, body {{
         addEvent(window, 'mouseup', handleMouseUp);
         
         addEvent(document, 'contextmenu', function(e) {
+            if (window.__selectableTextMode) return;
             if (justFinishedDrag) {
                 e = e || window.event;
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
