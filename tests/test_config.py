@@ -373,6 +373,7 @@ anki_mapping_file = ./anki-mapping.ini
 lmb_play = true
 lmb_source = inflection
 lmb_chain_mode = separate
+source_range_mode = all
 table_range_mode = all
 rmb_play = false
 rmb_chain_mode = separate
@@ -386,11 +387,12 @@ rmb_chain_mode = separate
         assert config.getboolean(SEC_AUDIO, 'lmb_play') is True
         assert config.get(SEC_AUDIO, 'lmb_source') == 'inflection'
         assert config.get(SEC_AUDIO, 'lmb_chain_mode') == 'separate'
+        assert config.get(SEC_AUDIO, 'source_range_mode') == 'all'
         assert config.get(SEC_AUDIO, 'table_range_mode') == 'all'
         assert config.getboolean(SEC_AUDIO, 'rmb_play') is False
         assert config.get(SEC_AUDIO, 'rmb_chain_mode') == 'separate'
 
-        # Test default fallback when table_range_mode is omitted
+        # Test default fallback when source_range_mode and table_range_mode are omitted
         config_content_default = f"""[environment]
 anki_tts_cli = ../anki-tts-cli/anki-tts-cli.py
 
@@ -402,6 +404,7 @@ lmb_play = true
 """
         config_file.write_text(config_content_default)
         config_def, _, _, _ = kardenwort_desk.load_config(config_file)
+        assert config_def.get(SEC_AUDIO, 'source_range_mode', fallback='all') == 'all'
         assert config_def.get(SEC_AUDIO, 'table_range_mode', fallback='none') == 'none'
 
 

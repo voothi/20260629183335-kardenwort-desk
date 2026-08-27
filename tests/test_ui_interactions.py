@@ -54,7 +54,7 @@ def get_base_html():
 """
     return html, None, None, headers, data_rows
 
-def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined", table_range_mode="none", rmb_play=False, rmb_chain_mode="separate", rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
+def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined", source_range_mode="all", table_range_mode="none", rmb_play=False, rmb_chain_mode="separate", rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
     desk_path = Path(kardenwort_desk.__file__)
     content = desk_path.read_text(encoding="utf-8")
     js_lines = []
@@ -76,6 +76,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     js = js.replace("{audio_lmb_play}", "true" if lmb_play else "false")
     js = js.replace("{audio_lmb_source}", f'"{lmb_source}"')
     js = js.replace("{audio_lmb_chain_mode}", f'"{lmb_chain_mode}"')
+    js = js.replace("{audio_source_range_mode}", f'"{source_range_mode}"')
     js = js.replace("{audio_table_range_mode}", f'"{table_range_mode}"')
     js = js.replace("{audio_rmb_play}", "true" if rmb_play else "false")
     js = js.replace("{audio_rmb_chain_mode}", f'"{rmb_chain_mode}"')
@@ -4196,6 +4197,152 @@ def test_table_row_lmb_audio_interactions(page):
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1, "Single Ctrl + Click should play only the targeted row"
     assert play_calls[0]["arg"].endswith("de\\nBaum")
+
+
+def test_source_text_token_range_lmb_audio_interactions(page):
+    source_html = (
+        '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="das">Das</span> '
+        '<span class="word" data-word-idx="1" data-line-idx="0" data-lower-clean="haus">Haus</span> '
+        '<span class="word" data-word-idx="2" data-line-idx="0" data-lower-clean="ist">ist</span> '
+        '<span class="word" data-word-idx="3" data-line-idx="0" data-lower-clean="gross">gross</span>'
+    )
+    manifest = [
+        {"text": "Das", "is_word": True, "visual_idx": 0, "lower_clean": "das", "row_ids": [0]},
+        {"text": "Haus", "is_word": True, "visual_idx": 1, "lower_clean": "haus", "row_ids": [1]},
+        {"text": "ist", "is_word": True, "visual_idx": 2, "lower_clean": "ist", "row_ids": [2]},
+        {"text": "gross", "is_word": True, "visual_idx": 3, "lower_clean": "gross", "row_ids": [3]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">der</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Das</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">это</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Haus</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">дом</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">sein</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">ist</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">быть</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">gross</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">gross</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">большой</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # --- Scenario A: Token drag selection plays when source_range_mode = all (joined) ---
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined", source_range_mode="all"))
+
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-word-idx='0']");
+        const s1 = document.querySelector("span[data-word-idx='1']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nder Haus")
+
+    # --- Scenario B: Token drag selection plays when source_range_mode = all (separate) ---
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate", source_range_mode="all"))
+
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-word-idx='0']");
+        const s1 = document.querySelector("span[data-word-idx='1']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nder ||| Haus")
+
+    # --- Scenario C: Token drag selection is silent when source_range_mode = none ---
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", source_range_mode="none"))
+
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-word-idx='0']");
+        const s1 = document.querySelector("span[data-word-idx='1']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0, "Token drag selection should be silent when source_range_mode is none"
+
+    # --- Scenario D: Ctrl + Drag emits audio when source_range_mode = none ---
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate", source_range_mode="none"))
+
+    page.evaluate("""() => {
+        const s0 = document.querySelector("span[data-word-idx='0']");
+        const s1 = document.querySelector("span[data-word-idx='1']");
+        s0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, ctrlKey: true }));
+        s1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1, ctrlKey: true }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0, ctrlKey: true }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1, "Ctrl + Drag should force sequential token range playback"
+    assert play_calls[0]["arg"].endswith("de\\nder ||| Haus")
+
+    # --- Scenario E: Single word click plays regardless of source_range_mode ---
+    # With source_range_mode = all
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", source_range_mode="all"))
+
+    span_s1 = page.locator("span[data-word-idx='1']")
+    span_s1.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nHaus")
+
+    # With source_range_mode = none
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", source_range_mode="none"))
+
+    span_s1 = page.locator("span[data-word-idx='1']")
+    span_s1.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nHaus")
+
 
 
 

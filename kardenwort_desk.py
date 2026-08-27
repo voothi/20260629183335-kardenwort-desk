@@ -7733,6 +7733,7 @@ html, body {{
     lmb_play_val = "false"
     lmb_source_val = "lemma"
     lmb_chain_mode_val = "joined"
+    source_range_mode_val = "all"
     table_range_mode_val = "none"
     rmb_play_val = "false"
     rmb_chain_mode_val = "separate"
@@ -7740,6 +7741,7 @@ html, body {{
         lmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'lmb_play', fallback=False) else "false"
         lmb_source_val = config.get(SEC_AUDIO, 'lmb_source', fallback='lemma').strip().lower()
         lmb_chain_mode_val = config.get(SEC_AUDIO, 'lmb_chain_mode', fallback='joined').strip().lower()
+        source_range_mode_val = config.get(SEC_AUDIO, 'source_range_mode', fallback='all').strip().lower()
         table_range_mode_val = config.get(SEC_AUDIO, 'table_range_mode', fallback='none').strip().lower()
         rmb_play_val = "true" if config.getboolean(SEC_AUDIO, 'rmb_play', fallback=False) else "false"
         rmb_chain_mode_val = config.get(SEC_AUDIO, 'rmb_chain_mode', fallback='separate').strip().lower()
@@ -10870,6 +10872,7 @@ html, body {{
         var audioLmbPlay = {audio_lmb_play};
         var audioLmbSource = {audio_lmb_source};
         var audioLmbChainMode = {audio_lmb_chain_mode};
+        var audioSourceRangeMode = {audio_source_range_mode};
         var audioTableRangeMode = {audio_table_range_mode};
         var audioRmbPlay = {audio_rmb_play};
         var audioRmbChainMode = {audio_rmb_chain_mode};
@@ -11666,21 +11669,24 @@ html, body {{
                     var minIdx = (tokenDragLastIdx !== -1) ? Math.min(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
                     var maxIdx = (tokenDragLastIdx !== -1) ? Math.max(tokenDragStartIdx, tokenDragLastIdx) : tokenDragStartIdx;
                     if (dragOccurred && minIdx !== maxIdx) {
-                        var dragWords = [];
-                        for (var k = minIdx; k <= maxIdx; k++) {
-                            var term = getSingleTokenWordsToPlay(tokenSpans[k], audioLmbSource, audioLmbChainMode);
-                            if (term) {
-                                dragWords.push(term);
+                        var shouldPlay = (audioSourceRangeMode === 'all' || activeCtrl);
+                        if (shouldPlay) {
+                            var dragWords = [];
+                            for (var k = minIdx; k <= maxIdx; k++) {
+                                var term = getSingleTokenWordsToPlay(tokenSpans[k], audioLmbSource, audioLmbChainMode);
+                                if (term) {
+                                    dragWords.push(term);
+                                }
                             }
-                        }
-                        if (dragWords.length > 0) {
-                            var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
-                            if (audioLmbChainMode === 'separate' || audioLmbChainMode === 'per_word') {
-                                playAudio(dragWords.join(' ||| '), sourceLang);
-                            } else {
-                                var dragText = dragWords.join(' ');
-                                if (dragText) {
-                                    playAudio(dragText, sourceLang);
+                            if (dragWords.length > 0) {
+                                var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                                if (audioLmbChainMode === 'separate' || audioLmbChainMode === 'per_word') {
+                                    playAudio(dragWords.join(' ||| '), sourceLang);
+                                } else {
+                                    var dragText = dragWords.join(' ');
+                                    if (dragText) {
+                                        playAudio(dragText, sourceLang);
+                                    }
                                 }
                             }
                         }
@@ -13416,6 +13422,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{audio_lmb_play}", lmb_play_val)
     html_page = html_page.replace("{audio_lmb_source}", f'"{lmb_source_val}"')
     html_page = html_page.replace("{audio_lmb_chain_mode}", f'"{lmb_chain_mode_val}"')
+    html_page = html_page.replace("{audio_source_range_mode}", f'"{source_range_mode_val}"')
     html_page = html_page.replace("{audio_table_range_mode}", f'"{table_range_mode_val}"')
     html_page = html_page.replace("{audio_rmb_play}", rmb_play_val)
     html_page = html_page.replace("{audio_rmb_chain_mode}", f'"{rmb_chain_mode_val}"')
