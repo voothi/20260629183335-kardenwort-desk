@@ -198,3 +198,199 @@ def test_set_language_missing_field(running_controller):
         urllib.request.urlopen(req, timeout=5.0)
     assert exc_info.value.code == 400
 
+
+def test_verify_language_get_endpoint(running_controller):
+    """
+    Verify GET /verify-language serves standalone verification page populated from draft session.
+    """
+    from kardenwort_controller import _DRAFT_SESSIONS, _DRAFT_SESSIONS_LOCK
+    server_url, server = running_controller
+
+    session_zid = "20260827010099"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid] = {
+            "text": "Das ist ein deutsches Haus.",
+            "language": "en",
+            "text_mode": "single",
+            "theme": "dark",
+            "mismatch_info": {
+                "is_mismatch": True,
+                "detected_language": "de",
+                "expected_language": "en",
+                "detected_name": "German",
+                "expected_name": "English",
+                "session_zid": session_zid,
+            }
+        }
+
+    url = f"{server_url}/verify-language?session_zid={session_zid}&theme=dark"
+    req = urllib.request.Request(url)
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        content_type = resp.headers.get("Content-Type")
+        assert "text/html" in content_type
+        body = resp.read().decode("utf-8")
+        assert "Language Verification" in body
+        assert "The text appears to be German (de), but the active profile is English (en)." in body
+        assert "Switch language to German?" in body
+        assert 'id="kw-btn-lang-yes"' in body
+        assert 'id="kw-btn-lang-no"' in body
+        assert 'id="kw-btn-lang-cancel"' in body
+        assert 'id="kw-status-msg"' in body
+
+
+def test_confirm_language_cancel(running_controller):
+    """
+    Verify POST /api/v1/confirm-language with action=cancel discards draft session and returns 200.
+    """
+    from kardenwort_controller import _DRAFT_SESSIONS, _DRAFT_SESSIONS_LOCK
+    server_url, server = running_controller
+
+    session_zid = "20260827010100"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid] = {
+            "text": "Das ist ein Haus.",
+            "language": "en",
+            "text_mode": "single",
+            "theme": "dark",
+            "mismatch_info": {
+                "is_mismatch": True,
+                "detected_language": "de",
+                "expected_language": "en",
+                "session_zid": session_zid,
+            }
+        }
+
+    req_body = {"session_zid": session_zid, "action": "cancel"}
+    req_data = json.dumps(req_body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=req_data,
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data.get("status") == "success"
+        res = data.get("data", {})
+        assert res.get("ok") is True
+        assert res.get("action") == "cancel"
+
+    with _DRAFT_SESSIONS_LOCK:
+        assert session_zid not in _DRAFT_SESSIONS
+
+
+def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, monkeypatch):
+    """
+    Verify POST /api/v1/confirm-language with action=switch:
+    1. Updates runtime config to detected language
+    2. Signals AHK tray via IPC
+    3. Spawns tabs with reverse order focus guarantee (Sentence 1 opened last).
+    """
+    from kardenwort_controller import _DRAFT_SESSIONS, _DRAFT_SESSIONS_LOCK
+    server_url, server = running_controller
+
+    session_zid = "20260827010101"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid] = {
+            "text": "Satz eins. Satz zwei. Satz drei.",
+            "language": "en",
+            "text_mode": "multi",
+            "theme": "dark",
+            "zoom": 100,
+            "mismatch_info": {
+                "is_mismatch": True,
+                "detected_language": "de",
+                "expected_language": "en",
+                "detected_name": "German",
+                "expected_name": "English",
+                "session_zid": session_zid,
+            }
+        }
+
+    spawn_calls = []
+    opened_urls = []
+    monkeypatch.setattr(kardenwort_desk, "spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
+    monkeypatch.setattr("kardenwort_controller.spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: opened_urls.append(url))
+
+    # Mock run_render_flow to simulate reverse order child generation
+    mock_child_args = [
+        "--seq-num", "4", "--restore", "results/20260827010101-03.de.tsv",
+        "--seq-num", "3", "--restore", "results/20260827010101-02.de.tsv",
+        "--seq-num", "2", "--restore", "results/20260827010101-01.de.tsv",
+    ]
+    monkeypatch.setattr(
+        "kardenwort_controller.run_render_flow",
+        lambda **kwargs: ("<html>mock</html>", mock_child_args)
+    )
+
+    req_body = {"session_zid": session_zid, "action": "switch"}
+    req_data = json.dumps(req_body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=req_data,
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        res = data.get("data", {})
+        assert res.get("ok") is True
+        assert res.get("action") == "switch"
+        assert res.get("language") == "de"
+        assert len(res.get("urls", [])) == 4
+
+    # 1. Check in-memory config updated to 'de'
+    assert server.config.get("settings", "default_language") == "de"
+
+    # 2. Check spawn_ahk signaled with --set-language de
+    assert len(spawn_calls) >= 1
+    assert spawn_calls[-1][0] == ["--set-language", "de"]
+
+    # 3. Check opened tab order: Master tab first, then Child 3, Child 2, Child 1 LAST
+    assert len(opened_urls) == 4
+    assert f"session_zid={session_zid}" in opened_urls[0] and "seq_num=1" in opened_urls[0]
+    assert "20260827010101-03" in opened_urls[1] and "seq_num=4" in opened_urls[1]
+    assert "20260827010101-02" in opened_urls[2] and "seq_num=3" in opened_urls[2]
+    assert "20260827010101-01" in opened_urls[3] and "seq_num=2" in opened_urls[3]  # Opened LAST -> Active focus!
+
+
+def test_confirm_language_validation_errors(running_controller):
+    """
+    Verify POST /api/v1/confirm-language returns proper error codes on bad input or missing draft.
+    """
+    server_url, server = running_controller
+
+    # Missing session_zid
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=json.dumps({"action": "switch"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req, timeout=5.0)
+    assert exc_info.value.code == 400
+
+    # Invalid action
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=json.dumps({"session_zid": "123", "action": "invalid_action"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req, timeout=5.0)
+    assert exc_info.value.code == 400
+
+    # Non-existent draft
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=json.dumps({"session_zid": "99999999999999", "action": "switch"}).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req, timeout=5.0)
+    assert exc_info.value.code == 404
+
+

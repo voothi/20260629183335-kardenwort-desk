@@ -50,6 +50,7 @@ from kardenwort_desk import (
     get_storage_adapter,
     parse_tsv_to_bundle,
     render_lookup_html,
+    render_verify_language_html,
     run_render_flow,
     verify_language,
     synthesize_project_materials,
@@ -1559,6 +1560,34 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # Verification page endpoint
+        if path == '/verify-language':
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            session_zid = qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0]
+            req_theme = qs.get('theme', [None])[0] or 'dark'
+            token = qs.get('token', [''])[0] or getattr(self.server, 'api_key', '')
+            with _DRAFT_SESSIONS_LOCK:
+                draft = _DRAFT_SESSIONS.get(session_zid)
+            mismatch_info = draft.get("mismatch_info") if draft else {
+                "session_zid": session_zid,
+                "is_mismatch": False,
+            }
+            html = render_verify_language_html(
+                mismatch_info=mismatch_info,
+                theme=req_theme,
+                api_token=token,
+                session_zid=session_zid or "",
+            )
+            body = html.encode('utf-8')
+            self.send_response(200)
+            self._send_cors_headers()
+            self.send_header('Content-Type', 'text/html; charset=utf-8')
+            self.send_header('Content-Length', str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            return
+
         # 4. Consolidated Legacy & Reader Endpoints (from http_server.py & web reader)
         if path in ('/', '/lookup', '/session/render'):
             if method != 'GET':
@@ -2051,6 +2080,136 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "language": language,
                 "persisted": persisted,
+            })
+            return
+
+        # Atomic Language Confirmation & Session Tab Spawning
+        if path == '/api/v1/confirm-language':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            session_zid = body.get('session_zid') or body.get('zid')
+            action = body.get('action')
+            if not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required payload field: 'session_zid'")
+            if not action or action not in ('switch', 'keep', 'cancel'):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Invalid or missing required payload field 'action': '{action}'. Must be 'switch', 'keep', or 'cancel'")
+
+            with _DRAFT_SESSIONS_LOCK:
+                draft = _DRAFT_SESSIONS.pop(session_zid, None)
+
+            if action == 'cancel':
+                self._send_json(200, {
+                    "ok": True,
+                    "action": "cancel",
+                    "session_zid": session_zid,
+                })
+                return
+
+            if not draft:
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Draft session '{session_zid}' not found or already confirmed")
+
+            if action == 'switch':
+                target_lang = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
+                if target_lang:
+                    target_lang = target_lang.strip().lower()
+                else:
+                    target_lang = "en"
+
+                # 1. Update in-memory config
+                if hasattr(self.server, 'config') and self.server.config:
+                    if not self.server.config.has_section(SEC_SETTINGS):
+                        self.server.config.add_section(SEC_SETTINGS)
+                    self.server.config.set(SEC_SETTINGS, 'default_language', target_lang)
+
+                # 2. Persist to config.ini files (desk and AHK)
+                base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
+                persist_default_language(target_lang, base_dir=base_dir)
+
+                # 3. Notify AutoHotkey process via IPC
+                spawn_ahk(["--set-language", target_lang], base_dir=base_dir)
+            else:
+                target_lang = draft.get("language") or "en"
+
+            # Execute run_render_flow
+            render_out = run_render_flow(
+                text=draft.get("text", ""),
+                language=target_lang,
+                zid=session_zid,
+                text_mode=draft.get("text_mode", "single"),
+                config=self.server.config,
+                resolved_paths=self.server.resolved_paths,
+                zoom_level=str(draft.get("zoom", "100")),
+                theme=draft.get("theme", "dark"),
+                tsv_path=Path(draft["tsv_path"]) if draft.get("tsv_path") else None,
+                seq_num=int(draft["seq_num"]) if draft.get("seq_num") else None,
+                spawn_children=False,
+                return_children=True,
+            )
+            if isinstance(render_out, tuple):
+                html_result, child_args = render_out
+            else:
+                html_result = render_out
+                child_args = getattr(render_out, 'children', [])
+
+            # Construct URLs for browser tabs
+            port = getattr(self.server, 'server_port', None) or (self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335)
+            host = self.server.server_address[0] if hasattr(self.server, 'server_address') and self.server.server_address[0] not in ('0.0.0.0', '') else '127.0.0.1'
+            api_token = getattr(self.server, 'api_key', '')
+            theme = draft.get("theme", "dark")
+
+            def build_browser_url(s_zid, s_num):
+                u = f"http://{host}:{port}/?session_zid={urllib.parse.quote(str(s_zid))}&seq_num={urllib.parse.quote(str(s_num))}&theme={urllib.parse.quote(str(theme))}"
+                if api_token:
+                    u += f"&token={urllib.parse.quote(str(api_token))}"
+                return u
+
+            parent_mode = "full"
+            if hasattr(self.server, 'config') and self.server.config and self.server.config.has_section("sentences_mode"):
+                parent_mode = self.server.config.get("sentences_mode", "parent_mode", fallback="full").lower()
+
+            child_items = []
+            i = 0
+            curr_seq = 2
+            while i < len(child_args):
+                arg = child_args[i]
+                if arg == "--seq-num" and i + 1 < len(child_args):
+                    try:
+                        curr_seq = int(child_args[i + 1])
+                    except Exception:
+                        pass
+                    i += 2
+                elif arg == "--restore" and i + 1 < len(child_args):
+                    t_path = child_args[i + 1]
+                    m_zid = re.search(r'(\d{14}(?:-\d+)?)', str(t_path))
+                    c_zid = m_zid.group(1) if m_zid else session_zid
+                    child_items.append((curr_seq, c_zid))
+                    i += 2
+                else:
+                    i += 1
+
+            spawn_urls = []
+            if parent_mode != 'stub' or not child_items:
+                spawn_urls.append(build_browser_url(session_zid, 1))
+
+            for c_seq, c_zid in child_items:
+                spawn_urls.append(build_browser_url(c_zid, c_seq))
+
+            spawned_urls = []
+            for u in spawn_urls:
+                try:
+                    webbrowser.open_new_tab(u)
+                    spawned_urls.append(u)
+                    time.sleep(0.05)
+                except Exception as e:
+                    logger.warning(f"Failed to spawn browser tab for {u}: {e}")
+
+            self._send_json(200, {
+                "ok": True,
+                "action": action,
+                "language": target_lang,
+                "session_zid": session_zid,
+                "urls": spawned_urls,
             })
             return
 

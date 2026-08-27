@@ -6908,6 +6908,248 @@ def get_language_display_name(code: Optional[str]) -> str:
     return LANGUAGE_NAMES_MAP.get(clean, code.strip().capitalize())
 
 
+def render_verify_language_html(
+    mismatch_info: Optional[dict],
+    theme: str = "dark",
+    api_token: str = "",
+    session_zid: str = "",
+) -> str:
+    """
+    Renders a lightweight, standalone HTML page for /verify-language.
+    Displays language mismatch confirmation card with Yes, No, and Cancel buttons.
+    """
+    mismatch = mismatch_info or {}
+    zid = session_zid or mismatch.get("session_zid", "")
+    det_code = mismatch.get("detected_language") or ""
+    exp_code = mismatch.get("expected_language") or ""
+    det_name = mismatch.get("detected_name") or get_language_display_name(det_code) or det_code
+    exp_name = mismatch.get("expected_name") or get_language_display_name(exp_code) or exp_code
+    det_label = f"{det_name} ({det_code})" if det_code else det_name
+    exp_label = f"{exp_name} ({exp_code})" if exp_code else exp_name
+
+    if det_label and exp_label:
+        prompt_text = f"The text appears to be {det_label}, but the active profile is {exp_label}.\n\nSwitch language to {det_name}?"
+    else:
+        prompt_text = "Language mismatch detected.\n\nProceed with verification?"
+
+    is_light = theme in ("light", "white")
+    bg_color = "#f6f8fa" if is_light else "#0d0f12"
+    card_bg = "#ffffff" if is_light else "#161b22"
+    card_border = "#d0d7de" if is_light else "#30363d"
+    text_color = "#24292f" if is_light else "#c9d1d9"
+    subtext_color = "#57606a" if is_light else "#8b949e"
+    title_color = "#0969da" if is_light else "#58a6ff"
+
+    btn_yes_bg = "#1f883d" if is_light else "#238636"
+    btn_yes_hover = "#1a7f37" if is_light else "#2ea043"
+    btn_yes_color = "#ffffff"
+
+    btn_no_bg = "#f3f4f6" if is_light else "#21262d"
+    btn_no_hover = "#e5e7eb" if is_light else "#30363d"
+    btn_no_border = "#d0d7de" if is_light else "#30363d"
+    btn_no_color = "#24292f" if is_light else "#c9d1d9"
+
+    btn_cancel_bg = "transparent"
+    btn_cancel_hover = "#f3f4f6" if is_light else "#30363d"
+    btn_cancel_border = "#d0d7de" if is_light else "#30363d"
+    btn_cancel_color = "#57606a" if is_light else "#8b949e"
+
+    token_json = json.dumps(api_token)
+    zid_json = json.dumps(zid)
+
+    return f"""<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Language Verification - Kardenwort</title>
+<style>
+* {{
+    box-sizing: border-box;
+    margin: 0;
+    padding: 0;
+}}
+body {{
+    background-color: {bg_color};
+    color: {text_color};
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    min-height: 100vh;
+    padding: 20px;
+    overflow: hidden;
+}}
+.kw-verify-card {{
+    background: {card_bg};
+    border: 1px solid {card_border};
+    border-radius: 8px;
+    padding: 24px;
+    max-width: 480px;
+    width: 100%;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    text-align: left;
+    transition: opacity 0.2s ease;
+}}
+.kw-verify-title {{
+    color: {title_color};
+    font-size: 18px;
+    font-weight: 600;
+    margin-bottom: 16px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}}
+.kw-verify-body {{
+    color: {text_color};
+    font-size: 14px;
+    line-height: 1.5;
+    margin-bottom: 24px;
+    white-space: pre-wrap;
+}}
+.kw-verify-actions {{
+    display: flex;
+    justify-content: flex-end;
+    gap: 8px;
+}}
+.kw-btn {{
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 500;
+    padding: 6px 14px;
+    border-radius: 6px;
+    cursor: pointer;
+    border: 1px solid transparent;
+    transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+    user-select: none;
+}}
+.kw-btn:disabled {{
+    opacity: 0.5;
+    cursor: not-allowed;
+}}
+.kw-btn-yes {{
+    background-color: {btn_yes_bg};
+    color: {btn_yes_color};
+}}
+.kw-btn-yes:hover:not(:disabled) {{
+    background-color: {btn_yes_hover};
+}}
+.kw-btn-no {{
+    background-color: {btn_no_bg};
+    color: {btn_no_color};
+    border-color: {btn_no_border};
+}}
+.kw-btn-no:hover:not(:disabled) {{
+    background-color: {btn_no_hover};
+}}
+.kw-btn-cancel {{
+    background-color: {btn_cancel_bg};
+    color: {btn_cancel_color};
+    border-color: {btn_cancel_border};
+}}
+.kw-btn-cancel:hover:not(:disabled) {{
+    background-color: {btn_cancel_hover};
+}}
+.kw-status-msg {{
+    color: {subtext_color};
+    font-size: 13px;
+    margin-top: 12px;
+    display: none;
+    text-align: center;
+}}
+</style>
+</head>
+<body>
+<div class="kw-verify-card" id="kw-lang-modal">
+    <div class="kw-verify-title" id="kw-lang-modal-title">Language Verification</div>
+    <div class="kw-verify-body" id="kw-lang-modal-body">{prompt_text}</div>
+    <div class="kw-verify-actions">
+        <button id="kw-btn-lang-yes" class="kw-btn kw-btn-yes" onclick="submitChoice('switch')">Yes</button>
+        <button id="kw-btn-lang-no" class="kw-btn kw-btn-no" onclick="submitChoice('keep')">No</button>
+        <button id="kw-btn-lang-cancel" class="kw-btn kw-btn-cancel" onclick="submitChoice('cancel')">Cancel</button>
+    </div>
+    <div id="kw-status-msg" class="kw-status-msg"></div>
+</div>
+<script>
+const sessionZid = {zid_json};
+const apiToken = {token_json};
+let submitted = false;
+
+function setButtonsDisabled(disabled) {{
+    document.getElementById('kw-btn-lang-yes').disabled = disabled;
+    document.getElementById('kw-btn-lang-no').disabled = disabled;
+    document.getElementById('kw-btn-lang-cancel').disabled = disabled;
+}}
+
+function showFallbackMessage(msg) {{
+    const statusDiv = document.getElementById('kw-status-msg');
+    if (statusDiv) {{
+        statusDiv.textContent = msg;
+        statusDiv.style.display = 'block';
+    }}
+    const bodyDiv = document.getElementById('kw-lang-modal-body');
+    if (bodyDiv) {{
+        bodyDiv.textContent = msg;
+    }}
+}}
+
+function closeTabSafely(fallbackMsg) {{
+    window.close();
+    setTimeout(function() {{
+        if (!window.closed) {{
+            showFallbackMessage(fallbackMsg);
+        }}
+    }}, 200);
+}}
+
+function submitChoice(action) {{
+    if (submitted) return;
+    submitted = true;
+    setButtonsDisabled(true);
+
+    const headers = {{ 'Content-Type': 'application/json' }};
+    if (apiToken) {{
+        headers['X-API-Key'] = apiToken;
+    }}
+
+    fetch('/api/v1/confirm-language', {{
+        method: 'POST',
+        headers: headers,
+        body: JSON.stringify({{ session_zid: sessionZid, action: action }})
+    }})
+    .then(function(res) {{
+        return res.json();
+    }})
+    .then(function(data) {{
+        const msg = action === 'cancel' 
+            ? 'Verification cancelled. You may close this tab.' 
+            : 'Configuration updated. You may close this tab.';
+        closeTabSafely(msg);
+    }})
+    .catch(function(err) {{
+        console.error('Language confirmation failed:', err);
+        const msg = action === 'cancel' 
+            ? 'Verification cancelled. You may close this tab.' 
+            : 'Configuration updated. You may close this tab.';
+        closeTabSafely(msg);
+    }});
+}}
+
+document.addEventListener('keydown', function(e) {{
+    if (e.key === 'Enter') {{
+        e.preventDefault();
+        submitChoice('switch');
+    }} else if (e.key === 'Escape') {{
+        e.preventDefault();
+        submitChoice('cancel');
+    }}
+}});
+</script>
+</body>
+</html>
+"""
+
+
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
