@@ -976,6 +976,68 @@ def test_session_status_client_hydration_multi_sentence_frequency_order(page, tm
     assert "дерево_hydrated_s2" in row1_trans.inner_text()
 
 
+def test_persistent_text_selection_and_dismissal(page, tmp_path):
+    html = get_desk_page_html(tmp_path)
+    page.set_content(html)
+
+    # 1. Verify CSS selectability in base styles
+    source_user_select = page.evaluate("window.getComputedStyle(document.querySelector('.source-text')).userSelect")
+    assert source_user_select == "text"
+    trans_user_select = page.evaluate("window.getComputedStyle(document.querySelector('.translation-text')).userSelect")
+    assert trans_user_select == "text"
+
+    # 2. Text selected during transient Alt-mode persists after Alt key release
+    page.keyboard.down("Alt")
+    assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is True
+
+    # Select text in #source-container
+    page.evaluate("""() => {
+        const source = document.querySelector('#source-container');
+        const range = document.createRange();
+        range.selectNodeContents(source);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }""")
+    selected_text = page.evaluate("window.getSelection().toString()")
+    assert "Haus" in selected_text
+
+    # Release Alt key - mode deactivated but selection persists
+    page.keyboard.up("Alt")
+    assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is False
+    persisted_text = page.evaluate("window.getSelection().toString()")
+    assert persisted_text == selected_text
+
+    # 3. Dismiss selection using Escape key
+    page.keyboard.press("Escape")
+    assert page.evaluate("window.getSelection().toString()") == ""
+
+    # 4. Text selected during Hand Tool toggle mode persists after toggling off
+    hand_btn = page.locator("#kw-btn-hand-tool")
+    hand_btn.click()
+    assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is True
+
+    page.evaluate("""() => {
+        const source = document.querySelector('#source-container');
+        const range = document.createRange();
+        range.selectNodeContents(source);
+        const sel = window.getSelection();
+        sel.removeAllRanges();
+        sel.addRange(range);
+    }""")
+    assert page.evaluate("window.getSelection().toString()").strip() != ""
+
+    # Toggle Hand Tool off
+    hand_btn.click()
+    assert page.evaluate("document.body.classList.contains('text-selection-mode-active')") is False
+    assert page.evaluate("window.getSelection().toString()").strip() != ""
+
+    # 5. Dismiss selection by clicking on a free container area (padding of .container)
+    page.locator(".container").click(position={"x": 5, "y": 5})
+    assert page.evaluate("window.getSelection().toString()") == ""
+
+
+
 
 
 
