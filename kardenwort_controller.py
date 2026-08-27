@@ -741,48 +741,35 @@ class SessionArbiter:
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
         target_lang = self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
 
-        tsv_path = None
+        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+        results_dir = resolve_results_dir(self.resolved_paths, self.config)
+        tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
+        if not tsv_path:
+            tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
+
+        if not is_sqlite and (not tsv_path or not tsv_path.exists()):
+            raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
+
         session_text = ""
         with self._lock:
             if session_zid in self.sessions:
                 sess = self.sessions[session_zid]
                 session_text = sess.get("text", "")
-                if sess.get("tsv_path"):
-                    cand = Path(sess["tsv_path"])
-                    if cand.exists():
-                        tsv_path = cand
-                    else:
-                        tsv_path = cand
-                        comments = sess.get("comments", [])
-                        headers = sess.get("headers", [])
-                        data_rows = sess.get("data_rows", [])
-                        if headers and data_rows:
-                            try:
-                                tsv_path.parent.mkdir(parents=True, exist_ok=True)
-                                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                            except Exception:
-                                pass
 
-        if not tsv_path or not tsv_path.exists():
-            results_dir = resolve_results_dir(self.resolved_paths, self.config)
-            storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
-            tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
-
-        if not tsv_path or not tsv_path.exists():
-            raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
-
-        source_txt = tsv_path.with_suffix('.txt')
-        if source_txt.exists():
+        source_txt = tsv_path.with_suffix('.txt') if tsv_path else None
+        if not is_sqlite and source_txt and source_txt.exists():
             text = source_txt.read_text(encoding='utf-8')
         elif session_text:
             text = session_text
-            try:
-                source_txt.write_text(text, encoding='utf-8')
-            except Exception:
-                pass
+            if not is_sqlite and source_txt:
+                try:
+                    source_txt.write_text(text, encoding='utf-8')
+                except Exception:
+                    pass
         else:
-            # Third fallback: recover source text from SQLite session record
-            storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+            # Fallback: recover source text from storage_adapter / SQLite session record
             recovered_text = ""
             try:
                 bundle = storage_adapter.restore_session(session_zid)
@@ -803,16 +790,20 @@ class SessionArbiter:
                             self.sessions[session_zid]["comments"] = bundle["comments"]
             except Exception:
                 pass
-            if not recovered_text:
+            if not recovered_text and source_txt and source_txt.exists():
+                text = source_txt.read_text(encoding='utf-8')
+            elif not recovered_text:
                 raise StructuredError(ErrorCode.DESK_FAILED, f"Source text not recoverable for session {session_zid}")
-            text = recovered_text
+            else:
+                text = recovered_text
+
         provider = self.config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
 
         # Translate in-memory
         sentence_trans = translate_source_text(text, lang, target_lang, text_mode, self.config, self.resolved_paths, provider, zid=req_zid)
 
-        with file_lock(tsv_path):
-            comments, headers, data_rows = load_tsv_rows(tsv_path)
+        with storage_adapter.file_lock(tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -821,7 +812,7 @@ class SessionArbiter:
                 for row in data_rows:
                     if len(row) > col_sentence_dest and sentence_trans:
                         row[col_sentence_dest] = list(sentence_trans.values())[0] if isinstance(sentence_trans, dict) else str(sentence_trans)
-                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
 
         new_fp = compute_content_fingerprint(data_rows)
         with self._lock:

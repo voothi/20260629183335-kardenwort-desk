@@ -31,6 +31,10 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20260826214953", seq_num=Non
 def inject_mock_fetch(html):
     mock_script = """<script>
 window.__fetches = [];
+window.__reloads = 0;
+window.onUpdateClick = function() {
+    window.__reloads = (window.__reloads || 0) + 1;
+};
 window.fetch = async function(url, options) {
     var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
     window.__fetches.push({ url: url, options: options, body: bodyObj });
@@ -126,17 +130,18 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     html = inject_mock_fetch(get_desk_page_html(tmp_path))
     page.set_content(html)
 
-    # 1. Click Re-word without selection -> warning toast, no fetch
+    # 1. Click Re-word without selection -> warning toast, no fetch, no reload
     reword_btn = page.locator("#kw-btn-reword")
     reword_btn.click()
     page.wait_for_timeout(50)
     fetches = page.evaluate("window.__fetches")
     assert len(fetches) == 0
+    assert page.evaluate("window.__reloads") == 0
     toast_warn = page.locator(".kw-toast-warning")
     assert toast_warn.is_visible()
     assert "Please select rows to re-word." in toast_warn.inner_text()
 
-    # 2. Select row 0 and click Re-word -> dispatches /session/reword
+    # 2. Select row 0 and click Re-word -> dispatches /session/reword and auto-refreshes view
     row0 = page.locator("tr[data-row-id='0']")
     row0.click()
     reword_btn.click()
@@ -146,8 +151,9 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     assert fetches[0]["url"] == "/session/reword"
     assert fetches[0]["body"]["row_ids"] == [0]
     assert fetches[0]["body"]["session_zid"] == "20260826214953"
+    assert page.evaluate("window.__reloads") == 1
 
-    # 3. Click Re-text -> dispatches /session/retext
+    # 3. Click Re-text -> dispatches /session/retext and auto-refreshes view
     retext_btn = page.locator("#kw-btn-retext")
     retext_btn.click()
     page.wait_for_timeout(100)
@@ -155,6 +161,7 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     assert len(fetches) == 2
     assert fetches[1]["url"] == "/session/retext"
     assert fetches[1]["body"]["session_zid"] == "20260826214953"
+    assert page.evaluate("window.__reloads") == 2
 
 def test_send_to_anki_rest_dispatch(page, tmp_path):
     html = inject_mock_fetch(get_desk_page_html(tmp_path))

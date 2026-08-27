@@ -838,3 +838,69 @@ def test_reword_structured_error_on_failure(running_controller, monkeypatch):
         assert "message" in err_body, f"Expected 'message' key in error body, got: {err_body}"
         assert err_body["status"] == "error"
         assert "Re-word failed" in err_body["message"]
+
+
+def test_controller_session_retext_sqlite_pure_virtual(running_controller):
+    """
+    Verify that retext_session operates completely without physical .tsv or .txt files
+    on disk when backed by SQLite storage adapter.
+    """
+    server_url, server = running_controller
+
+    # 1. Create a session via /session/create
+    create_url = f"{server_url}/session/create"
+    create_payload = json.dumps({
+        "text": "The quick brown fox jumps over the lazy dog.",
+        "language": "en",
+        "bypass_lang_check": True
+    }).encode("utf-8")
+    req_create = urllib.request.Request(
+        create_url,
+        data=create_payload,
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_create, timeout=30.0) as resp:
+        assert resp.status == 200
+        create_res = json.loads(resp.read().decode("utf-8"))
+        session_zid = create_res["data"]["session_zid"]
+
+    # 2. Clear arbiter in-memory session cache
+    with server.arbiter._lock:
+        server.arbiter.sessions.clear()
+
+    # 3. Verify no physical files are required or delete any leftover files on disk
+    results_dir = kardenwort_desk.resolve_results_dir(server.resolved_paths, server.config)
+    for ext in [".tsv", ".txt", ".json", ".js"]:
+        p = results_dir / f"{session_zid}.en{ext}"
+        if p.exists():
+            try:
+                p.unlink()
+            except Exception:
+                pass
+        p_raw = results_dir / f"{session_zid}{ext}"
+        if p_raw.exists():
+            try:
+                p_raw.unlink()
+            except Exception:
+                pass
+
+    # 4. Call /session/retext — must succeed seamlessly via SQLite storage adapter
+    retext_url = f"{server_url}/session/retext"
+    retext_payload = json.dumps({
+        "session_zid": session_zid,
+        "language": "en",
+        "text_mode": "single"
+    }).encode("utf-8")
+    req_retext = urllib.request.Request(
+        retext_url,
+        data=retext_payload,
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_retext, timeout=30.0) as resp:
+        assert resp.status == 200
+        retext_res = json.loads(resp.read().decode("utf-8"))
+        assert retext_res["status"] == "success"
+        data_payload = retext_res.get("data", retext_res)
+        assert "translated_text" in data_payload
+        assert len(data_payload["data_rows"]) > 0
+
