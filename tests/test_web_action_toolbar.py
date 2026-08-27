@@ -151,6 +151,8 @@ def test_toolbar_markup_and_styles_rendered(tmp_path):
     assert '>Delete</button>' in html
     assert 'id="kw-toast-container"' in html
     assert 'min-width: 110px;' in html
+    assert 'height: 28px;' in html
+    assert 'padding: 4px 12px;' in html
     assert 'padding-bottom: 70px;' in html
     assert 'background: #161b22;' in html
     assert 'background: #30363d;' in html
@@ -161,6 +163,12 @@ def test_toolbar_markup_and_styles_rendered(tmp_path):
     assert '.kw-toast-warning' in html
     assert '.kw-toast-error' in html
     assert '.kw-toast-info' in html
+    # Utilitarian neutral styles - no saturated blue or red in toolbar/modal buttons
+    assert '#1f6feb' not in html
+    # Modal unified geometry
+    assert '.kw-modal-box {' in html
+    assert 'min-width: 84px;' in html
+    assert 'padding: 4px 14px;' in html
     # Ensure no emojis in toolbar buttons
     for emoji in ['💾', '🔄', '📝', '🔤', '📦', '✋', '🗑️']:
         assert emoji not in html

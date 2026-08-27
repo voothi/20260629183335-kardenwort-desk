@@ -9157,7 +9157,8 @@ html, body {{
     font-size: 13px;
     font-weight: 500;
     min-width: 110px;
-    padding: 6px 12px;
+    height: 28px;
+    padding: 4px 12px;
     border-radius: 4px;
     border: 1px solid {section_border};
     background: {input_bg};
@@ -9181,19 +9182,23 @@ html, body {{
     cursor: not-allowed;
   }
   .kw-action-toolbar button.btn-primary {
-    background: #1f6feb;
-    border-color: #388bfd;
-    color: #ffffff;
+    background: {input_bg};
+    border-color: {section_border};
+    color: {text_color};
   }
   .kw-action-toolbar button.btn-primary:hover:not(:disabled) {
-    background: #388bfd;
+    background: {toolbar_btn_hover};
+    border-color: {text_muted};
   }
   .kw-action-toolbar button.btn-danger {
-    color: #ff7b72;
+    background: {input_bg};
+    border-color: {section_border};
+    color: {text_color};
   }
   .kw-action-toolbar button.btn-danger:hover:not(:disabled) {
-    background: rgba(248, 81, 73, 0.15);
-    border-color: #f85149;
+    background: rgba(248, 81, 73, 0.12);
+    border-color: rgba(248, 81, 73, 0.4);
+    color: #ff7b72;
   }
   .kw-action-toolbar button.active {
     background: {flipped_bg};
@@ -9301,11 +9306,11 @@ html, body {{
   .kw-modal-box {
     background: {modal_bg};
     border: 1px solid {modal_border};
-    border-radius: 8px;
+    border-radius: 6px;
     width: 90%;
     max-width: 480px;
     box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-    padding: 22px 24px;
+    padding: 24px;
     color: {text_color};
     font-family: inherit;
     box-sizing: border-box;
@@ -9338,9 +9343,9 @@ html, body {{
     font-family: inherit;
     font-size: 13px;
     font-weight: 500;
-    min-width: 75px;
-    height: 32px;
-    padding: 4px 16px;
+    min-width: 84px;
+    height: 28px;
+    padding: 4px 14px;
     border-radius: 4px;
     border: 1px solid {section_border};
     background: {input_bg};
@@ -9363,12 +9368,13 @@ html, body {{
     cursor: not-allowed;
   }
   .kw-modal-actions button.btn-primary {
-    background: #1f6feb;
-    border-color: #388bfd;
-    color: #ffffff;
+    background: {input_bg};
+    border-color: {section_border};
+    color: {text_color};
   }
   .kw-modal-actions button.btn-primary:hover:not(:disabled) {
-    background: #388bfd;
+    background: {row_hover};
+    border-color: {text_muted};
   }
   body.theme-light .kw-modal-box,
   body.theme-white .kw-modal-box {
@@ -9396,13 +9402,14 @@ html, body {{
   }
   body.theme-light .kw-modal-actions button.btn-primary,
   body.theme-white .kw-modal-actions button.btn-primary {
-    background: #1f6feb;
-    border-color: #388bfd;
-    color: #ffffff;
+    background: #f6f8fa;
+    border-color: #d0d7de;
+    color: #24292f;
   }
   body.theme-light .kw-modal-actions button.btn-primary:hover:not(:disabled),
   body.theme-white .kw-modal-actions button.btn-primary:hover:not(:disabled) {
-    background: #388bfd;
+    background: #eaeef2;
+    border-color: #afb8c1;
   }
 </style>
 </head>
@@ -14037,20 +14044,28 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             margin-bottom: 8px;
         }
         .kw-export-btn {
-            background-color: #2da44e;
-            color: #ffffff;
-            border: 1px solid rgba(27, 31, 36, 0.15);
-            border-radius: 6px;
-            padding: 3px 10px;
-            font-size: 12px;
+            background-color: #f6f8fa;
+            color: #24292f;
+            border: 1px solid #d0d7de;
+            border-radius: 4px;
+            padding: 4px 12px;
+            height: 28px;
+            font-size: 13px;
             font-weight: 500;
             cursor: pointer;
+            display: inline-flex;
+            align-items: center;
+            justify-content: center;
+            text-decoration: none;
+            transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+            user-select: none;
         }
         .kw-export-btn:hover {
-            background-color: #2c974b;
+            background-color: #eaeef2;
+            border-color: #afb8c1;
         }
         .kw-export-btn:disabled {
-            opacity: 0.6;
+            opacity: 0.4;
             cursor: not-allowed;
         }
         .kw-interactive-status {
@@ -14182,9 +14197,9 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             background-color: var(--bg-card);
             color: var(--text-main);
             border: 1px solid var(--border-color);
-            border-radius: var(--radius-sm);
+            border-radius: 4px;
             padding: 4px 12px;
-            height: 26px;
+            height: 28px;
             font-size: var(--font-size-sm);
             font-weight: 500;
             cursor: pointer;
@@ -14192,6 +14207,8 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             align-items: center;
             justify-content: center;
             text-decoration: none;
+            transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+            user-select: none;
         }
         .kw-export-btn:hover {
             background-color: var(--bg-hover);
