@@ -155,6 +155,7 @@ def test_set_language_endpoint(running_controller, monkeypatch, tmp_path):
 
     monkeypatch.setattr(kardenwort_desk, "spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
     monkeypatch.setattr("kardenwort_controller.spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
+    monkeypatch.setattr("kardenwort_controller.persist_default_language", lambda language, base_dir=None: True)
 
     req_body = {"language": "de"}
     req_data = json.dumps(req_body).encode("utf-8")
@@ -312,6 +313,7 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     opened_urls = []
     monkeypatch.setattr(kardenwort_desk, "spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
     monkeypatch.setattr("kardenwort_controller.spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
+    monkeypatch.setattr("kardenwort_controller.persist_default_language", lambda language, base_dir=None: True)
     import webbrowser
     monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: opened_urls.append(url))
 

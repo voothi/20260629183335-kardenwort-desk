@@ -6933,26 +6933,7 @@ def render_verify_language_html(
         prompt_text = "Language mismatch detected.\n\nProceed with verification?"
 
     is_light = theme in ("light", "white")
-    bg_color = "#f6f8fa" if is_light else "#0d0f12"
-    card_bg = "#ffffff" if is_light else "#161b22"
-    card_border = "#d0d7de" if is_light else "#30363d"
-    text_color = "#24292f" if is_light else "#c9d1d9"
-    subtext_color = "#57606a" if is_light else "#8b949e"
-    title_color = "#0969da" if is_light else "#58a6ff"
-
-    btn_yes_bg = "#1f883d" if is_light else "#238636"
-    btn_yes_hover = "#1a7f37" if is_light else "#2ea043"
-    btn_yes_color = "#ffffff"
-
-    btn_no_bg = "#f3f4f6" if is_light else "#21262d"
-    btn_no_hover = "#e5e7eb" if is_light else "#30363d"
-    btn_no_border = "#d0d7de" if is_light else "#30363d"
-    btn_no_color = "#24292f" if is_light else "#c9d1d9"
-
-    btn_cancel_bg = "transparent"
-    btn_cancel_hover = "#f3f4f6" if is_light else "#30363d"
-    btn_cancel_border = "#d0d7de" if is_light else "#30363d"
-    btn_cancel_color = "#57606a" if is_light else "#8b949e"
+    theme_class = "theme-light" if is_light else "theme-dark"
 
     token_json = json.dumps(api_token)
     zid_json = json.dumps(zid)
@@ -6964,14 +6945,34 @@ def render_verify_language_html(
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Language Verification - Kardenwort</title>
 <style>
+:root {{
+    --bg-primary: #0d0f12;
+    --bg-card: #161a22;
+    --bg-hover: #1f242d;
+    --border-color: rgba(255, 255, 255, 0.1);
+    --border-hover: rgba(255, 255, 255, 0.2);
+    --text-main: #e3e6eb;
+    --text-muted: #8b949e;
+    --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
+}}
+body.theme-light, body.theme-white {{
+    --bg-primary: #f6f8fa;
+    --bg-card: #ffffff;
+    --bg-hover: #eaeef2;
+    --border-color: #d0d7de;
+    --border-hover: #afb8c1;
+    --text-main: #24292f;
+    --text-muted: #57606a;
+    --card-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
+}}
 * {{
     box-sizing: border-box;
     margin: 0;
     padding: 0;
 }}
 body {{
-    background-color: {bg_color};
-    color: {text_color};
+    background-color: var(--bg-primary);
+    color: var(--text-main);
     font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
     display: flex;
     align-items: center;
@@ -6981,77 +6982,70 @@ body {{
     overflow: hidden;
 }}
 .kw-verify-card {{
-    background: {card_bg};
-    border: 1px solid {card_border};
-    border-radius: 8px;
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: 6px;
     padding: 24px;
     max-width: 480px;
     width: 100%;
-    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    box-shadow: var(--card-shadow);
     text-align: left;
     transition: opacity 0.2s ease;
 }}
 .kw-verify-title {{
-    color: {title_color};
-    font-size: 18px;
+    color: var(--text-main);
+    font-size: 16px;
     font-weight: 600;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
     display: flex;
     align-items: center;
     gap: 8px;
 }}
 .kw-verify-body {{
-    color: {text_color};
-    font-size: 14px;
-    line-height: 1.5;
-    margin-bottom: 24px;
+    color: var(--text-main);
+    font-size: 13.5px;
+    line-height: 1.6;
+    margin-bottom: 22px;
     white-space: pre-wrap;
+    word-break: break-word;
 }}
 .kw-verify-actions {{
     display: flex;
-    justify-content: flex-end;
+    justify-content: center;
     gap: 8px;
 }}
 .kw-btn {{
     font-family: inherit;
     font-size: 13px;
     font-weight: 500;
-    padding: 6px 14px;
-    border-radius: 6px;
+    min-width: 84px;
+    height: 28px;
+    padding: 4px 14px;
+    border-radius: 4px;
     cursor: pointer;
-    border: 1px solid transparent;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-card);
+    color: var(--text-main);
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
     transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
     user-select: none;
 }}
+.kw-btn:hover:not(:disabled) {{
+    background-color: var(--bg-hover);
+    border-color: var(--border-hover);
+}}
 .kw-btn:disabled {{
-    opacity: 0.5;
+    opacity: 0.4;
     cursor: not-allowed;
 }}
-.kw-btn-yes {{
-    background-color: {btn_yes_bg};
-    color: {btn_yes_color};
-}}
-.kw-btn-yes:hover:not(:disabled) {{
-    background-color: {btn_yes_hover};
-}}
-.kw-btn-no {{
-    background-color: {btn_no_bg};
-    color: {btn_no_color};
-    border-color: {btn_no_border};
-}}
-.kw-btn-no:hover:not(:disabled) {{
-    background-color: {btn_no_hover};
-}}
-.kw-btn-cancel {{
-    background-color: {btn_cancel_bg};
-    color: {btn_cancel_color};
-    border-color: {btn_cancel_border};
-}}
-.kw-btn-cancel:hover:not(:disabled) {{
-    background-color: {btn_cancel_hover};
+.kw-btn-yes, .kw-btn-no, .kw-btn-cancel {{
+    /* Inherit base .kw-btn design tokens */
 }}
 .kw-status-msg {{
-    color: {subtext_color};
+    color: var(--text-muted);
     font-size: 13px;
     margin-top: 12px;
     display: none;
@@ -7059,7 +7053,7 @@ body {{
 }}
 </style>
 </head>
-<body>
+<body class="{theme_class}">
 <div class="kw-verify-card" id="kw-lang-modal">
     <div class="kw-verify-title" id="kw-lang-modal-title">Language Verification</div>
     <div class="kw-verify-body" id="kw-lang-modal-body">{prompt_text}</div>
