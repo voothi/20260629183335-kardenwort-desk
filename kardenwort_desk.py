@@ -1720,6 +1720,17 @@ def _migrate_config(config):
             val_gap = 60
     config.set(SEC_SETTINGS, 'split_gap_limit', str(val_gap))
 
+    if not config.has_section(SEC_PIPELINE):
+        config.add_section(SEC_PIPELINE)
+    raw_sib_timeout = config.get(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=None)
+    val_sib_timeout = 0.0
+    if raw_sib_timeout is not None:
+        try:
+            val_sib_timeout = float(raw_sib_timeout)
+        except ValueError:
+            val_sib_timeout = 0.0
+    config.set(SEC_PIPELINE, 'sibling_coordination_timeout', str(val_sib_timeout))
+
 def resolve_wordfill_config(config, resolved_paths=None):
     """
     Parse and resolve wordfill configuration dictionary from config (ConfigParser or dict)
@@ -15985,8 +15996,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     else:
                         chunks = [lemmas_to_translate]
                         
+                    target_l = getattr(args, 'target_lang', None) or config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
                     for chunk in chunks:
-                        lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), args.target_lang, config, resolved_paths, provider)
+                        lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), target_l, config, resolved_paths, provider)
                         
                         if is_sqlite:
                             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
@@ -16372,8 +16384,8 @@ def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
     siblings.sort(key=lambda x: x[0])
     return [p for _, p in siblings]
 
-def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0, is_sqlite=False):
-    if is_sqlite:
+def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provider=None, data_rows_count=0, is_sqlite=False, timeout=0.0):
+    if is_sqlite or timeout <= 0:
         return
     import time
     from datetime import datetime
@@ -16389,7 +16401,7 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     if not zid_match: return
     my_zid = zid_match.group(1)
     
-    max_wait = 30.0
+    max_wait = float(timeout)
     
     def check_siblings():
         sibling_tsvs = get_batch_sibling_tsvs(working_tsv_path)
@@ -16471,8 +16483,8 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
         observer.stop()
         observer.join()
 
-def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_count=0, is_sqlite=False):
-    if is_sqlite:
+def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_count=0, is_sqlite=False, timeout=0.0):
+    if is_sqlite or timeout <= 0:
         return
     import time
     from datetime import datetime
@@ -16488,7 +16500,7 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
     if not zid_match: return
     my_zid = zid_match.group(1)
     
-    max_wait = 30.0
+    max_wait = float(timeout)
     
     def check_siblings():
         sibling_tsvs = get_batch_sibling_tsvs(working_tsv_path)
@@ -16781,9 +16793,10 @@ def cmd_progressive_worker(args):
         safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
             
         base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+        sibling_timeout = config.getfloat(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) if hasattr(config, 'getfloat') else float(config.get(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) or 0.0)
         has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi' or is_sqlite
         if has_siblings:
-            wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite)
+            wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
             data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
             
         try:
@@ -16805,7 +16818,7 @@ def cmd_progressive_worker(args):
             # 2. Enrichment Stage
             skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
             if has_siblings:
-                wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows), is_sqlite=is_sqlite)
+                wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
                 zid_part = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
                 with TraceTimer("cross_pollinate_from_siblings", zid_part, config, resolved_paths):
                     data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)

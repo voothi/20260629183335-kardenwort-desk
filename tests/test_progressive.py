@@ -741,3 +741,94 @@ en_prompt=
     assert "for" not in child1_lemmas, "Child 1 must NOT contain 'for' from sentence 2"
 
 
+def test_wait_for_older_siblings_zero_timeout_returns_immediately(tmp_path):
+    """
+    Verify that wait_for_older_siblings_in_batch and wait_for_older_siblings_enrichment_in_batch
+    return immediately (< 0.1s) when timeout <= 0.0, even if older sibling markers do not exist.
+    """
+    import time
+
+    # Setup older incomplete sibling TSV without markers
+    sibling_tsv = tmp_path / "20260809190000-sibling.en.tsv"
+    sibling_tsv.write_text("WordSource\tWordDestination\nHaus\t\n", encoding="utf-8")
+
+    working_tsv = tmp_path / "20260809190005-working.en.tsv"
+    working_tsv.write_text("WordSource\tWordDestination\nAuto\t\n", encoding="utf-8")
+
+    mapping = {"desk_columns": {"WordSource": "lemma", "WordDestination": "word_translation"}}
+
+    start = time.time()
+    desk.wait_for_older_siblings_in_batch(working_tsv, mapping, timeout=0.0)
+    duration_base = time.time() - start
+    assert duration_base < 0.2, f"Base sibling wait with timeout=0 took {duration_base}s, expected instant return"
+
+    start = time.time()
+    desk.wait_for_older_siblings_enrichment_in_batch(working_tsv, timeout=0.0)
+    duration_enrich = time.time() - start
+    assert duration_enrich < 0.2, f"Enrichment sibling wait with timeout=0 took {duration_enrich}s, expected instant return"
+
+
+def test_progressive_worker_nonblocking_zero_timeout(monkeypatch, tmp_path):
+    """
+    Verify that cmd_progressive_worker with sibling_coordination_timeout = 0.0
+    executes immediately without blocking on older siblings, translating its own words.
+    """
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        "[settings]\ndefault_language=en\n"
+        "[pipeline]\nsibling_coordination_timeout=0.0\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+        "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+        "[fields]\n",
+        encoding="utf-8",
+    )
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
+        encoding="utf-8",
+    )
+
+    # Older sibling exists but is NOT finished (no .base_translation_done marker)
+    sibling_tsv = tmp_path / "20260809190000-older.en.tsv"
+    sibling_tsv.write_text("WordSource\tWordDestination\nHaus\t\n", encoding="utf-8")
+
+    # Child TSV: single text-mode with 'Auto' untranslated
+    child_tsv = tmp_path / "20260809190005-child.en.tsv"
+    child_tsv.write_text("WordSource\tWordDestination\nAuto\t\n", encoding="utf-8")
+
+    args = types.SimpleNamespace()
+    args.tsv = str(child_tsv)
+    args.config = str(config_path)
+    args.text_mode = "single"
+    args.skip_intellifiller = True
+
+    def mock_load_config(cfg_path):
+        config = configparser.ConfigParser()
+        config.read_string(
+            "[settings]\ndefault_language=en\n"
+            "[pipeline]\nsibling_coordination_timeout=0.0\nlemma_base_provider=google\nlemma_reprocess_provider=intellifiller\n"
+            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+            "[fields]\n"
+        )
+        resolved = {
+            "results_dir": tmp_path,
+            "anki_mapping_file": mapping_path,
+            "kardenwort_workspace": tmp_path,
+            "settings_file": tmp_path / "settings.ini",
+        }
+        return config, resolved, None, None
+
+    monkeypatch.setattr(desk, 'load_config', mock_load_config)
+    monkeypatch.setattr(desk, 'write_update_js', lambda *a, **kw: None)
+    monkeypatch.setattr(desk, 'translate_lemmas_fast_path', lambda lemmas, *a, **kw: {l: "car" if l == "Auto" else "trans" for l in lemmas})
+
+    import time
+    start = time.time()
+    desk.cmd_progressive_worker(args)
+    duration = time.time() - start
+
+    assert duration < 2.0, f"cmd_progressive_worker took {duration}s; should be immediate and non-blocking"
+    _, headers, rows = desk.load_tsv_rows(child_tsv)
+    assert rows[0][1] == "car", "Child worker should have independently translated its own lemma"
+
+
+

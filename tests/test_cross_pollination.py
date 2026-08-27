@@ -334,3 +334,54 @@ def test_cross_pollinate_excludes_sentence_level_fields(tmp_path):
     assert result[0][7] == "Zitat B", "Quotation must NOT be overwritten by sibling"
     assert result[0][8] == "Text Quelle B", "TextSource must NOT be overwritten by sibling"
 
+
+def test_cross_pollination_opportunistic_without_blocking(tmp_path):
+    """
+    Verify that cross_pollinate_from_siblings executes opportunistically,
+    copying only what's available from siblings without blocking, locking, or failing
+    when some siblings are partially filled or empty.
+    """
+    child_name = "20260809190005-child.en.tsv"
+    sibling1_name = "20260809190001-sib1.en.tsv"
+    sibling2_name = "20260809190002-sib2.en.tsv"
+
+    headers = [
+        "WordSource",
+        "WordDestination",
+        "WordSourceIPA",
+        "WordSourceMorphologyAI",
+    ]
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "ipa": "WordSourceIPA",
+        "morphology": "WordSourceMorphologyAI",
+    }
+
+    # Child has two words: "Haus" and "Buch"
+    child_rows = [
+        ["Haus", "", "", ""],
+        ["Buch", "", "", ""],
+    ]
+    child_tsv = tmp_path / child_name
+    child_tsv.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in child_rows) + "\n", encoding="utf-8")
+
+    # Sibling 1 has completed translation for "Haus"
+    sib1_tsv = tmp_path / sibling1_name
+    sib1_tsv.write_text("\t".join(headers) + "\n" + "\t".join(["Haus", "house", "/haʊs/", "Noun"]) + "\n", encoding="utf-8")
+
+    # Sibling 2 has uncompleted/empty translation for "Buch"
+    sib2_tsv = tmp_path / sibling2_name
+    sib2_tsv.write_text("\t".join(headers) + "\n" + "\t".join(["Buch", "", "", ""]) + "\n", encoding="utf-8")
+
+    import time
+    start = time.time()
+    result = desk.cross_pollinate_from_siblings(child_tsv, child_rows, headers, role_fields)
+    duration = time.time() - start
+
+    assert duration < 0.5, "Opportunistic cross-pollination must execute fast and non-blocking"
+    assert result[0][1] == "house", "Haus should be cross-pollinated from sib1"
+    assert result[0][2] == "/haʊs/", "Haus IPA should be cross-pollinated from sib1"
+    assert result[1][1] == "", "Buch should remain empty for child's own translation pass"
+
+
