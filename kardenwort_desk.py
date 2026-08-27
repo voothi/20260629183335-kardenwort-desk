@@ -12408,10 +12408,10 @@ html, body {{
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
             })
             .then(function(resObj) {
-                if (resObj.ok && (resObj.data.ok || resObj.data.retext_started)) {
+                if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.retext_started)) {
                     window.showToast("Retext started...", "success");
                 } else {
-                    window.showToast("Retext failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                    window.showToast("Retext failed: " + (resObj.data.message || (resObj.data.data && resObj.data.data.message) || resObj.data.error || "Server error"), "error");
                 }
             })
             .catch(function(err) {
@@ -12455,10 +12455,10 @@ html, body {{
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
             })
             .then(function(resObj) {
-                if (resObj.ok && (resObj.data.ok || resObj.data.reprocess_started)) {
+                if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.reprocess_started)) {
                     window.showToast("Re-word started for " + rows.length + " rows", "success");
                 } else {
-                    window.showToast("Re-word failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                    window.showToast("Re-word failed: " + (resObj.data.message || (resObj.data.data && resObj.data.data.message) || resObj.data.error || "Server error"), "error");
                 }
             })
             .catch(function(err) {
