@@ -3813,6 +3813,87 @@ def test_cleanup_orphan_skeletons_non_destructive(page):
     assert any("/session/status" in c and "20260827120000" in c for c in recovery_calls)
 
 
+def test_intermediate_empty_status_preserves_skeleton_loader(page):
+    """
+    Verify that intermediate status updates carrying empty translation values
+    (e.g., stage='translating', trans='') do NOT wipe active skeleton loaders,
+    and polling remains active until final translated values arrive.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260827120000">
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">Das Haus</div>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td><div class="scrollable-cell">Haus</div></td>
+        <td><div class="scrollable-cell">Haus</div></td>
+        <td><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true">...</span></div></td>
+        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.__callCount = 0;
+        window.__reloaded = false;
+        window.onSessionReload = function() { window.__reloaded = true; };
+        window.fetch = function(url, options) {
+            window.__callCount++;
+            if (window.__callCount === 1) {
+                // First call: intermediate update with empty translation string
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: function() {
+                        return Promise.resolve({
+                            ok: true,
+                            is_finished: false,
+                            stage: "translating",
+                            zid: "20260827120000",
+                            rows: {
+                                "0": { "trans": "" }
+                            }
+                        });
+                    }
+                });
+            } else {
+                // Subsequent call: finished update with real translation
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: function() {
+                        return Promise.resolve({
+                            ok: true,
+                            is_finished: true,
+                            stage: "finished",
+                            zid: "20260827120000",
+                            rows: {
+                                "0": { "trans": "House" }
+                            }
+                        });
+                    }
+                });
+            }
+        };
+    """)
+
+    page.evaluate(extract_desk_js())
+
+    # Wait for completion pass
+    page.wait_for_function("() => window.__reloaded === true", timeout=5000)
+    assert page.locator("tr[data-row-id='0'] td").nth(2).text_content() == "House"
+
+
 
 
 

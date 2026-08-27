@@ -158,10 +158,14 @@ def check_coordination_busy(tsv_path: Path) -> bool:
     Checks if background IntelliFiller or progressive worker sentinel lock files are held.
     Returns True if busy (held by background process), False if free.
     """
-    sentinels = [
-        Path(str(tsv_path) + ".intellifiller.lock"),
-        Path(str(tsv_path) + ".worker.lock")
-    ]
+    tsv_str = str(tsv_path)
+    if tsv_str.endswith('.lock'):
+        sentinels = [tsv_path]
+    else:
+        sentinels = [
+            Path(tsv_str + ".intellifiller.lock"),
+            Path(tsv_str + ".worker.lock")
+        ]
     for lock_path in sentinels:
         if not lock_path.exists():
             continue
@@ -2553,7 +2557,11 @@ class TsvStorageAdapter(StorageAdapter):
 
     @contextlib.contextmanager
     def file_lock(self, file_path: Path):
-        lock_file_path = file_path.with_suffix('.lock')
+        file_path_str = str(file_path)
+        if file_path_str.endswith('.lock'):
+            lock_file_path = file_path
+        else:
+            lock_file_path = Path(file_path_str + '.lock')
         lock_file_path.parent.mkdir(parents=True, exist_ok=True)
         lock_file = open(lock_file_path, 'w')
         try:
@@ -3262,11 +3270,8 @@ class SqliteStorageAdapter(StorageAdapter):
 
     @contextlib.contextmanager
     def file_lock(self, file_path: Path):
-        if file_path and not file_path.exists():
+        with self._tsv_fallback.file_lock(file_path):
             yield
-        else:
-            with self._tsv_fallback.file_lock(file_path):
-                yield
 
     def update_word(
         self,
@@ -5871,7 +5876,7 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
         return _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows, reprocess, zid=zid, trace_id=trace_id)
 
 def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
-    lock_target = Path(str(tsv_path) + ".intellifiller")
+    lock_target = Path(str(tsv_path) + ".intellifiller.lock")
     with file_lock(lock_target):
         # 1. Read [intellifiller] and timeout sections from config
         model = None
@@ -10169,15 +10174,17 @@ html, body {{
                     if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
                         var div = tds[2].querySelector('.scrollable-cell');
                         var val = rowData.trans || "";
-                        if (globalStage === 'translated_words' || globalStage === 'finished' || window.AppState.isFinished) {
+                        var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
+                        var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
+                        if (hasSkeleton && val === "" && !isTerm) {
+                            // Skeletons remain active until real translations arrive or terminal stage
+                        } else if (globalStage === 'translated_words' || isTerm) {
                             if (div) setCellText(div, val);
                             else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
                             updated = true;
                         } else {
                             var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
-                            var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
-                            var shouldUpdate = (oldVal !== val);
-                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished') || window.AppState.isFinished;
+                            var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (div) setCellText(div, val);
                                 else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
@@ -10188,15 +10195,17 @@ html, body {{
                     if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
                         var div = tds[3].querySelector('.scrollable-cell');
                         var val = rowData.ipa || "";
-                        if (globalStage === 'translated_words' || globalStage === 'finished' || window.AppState.isFinished) {
+                        var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
+                        var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
+                        if (hasSkeleton && val === "" && !isTerm) {
+                            // Skeletons remain active until real translations arrive or terminal stage
+                        } else if (globalStage === 'translated_words' || isTerm) {
                             if (div) setCellText(div, val);
                             else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
                             updated = true;
                         } else {
                             var oldVal = div ? (div.textContent || div.innerText) : (tds[3].classList.contains('editing') ? null : (tds[3].textContent || tds[3].innerText));
-                            var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
-                            var shouldUpdate = (oldVal !== val);
-                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished') || window.AppState.isFinished;
+                            var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (div) setCellText(div, val);
                                 else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
@@ -10207,18 +10216,20 @@ html, body {{
                     if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
                         var div = tds[4].querySelector('.scrollable-cell');
                         var val = rowData.morph || "";
-                        if (globalStage === 'translated_words' || globalStage === 'finished' || window.AppState.isFinished) {
+                        var hasSkeleton = (div || tds[4]).querySelector('.skeleton-loader') !== null;
+                        var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
+                        if (hasSkeleton && val === "" && !isTerm) {
+                            // Skeletons remain active until real translations arrive or terminal stage
+                        } else if (globalStage === 'translated_words' || isTerm) {
                             if (div) div.innerHTML = val;
-                            else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
+                            else if (!tds[4].classList.contains('editing')) div.innerHTML = val;
                             updated = true;
                         } else {
                             var oldVal = div ? div.innerHTML : (tds[4].classList.contains('editing') ? null : tds[4].innerHTML);
-                            var hasSkeleton = (div || tds[4]).querySelector('.skeleton-loader') !== null;
-                            var shouldUpdate = (oldVal !== val);
-                            if (hasSkeleton) shouldUpdate = (val !== "") || (globalStage === 'finished') || window.AppState.isFinished;
+                            var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (div) div.innerHTML = val;
-                                else if (!tds[4].classList.contains('editing')) tds[4].innerHTML = val;
+                                else if (!tds[4].classList.contains('editing')) div.innerHTML = val;
                                 updated = true;
                             }
                         }
@@ -10402,7 +10413,7 @@ html, body {{
                     var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
                     if (remaining === 0) return;
                     window._kwSkeletonPollTimer = setInterval(pollSessionStatus, pollIntervalMs);
-                    setTimeout(pollSessionStatus, 200);
+                    setTimeout(pollSessionStatus, 500);
                 };
 
                 window._kwWatchdogMaxTimer = setTimeout(function() {
@@ -16777,160 +16788,160 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
 
 def cmd_progressive_worker(args):
     tsv_path = Path(args.tsv)
-    lock_target = Path(str(tsv_path) + ".worker")
+    lock_target = Path(str(tsv_path) + ".worker.lock")
     with file_lock(lock_target):
         log_path = tsv_path.with_suffix('.log')
-    file_handler = None
-    m = re.match(r'^(\d{14})', tsv_path.name)
-    zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
-    trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:worker"
-    worker_error = None
-    try:
+        file_handler = None
+        m = re.match(r'^(\d{14})', tsv_path.name)
+        zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
+        trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:worker"
+        worker_error = None
         try:
-            file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
-            file_handler.setFormatter(JSONFormatter())
-            logger.addHandler(file_handler)
-        except Exception as log_err:
-            sys.stderr.write(f"Warning: Failed to setup progressive-worker log file: {log_err}\n")
-            
-        logger.info("Progressive-worker subcommand invoked")
-        config, resolved_paths, goldendict, _wordfill = load_config(args.config)
-        storage_adapter = get_storage_adapter(config, resolved_paths)
-        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
-        results_dir = resolve_results_dir(resolved_paths, config)
-        sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
-        if sess_logger:
-            sess_logger.info("Progressive worker started")
-        import os
-        os.environ["KARDEN_ACTIVE_TEXT_MODE"] = getattr(args, 'text_mode', 'single')
-        
-        if not is_sqlite and not tsv_path.exists():
-            return
-            
-        comments, headers, data_rows = [], [], []
-        role_fields = {}
-        with storage_adapter.file_lock(tsv_path):
-            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-            if not data_rows:
-                return
-            mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-            role_fields = get_role_fields(mapping, headers)
-            
-        lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
-        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-        # Write initial source stage immediately so UI renders without delay
-        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
-            
-        base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
-        sibling_timeout = config.getfloat(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) if hasattr(config, 'getfloat') else float(config.get(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) or 0.0)
-        has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi' or is_sqlite
-        if has_siblings:
-            wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
-            data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
-            
-        try:
-            run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
-            run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
-            run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
-            enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
-
-            # 1. Base Translation Stage
-            if run_base == 'auto' or run_text == 'auto':
-                data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+            try:
+                file_handler = logging.FileHandler(log_path, mode='a', encoding='utf-8')
+                file_handler.setFormatter(JSONFormatter())
+                logger.addHandler(file_handler)
+            except Exception as log_err:
+                sys.stderr.write(f"Warning: Failed to setup progressive-worker log file: {log_err}\n")
                 
-            if not is_sqlite:
-                try:
-                    tsv_path.with_suffix('.base_translation_done').touch()
-                except Exception:
-                    pass
-                    
-            # 2. Enrichment Stage
-            skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
-            if has_siblings:
-                wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
-                zid_part = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
-                with TraceTimer("cross_pollinate_from_siblings", zid_part, config, resolved_paths):
-                    data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
-            if not skip_intellifiller:
-                data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
-
-        except SystemExit as se:
-            raise se
-        except Exception as e:
-            logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
-            worker_error = {
-                "code": "ERR_PROGRESSIVE_WORKER_FAILED",
-                "message": str(e),
-                "provider": "desk",
-                "details": {}
-            }
+            logger.info("Progressive-worker subcommand invoked")
+            config, resolved_paths, goldendict, _wordfill = load_config(args.config)
+            storage_adapter = get_storage_adapter(config, resolved_paths)
+            is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+            results_dir = resolve_results_dir(resolved_paths, config)
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
             if sess_logger:
-                sess_logger.error(f"Progressive worker unhandled exception: {e}")
-            import traceback
-            logger.error(traceback.format_exc())
-        finally:
-            # Final sweep for FAILED to prevent stuck skeleton loaders
+                sess_logger.info("Progressive worker started")
+            import os
+            os.environ["KARDEN_ACTIVE_TEXT_MODE"] = getattr(args, 'text_mode', 'single')
+            
+            if not is_sqlite and not tsv_path.exists():
+                return
+                
+            comments, headers, data_rows = [], [], []
+            role_fields = {}
+            with storage_adapter.file_lock(tsv_path):
+                comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                if not data_rows:
+                    return
+                mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+                role_fields = get_role_fields(mapping, headers)
+                
+            lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
+            sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+            # Write initial source stage immediately so UI renders without delay
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
+                
+            base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+            sibling_timeout = config.getfloat(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) if hasattr(config, 'getfloat') else float(config.get(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) or 0.0)
+            has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi' or is_sqlite
+            if has_siblings:
+                wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
+                data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
+                
             try:
                 run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
-                if run_base == 'auto':
-                    with storage_adapter.file_lock(tsv_path):
-                        comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(tsv_path)
-                        col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
-                        col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
-                        col_token_order = headers_latest.index("TokenOrder") if "TokenOrder" in headers_latest else -1
-                        
-                        modified_sweep = False
-                        updates = []
-                        for row_idx, row in enumerate(current_rows):
-                            if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                                if col_word_dest != -1:
-                                    if len(row) <= col_word_dest:
-                                        row.extend([''] * (col_word_dest - len(row) + 1))
-                                    if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
-                                        row[col_word_dest] = ""
-                                        modified_sweep = True
-                                        if is_sqlite:
-                                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                            updates.append({
-                                                "token_order": t_ord,
-                                                "field": "word_destination",
-                                                "value": "",
-                                            })
-                        if modified_sweep:
-                            if is_sqlite:
-                                if updates:
-                                    storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
-                            else:
-                                save_tsv_rows_safely(tsv_path, comments, headers_latest, current_rows)
-                        data_rows = current_rows
-            except Exception as e:
-                logger.error(f"Error in progressive worker FAILED sweep: {e}")
+                run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
+                run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
+                enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
 
-            # 3. Finished Event
-            if not is_sqlite:
-                try:
-                    tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
-                except Exception:
-                    pass
-                try:
-                    tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
-                except Exception:
-                    pass
-            try:
-                status_val = "failed" if worker_error else "success"
-                sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id)
-                if tsv_path.exists():
-                    import os
-                    os.utime(tsv_path, None)
-                if sess_logger:
-                    sess_logger.info(f"Progressive worker finished (status={status_val})")
+                # 1. Base Translation Stage
+                if run_base == 'auto' or run_text == 'auto':
+                    data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                    
+                if not is_sqlite:
+                    try:
+                        tsv_path.with_suffix('.base_translation_done').touch()
+                    except Exception:
+                        pass
+                        
+                # 2. Enrichment Stage
+                skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
+                if has_siblings:
+                    wait_for_older_siblings_enrichment_in_batch(tsv_path, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
+                    zid_part = tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown"
+                    with TraceTimer("cross_pollinate_from_siblings", zid_part, config, resolved_paths):
+                        data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
+                if not skip_intellifiller:
+                    data_rows = _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+
+            except SystemExit as se:
+                raise se
             except Exception as e:
-                logger.error(f"Failed to write finished event: {e}")
-    finally:
-        if file_handler:
-            logger.removeHandler(file_handler)
-            file_handler.close()
+                logger.error(f"Unhandled exception in cmd_progressive_worker: {e}")
+                worker_error = {
+                    "code": "ERR_PROGRESSIVE_WORKER_FAILED",
+                    "message": str(e),
+                    "provider": "desk",
+                    "details": {}
+                }
+                if sess_logger:
+                    sess_logger.error(f"Progressive worker unhandled exception: {e}")
+                import traceback
+                logger.error(traceback.format_exc())
+            finally:
+                # Final sweep for FAILED to prevent stuck skeleton loaders
+                try:
+                    run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
+                    if run_base == 'auto':
+                        with storage_adapter.file_lock(tsv_path):
+                            comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(tsv_path)
+                            col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
+                            col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
+                            col_token_order = headers_latest.index("TokenOrder") if "TokenOrder" in headers_latest else -1
+                            
+                            modified_sweep = False
+                            updates = []
+                            for row_idx, row in enumerate(current_rows):
+                                if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                                    if col_word_dest != -1:
+                                        if len(row) <= col_word_dest:
+                                            row.extend([''] * (col_word_dest - len(row) + 1))
+                                        if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
+                                            row[col_word_dest] = ""
+                                            modified_sweep = True
+                                            if is_sqlite:
+                                                t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                                                updates.append({
+                                                    "token_order": t_ord,
+                                                    "field": "word_destination",
+                                                    "value": "",
+                                                })
+                            if modified_sweep:
+                                if is_sqlite:
+                                    if updates:
+                                        storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
+                                else:
+                                    save_tsv_rows_safely(tsv_path, comments, headers_latest, current_rows)
+                            data_rows = current_rows
+                except Exception as e:
+                    logger.error(f"Error in progressive worker FAILED sweep: {e}")
+
+                # 3. Finished Event
+                if not is_sqlite:
+                    try:
+                        tsv_path.with_suffix('.base_translation_done').touch(exist_ok=True)
+                    except Exception:
+                        pass
+                    try:
+                        tsv_path.with_suffix('.enrichment_done').touch(exist_ok=True)
+                    except Exception:
+                        pass
+                try:
+                    status_val = "failed" if worker_error else "success"
+                    sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id)
+                    if tsv_path.exists():
+                        import os
+                        os.utime(tsv_path, None)
+                    if sess_logger:
+                        sess_logger.info(f"Progressive worker finished (status={status_val})")
+                except Exception as e:
+                    logger.error(f"Failed to write finished event: {e}")
+        finally:
+            if file_handler:
+                logger.removeHandler(file_handler)
+                file_handler.close()
 
 
 

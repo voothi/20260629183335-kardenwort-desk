@@ -1781,8 +1781,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         if results_dir and results_dir.exists():
                             possible_locks = list(results_dir.glob(f"{zid}*.lock"))
                             for lk in possible_locks:
-                                dummy_tsv = lk.with_suffix('')
-                                if check_coordination_busy(dummy_tsv):
+                                if check_coordination_busy(lk):
                                     is_busy = True
                                     break
                 except Exception:
@@ -1837,6 +1836,32 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+            # Semantic completion check: if untranslated lemmas remain and session is recent (<= 300s) or locked
+            is_recent = False
+            try:
+                if len(zid) >= 14 and zid[:14].isdigit():
+                    dt = datetime.strptime(zid[:14], "%Y%m%d%H%M%S")
+                    now = datetime.now()
+                    age_sec = (now - dt).total_seconds()
+                    if abs(age_sec) <= 300:
+                        is_recent = True
+            except Exception:
+                pass
+
+            has_untranslated_lemmas = False
+            if data_rows and headers:
+                col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
+                col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
+                if col_lemma != -1 and col_word_dest != -1:
+                    for r in data_rows:
+                        if len(r) > col_lemma and r[col_lemma].strip():
+                            dest_val = r[col_word_dest].strip() if len(r) > col_word_dest else ""
+                            if not dest_val or "skeleton-loader" in dest_val:
+                                has_untranslated_lemmas = True
+                                break
+
+            session_is_busy = is_busy or (has_untranslated_lemmas and is_recent)
+
             rows_dict = format_update_rows_dict(data_rows, headers, role_fields)
             translated_html = format_translated_html(
                 sentence_translation,
@@ -1849,11 +1874,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "zid": zid,
                 "session_zid": zid,
-                "is_finished": not is_busy,
-                "stage": "translating" if is_busy else "finished",
+                "is_finished": not session_is_busy,
+                "stage": "translating" if session_is_busy else "finished",
                 "status": {
-                    "is_finished": not is_busy,
-                    "stage": "translating" if is_busy else "finished"
+                    "is_finished": not session_is_busy,
+                    "stage": "translating" if session_is_busy else "finished"
                 },
                 "rows": rows_dict,
                 "translatedText": translated_html,

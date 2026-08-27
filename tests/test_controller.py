@@ -1036,4 +1036,88 @@ def test_session_status_hydrated_rows_and_translated_text(running_controller):
             pass
 
 
+def test_controller_session_status_untranslated_lemmas_reports_translating(running_controller):
+    """
+    Verify GET /session/status reports is_finished=False and stage='translating'
+    when lemmas in a recently created session remain untranslated.
+    """
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    storage_zid = kardenwort_desk.generate_unique_zid()
+
+    storage_adapter.save_session(
+        session_zid=storage_zid,
+        slug="test-untranslated-status",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text="Der Hund rennt",
+        sentences=[{"sentence_index": 0, "sentence_source": "Der Hund rennt", "sentence_destination": "The dog runs"}],
+        headers=["WordSource", "WordDestination", "TokenOrder"],
+        data_rows=[["Hund", "", "0"], ["rennt", "", "1"]],
+    )
+    try:
+        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode("utf-8"))
+            data = res.get("data", res)
+            assert data.get("ok") is True
+            assert data.get("is_finished") is False
+            assert data.get("stage") == "translating"
+    finally:
+        try:
+            storage_adapter.delete_session(storage_zid)
+        except Exception:
+            pass
+
+
+def test_controller_session_status_worker_lock_held_reports_busy(running_controller):
+    """
+    Verify GET /session/status reports is_finished=False and stage='translating'
+    when a worker sentinel lock is actively held.
+    """
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    storage_zid = kardenwort_desk.generate_unique_zid()
+    results_dir = kardenwort_desk.resolve_results_dir(server.resolved_paths, server.config)
+
+    storage_adapter.save_session(
+        session_zid=storage_zid,
+        slug="test-lock-status",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text="Der Hund rennt",
+        sentences=[{"sentence_index": 0, "sentence_source": "Der Hund rennt", "sentence_destination": "The dog runs"}],
+        headers=["WordSource", "WordDestination", "TokenOrder"],
+        data_rows=[["Hund", "dog", "0"], ["rennt", "runs", "1"]],
+    )
+    sentinel_lock_path = (results_dir / f"{storage_zid}.worker.lock") if results_dir else Path(f"{storage_zid}.worker.lock")
+    try:
+        with storage_adapter.file_lock(sentinel_lock_path):
+            req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+            with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
+                assert resp.status == 200
+                res = json.loads(resp.read().decode("utf-8"))
+                data = res.get("data", res)
+                assert data.get("ok") is True
+                assert data.get("is_finished") is False
+                assert data.get("stage") == "translating"
+
+        # Once lock is released, is_finished should be True
+        req_storage2 = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        with urllib.request.urlopen(req_storage2, timeout=5.0) as resp2:
+            assert resp2.status == 200
+            res2 = json.loads(resp2.read().decode("utf-8"))
+            data2 = res2.get("data", res2)
+            assert data2.get("is_finished") is True
+            assert data2.get("stage") == "finished"
+    finally:
+        try:
+            storage_adapter.delete_session(storage_zid)
+        except Exception:
+            pass
+
+
 

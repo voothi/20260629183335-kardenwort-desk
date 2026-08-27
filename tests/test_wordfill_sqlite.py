@@ -498,3 +498,23 @@ SentenceDestination = sentence_destination
         assert len(words) == 1
         assert words[0]["word_destination"] == "собака"
 
+
+def test_sqlite_storage_adapter_sentinel_file_lock_busy_detection(sqlite_wordfill_db, tmp_path):
+    """
+    Verifies that SqliteStorageAdapter properly acquires sentinel file locks
+    and check_coordination_busy detects active locks without requiring primary TSV on disk.
+    """
+    from kardenwort_desk import SqliteStorageAdapter, check_coordination_busy
+    adapter = SqliteStorageAdapter(db_path=sqlite_wordfill_db.db_path)
+
+    dummy_tsv_path = tmp_path / "20260827150000-dummy-sqlite-session.tsv"
+    sentinel_lock_target = Path(str(dummy_tsv_path) + ".worker.lock")
+
+    assert not check_coordination_busy(dummy_tsv_path)
+
+    with adapter.file_lock(sentinel_lock_target):
+        assert check_coordination_busy(dummy_tsv_path) is True
+        assert check_coordination_busy(sentinel_lock_target) is True
+
+    assert check_coordination_busy(dummy_tsv_path) is False
+
