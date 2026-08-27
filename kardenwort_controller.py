@@ -2843,6 +2843,70 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
+        # Audio playback endpoint (Non-blocking background TTS synthesis for web sessions)
+        if path in ('/api/v1/audio/play', '/session/play'):
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+
+            text = body.get('text') or qs.get('text', [None])[0]
+            language = body.get('language') or body.get('lang') or qs.get('language', [None])[0] or qs.get('lang', [None])[0]
+            if not text:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'text' in payload")
+            if not language:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'language' in payload")
+
+            anki_tts_cli = None
+            if hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
+                anki_tts_cli = self.server.resolved_paths.get('anki_tts_cli')
+
+            if not anki_tts_cli or not Path(anki_tts_cli).exists():
+                desk_dir = Path(__file__).resolve().parent
+                workspace_parent = desk_dir.parent
+                candidates = list(workspace_parent.glob("*-anki-tts-cli/anki-tts-cli.py"))
+                if candidates:
+                    anki_tts_cli = candidates[0]
+
+            if not anki_tts_cli or not Path(anki_tts_cli).exists():
+                raise StructuredError(ErrorCode.CONFIGURATION_ERROR, "anki_tts_cli script path is not configured or does not exist")
+
+            python_exe = None
+            if hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
+                python_exe = self.server.resolved_paths.get('kardenwort_python')
+            if not python_exe and hasattr(self.server, 'config') and self.server.config:
+                try:
+                    python_exe = self.server.config.get(SEC_ENVIRONMENT, 'kardenwort_python', fallback=sys.executable)
+                except Exception:
+                    python_exe = sys.executable
+            if not python_exe:
+                python_exe = sys.executable
+
+            creationflags = 0
+            if sys.platform == "win32":
+                creationflags = 0x08000000  # CREATE_NO_WINDOW
+
+            cmd = [str(python_exe), str(anki_tts_cli), str(text), str(language)]
+            try:
+                subprocess.Popen(
+                    cmd,
+                    stdin=subprocess.DEVNULL,
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    creationflags=creationflags,
+                )
+            except Exception as e:
+                logger.warning(f"Failed to spawn audio player: {e}")
+                raise StructuredError(ErrorCode.SERVER_ERROR, f"Failed to spawn audio player: {e}")
+
+            self._send_json(200, {
+                "ok": True,
+                "status": "playing",
+                "text": text,
+                "language": language
+            })
+            return
+
         # 5. Admin Panel UI & Static Assets
         if path in ('/admin', '/admin/'):
             if method != 'GET':

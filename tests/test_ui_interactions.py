@@ -3886,12 +3886,91 @@ def test_intermediate_empty_status_preserves_skeleton_loader(page):
             }
         };
     """)
-
     page.evaluate(extract_desk_js())
 
     # Wait for completion pass
     page.wait_for_function("() => window.__reloaded === true", timeout=5000)
     assert page.locator("tr[data-row-id='0'] td").nth(2).text_content() == "House"
+
+
+def test_audio_playback_web_fallback_and_ahk_parity(page):
+    source_html = '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="haus">Haus</span>'
+    manifest = [
+        {"text": "Haus", "is_word": True, "visual_idx": 0, "lower_clean": "haus", "row_ids": [0]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource">Haus</td>
+          <td data-col="WordDestination">house</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">de</script>
+</body>
+</html>"""
+
+    # Scenario A: When window.ahkCall is present, it is used directly and fetch is NOT called
+    page.set_content(html)
+    page.evaluate("""
+        window.__ahkCalls = [];
+        window.__fetchCalls = [];
+        window.ahkCall = function(action, arg) {
+            window.__ahkCalls.push({action: action, arg: arg});
+        };
+        window.fetch = function(url, options) {
+            window.__fetchCalls.push({url: url, options: options});
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+        };
+    """)
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+
+    span = page.locator("span[data-lower-clean='haus']")
+    span.click(button="left")
+
+    ahk_calls = page.evaluate("window.__ahkCalls")
+    fetch_calls = page.evaluate("window.__fetchCalls")
+
+    ahk_play_calls = [c for c in ahk_calls if c.get("action") == "play"]
+    assert len(ahk_play_calls) == 1
+    assert "Haus" in ahk_play_calls[0]["arg"]
+    assert "de" in ahk_play_calls[0]["arg"]
+    audio_fetch_calls = [f for f in fetch_calls if f.get("url") == "/api/v1/audio/play"]
+    assert len(audio_fetch_calls) == 0
+
+    # Scenario B: When window.ahkCall is absent/undefined, client falls back to POST /api/v1/audio/play
+    page.set_content(html)
+    page.evaluate("""
+        delete window.ahkCall;
+        window.__fetchCalls = [];
+        window.fetch = function(url, options) {
+            window.__fetchCalls.push({url: url, options: options});
+            return Promise.resolve({ ok: true, json: () => Promise.resolve({ ok: true }) });
+        };
+    """)
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma"))
+
+    span = page.locator("span[data-lower-clean='haus']")
+    span.click(button="left")
+
+    fetch_calls = page.evaluate("window.__fetchCalls")
+    audio_fetch_calls = [f for f in fetch_calls if f.get("url") == "/api/v1/audio/play"]
+    assert len(audio_fetch_calls) == 1
+    assert audio_fetch_calls[0]["options"]["method"] == "POST"
+    body = json.loads(audio_fetch_calls[0]["options"]["body"])
+    assert body["text"] == "Haus"
+    assert body["language"] == "de"
+
 
 
 

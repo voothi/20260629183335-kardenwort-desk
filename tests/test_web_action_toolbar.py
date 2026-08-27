@@ -43,6 +43,16 @@ if (window.location) {
     } catch(e) {}
 }
 window.fetch = async function(url, options) {
+    if (url === '/api/v1/audio/play' || url === '/session/play') {
+        window.__audioFetches = window.__audioFetches || [];
+        var audioBody = (options && options.body) ? JSON.parse(options.body) : {};
+        window.__audioFetches.push({ url: url, options: options, body: audioBody });
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, status: 'playing' })
+        };
+    }
     var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
     window.__fetches.push({ url: url, options: options, body: bodyObj });
     if (url === '/session/save') {

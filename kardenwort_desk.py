@@ -10890,6 +10890,21 @@ html, body {{
                     window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
                 } catch (e) {
                 }
+            } else if (typeof fetch === 'function') {
+                var headers = { 'Content-Type': 'application/json' };
+                if (typeof getApiToken === 'function') {
+                    var tok = getApiToken();
+                    if (tok) {
+                        headers['X-API-Token'] = tok;
+                    }
+                } else if (typeof API_TOKEN !== 'undefined' && API_TOKEN && API_TOKEN !== '__API_TOKEN__') {
+                    headers['X-API-Token'] = API_TOKEN;
+                }
+                fetch('/api/v1/audio/play', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({ text: clean, language: lang })
+                }).catch(function(e) {});
             }
         }
 

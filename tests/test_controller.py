@@ -1205,3 +1205,92 @@ def test_session_status_multi_sentence_global_frequency_sort(running_controller)
             storage_adapter.delete_session(storage_zid)
         except Exception:
             pass
+
+
+def test_audio_play_endpoint_success_and_validation(running_controller, monkeypatch):
+    server_url, server = running_controller
+    spawned_cmds = []
+
+    def mock_popen(cmd, *args, **kwargs):
+        spawned_cmds.append((cmd, kwargs))
+        class MockProc:
+            pid = 12345
+            def poll(self): return 0
+        return MockProc()
+
+    import subprocess
+    import kardenwort_controller
+    monkeypatch.setattr(kardenwort_controller.subprocess, "Popen", mock_popen)
+
+    # 1. Successful POST /api/v1/audio/play
+    payload = json.dumps({"text": "Guten Tag", "language": "de"}).encode('utf-8')
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/audio/play",
+        data=payload,
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
+    )
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode('utf-8'))
+        assert data["status"] == "success"
+        res = data.get("data", data)
+        assert res["ok"] is True
+        assert res["status"] == "playing"
+        assert res["text"] == "Guten Tag"
+        assert res["language"] == "de"
+
+    assert len(spawned_cmds) == 1
+    cmd, kwargs = spawned_cmds[0]
+    assert cmd[2] == "Guten Tag"
+    assert cmd[3] == "de"
+    assert "anki-tts-cli" in str(cmd[1])
+
+    # 2. Alias POST /session/play
+    payload_alias = json.dumps({"text": "Hello world", "language": "en"}).encode('utf-8')
+    req_alias = urllib.request.Request(
+        f"{server_url}/session/play",
+        data=payload_alias,
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
+    )
+    with urllib.request.urlopen(req_alias, timeout=5.0) as resp:
+        assert resp.status == 200
+        data_alias = json.loads(resp.read().decode('utf-8'))
+        res_alias = data_alias.get("data", data_alias)
+        assert res_alias["ok"] is True
+        assert res_alias["text"] == "Hello world"
+        assert res_alias["language"] == "en"
+
+    assert len(spawned_cmds) == 2
+    cmd2, _ = spawned_cmds[1]
+    assert cmd2[2] == "Hello world"
+    assert cmd2[3] == "en"
+
+    # 3. Validation: Missing language
+    req_bad_lang = urllib.request.Request(
+        f"{server_url}/api/v1/audio/play",
+        data=json.dumps({"text": "Hello"}).encode('utf-8'),
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req_bad_lang, timeout=5.0)
+    assert exc_info.value.code == 400
+
+    # 4. Validation: Missing text
+    req_bad_text = urllib.request.Request(
+        f"{server_url}/api/v1/audio/play",
+        data=json.dumps({"language": "de"}).encode('utf-8'),
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req_bad_text, timeout=5.0)
+    assert exc_info.value.code == 400
+
+    # 5. Method not allowed (GET)
+    req_get = urllib.request.Request(
+        f"{server_url}/api/v1/audio/play",
+        headers={"X-API-Token": server.api_key}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req_get, timeout=5.0)
+    assert exc_info.value.code == 405
+
