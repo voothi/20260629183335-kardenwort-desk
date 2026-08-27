@@ -32,9 +32,11 @@ def inject_mock_fetch(html):
     mock_script = """<script>
 window.__fetches = [];
 window.__reloads = 0;
-window.onUpdateClick = function() {
-    window.__reloads = (window.__reloads || 0) + 1;
-};
+if (window.location) {
+    window.location.reload = function() {
+        window.__reloads = (window.__reloads || 0) + 1;
+    };
+}
 window.fetch = async function(url, options) {
     var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
     window.__fetches.push({ url: url, options: options, body: bodyObj });
@@ -46,10 +48,70 @@ window.fetch = async function(url, options) {
         };
     }
     if (url === '/session/reword') {
-        return { ok: true, status: 200, json: async () => ({ ok: true, reprocess_started: true, rows: 1 }) };
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                reprocess_started: true,
+                rows: {
+                    0: {
+                        lemma: 'Haus',
+                        inflected: 'Haus',
+                        trans: 'новое_здание_reworded',
+                        ipa: '/haʊs/',
+                        morph: '<b>N</b>; Nom, Sg',
+                        token_order: '0',
+                        sentence_idx: '1'
+                    }
+                }
+            })
+        };
     }
     if (url === '/session/retext') {
-        return { ok: true, status: 200, json: async () => ({ ok: true, retext_started: true }) };
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                retext_started: true,
+                translatedText: '<div>Переведенный текст обновлен</div>',
+                rows: {
+                    0: {
+                        lemma: 'Haus',
+                        inflected: 'Haus',
+                        trans: 'дом',
+                        ipa: '/haʊs/',
+                        morph: '<b>N</b>; Nom, Sg',
+                        token_order: '0',
+                        sentence_idx: '1'
+                    }
+                }
+            })
+        };
+    }
+    if (url.indexOf('/session/status') !== -1) {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                rows: {
+                    0: {
+                        lemma: 'Haus',
+                        inflected: 'Haus',
+                        trans: 'дом_status_updated',
+                        ipa: '/haʊs/',
+                        morph: '<b>N</b>; Nom, Sg',
+                        token_order: '0',
+                        sentence_idx: '1'
+                    }
+                }
+            })
+        };
     }
     if (url === '/session/export') {
         return { ok: true, status: 200, json: async () => ({ ok: true, status: 'success', import_complete: true }) };
@@ -141,7 +203,7 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     assert toast_warn.is_visible()
     assert "Please select rows to re-word." in toast_warn.inner_text()
 
-    # 2. Select row 0 and click Re-word -> dispatches /session/reword and auto-refreshes view
+    # 2. Select row 0 and click Re-word -> dispatches /session/reword and updates cell in-place
     row0 = page.locator("tr[data-row-id='0']")
     row0.click()
     reword_btn.click()
@@ -151,9 +213,11 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     assert fetches[0]["url"] == "/session/reword"
     assert fetches[0]["body"]["row_ids"] == [0]
     assert fetches[0]["body"]["session_zid"] == "20260826214953"
-    assert page.evaluate("window.__reloads") == 1
+    assert page.evaluate("window.__reloads") == 0
+    cell_trans = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    assert "новое_здание_reworded" in cell_trans.inner_text()
 
-    # 3. Click Re-text -> dispatches /session/retext and auto-refreshes view
+    # 3. Click Re-text -> dispatches /session/retext and in-place updates translation container without reload
     retext_btn = page.locator("#kw-btn-retext")
     retext_btn.click()
     page.wait_for_timeout(100)
@@ -161,7 +225,19 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     assert len(fetches) == 2
     assert fetches[1]["url"] == "/session/retext"
     assert fetches[1]["body"]["session_zid"] == "20260826214953"
-    assert page.evaluate("window.__reloads") == 2
+    assert page.evaluate("window.__reloads") == 0
+    trans_container = page.locator("#translation-container")
+    assert "Переведенный текст обновлен" in trans_container.inner_text()
+
+    # 4. Click Update -> dispatches /session/status and in-place updates without reload
+    update_btn = page.locator("#kw-btn-update")
+    update_btn.click()
+    page.wait_for_timeout(100)
+    fetches = page.evaluate("window.__fetches")
+    assert len(fetches) == 3
+    assert "/session/status" in fetches[2]["url"]
+    assert page.evaluate("window.__reloads") == 0
+    assert "дом_status_updated" in cell_trans.inner_text()
 
 def test_send_to_anki_rest_dispatch(page, tmp_path):
     html = inject_mock_fetch(get_desk_page_html(tmp_path))

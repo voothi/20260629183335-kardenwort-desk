@@ -10020,23 +10020,27 @@ html, body {{
                 
                 var updated = false;
                 
-                if (data.sourceText !== undefined && data.sourceText !== "") {
-                    window.AppState.sourceText = data.sourceText;
+                var src = (data.sourceText !== undefined && data.sourceText !== "") ? data.sourceText : ((data.source_text !== undefined && data.source_text !== "") ? data.source_text : null);
+                if (src !== null) {
+                    window.AppState.sourceText = src;
                     if (window.AppView.renderSourceText(data.stage)) updated = true;
                 } else if (document.getElementById('source-container') && document.getElementById('source-container').querySelector('[data-pending="true"]')) {
                     if (window.AppView.renderSourceText(data.stage)) updated = true;
                 }
                 
-                if (data.translatedText !== undefined && data.translatedText !== "") {
-                    window.AppState.translatedText = data.translatedText;
+                var trans = (data.translatedText !== undefined && data.translatedText !== "") ? data.translatedText : ((data.translated_text !== undefined && data.translated_text !== "") ? data.translated_text : null);
+                if (trans !== null) {
+                    window.AppState.translatedText = trans;
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
                 } else if (document.getElementById('translation-container') && document.getElementById('translation-container').querySelector('[data-pending="true"]')) {
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
                 }
                 
                 var rowsData = null;
-                if (data.stage) {
-                    if (data.rows) rowsData = data.rows;
+                if (data.rows) {
+                    rowsData = data.rows;
+                } else if (data.stage) {
+                    rowsData = data.rows;
                 } else {
                     rowsData = data;
                 }
@@ -12373,9 +12377,31 @@ html, body {{
             });
         };
 
-        window.onUpdateClick = window.onUpdateClick || function() {
+        window.onUpdateClick = function(forceReload) {
             if (window.commitActiveEdit) window.commitActiveEdit();
-            window.location.reload();
+            var sZid = getSessionZid();
+            var isForce = (forceReload === true);
+            if (isForce || !sZid || typeof fetch === 'undefined') {
+                window.onbeforeunload = null;
+                if (window.location && window.location.reload) window.location.reload();
+                return;
+            }
+            var tok = getApiToken();
+            var headers = { 'Accept': 'application/json' };
+            if (tok) headers['X-API-Token'] = tok;
+            fetch('/session/status?zid=' + encodeURIComponent(sZid), { method: 'GET', headers: headers })
+                .then(function(res) { return res.json(); })
+                .then(function(resObj) {
+                    var payload = (resObj && resObj.data) ? resObj.data : resObj;
+                    if (payload && window.receiveUpdate) {
+                        window.receiveUpdate(payload);
+                        window.showToast("Session updated", "success");
+                    }
+                })
+                .catch(function() {
+                    window.onbeforeunload = null;
+                    if (window.location && window.location.reload) window.location.reload();
+                });
         };
 
         window.onRetextClick = function() {
@@ -12410,10 +12436,11 @@ html, body {{
             .then(function(resObj) {
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.retext_started)) {
                     window.showToast("Retext completed", "success");
-                    if (window.onUpdateClick) {
+                    var payload = (resObj.data && resObj.data.data) ? resObj.data.data : resObj.data;
+                    if (window.receiveUpdate && payload && (payload.rows || payload.translatedText || payload.translated_text)) {
+                        window.receiveUpdate(payload);
+                    } else if (window.onUpdateClick) {
                         window.onUpdateClick();
-                    } else if (window.location && window.location.reload) {
-                        window.location.reload();
                     }
                 } else {
                     window.showToast("Retext failed: " + (resObj.data.message || (resObj.data.data && resObj.data.data.message) || resObj.data.error || "Server error"), "error");
@@ -12462,10 +12489,11 @@ html, body {{
             .then(function(resObj) {
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.reprocess_started)) {
                     window.showToast("Re-word completed for " + rows.length + " rows", "success");
-                    if (window.onUpdateClick) {
+                    var payload = (resObj.data && resObj.data.data) ? resObj.data.data : resObj.data;
+                    if (window.receiveUpdate && payload && payload.rows) {
+                        window.receiveUpdate(payload);
+                    } else if (window.onUpdateClick) {
                         window.onUpdateClick();
-                    } else if (window.location && window.location.reload) {
-                        window.location.reload();
                     }
                 } else {
                     window.showToast("Re-word failed: " + (resObj.data.message || (resObj.data.data && resObj.data.data.message) || resObj.data.error || "Server error"), "error");
@@ -15503,6 +15531,43 @@ def cmd_reprocess_worker(args):
 
 _update_seq_counter = 0
 
+def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None):
+    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
+    col_inflected2 = headers.index("WordSourceInflectedForm2") if "WordSourceInflectedForm2" in headers else -1
+    col_quotation = headers.index("Quotation") if "Quotation" in headers else -1
+    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+    col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+    
+    rows_data = {}
+    for row_id, row in enumerate(data_rows):
+        lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
+        inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
+        trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
+        morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
+        ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+        token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
+        sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
+        rows_data[row_id] = {
+            "lemma": lemma_val,
+            "inflected": inflected_val,
+            "trans": trans_val,
+            "ipa": ipa_val,
+            "morph": morph_val,
+            "token_order": token_order_val,
+            "sentence_idx": sent_idx_val
+        }
+        if class_cols:
+            class_vals = {}
+            for name, col_idx in class_cols:
+                val = row[col_idx] if len(row) > col_idx else ""
+                class_vals[name] = val
+            rows_data[row_id]["classifications"] = class_vals
+    return rows_data
+
 def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None):
     import time
     global _update_seq_counter
@@ -15538,41 +15603,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         if trace_id is not None:
             update_data["trace_id"] = trace_id
     else:
-        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
-        col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
-        col_inflected2 = headers.index("WordSourceInflectedForm2") if "WordSourceInflectedForm2" in headers else -1
-        col_quotation = headers.index("Quotation") if "Quotation" in headers else -1
-        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-        col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
-        col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
-        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-        col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-        
-        rows_data = {}
-        for row_id, row in enumerate(data_rows):
-            lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
-            inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
-            trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
-            morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
-            ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
-            token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
-            sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
-            rows_data[row_id] = {
-                "lemma": lemma_val,
-                "inflected": inflected_val,
-                "trans": trans_val,
-                "ipa": ipa_val,
-                "morph": morph_val,
-                "token_order": token_order_val,
-                "sentence_idx": sent_idx_val
-            }
-            if class_cols:
-                class_vals = {}
-                for name, col_idx in class_cols:
-                    val = row[col_idx] if len(row) > col_idx else ""
-                    class_vals[name] = val
-                rows_data[row_id]["classifications"] = class_vals
-            
+        rows_data = format_update_rows_dict(data_rows, headers, role_fields, class_cols=class_cols)
         if stage is None:
             # Inline snapshot — only emit rows that have at least one non-empty field
             update_data = {

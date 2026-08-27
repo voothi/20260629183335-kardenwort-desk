@@ -601,6 +601,13 @@ def test_controller_session_reword_frequency_sorted_parity(running_controller, t
             assert returned_rows[0][col_dest] == "reworded_apple"
             assert returned_rows[1][col_lemma] == "zebra"
             assert returned_rows[1][col_dest] == ""
+
+            # Verify structured rows dictionary for granular in-place DOM updates
+            assert "rows" in res["data"]
+            structured = res["data"]["rows"]
+            row0 = structured[0] if 0 in structured else structured["0"]
+            assert row0["lemma"] == "apple"
+            assert row0["trans"] == "reworded_apple"
     finally:
         try:
             storage_adapter.delete_session(sess_zid)
@@ -902,5 +909,8 @@ def test_controller_session_retext_sqlite_pure_virtual(running_controller):
         assert retext_res["status"] == "success"
         data_payload = retext_res.get("data", retext_res)
         assert "translated_text" in data_payload
+        assert "translatedText" in data_payload
+        assert "rows" in data_payload
+        assert len(data_payload["rows"]) > 0
         assert len(data_payload["data_rows"]) > 0
 

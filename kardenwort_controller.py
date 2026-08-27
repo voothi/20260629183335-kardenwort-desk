@@ -58,6 +58,7 @@ from kardenwort_desk import (
     resolve_project_deck_path,
     safe_write_update_js,
     format_translated_html,
+    format_update_rows_dict,
     SessionLogger,
     find_wordfill_match,
     apply_wordfill_to_rows,
@@ -838,6 +839,7 @@ class SessionArbiter:
                 self.sessions[session_zid]["fingerprint"] = new_fp
 
         translated_html = format_translated_html(sentence_trans, text_mode=text_mode, text=text, config=self.config)
+        structured_rows = format_update_rows_dict(data_rows, headers, role_fields)
         safe_write_update_js(
             tsv_path,
             data_rows,
@@ -856,8 +858,9 @@ class SessionArbiter:
             "stage": "translated_text",
             "status": "success",
             "fingerprint": new_fp,
-            "rows": data_rows,
-            "translated_text": translated_html
+            "rows": structured_rows,
+            "translated_text": translated_html,
+            "translatedText": translated_html
         })
 
         return {
@@ -865,7 +868,9 @@ class SessionArbiter:
             "session_zid": session_zid,
             "fingerprint": new_fp,
             "data_rows": data_rows,
-            "translated_text": translated_html
+            "rows": structured_rows,
+            "translated_text": translated_html,
+            "translatedText": translated_html
         }
 
     def reword_session(
@@ -974,19 +979,22 @@ class SessionArbiter:
             config=self.config
         )
 
+        structured_rows = format_update_rows_dict(data_rows, headers, role_fields)
+
         self.emit_event(session_zid, {
             "type": "update",
             "stage": "enrichment",
             "status": "success",
             "fingerprint": new_fp,
-            "rows": data_rows
+            "rows": structured_rows
         })
 
         return {
             "status": "success",
             "session_zid": session_zid,
             "fingerprint": new_fp,
-            "data_rows": data_rows
+            "data_rows": data_rows,
+            "rows": structured_rows
         }
 
 
