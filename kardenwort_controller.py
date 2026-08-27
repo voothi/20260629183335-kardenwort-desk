@@ -1039,11 +1039,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if not api_key:
             return
 
-        provided_token = self.headers.get('X-API-Token')
+        provided_token = self.headers.get('X-API-Token') or self.headers.get('X-API-Key')
+        if not provided_token:
+            auth_header = self.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                provided_token = auth_header[7:].strip()
         if not provided_token and body_data and isinstance(body_data, dict):
             provided_token = body_data.get('token')
         if not provided_token and query_params and isinstance(query_params, dict):
             token_list = query_params.get('token', [])
+            if not token_list:
+                token_list = query_params.get('api_token', [])
             if token_list:
                 provided_token = token_list[0]
 

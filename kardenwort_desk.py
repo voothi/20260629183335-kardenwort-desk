@@ -12292,6 +12292,22 @@ html, body {{
             return el ? (el.textContent || el.innerText || "en").trim() : "en";
         }
 
+        function getApiToken() {
+            if (typeof API_TOKEN !== 'undefined' && API_TOKEN && API_TOKEN !== '__API_TOKEN__') {
+                return API_TOKEN;
+            }
+            if (typeof window.API_TOKEN !== 'undefined' && window.API_TOKEN) {
+                return window.API_TOKEN;
+            }
+            try {
+                var params = new URLSearchParams(window.location.search);
+                return params.get('token') || params.get('api_token') || "";
+            } catch(e) {
+                return "";
+            }
+        }
+        window.getApiToken = getApiToken;
+
         window.onSaveClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
             if (!window.isDirty()) {
@@ -12315,14 +12331,20 @@ html, body {{
             var saveBtn = document.getElementById('kw-btn-save');
             if (saveBtn) saveBtn.disabled = true;
 
+            var tok = getApiToken();
+            var headers = { 'Content-Type': 'application/json' };
+            if (tok) headers['X-API-Token'] = tok;
+            var bodyPayload = {
+                session_zid: sZid,
+                deltas: deltasJson,
+                language: getSessionLang()
+            };
+            if (tok) bodyPayload.token = tok;
+
             fetch('/session/save', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session_zid: sZid,
-                    deltas: deltasJson,
-                    language: getSessionLang()
-                })
+                headers: headers,
+                body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
@@ -12360,13 +12382,19 @@ html, body {{
                 return;
             }
             window.showToast("Retexting session...", "info");
+            var tok = getApiToken();
+            var headers = { 'Content-Type': 'application/json' };
+            if (tok) headers['X-API-Token'] = tok;
+            var bodyPayload = {
+                session_zid: sZid,
+                language: getSessionLang()
+            };
+            if (tok) bodyPayload.token = tok;
+
             fetch('/session/retext', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session_zid: sZid,
-                    language: getSessionLang()
-                })
+                headers: headers,
+                body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
@@ -12400,14 +12428,20 @@ html, body {{
                 return;
             }
             window.showToast("Re-wording " + rows.length + " rows...", "info");
+            var tok = getApiToken();
+            var headers = { 'Content-Type': 'application/json' };
+            if (tok) headers['X-API-Token'] = tok;
+            var bodyPayload = {
+                session_zid: sZid,
+                row_ids: rows,
+                language: getSessionLang()
+            };
+            if (tok) bodyPayload.token = tok;
+
             fetch('/session/reword', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session_zid: sZid,
-                    row_ids: rows,
-                    language: getSessionLang()
-                })
+                headers: headers,
+                body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
@@ -12441,14 +12475,20 @@ html, body {{
                 return;
             }
             window.showToast("Exporting to Anki...", "info");
+            var tok = getApiToken();
+            var headers = { 'Content-Type': 'application/json' };
+            if (tok) headers['X-API-Token'] = tok;
+            var bodyPayload = {
+                session_zid: sZid,
+                row_ids: rows,
+                language: getSessionLang()
+            };
+            if (tok) bodyPayload.token = tok;
+
             fetch('/session/export', {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    session_zid: sZid,
-                    row_ids: rows,
-                    language: getSessionLang()
-                })
+                headers: headers,
+                body: JSON.stringify(bodyPayload)
             })
             .then(function(res) {
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
@@ -12569,15 +12609,15 @@ html, body {{
                         var curTsv = children[i + 1];
                         i++;
                         if (curTsv) {
-                            var zidMatch = curTsv.match(/(\d{14})/);
+                            var zidMatch = curTsv.match(/(\\d{14})/);
                             var childZid = zidMatch ? zidMatch[1] : null;
                             if (childZid) {
                                 results.push({ zid: childZid, seq_num: curSeq || '1' });
                             }
                             curSeq = null;
                         }
-                    } else if (item.match && item.match(/(\d{14})/)) {
-                        var zidMatch = item.match(/(\d{14})/);
+                    } else if (item.match && item.match(/(\\d{14})/)) {
+                        var zidMatch = item.match(/(\\d{14})/);
                         results.push({ zid: zidMatch[1], seq_num: '1' });
                     }
                 } else if (typeof item === 'object' && item !== null) {
@@ -12593,10 +12633,12 @@ html, body {{
         function spawnChildTabs(children) {
             var childSessions = extractChildSessions(children);
             if (!childSessions || childSessions.length === 0) return;
+            var tok = getApiToken();
+            var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
             var urls = [];
             for (var i = 0; i < childSessions.length; i++) {
                 var c = childSessions[i];
-                var childUrl = '/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true';
+                var childUrl = '/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true' + tokenQuery;
                 urls.push(childUrl);
             }
             if (urls.length === 0) return;
@@ -12612,10 +12654,14 @@ html, body {{
             };
 
             if (typeof fetch !== 'undefined') {
+                var headers = { 'Content-Type': 'application/json' };
+                if (tok) headers['X-API-Token'] = tok;
+                var bodyPayload = { urls: urls, children: childSessions };
+                if (tok) bodyPayload.token = tok;
                 fetch('/api/v1/spawn-tabs', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ urls: urls, children: childSessions })
+                    headers: headers,
+                    body: JSON.stringify(bodyPayload)
                 })
                 .then(function(res) {
                     if (!res.ok) {
@@ -12646,32 +12692,43 @@ html, body {{
             var srcText = info.text || info.source_text || (srcContainer ? (srcContainer.textContent || srcContainer.innerText || "") : "");
             var detName = info.detected_name || getLanguageName(detLang) || detLang;
             var effMode = getTextMode();
+            var tok = getApiToken();
+            var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
 
             document.title = "Kardenwort - " + detLang + " (" + effMode + ")";
             window.showToast("Switching language to " + detName + "...", "info");
             setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
+                var headers = { 'Content-Type': 'application/json' };
+                if (tok) headers['X-API-Token'] = tok;
+
+                var langPayload = { language: detLang };
+                if (tok) langPayload.token = tok;
+
                 fetch('/api/v1/set-language', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ language: detLang })
+                    headers: headers,
+                    body: JSON.stringify(langPayload)
                 }).catch(function(e) {
                     console.warn("Failed to synchronize language with controller:", e);
                 });
 
+                var renderPayload = {
+                    session_zid: sZid,
+                    zid: sZid,
+                    language: detLang,
+                    text: srcText,
+                    bypass_lang_check: true,
+                    theme: getTheme(),
+                    text_mode: effMode
+                };
+                if (tok) renderPayload.token = tok;
+
                 fetch('/api/v1/render', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_zid: sZid,
-                        zid: sZid,
-                        language: detLang,
-                        text: srcText,
-                        bypass_lang_check: true,
-                        theme: getTheme(),
-                        text_mode: effMode
-                    })
+                    headers: headers,
+                    body: JSON.stringify(renderPayload)
                 })
                 .then(function(res) {
                     return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
@@ -12692,7 +12749,7 @@ html, body {{
                             return;
                         }
                     }
-                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true';
+                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true' + tokenQuery;
                 })
                 .catch(function(err) {
                     setLangModalLoading(false);
@@ -12701,7 +12758,7 @@ html, body {{
             } else {
                 setLangModalLoading(false);
                 window.hideLanguageVerificationModal();
-                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true';
+                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(detLang) + '&bypass_lang_check=true' + tokenQuery;
             }
         };
 
@@ -12716,24 +12773,32 @@ html, body {{
             var srcText = info.text || info.source_text || (srcContainer ? (srcContainer.textContent || srcContainer.innerText || "") : "");
             var expName = info.expected_name || getLanguageName(expLang) || expLang;
             var effMode = getTextMode();
+            var tok = getApiToken();
+            var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
 
             document.title = "Kardenwort - " + expLang + " (" + effMode + ")";
             window.showToast("Processing in " + expName + "...", "info");
             setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
+                var headers = { 'Content-Type': 'application/json' };
+                if (tok) headers['X-API-Token'] = tok;
+
+                var renderPayload = {
+                    session_zid: sZid,
+                    zid: sZid,
+                    language: expLang,
+                    text: srcText,
+                    bypass_lang_check: true,
+                    theme: getTheme(),
+                    text_mode: effMode
+                };
+                if (tok) renderPayload.token = tok;
+
                 fetch('/api/v1/render', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        session_zid: sZid,
-                        zid: sZid,
-                        language: expLang,
-                        text: srcText,
-                        bypass_lang_check: true,
-                        theme: getTheme(),
-                        text_mode: effMode
-                    })
+                    headers: headers,
+                    body: JSON.stringify(renderPayload)
                 })
                 .then(function(res) {
                     return res.json().then(function(data) { return { ok: res.ok, status: res.status, data: data }; });
@@ -12754,7 +12819,7 @@ html, body {{
                             return;
                         }
                     }
-                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true';
+                    window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true' + tokenQuery;
                 })
                 .catch(function(err) {
                     setLangModalLoading(false);
@@ -12763,7 +12828,7 @@ html, body {{
             } else {
                 setLangModalLoading(false);
                 window.hideLanguageVerificationModal();
-                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true';
+                window.location.href = '/session/render?session_zid=' + encodeURIComponent(sZid) + '&language=' + encodeURIComponent(expLang) + '&bypass_lang_check=true' + tokenQuery;
             }
         };
 

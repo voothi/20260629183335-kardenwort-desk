@@ -300,4 +300,68 @@ delete window.EventSource;
     assert len(page_errors) == 0
 
 
+def test_toolbar_api_token_propagation(page, tmp_path):
+    html = inject_mock_fetch(get_desk_page_html(tmp_path))
+    # Inject window.API_TOKEN
+    token_script = "<script>window.API_TOKEN = 'secret-test-token-42';</script>"
+    html_with_token = html.replace("<head>", f"<head>\n{token_script}")
+    page.set_content(html_with_token)
+
+    # Verify getApiToken() resolves the token
+    resolved_tok = page.evaluate("window.getApiToken()")
+    assert resolved_tok == "secret-test-token-42"
+
+    # 1. Test Save
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    cell.dblclick()
+    edit_input = cell.locator("input")
+    edit_input.fill("новое_здание")
+    page.keyboard.press("Enter")
+
+    save_btn = page.locator("#kw-btn-save")
+    save_btn.click()
+    page.wait_for_timeout(100)
+
+    fetches = page.evaluate("window.__fetches")
+    assert len(fetches) == 1
+    assert fetches[0]["url"] == "/session/save"
+    assert fetches[0]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
+    assert fetches[0]["body"]["token"] == "secret-test-token-42"
+
+    # 2. Test Retext
+    retext_btn = page.locator("#kw-btn-retext")
+    retext_btn.click()
+    page.wait_for_timeout(100)
+
+    fetches = page.evaluate("window.__fetches")
+    assert len(fetches) == 2
+    assert fetches[1]["url"] == "/session/retext"
+    assert fetches[1]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
+    assert fetches[1]["body"]["token"] == "secret-test-token-42"
+
+    # 3. Test Reword
+    page.locator("tr[data-row-id='0']").click()
+    reword_btn = page.locator("#kw-btn-reword")
+    reword_btn.click()
+    page.wait_for_timeout(100)
+
+    fetches = page.evaluate("window.__fetches")
+    assert len(fetches) == 3
+    assert fetches[2]["url"] == "/session/reword"
+    assert fetches[2]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
+    assert fetches[2]["body"]["token"] == "secret-test-token-42"
+
+    # 4. Test Export
+    export_btn = page.locator("#kw-btn-export")
+    export_btn.click()
+    page.wait_for_timeout(100)
+
+    fetches = page.evaluate("window.__fetches")
+    assert len(fetches) == 4
+    assert fetches[3]["url"] == "/session/export"
+    assert fetches[3]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
+    assert fetches[3]["body"]["token"] == "secret-test-token-42"
+
+
+
 

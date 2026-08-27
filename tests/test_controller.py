@@ -643,4 +643,99 @@ def test_controller_assets_numbers_ico_serving(running_controller):
         assert content_fb == content_1
 
 
+def test_controller_api_token_auth_headers(running_controller):
+    """
+    Verify that _authenticate_token in controller supports X-API-Token, X-API-Key,
+    and Bearer Authorization headers interchangeably, and rejects unauthorized requests.
+    Uses a real session created by /session/create to avoid 500 from missing session.
+    """
+    server_url, server = running_controller
+
+    # 0. Create a real session to get a valid session_zid
+    create_url = f"{server_url}/session/create"
+    create_payload = json.dumps({
+        "text": "dog",
+        "language": "en",
+        "bypass_lang_check": True
+    }).encode("utf-8")
+    req_create = urllib.request.Request(
+        create_url,
+        data=create_payload,
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_create, timeout=30.0) as resp:
+        create_res = json.loads(resp.read().decode("utf-8"))
+        session_zid = create_res["data"]["session_zid"]
+
+    retext_url = f"{server_url}/session/retext"
+    base_payload = {"session_zid": session_zid, "language": "en", "text_mode": "single"}
+
+    # 1. Reject without token (controller maps UNAUTHORIZED -> 403)
+    req_no_auth = urllib.request.Request(
+        retext_url,
+        data=json.dumps(base_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req_no_auth, timeout=5.0)
+    assert exc_info.value.code == 403
+
+    # 2. Reject with wrong token
+    req_wrong_auth = urllib.request.Request(
+        retext_url,
+        data=json.dumps(base_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-API-Token": "invalid-token"}
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req_wrong_auth, timeout=5.0)
+    assert exc_info.value.code == 403
+
+    # 3. Accept with X-API-Token
+    req_x_api_token = urllib.request.Request(
+        retext_url,
+        data=json.dumps(base_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_x_api_token, timeout=30.0) as resp:
+        assert resp.status == 200
+        res_data = json.loads(resp.read().decode("utf-8"))
+        assert res_data["status"] == "success"
+
+    # 4. Accept with X-API-Key
+    req_x_api_key = urllib.request.Request(
+        retext_url,
+        data=json.dumps(base_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "X-API-Key": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_x_api_key, timeout=30.0) as resp:
+        assert resp.status == 200
+        res_data = json.loads(resp.read().decode("utf-8"))
+        assert res_data["status"] == "success"
+
+    # 5. Accept with Bearer Authorization
+    req_bearer = urllib.request.Request(
+        retext_url,
+        data=json.dumps(base_payload).encode("utf-8"),
+        headers={"Content-Type": "application/json", "Authorization": "Bearer test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_bearer, timeout=30.0) as resp:
+        assert resp.status == 200
+        res_data = json.loads(resp.read().decode("utf-8"))
+        assert res_data["status"] == "success"
+
+    # 6. Accept with token in body
+    payload_with_token = dict(base_payload, token="test-controller-api-key")
+    req_body_token = urllib.request.Request(
+        retext_url,
+        data=json.dumps(payload_with_token).encode("utf-8"),
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req_body_token, timeout=30.0) as resp:
+        assert resp.status == 200
+        res_data = json.loads(resp.read().decode("utf-8"))
+        assert res_data["status"] == "success"
+
+
+
+
 

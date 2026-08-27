@@ -150,11 +150,15 @@ class APIRequestHandler(BaseHTTPRequestHandler):
         if not api_key:
             raise StructuredError(ErrorCode.TOKEN_NOT_CONFIGURED, "Server api_key is empty in config.ini")
 
-        provided_token = self.headers.get('X-API-Token')
+        provided_token = self.headers.get('X-API-Token') or self.headers.get('X-API-Key')
+        if not provided_token:
+            auth_header = self.headers.get('Authorization', '')
+            if auth_header.startswith('Bearer '):
+                provided_token = auth_header[7:].strip()
         if not provided_token and body_data and isinstance(body_data, dict):
             provided_token = body_data.get('token')
 
-        if not provided_token or not hmac.compare_digest(provided_token.strip(), api_key):
+        if not provided_token or not hmac.compare_digest(str(provided_token).strip(), str(api_key).strip()):
             raise StructuredError(ErrorCode.UNAUTHORIZED, "Invalid or missing API authentication token")
 
     def _serve_static_file(self, file_path: Path):
