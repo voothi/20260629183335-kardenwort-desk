@@ -8497,7 +8497,7 @@ html, body {{
     else:
         has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
         if is_progressive and run_text == 'auto' and not has_real_text:
-            sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;"></div>'
+            sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;" title="Translating sentence..."></div>'
         else:
             sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
     
@@ -8572,11 +8572,11 @@ html, body {{
         
         # Skeleton loaders for cells pending when a configured provider is expected to fill them:
         if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
-            trans_val = '<span class="skeleton-loader" style="width: 60px;"></span>'
+            trans_val = '<span class="skeleton-loader" style="width: 60px;" title="Translating..."></span>'
         if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
-            ipa_val = '<span class="skeleton-loader" style="width: 50px;"></span>'
+            ipa_val = '<span class="skeleton-loader" style="width: 50px;" title="Enriching..."></span>'
         if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
-            morph_val = '<span class="skeleton-loader" style="width: 80px;"></span>'
+            morph_val = '<span class="skeleton-loader" style="width: 80px;" title="Enriching..."></span>'
         
         row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
         
@@ -10260,8 +10260,8 @@ html, body {{
             window.AppState.applyDeltas(data);
         };
 
-        // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling)
-        try {
+        // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling + 30s Safety Timeout)
+        function initWatchdog() {
             var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
             var sessZidEl = document.getElementById('session-zid');
             var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
@@ -10277,10 +10277,30 @@ html, body {{
 
             if (isWebMode && curZid && hasSkeletons) {
                 var startTime = Date.now();
-                var maxBudgetMs = 15000; // 15-second safety budget
+                var maxBudgetMs = 30000; // 30-second safety budget
                 var pollIntervalMs = 500;
                 var isPolling = false;
                 var resolved = false;
+
+                var cleanupOrphanSkeletons = function() {
+                    var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
+                    if (pendings.length > 0) {
+                        for (var i = 0; i < pendings.length; i++) {
+                            var el = pendings[i];
+                            el.classList.remove("skeleton-loader");
+                            el.removeAttribute("data-pending");
+                            if (el.tagName === 'SPAN' || el.tagName === 'DIV') {
+                                if (el.parentNode && (el.parentNode.classList.contains('scrollable-cell') || el.parentNode.tagName === 'TD' || el.parentNode.id === 'translation-container')) {
+                                    el.textContent = '';
+                                }
+                            }
+                        }
+                        if (typeof window.showToast === 'function') {
+                            window.showToast("Background loading timed out. Restored table editing.", "warning");
+                        }
+                    }
+                };
+                window.cleanupOrphanSkeletons = cleanupOrphanSkeletons;
 
                 var stopPolling = function() {
                     if (window._kwSkeletonPollTimer) {
@@ -10304,8 +10324,13 @@ html, body {{
                     if (document.hidden) {
                         return;
                     }
-                    if (resolved || (Date.now() - startTime > maxBudgetMs)) {
+                    if (resolved) {
                         stopPolling();
+                        return;
+                    }
+                    if (Date.now() - startTime > maxBudgetMs) {
+                        stopPolling();
+                        cleanupOrphanSkeletons();
                         return;
                     }
                     if (isPolling) return;
@@ -10327,6 +10352,10 @@ html, body {{
                                 var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
                                 if (remaining === 0 || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished'))) {
                                     resolved = true;
+                                    if (window._kwWatchdogMaxTimer) {
+                                        clearTimeout(window._kwWatchdogMaxTimer);
+                                        window._kwWatchdogMaxTimer = null;
+                                    }
                                     stopPolling();
                                     if (window.onSessionReload) {
                                         window.onSessionReload();
@@ -10342,6 +10371,10 @@ html, body {{
                                     isPolling = false;
                                     if (htmlText && htmlText.indexOf('skeleton-loader') === -1) {
                                         resolved = true;
+                                        if (window._kwWatchdogMaxTimer) {
+                                            clearTimeout(window._kwWatchdogMaxTimer);
+                                            window._kwWatchdogMaxTimer = null;
+                                        }
                                         stopPolling();
                                         if (window.onSessionReload) {
                                             window.onSessionReload();
@@ -10362,6 +10395,14 @@ html, body {{
                     window._kwSkeletonPollTimer = setInterval(pollSessionStatus, pollIntervalMs);
                     setTimeout(pollSessionStatus, 200);
                 };
+
+                window._kwWatchdogMaxTimer = setTimeout(function() {
+                    if (!resolved) {
+                        closeEvtSource();
+                        stopPolling();
+                        cleanupOrphanSkeletons();
+                    }
+                }, maxBudgetMs);
 
                 // Visibility-aware listener: pause polling when hidden, resume/check on tab activation
                 document.addEventListener('visibilitychange', function() {
@@ -10386,7 +10427,7 @@ html, body {{
                         var evtSource = new EventSource(sseUrl);
                         window._kwEvtSource = evtSource;
 
-                        // 15-second safety timer to ensure EventSource is closed and slot is released
+                        // 30-second safety timer to ensure EventSource is closed and slot is released
                         window._kwSseSafetyTimer = setTimeout(function() {
                             closeEvtSource();
                             var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
@@ -10414,6 +10455,10 @@ html, body {{
                                     var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
                                     if (remaining === 0 || parsed.is_finished || parsed.stage === 'finished') {
                                         resolved = true;
+                                        if (window._kwWatchdogMaxTimer) {
+                                            clearTimeout(window._kwWatchdogMaxTimer);
+                                            window._kwWatchdogMaxTimer = null;
+                                        }
                                         closeEvtSource();
                                         stopPolling();
                                         if (window.onSessionReload) {
@@ -10434,6 +10479,10 @@ html, body {{
 
                 window.startPolling = startWatchdogPolling;
             }
+        }
+        window.initWatchdog = initWatchdog;
+        try {
+            initWatchdog();
         } catch(e) {}
 
         window.startPolling = function() {
@@ -12315,7 +12364,28 @@ html, body {{
                 }
                 btn.disabled = true;
                 btn.textContent = loadingText || "Loading...";
+                if (btn._recoveryTimer) {
+                    clearTimeout(btn._recoveryTimer);
+                }
+                btn._recoveryTimer = setTimeout(function() {
+                    btn.disabled = false;
+                    var original = btn.getAttribute('data-default-text') || defaultText;
+                    if (original) {
+                        btn.textContent = original;
+                    }
+                    if (btn.id === 'kw-btn-save') {
+                        updateToolbarState();
+                    }
+                    btn._recoveryTimer = null;
+                    if (typeof window.showToast === 'function') {
+                        window.showToast("Action timed out. Restored toolbar controls.", "warning");
+                    }
+                }, 25000);
             } else {
+                if (btn._recoveryTimer) {
+                    clearTimeout(btn._recoveryTimer);
+                    btn._recoveryTimer = null;
+                }
                 btn.disabled = false;
                 var original = btn.getAttribute('data-default-text') || defaultText;
                 if (original) {
@@ -16159,6 +16229,12 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 valid_selected.append(r)
                 
         selected_rows = valid_selected
+
+        if not selected_rows:
+            logger.info("No rows requiring enrichment in progressive stage; skipping IntelliFiller.")
+            sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
+            return data_rows
         
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
         lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -16542,120 +16618,12 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
         observer.join()
 
 def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_count=0, is_sqlite=False, timeout=0.0):
-    if is_sqlite or timeout <= 0:
-        return
-    import time
-    from datetime import datetime
-    import threading
-    try:
-        from watchdog.observers import Observer
-        from watchdog.events import FileSystemEventHandler
-        has_watchdog = True
-    except ImportError:
-        has_watchdog = False
+    """
+    Deprecated: Sibling enrichment coordination is handled via centralized controller
+    deduplication and opportunistic cross-pollination, eliminating blocking file watcher loops.
+    """
+    return
 
-    zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
-    if not zid_match: return
-    my_zid = zid_match.group(1)
-    
-    max_wait = float(timeout)
-    
-    def check_siblings():
-        sibling_tsvs = get_batch_sibling_tsvs(working_tsv_path)
-        if not sibling_tsvs:
-            return True
-            
-        zids = [re.match(r'^(\d{14})', s.name).group(1) for s in sibling_tsvs if re.match(r'^(\d{14})', s.name)]
-        zids.append(my_zid)
-        master_zid = min(zids)
-
-        found_older = False
-        for sibling in sibling_tsvs:
-            sib_match = re.match(r'^(\d{14})', sibling.name)
-            if not sib_match: continue
-            sib_zid = sib_match.group(1)
-            
-            if sib_zid == master_zid and my_zid != master_zid:
-                # Children do not wait for the master window in enrichment.
-                continue
-                
-            try:
-                dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-                dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
-                diff_sec = (dt_my - dt_sib).total_seconds()
-                
-                # Check if it's an OLDER sibling from the SAME batch
-                if 0 < diff_sec <= 120:
-                    found_older = True
-                    marker_file = sibling.with_suffix('.enrichment_done')
-                    if not marker_file.exists():
-                        return False
-            except Exception as e:
-                logger.warning(f"Error checking sibling TSV {sibling} for enrichment: {e}")
-        
-        # Master role auto-detection: if no older siblings exist, wait for younger siblings (children).
-        # This ensures cross-pollination happens after all children finish enrichment.
-        if my_zid == master_zid:
-            has_younger = any(z > my_zid for z in zids)
-            if has_younger:
-                cut_done_marker = working_tsv_path.with_suffix('.the_cut_done')
-                if not cut_done_marker.exists():
-                    return False
-                    
-                for sibling in sibling_tsvs:
-                    sib_match = re.match(r'^(\d{14})', sibling.name)
-                    if not sib_match: continue
-                    sib_zid = sib_match.group(1)
-                    try:
-                        dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
-                        dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
-                        diff_sec = (dt_sib - dt_my).total_seconds()  # reversed: younger siblings
-                        if 0 < diff_sec <= 120:
-                            marker_file = sibling.with_suffix('.enrichment_done')
-                            if not marker_file.exists():
-                                return False
-                    except Exception as e:
-                        logger.warning(f"Error checking younger sibling TSV {sibling} for enrichment: {e}")
-        
-        return True
-
-    if check_siblings():
-        return
-
-    if not has_watchdog:
-        start_wait = time.time()
-        while time.time() - start_wait < max_wait:
-            if check_siblings():
-                break
-            time.sleep(1)
-        return
-
-    event_cond = threading.Condition()
-    class SiblingChangeHandler(FileSystemEventHandler):
-        def on_modified(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done') or event.src_path.endswith('.the_cut_done'):
-                with event_cond:
-                    event_cond.notify_all()
-        def on_created(self, event):
-            if event.src_path.endswith('.tsv') or event.src_path.endswith('.enrichment_done') or event.src_path.endswith('.the_cut_done'):
-                with event_cond:
-                    event_cond.notify_all()
-                    
-    observer = Observer()
-    handler = SiblingChangeHandler()
-    observer.schedule(handler, path=str(working_tsv_path.parent), recursive=False)
-    observer.start()
-    
-    try:
-        start_wait = time.time()
-        with event_cond:
-            while time.time() - start_wait < max_wait:
-                if check_siblings():
-                    break
-                event_cond.wait(timeout=1.0)
-    finally:
-        observer.stop()
-        observer.join()
 
 def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fields, storage_adapter=None, is_sqlite=False):
     if not data_rows:

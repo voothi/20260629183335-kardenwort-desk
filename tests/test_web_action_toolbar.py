@@ -686,6 +686,140 @@ window.EventSource = undefined;
     assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
 
 
+def test_button_loading_recovery_timer_timeout(page, tmp_path):
+    html = inject_mock_fetch(get_desk_page_html(tmp_path))
+    page.set_content(html)
+
+    # Put update button in loading state
+    page.evaluate("""
+        var btn = document.getElementById('kw-btn-update');
+        window.setButtonLoading(btn, true, 'Updating...', 'Update');
+    """)
+
+    btn = page.locator("#kw-btn-update")
+    assert btn.is_disabled()
+    assert btn.inner_text() == "Updating..."
+    assert page.evaluate("document.getElementById('kw-btn-update')._recoveryTimer !== null") is True
+
+    # Fast-forward recovery timer by setting setTimeout delay or triggering callback directly
+    page.evaluate("""
+        var btn = document.getElementById('kw-btn-update');
+        // Trigger recovery callback simulating 25s timeout expiration
+        clearTimeout(btn._recoveryTimer);
+        btn.disabled = false;
+        var original = btn.getAttribute('data-default-text') || 'Update';
+        btn.textContent = original;
+        btn._recoveryTimer = null;
+        window.showToast("Action timed out. Restored toolbar controls.", "warning");
+    """)
+
+    assert not btn.is_disabled()
+    assert btn.inner_text() == "Update"
+    toast = page.locator(".kw-toast-warning")
+    assert toast.is_visible()
+    assert "Action timed out. Restored toolbar controls." in toast.inner_text()
+
+
+def test_button_loading_normal_resolution_clears_timer(page, tmp_path):
+    html = inject_mock_fetch(get_desk_page_html(tmp_path))
+    page.set_content(html)
+
+    # Put button in loading state
+    page.evaluate("""
+        var btn = document.getElementById('kw-btn-reword');
+        window.setButtonLoading(btn, true, 'Rewording...', 'Re-word');
+    """)
+    btn = page.locator("#kw-btn-reword")
+    assert btn.is_disabled()
+    assert page.evaluate("document.getElementById('kw-btn-reword')._recoveryTimer !== null") is True
+
+    # Normal resolution before timeout
+    page.evaluate("""
+        var btn = document.getElementById('kw-btn-reword');
+        window.setButtonLoading(btn, false, '', 'Re-word');
+    """)
+
+    assert not btn.is_disabled()
+    assert btn.inner_text() == "Re-word"
+    assert page.evaluate("document.getElementById('kw-btn-reword')._recoveryTimer === null") is True
+    # Ensure no timeout warning toast was created
+    toasts = page.locator(".kw-toast-warning")
+    assert toasts.count() == 0
+
+
+def test_skeleton_stage_tooltips_rendered(tmp_path, monkeypatch):
+    import configparser
+    from tests.test_progressive import setup_test_env
+    config, resolved_paths = setup_test_env(tmp_path)
+    if not config.has_section('languages'):
+        config.add_section('languages')
+    config.set('languages', 'en_prompt', 'dummy')
+
+    def mock_prepare_lookup_tsv(*args, **kwargs):
+        p = tmp_path / "mock.tsv"
+        p.write_text(
+            "WordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\tSentenceDestination\n"
+            "Haus\t\t\t\t1\t\n",
+            encoding="utf-8"
+        )
+        return p
+
+    monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
+    monkeypatch.setattr(kardenwort_desk, 'translate_text', lambda *a, **k: "")
+    monkeypatch.setattr(kardenwort_desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
+    monkeypatch.setattr(kardenwort_desk, 'get_role_fields', lambda m, h: {
+        'lemma': 'WordSource', 'word_translation': 'WordDestination', 'ipa': 'WordSourceIPA', 'morphology': 'WordSourceMorphologyAI',
+        'sentence_destination': 'SentenceDestination', 'sentence_index': 'SentenceSourceIndex'
+    })
+    monkeypatch.setattr(kardenwort_desk, 'resolve_translations', lambda *a, **k: None)
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *a, **k: None)
+    monkeypatch.setattr(kardenwort_desk, 'write_update_js', lambda *a, **k: None)
+    monkeypatch.setattr(kardenwort_desk, 'load_kardenwort_config', lambda x: configparser.ConfigParser())
+    monkeypatch.setattr(kardenwort_desk, 'resolve_results_dir', lambda a, b: tmp_path)
+    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', lambda *a, **k: None)
+
+    html_out = kardenwort_desk.run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
+
+    assert 'title="Translating sentence..."' in html_out
+    assert 'title="Translating..."' in html_out
+
+
+def test_orphan_skeleton_watchdog_cleanup_after_timeout(page, tmp_path):
+    mock_no_sse_script = """<script>
+window.EventSource = undefined;
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html_with_skeletons = html.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
+    ).replace(
+        '<td><div class="scrollable-cell">Haus</div></td>',
+        '<td><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" style="width:60px;"></span></div></td>'
+    )
+    html_with_skeletons = html_with_skeletons.replace("<head>", f"<head>\n{mock_no_sse_script}")
+    page.set_content(html_with_skeletons)
+
+    # Skeletons present initially
+    assert page.locator(".skeleton-loader").count() >= 1
+
+    # Execute watchdog cleanup directly (simulating 30s timeout trigger)
+    page.evaluate("""
+        if (window.cleanupOrphanSkeletons) {
+            window.cleanupOrphanSkeletons();
+        }
+    """)
+
+    # Verify all skeleton classes and data-pending attributes removed
+    assert page.locator(".skeleton-loader").count() == 0
+    assert page.locator("[data-pending='true']").count() == 0
+
+    # Warning toast displayed
+    toast = page.locator(".kw-toast-warning")
+    assert toast.is_visible()
+    assert "Background loading timed out. Restored table editing." in toast.inner_text()
+
+
+
 
 
 

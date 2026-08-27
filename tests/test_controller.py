@@ -18,7 +18,8 @@ from kardenwort_controller import (
     SidecarService,
     WindowsJobObject,
     ControllerRequestHandler,
-    run_controller
+    run_controller,
+    EnrichmentQueue,
 )
 
 
@@ -913,4 +914,42 @@ def test_controller_session_retext_sqlite_pure_virtual(running_controller):
         assert "rows" in data_payload
         assert len(data_payload["rows"]) > 0
         assert len(data_payload["data_rows"]) > 0
+
+
+def test_controller_enrichment_queue_integration(running_controller):
+    """
+    Verify that SessionArbiter on running_controller initializes EnrichmentQueue
+    and correctly bounds concurrency while caching results.
+    """
+    _, server = running_controller
+    arbiter = server.arbiter
+    assert hasattr(arbiter, "enrichment_queue")
+    assert isinstance(arbiter.enrichment_queue, EnrichmentQueue)
+    assert arbiter.enrichment_queue.max_workers >= 1
+
+    # Manually test cache operations on arbiter's enrichment queue
+    arbiter.enrichment_queue.set_cached("TestLemma", "de", {"WordDestination": "test translation"})
+    cached = arbiter.enrichment_queue.get_cached("TestLemma", "de")
+    assert cached is not None
+    assert cached["WordDestination"] == "test translation"
+
+
+def test_controller_enrichment_queue_error_recovery(running_controller):
+    """
+    Verify that EnrichmentQueue on controller cleanly cleans up in-flight entries on error.
+    """
+    _, server = running_controller
+    eq = EnrichmentQueue(server.config, server.resolved_paths, max_workers=1)
+
+    def failing_execute(*args, **kwargs):
+        raise ValueError("Inference provider timeout")
+
+    eq._execute_enrich_lemma = failing_execute
+
+    with pytest.raises(ValueError, match="Inference provider timeout"):
+        eq.enrich_lemma("BrokenLemma", "en")
+
+    assert ("BrokenLemma", "en") not in eq._inflight_lemmas
+    eq.shutdown()
+
 

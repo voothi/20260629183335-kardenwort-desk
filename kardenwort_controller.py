@@ -13,6 +13,7 @@ import webbrowser
 import urllib.parse
 import urllib.request
 import urllib.error
+import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timezone
 from typing import Dict, Any, List, Optional, Tuple
@@ -70,6 +71,7 @@ from kardenwort_desk import (
     SEC_TRIGGERS,
     SEC_SERVICES,
     SEC_TRANSLATION,
+    SEC_TIMEOUTS,
     persist_default_language,
     spawn_ahk,
 )
@@ -574,6 +576,204 @@ class ProcessSupervisor:
 
 
 # ---------------------------------------------------------------------------
+# Centralized Controller Enrichment Task Queue
+# ---------------------------------------------------------------------------
+class EnrichmentQueue:
+    """
+    Centralized controller task queue with bounded worker concurrency,
+    in-memory lemma deduplication cache, and in-flight request coalescing.
+    """
+
+    def __init__(
+        self,
+        config: Any,
+        resolved_paths: Dict[str, Any],
+        max_workers: Optional[int] = None,
+    ):
+        self.config = config
+        self.resolved_paths = resolved_paths
+        if max_workers is not None:
+            self.max_workers = max(1, int(max_workers))
+        elif config and hasattr(config, "getint"):
+            self.max_workers = config.getint("intellifiller", "max_workers", fallback=1)
+        else:
+            self.max_workers = 1
+
+        self._executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.max_workers,
+            thread_name_prefix="EnrichmentWorker",
+        )
+        self._cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
+        self._inflight_lemmas: Dict[Tuple[str, str], concurrent.futures.Future] = {}
+        self._lock = threading.Lock()
+
+    def get_cached(self, lemma: str, language: str = "de") -> Optional[Dict[str, Any]]:
+        norm_lemma = lemma.strip()
+        norm_lang = (language or "de").strip()
+        with self._lock:
+            cached = self._cache.get((norm_lemma, norm_lang))
+            return dict(cached) if cached is not None else None
+
+    def set_cached(self, lemma: str, language: str, result: Dict[str, Any]):
+        norm_lemma = lemma.strip()
+        norm_lang = (language or "de").strip()
+        with self._lock:
+            self._cache[(norm_lemma, norm_lang)] = dict(result)
+
+    def clear_cache(self):
+        with self._lock:
+            self._cache.clear()
+
+    def enrich_lemma(
+        self,
+        lemma: str,
+        language: str = "de",
+        prompt_name: str = "",
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        norm_lemma = lemma.strip()
+        norm_lang = (language or "de").strip()
+        if not norm_lemma:
+            return {}
+
+        key = (norm_lemma, norm_lang)
+        fut = None
+        with self._lock:
+            if key in self._cache:
+                return dict(self._cache[key])
+            if key in self._inflight_lemmas:
+                fut = self._inflight_lemmas[key]
+            else:
+                fut = self._executor.submit(
+                    self._execute_enrich_lemma,
+                    norm_lemma,
+                    norm_lang,
+                    prompt_name,
+                    zid,
+                    trace_id,
+                )
+                self._inflight_lemmas[key] = fut
+
+        try:
+            res = fut.result()
+            if isinstance(res, dict) and res:
+                with self._lock:
+                    self._cache[key] = dict(res)
+            return dict(res) if isinstance(res, dict) else {}
+        finally:
+            with self._lock:
+                if self._inflight_lemmas.get(key) is fut:
+                    del self._inflight_lemmas[key]
+
+    def _execute_enrich_lemma(
+        self,
+        lemma: str,
+        language: str = "de",
+        prompt_name: str = "",
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        norm_lemma = lemma.strip()
+        lang = language or "de"
+        prompt = prompt_name or (self.config.get(SEC_LANGUAGES, f"{lang}_prompt", fallback="") if self.config else "")
+
+        # 1. Try HTTP microservice if configured
+        intellifiller_url = None
+        if self.config:
+            if self.config.has_section(SEC_SERVICES):
+                intellifiller_url = self.config.get(SEC_SERVICES, 'intellifiller_server_url', fallback=None)
+            elif self.config.has_section('services'):
+                intellifiller_url = self.config.get('services', 'intellifiller_server_url', fallback=None)
+
+        model = None
+        base_url = None
+        api_key = None
+        temperature = None
+        prompt_template = None
+        timeout = 120
+        if self.config and self.config.has_section("intellifiller"):
+            model = self.config.get("intellifiller", "model", fallback=None)
+            base_url = self.config.get("intellifiller", "base_url", fallback=None)
+            api_key = self.config.get("intellifiller", "api_key", fallback=None)
+            temperature = self.config.get("intellifiller", "temperature", fallback=None)
+            prompt_template = self.config.get("intellifiller", "prompt_template", fallback=None)
+        if self.config and hasattr(self.config, 'getint'):
+            timeout = self.config.getint(SEC_TIMEOUTS, 'intellifiller_timeout', fallback=120)
+
+        temp_val = float(temperature) if (temperature is not None and str(temperature).strip()) else None
+
+        if intellifiller_url:
+            try:
+                batch_rows = [{"row_id": 0, "WordSource": norm_lemma, "WordDestination": "", "WordSourceIPA": "", "WordSourceMorphologyAI": ""}]
+                resp = query_intellifiller_server(
+                    rows=batch_rows,
+                    prompt=prompt,
+                    language=lang,
+                    server_url=intellifiller_url,
+                    zid=zid,
+                    trace_id=trace_id,
+                    timeout=float(timeout),
+                    model=model,
+                    base_url=base_url,
+                    api_key=api_key,
+                    temperature=temp_val,
+                    prompt_template=prompt_template,
+                )
+                if resp and resp.get("status") == "success":
+                    enriched = resp.get("enriched_rows", [])
+                    if enriched:
+                        item = enriched[0]
+                        res = {}
+                        for k in ("WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"):
+                            if k in item and item[k]:
+                                res[k] = str(item[k]).strip()
+                        with self._lock:
+                            self._cache[(norm_lemma, lang)] = res
+                        return res
+            except Exception as e:
+                logger.warning(f"IntelliFiller HTTP query in EnrichmentQueue failed: {e}")
+
+        # 2. Fallback to headless runner via ephemeral TSV
+        import tempfile
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_tsv = Path(temp_dir) / f"{zid or 'enrich'}-ephemeral.tsv"
+            headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
+            rows = [[norm_lemma, "", "", ""]]
+            save_tsv_rows_safely(temp_tsv, [f"# language={lang}"], headers, rows)
+
+            success = run_headless_intellifiller(
+                tsv_path=temp_tsv,
+                prompt_name=prompt,
+                config=self.config,
+                resolved_paths=self.resolved_paths,
+                selected_rows=[0],
+                reprocess=True,
+                zid=zid,
+                trace_id=trace_id,
+            )
+
+            if success and temp_tsv.exists():
+                _, updated_headers, updated_rows = load_tsv_rows(temp_tsv)
+                if updated_rows:
+                    urow = updated_rows[0]
+                    res = {}
+                    for field in ("WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"):
+                        if field in updated_headers:
+                            c_idx = updated_headers.index(field)
+                            if c_idx < len(urow) and urow[c_idx].strip():
+                                res[field] = urow[c_idx].strip()
+                    with self._lock:
+                        self._cache[(norm_lemma, lang)] = res
+                    return res
+
+        return {}
+
+    def shutdown(self, wait: bool = True):
+        self._executor.shutdown(wait=wait)
+
+
+# ---------------------------------------------------------------------------
 # In-Memory Session Arbiter & SSE Event Dispatcher
 # ---------------------------------------------------------------------------
 class SessionArbiter:
@@ -589,6 +789,7 @@ class SessionArbiter:
         self.sessions: Dict[str, Dict[str, Any]] = {}
         self.subscribers: Dict[str, List[queue.Queue]] = {}
         self._lock = threading.Lock()
+        self.enrichment_queue = EnrichmentQueue(config, resolved_paths)
 
     def register_subscriber(self, session_zid: str) -> queue.Queue:
         q = queue.Queue(maxsize=1000)
@@ -873,6 +1074,92 @@ class SessionArbiter:
             "translatedText": translated_html
         }
 
+    def propagate_enrichment_to_siblings(
+        self,
+        enriched_lemmas: Dict[str, Dict[str, str]],
+        exclude_session_zid: Optional[str] = None,
+        language: str = "de",
+    ):
+        """
+        Propagates newly enriched lemma fields (WordDestination, WordSourceIPA, WordSourceMorphologyAI)
+        simultaneously to all active sibling sessions and their subscribers.
+        """
+        if not enriched_lemmas:
+            return
+
+        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        results_dir = resolve_results_dir(self.resolved_paths, self.config)
+
+        with self._lock:
+            sibling_zids = [z for z in self.sessions.keys() if z != exclude_session_zid]
+
+        for sib_zid in sibling_zids:
+            with self._lock:
+                sess = self.sessions.get(sib_zid)
+                if not sess:
+                    continue
+                sess_lang = sess.get("language") or language
+                if sess_lang != language:
+                    continue
+                data_rows = [list(r) for r in sess.get("data_rows", [])]
+                headers = list(sess.get("headers", []))
+                role_fields = dict(sess.get("role_fields", {}))
+
+            if not data_rows or not headers:
+                continue
+
+            col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+            if col_lemma == -1:
+                continue
+
+            modified = False
+            for row in data_rows:
+                if len(row) <= col_lemma:
+                    continue
+                lemma_val = row[col_lemma].strip()
+                if lemma_val in enriched_lemmas:
+                    enrich_dict = enriched_lemmas[lemma_val]
+                    for field_name, val in enrich_dict.items():
+                        if not val:
+                            continue
+                        if field_name not in headers:
+                            headers.append(field_name)
+                            for dr in data_rows:
+                                dr.append("")
+                        col_idx = headers.index(field_name)
+                        while len(row) <= col_idx:
+                            row.append("")
+                        if not row[col_idx].strip() or 'skeleton-loader' in row[col_idx] or row[col_idx] == '[FAILED]':
+                            row[col_idx] = str(val)
+                            modified = True
+
+            if modified:
+                new_fp = compute_content_fingerprint(data_rows)
+                with self._lock:
+                    if sib_zid in self.sessions:
+                        self.sessions[sib_zid]["data_rows"] = data_rows
+                        self.sessions[sib_zid]["headers"] = headers
+                        self.sessions[sib_zid]["fingerprint"] = new_fp
+
+                # Persist to TSV or SQLite
+                sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
+                if sib_tsv:
+                    try:
+                        with storage_adapter.file_lock(sib_tsv):
+                            comments, _, _ = storage_adapter.load_tsv_rows(sib_tsv)
+                            storage_adapter.save_tsv_rows_safely(sib_tsv, comments, headers, data_rows)
+                    except Exception as e:
+                        logger.warning(f"Failed to save propagated sibling TSV {sib_zid}: {e}")
+
+                structured_rows = format_update_rows_dict(data_rows, headers, role_fields)
+                self.emit_event(sib_zid, {
+                    "type": "update",
+                    "stage": "enrichment",
+                    "status": "success",
+                    "fingerprint": new_fp,
+                    "rows": structured_rows,
+                })
+
     def reword_session(
         self,
         session_zid: str,
@@ -935,6 +1222,7 @@ class SessionArbiter:
                     storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 selected_rows = remaining_selected
 
+        enriched_lemma_map: Dict[str, Dict[str, str]] = {}
         if selected_rows:
             if is_sqlite:
                 try:
@@ -951,15 +1239,91 @@ class SessionArbiter:
                     raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
                 data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+                col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+                col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+                for r_idx in selected_rows:
+                    if 0 <= r_idx < len(data_rows):
+                        r = data_rows[r_idx]
+                        if col_lemma != -1 and len(r) > col_lemma:
+                            l_val = r[col_lemma].strip()
+                            if l_val:
+                                item_enrich = {}
+                                if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
+                                    item_enrich["WordDestination"] = r[col_w_dest].strip()
+                                if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
+                                    item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
+                                if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
+                                    item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
+                                if item_enrich:
+                                    self.enrichment_queue.set_cached(l_val, lang, item_enrich)
+                                    enriched_lemma_map[l_val] = item_enrich
             else:
                 try:
-                    run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
+                    rows_to_enrich = []
+                    for r_idx in selected_rows:
+                        if 0 <= r_idx < len(data_rows):
+                            row = data_rows[r_idx]
+                            lemma_val = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ""
+                            if not lemma_val:
+                                continue
+                            cached = self.enrichment_queue.get_cached(lemma_val, lang)
+                            if cached:
+                                for k, v in cached.items():
+                                    if k not in headers:
+                                        headers.append(k)
+                                        for dr in data_rows:
+                                            dr.append("")
+                                    c_idx = headers.index(k)
+                                    while len(row) <= c_idx:
+                                        row.append("")
+                                    row[c_idx] = str(v)
+                                enriched_lemma_map[lemma_val] = cached
+                            else:
+                                rows_to_enrich.append(r_idx)
+
+                    if rows_to_enrich:
+                        run_headless_intellifiller(
+                            tsv_path,
+                            prompt_name,
+                            self.config,
+                            self.resolved_paths,
+                            selected_rows=rows_to_enrich,
+                            reprocess=True,
+                            zid=req_zid,
+                        )
+                        comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                        data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                        col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+                        col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+                        col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+                        for r_idx in rows_to_enrich:
+                            if 0 <= r_idx < len(data_rows):
+                                r = data_rows[r_idx]
+                                if col_lemma != -1 and len(r) > col_lemma:
+                                    l_val = r[col_lemma].strip()
+                                    if l_val:
+                                        item_enrich = {}
+                                        if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
+                                            item_enrich["WordDestination"] = r[col_w_dest].strip()
+                                        if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
+                                            item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
+                                        if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
+                                            item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
+                                        if item_enrich:
+                                            self.enrichment_queue.set_cached(l_val, lang, item_enrich)
+                                            enriched_lemma_map[l_val] = item_enrich
+                    else:
+                        with storage_adapter.file_lock(tsv_path):
+                            storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 except StructuredError:
                     raise
                 except Exception as e:
                     raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
-                comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+
+            # Propagate newly enriched lemmas to open sibling sessions!
+            if enriched_lemma_map:
+                self.propagate_enrichment_to_siblings(enriched_lemma_map, exclude_session_zid=session_zid, language=lang)
 
         new_fp = compute_content_fingerprint(data_rows)
 
