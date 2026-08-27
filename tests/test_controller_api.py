@@ -143,3 +143,58 @@ def test_session_status_fallback_to_persistent_storage(running_controller):
             storage_adapter.delete_session(sess_zid)
         except Exception:
             pass
+
+
+def test_set_language_endpoint(running_controller, monkeypatch, tmp_path):
+    """
+    Verify POST /api/v1/set-language updates in-memory config, invokes spawn_ahk IPC,
+    and returns 200 with updated language status.
+    """
+    server_url, server = running_controller
+    spawn_calls = []
+
+    monkeypatch.setattr(kardenwort_desk, "spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
+    monkeypatch.setattr("kardenwort_controller.spawn_ahk", lambda args, base_dir=None: spawn_calls.append((args, base_dir)))
+
+    req_body = {"language": "de"}
+    req_data = json.dumps(req_body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/set-language",
+        data=req_data,
+        headers={"Content-Type": "application/json"}
+    )
+
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        assert data.get("status") == "success"
+        res_data = data.get("data", {})
+        assert res_data.get("ok") is True
+        assert res_data.get("language") == "de"
+
+    # Verify in-memory config updated
+    assert server.config.get("settings", "default_language") == "de"
+
+    # Verify spawn_ahk was called with --set-language
+    assert len(spawn_calls) >= 1
+    assert spawn_calls[-1][0] == ["--set-language", "de"]
+
+
+def test_set_language_missing_field(running_controller):
+    """
+    Verify POST /api/v1/set-language returns 400 when language is missing or empty.
+    """
+    server_url, server = running_controller
+
+    req_body = {}
+    req_data = json.dumps(req_body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/set-language",
+        data=req_data,
+        headers={"Content-Type": "application/json"}
+    )
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req, timeout=5.0)
+    assert exc_info.value.code == 400
+

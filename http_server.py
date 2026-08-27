@@ -26,6 +26,9 @@ from kardenwort_desk import (
     verify_language,
     run_render_flow,
     get_storage_adapter,
+    SEC_SETTINGS,
+    persist_default_language,
+    spawn_ahk,
 )
 from kardenwort_controller import ProcessSupervisor
 
@@ -638,6 +641,36 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     logger.error(f"Error during server shutdown: {e}")
 
             threading.Thread(target=shutdown_server, daemon=True).start()
+            return
+
+        # Language synchronization endpoint
+        if path == '/api/v1/set-language':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            language = body.get('language') or body.get('lang')
+            if not language or not isinstance(language, str) or not language.strip():
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing or invalid required payload field: 'language'")
+            language = language.strip().lower()
+
+            # 1. Update in-memory config
+            if hasattr(self.server, 'config') and self.server.config:
+                if not self.server.config.has_section(SEC_SETTINGS):
+                    self.server.config.add_section(SEC_SETTINGS)
+                self.server.config.set(SEC_SETTINGS, 'default_language', language)
+
+            # 2. Persist to config.ini files (desk and AHK)
+            base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
+            persisted = persist_default_language(language, base_dir=base_dir)
+
+            # 3. Notify AutoHotkey process via IPC
+            spawn_ahk(["--set-language", language], base_dir=base_dir)
+
+            self._send_json(200, {
+                "ok": True,
+                "language": language,
+                "persisted": persisted,
+            })
             return
 
         # Browser tab spawning endpoint

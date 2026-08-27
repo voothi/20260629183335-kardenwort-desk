@@ -131,6 +131,12 @@ def test_language_modal_yes_click_action(page, tmp_path):
     assert render_fetches[0]["body"]["language"] == "de"
     assert render_fetches[0]["body"]["bypass_lang_check"] is True
 
+    set_lang_fetches = [f for f in fetches if f["url"] == "/api/v1/set-language"]
+    assert len(set_lang_fetches) == 1
+    assert set_lang_fetches[0]["method"] == "POST"
+    assert set_lang_fetches[0]["body"]["language"] == "de"
+
+
 
 def test_language_modal_no_click_action(page, tmp_path):
     mismatch = {
@@ -424,4 +430,64 @@ def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
     assert len(opened) == 2
     assert opened[0]["url"] == "/session/render?session_zid=20260827005723&seq_num=2&bypass_lang_check=true"
     assert opened[1]["url"] == "/session/render?session_zid=20260827005724&seq_num=3&bypass_lang_check=true"
+
+
+def test_language_modal_reverse_ordered_child_tab_spawning(page, tmp_path):
+    mismatch = {
+        "is_mismatch": True,
+        "detected_language": "de",
+        "expected_language": "en",
+        "detected_name": "German",
+        "expected_name": "English",
+        "text": "Erste Satz. Zweite Satz. Dritte Satz.",
+        "session_zid": "20260827005722",
+    }
+    # In reverse spawn order, child sessions arrive with highest sequence number first
+    children_args = [
+        "--seq-num", "4", "--restore", "U:\\voothi\\results\\20260827005725-dritte.de.tsv",
+        "--seq-num", "3", "--restore", "U:\\voothi\\results\\20260827005724-zweite.de.tsv",
+        "--seq-num", "2", "--restore", "U:\\voothi\\results\\20260827005723-erste.de.tsv",
+    ]
+    children_json = json.dumps(children_args)
+    mock_spawn_script = f"""<script>
+    window.__spawnCalls = [];
+    window.fetch = function(url, options) {{
+        if (url === '/api/v1/spawn-tabs') {{
+            var body = (options && options.body) ? JSON.parse(options.body) : {{}};
+            window.__spawnCalls.push(body);
+            return Promise.resolve({{
+                ok: true,
+                status: 200,
+                json: function() {{ return Promise.resolve({{ ok: true, spawned: 3 }}); }}
+            }});
+        }}
+        return Promise.resolve({{
+            ok: true,
+            status: 200,
+            json: function() {{
+                return Promise.resolve({{
+                    ok: true,
+                    data: {{
+                        html: null,
+                        children: {children_json}
+                    }}
+                }});
+            }}
+        }});
+    }};
+    </script>"""
+    html = get_modal_test_page_html(tmp_path, mismatch_info=mismatch).replace("<head>", f"<head>\n{mock_spawn_script}")
+    page.set_content(html)
+
+    page.locator("#kw-btn-lang-yes").click()
+    page.wait_for_timeout(50)
+
+    spawn_calls = page.evaluate("window.__spawnCalls")
+    assert len(spawn_calls) == 1
+    assert len(spawn_calls[0]["urls"]) == 3
+    # Exactly in reverse order as delivered by backend
+    assert spawn_calls[0]["urls"][0] == "/session/render?session_zid=20260827005725&seq_num=4&bypass_lang_check=true"
+    assert spawn_calls[0]["urls"][1] == "/session/render?session_zid=20260827005724&seq_num=3&bypass_lang_check=true"
+    assert spawn_calls[0]["urls"][2] == "/session/render?session_zid=20260827005723&seq_num=2&bypass_lang_check=true"
+
 

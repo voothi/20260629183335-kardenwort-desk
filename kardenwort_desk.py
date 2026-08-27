@@ -12416,6 +12416,14 @@ html, body {{
             setLangModalLoading(true);
 
             if (typeof fetch !== 'undefined') {
+                fetch('/api/v1/set-language', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ language: detLang })
+                }).catch(function(e) {
+                    console.warn("Failed to synchronize language with controller:", e);
+                });
+
                 fetch('/api/v1/render', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
@@ -17167,7 +17175,58 @@ def get_ahk_executable():
             if (p_dir / name).exists():
                 return str(p_dir / name)
                 
-    return None
+def persist_default_language(language: str, base_dir=None) -> bool:
+    """
+    Persists the default language to config.ini files in both kardenwort-desk and kardenwort-window.
+    Preserves comments and formatting via regex substitution.
+    """
+    if not language:
+        return False
+    
+    if not base_dir:
+        base_dir = Path(__file__).resolve().parent
+    base_dir = Path(base_dir)
+
+    success = False
+    
+    # 1. Update desk config.ini
+    desk_config = base_dir / "config.ini"
+    if desk_config.exists():
+        try:
+            content = desk_config.read_text(encoding="utf-8")
+            if re.search(r'(?i)^\s*default_language\s*=', content, flags=re.MULTILINE):
+                new_content = re.sub(
+                    r'(?i)^(\s*default_language\s*=\s*).*$',
+                    r'\g<1>' + language,
+                    content,
+                    flags=re.MULTILINE
+                )
+                desk_config.write_text(new_content, encoding="utf-8")
+                success = True
+        except Exception as e:
+            logger.warning(f"Failed to update desk config.ini with default_language={language}: {e}")
+
+    # 2. Update autohotkey config.ini
+    ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None) if base_dir.parent else None
+    if ahk_repo:
+        ahk_config = ahk_repo / "kardenwort-window" / "config.ini"
+        if ahk_config.exists():
+            try:
+                content = ahk_config.read_text(encoding="utf-8")
+                if re.search(r'(?i)^\s*DefaultLanguage\s*=', content, flags=re.MULTILINE):
+                    new_content = re.sub(
+                        r'(?i)^(\s*DefaultLanguage\s*=\s*).*$',
+                        r'\g<1>' + language,
+                        content,
+                        flags=re.MULTILINE
+                    )
+                    ahk_config.write_text(new_content, encoding="utf-8")
+                    success = True
+            except Exception as e:
+                logger.warning(f"Failed to update AHK config.ini with DefaultLanguage={language}: {e}")
+
+    return success
+
 
 def spawn_ahk(args_list, base_dir=None):
     if not base_dir:
