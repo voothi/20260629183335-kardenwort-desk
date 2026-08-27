@@ -830,7 +830,7 @@ window.EventSource = undefined;
 def test_update_button_in_place_hydration_and_fallback_reload(page, tmp_path):
     """
     Verify that clicking Update updates cells in-place when hydrated rows are present,
-    and falls back to prompt-free reload (onbeforeunload=null) on network/server error.
+    and falls back to prompt-free reload on network/server error.
     """
     html = inject_mock_fetch(get_desk_page_html(tmp_path))
     page.set_content(html)
@@ -847,18 +847,49 @@ def test_update_button_in_place_hydration_and_fallback_reload(page, tmp_path):
     assert toast.is_visible()
     assert "Session updated" in toast.inner_text()
 
-    # 2. Simulate dirty page state with active beforeunload handler
-    page.evaluate("window.onbeforeunload = function() { return 'Unsaved changes!'; };")
-    assert page.evaluate("window.onbeforeunload !== null") is True
-
-    # 3. Simulate network failure on /session/status -> triggers prompt-free reload
+    # 2. Simulate network failure on /session/status -> triggers fallback reload
     page.evaluate("window.__failStatus = true;")
     update_btn.click()
     page.wait_for_timeout(100)
 
-    # Asserts that reload was triggered and onbeforeunload prompt was neutralized
+    # Asserts that fallback reload was triggered
     assert page.evaluate("window.__reloads") == 1
-    assert page.evaluate("window.onbeforeunload === null") is True
+
+
+def test_dirty_state_has_no_beforeunload_prompt(page, tmp_path):
+    """
+    Verify that dirty state (via row selection / cell edits) does not register
+    a window beforeunload event listener or set window.onbeforeunload, allowing
+    prompt-free tab closure.
+    """
+    html = inject_mock_fetch(get_desk_page_html(tmp_path))
+    page.set_content(html)
+
+    # Initially onbeforeunload is null
+    assert page.evaluate("window.onbeforeunload === null || window.onbeforeunload === undefined") is True
+
+    # Mark document dirty by editing a cell
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    cell.dblclick()
+    edit_input = cell.locator("input")
+    edit_input.fill("новое_здание")
+    page.keyboard.press("Enter")
+    assert page.evaluate("window.isDirty()") is True
+
+    # Confirm onbeforeunload remains unset and dispatching beforeunload produces no confirmation returnValue
+    result = page.evaluate("""() => {
+        const evt = new Event('beforeunload', { cancelable: true });
+        window.dispatchEvent(evt);
+        return {
+            defaultPrevented: evt.defaultPrevented,
+            returnValue: evt.returnValue,
+            onbeforeunload: window.onbeforeunload
+        };
+    }""")
+    assert result["defaultPrevented"] is False
+    assert result["onbeforeunload"] is None
+
+
 
 
 

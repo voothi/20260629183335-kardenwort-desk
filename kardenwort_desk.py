@@ -12558,7 +12558,6 @@ html, body {{
             var sZid = getSessionZid();
             var isForce = (forceReload === true);
             if (isForce || !sZid || typeof fetch === 'undefined') {
-                window.onbeforeunload = null;
                 if (window.onSessionReload) window.onSessionReload();
                 else if (window.location && window.location.reload) window.location.reload();
                 return;
@@ -12582,14 +12581,12 @@ html, body {{
                         window.receiveUpdate(payload);
                         window.showToast("Session updated", "success");
                     } else {
-                        window.onbeforeunload = null;
                         if (window.onSessionReload) window.onSessionReload();
                         else if (window.location && window.location.reload) window.location.reload();
                     }
                 })
                 .catch(function(err) {
                     setButtonLoading(updateBtn, false, "", "Update");
-                    window.onbeforeunload = null;
                     if (window.onSessionReload) window.onSessionReload();
                     else if (window.location && window.location.reload) window.location.reload();
                 });
@@ -13172,15 +13169,6 @@ html, body {{
                 window.redo();
                 updateToolbarState();
                 return false;
-            }
-        });
-
-        addEvent(window, 'beforeunload', function(e) {
-            if (window.isDirty && window.isDirty()) {
-                e = e || window.event;
-                var msg = 'You have unsaved changes in this session.';
-                if (e) e.returnValue = msg;
-                return msg;
             }
         });
 

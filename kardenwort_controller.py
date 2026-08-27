@@ -15,7 +15,7 @@ import urllib.request
 import urllib.error
 import concurrent.futures
 from pathlib import Path
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from typing import Dict, Any, List, Optional, Tuple
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from b64util import encode
@@ -1840,7 +1840,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             is_recent = False
             try:
                 if len(zid) >= 14 and zid[:14].isdigit():
-                    dt = datetime.strptime(zid[:14], "%Y%m%d%H%M%S")
+                    yr, mo, dy = int(zid[0:4]), int(zid[4:6]), int(zid[6:8])
+                    hr, mn, sc = int(zid[8:10]), int(zid[10:12]), int(zid[12:14])
+                    dt = datetime(yr, mo, dy, hr, mn, min(sc, 59)) + timedelta(seconds=max(0, sc - 59))
                     now = datetime.now()
                     age_sec = (now - dt).total_seconds()
                     if abs(age_sec) <= 300:
