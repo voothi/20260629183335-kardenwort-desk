@@ -2181,7 +2181,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     i += 2
                 elif arg == "--restore" and i + 1 < len(child_args):
                     t_path = child_args[i + 1]
-                    m_zid = re.search(r'(\d{14}(?:-\d+)?)', str(t_path))
+                    m_zid = re.search(r'(\d{14}(?:-\d+)?)', Path(str(t_path)).name)
                     c_zid = m_zid.group(1) if m_zid else session_zid
                     child_items.append((curr_seq, c_zid))
                     i += 2

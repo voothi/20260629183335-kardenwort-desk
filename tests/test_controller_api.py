@@ -315,11 +315,11 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     import webbrowser
     monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: opened_urls.append(url))
 
-    # Mock run_render_flow to simulate reverse order child generation
+    # Mock run_render_flow to simulate reverse order child generation with absolute paths
     mock_child_args = [
-        "--seq-num", "4", "--restore", "results/20260827010101-03.de.tsv",
-        "--seq-num", "3", "--restore", "results/20260827010101-02.de.tsv",
-        "--seq-num", "2", "--restore", "results/20260827010101-01.de.tsv",
+        "--seq-num", "4", "--restore", r"U:\voothi\20260629183335-kardenwort-desk\results\20260827010101-03.de.tsv",
+        "--seq-num", "3", "--restore", r"U:\voothi\20260629183335-kardenwort-desk\results\20260827010101-02.de.tsv",
+        "--seq-num", "2", "--restore", r"U:\voothi\20260629183335-kardenwort-desk\results\20260827010101-01.de.tsv",
     ]
     monkeypatch.setattr(
         "kardenwort_controller.run_render_flow",
