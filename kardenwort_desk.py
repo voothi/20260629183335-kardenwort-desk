@@ -8211,6 +8211,7 @@ html, body {{
                                 storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
                         else:
                             save_tsv_rows_safely(working_tsv_path, comments, headers_latest, current_rows)
+                        current_rows = sort_rows_by_frequency(current_rows, headers_latest, language, config, resolved_paths, role_fields=role_fields)
                         data_rows = current_rows
             except Exception as e:
                 logger.error(f"Error sweeping FAILED (WordDestination) in UI thread: {e}")

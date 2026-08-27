@@ -1731,9 +1731,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 safe_sess = {k: v for k, v in sess.items() if k != "lock"}
                 headers = safe_sess.get("headers", [])
                 data_rows = safe_sess.get("data_rows", [])
+                sess_lang = safe_sess.get("language") or safe_sess.get("lang") or "de"
                 role_fields = get_role_fields(mapping, headers) if mapping else {}
-                if "rows" not in safe_sess or not isinstance(safe_sess["rows"], dict):
-                    safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields)
+                if data_rows and headers:
+                    data_rows = sort_rows_by_frequency(
+                        data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
+                    )
+                safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields)
                 if "translatedText" not in safe_sess or not safe_sess["translatedText"]:
                     st = safe_sess.get("sentence_translation")
                     if st:
@@ -1796,14 +1800,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             sentence_translation = ""
             source_text = ""
             text_mode = "single"
+            sess_lang = "de"
 
             if restored:
                 headers = restored.get("headers", [])
                 data_rows = restored.get("data_rows", [])
                 source_text = restored.get("source_text", "")
                 sentence_translation = restored.get("sentence_translation", "")
+                sess_lang = restored.get("source_language") or restored.get("language") or restored.get("lang") or "de"
                 if restored.get("session") and isinstance(restored["session"], dict):
                     text_mode = restored["session"].get("text_mode", "single")
+                    if not sess_lang:
+                        sess_lang = restored["session"].get("source_language") or restored["session"].get("language") or "de"
 
             # If sentence_translation not found directly, try extracting from TSV columns or SQLite sentences
             role_fields = get_role_fields(mapping, headers) if mapping else {}
@@ -1863,6 +1871,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                 break
 
             session_is_busy = is_busy or (has_untranslated_lemmas and is_recent)
+
+            if data_rows and headers:
+                data_rows = sort_rows_by_frequency(
+                    data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
+                )
 
             rows_dict = format_update_rows_dict(data_rows, headers, role_fields)
             translated_html = format_translated_html(
@@ -2280,6 +2293,21 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         for s in restored["sentences"]
                         if (s.get("sentence_destination") or s.get("sentence_destination2"))
                     ])
+
+                mapping_path = None
+                if self.server.resolved_paths and "anki_mapping_file" in self.server.resolved_paths:
+                    mapping_path = Path(self.server.resolved_paths["anki_mapping_file"])
+                elif self.server.config and hasattr(self.server.config, "get"):
+                    raw_mp = self.server.config.get(SEC_SETTINGS, "anki_mapping_file", fallback="./anki-mapping.ini")
+                    mapping_path = Path(raw_mp)
+                mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
+                role_fields = get_role_fields(mapping, headers) if mapping else {}
+
+                if data_rows and headers:
+                    data_rows = sort_rows_by_frequency(
+                        data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
+                    )
+
                 fingerprint = compute_content_fingerprint(data_rows)
 
                 req_theme = qs.get('theme', [None])[0]
@@ -2476,6 +2504,21 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 headers = restored.get("headers", [])
                 comments = restored.get("comments", [])
                 sentence_translation = restored.get("sentence_translation", "")
+
+                mapping_path = None
+                if self.server.resolved_paths and "anki_mapping_file" in self.server.resolved_paths:
+                    mapping_path = Path(self.server.resolved_paths["anki_mapping_file"])
+                elif self.server.config and hasattr(self.server.config, "get"):
+                    raw_mp = self.server.config.get(SEC_SETTINGS, "anki_mapping_file", fallback="./anki-mapping.ini")
+                    mapping_path = Path(raw_mp)
+                mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
+                role_fields = get_role_fields(mapping, headers) if mapping else {}
+
+                if data_rows and headers:
+                    data_rows = sort_rows_by_frequency(
+                        data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
+                    )
+
                 fingerprint = compute_content_fingerprint(data_rows)
 
                 goldendict = dict(self.server.goldendict) if self.server.goldendict else {}

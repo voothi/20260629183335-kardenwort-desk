@@ -989,10 +989,15 @@ def test_session_status_hydrated_rows_and_translated_text(running_controller):
             data = res.get("data", res)
             assert "rows" in data
             assert isinstance(data["rows"], dict)
+            # In German frequency index, Hund ranks higher than Katze, so row 0 is Hund, row 1 is Katze
             row0 = data["rows"].get("0") or data["rows"].get(0)
             assert row0 is not None
-            assert row0.get("lemma") == "Katze"
-            assert row0.get("trans") == "cat"
+            assert row0.get("lemma") == "Hund"
+            assert row0.get("trans") == "dog"
+            row1 = data["rows"].get("1") or data["rows"].get(1)
+            assert row1 is not None
+            assert row1.get("lemma") == "Katze"
+            assert row1.get("trans") == "cat"
             assert "translatedText" in data
             assert "The cat sleeps" in data["translatedText"]
     finally:
@@ -1120,4 +1125,83 @@ def test_controller_session_status_worker_lock_held_reports_busy(running_control
             pass
 
 
+def test_session_status_multi_sentence_global_frequency_sort(running_controller):
+    """
+    Verify GET /session/status orders rows globally across multi-sentence boundaries
+    so that common words from later sentences precede rare words from earlier sentences.
+    """
+    server_url, server = running_controller
+    arbiter = server.arbiter
+    sess_zid = kardenwort_desk.generate_unique_zid()
 
+    # 1. In-memory arbiter session: Sentence 1 has rare word ("Transporter"), Sentence 2 has common word ("der")
+    headers = ["WordSource", "WordDestination", "TokenOrder", "SentenceSourceIndex", "SentenceDestination"]
+    data_rows = [
+        ["Transporter", "transporter", "0", "1", "Ein seltener Transporter."],
+        ["der", "the", "1", "2", "Das ist der beste Weg."],
+    ]
+    with arbiter._lock:
+        arbiter.sessions[sess_zid] = {
+            "session_zid": sess_zid,
+            "language": "de",
+            "target_lang": "en",
+            "text": "Ein seltener Transporter. Das ist der beste Weg.",
+            "headers": headers,
+            "data_rows": data_rows,
+            "sentence_translation": "A rare transporter.\nThat is the best way.",
+            "fingerprint": "fp_multi_sent",
+            "created_at": time.time(),
+        }
+
+    try:
+        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}")
+        with urllib.request.urlopen(req_status, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode("utf-8"))
+            data = res.get("data", res)
+            assert "rows" in data
+            rows = data["rows"]
+            # Row 0 should be the most frequent word ("der")
+            # Row 1 should be the rarer word ("Transporter")
+            assert (rows.get("0") or rows.get(0))["lemma"] == "der"
+            assert (rows.get("1") or rows.get(1))["lemma"] == "Transporter"
+    finally:
+        with arbiter._lock:
+            arbiter.sessions.pop(sess_zid, None)
+
+    # 2. Persistent storage restore session with 2 sentences
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    storage_zid = kardenwort_desk.generate_unique_zid()
+    storage_adapter.save_session(
+        session_zid=storage_zid,
+        slug="test-multi-sent-sort",
+        source_language="de",
+        target_language="en",
+        text_mode="sentences",
+        source_raw_text="Ein seltener Transporter. Das ist der beste Weg.",
+        sentences=[
+            {"sentence_index": 1, "sentence_source": "Ein seltener Transporter.", "sentence_destination": "A rare transporter."},
+            {"sentence_index": 2, "sentence_source": "Das ist der beste Weg.", "sentence_destination": "That is the best way."},
+        ],
+        headers=["WordSource", "WordDestination", "TokenOrder", "SentenceSourceIndex"],
+        data_rows=[
+            ["Transporter", "transporter", "0", "1"],
+            ["der", "the", "1", "2"],
+        ],
+    )
+    try:
+        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode("utf-8"))
+            data = res.get("data", res)
+            assert data.get("ok") is True
+            assert "rows" in data
+            rows = data["rows"]
+            assert (rows.get("0") or rows.get(0))["lemma"] == "der"
+            assert (rows.get("1") or rows.get(1))["lemma"] == "Transporter"
+    finally:
+        try:
+            storage_adapter.delete_session(storage_zid)
+        except Exception:
+            pass

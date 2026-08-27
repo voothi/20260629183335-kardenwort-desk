@@ -890,6 +890,75 @@ def test_dirty_state_has_no_beforeunload_prompt(page, tmp_path):
     assert result["onbeforeunload"] is None
 
 
+def test_session_status_client_hydration_multi_sentence_frequency_order(page, tmp_path):
+    """
+    Verify that client-side hydration via /session/status updates table rows in global
+    frequency order across sentence boundaries without sentence-block concatenation.
+    """
+    html = inject_mock_fetch(get_desk_page_html(tmp_path))
+    page.set_content(html)
+
+    # Initial table state: Row 0 is Haus, Row 1 is Baum
+    row0_lemma = page.locator("tr[data-row-id='0'] td[data-col='WordSource']")
+    row1_lemma = page.locator("tr[data-row-id='1'] td[data-col='WordSource']")
+    row0_trans = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    row1_trans = page.locator("tr[data-row-id='1'] td[data-col='WordDestination']")
+
+    assert "Haus" in row0_lemma.inner_text()
+    assert "Baum" in row1_lemma.inner_text()
+    assert "дом" in row0_trans.inner_text()
+
+    # Override mock fetch for /session/status with multi-sentence globally sorted rows
+    page.evaluate("""() => {
+        const origFetch = window.fetch;
+        window.fetch = async function(url, options) {
+            if (url.indexOf('/session/status') !== -1) {
+                return {
+                    ok: true,
+                    status: 200,
+                    json: async () => ({
+                        ok: true,
+                        status: 'success',
+                        rows: {
+                            0: {
+                                lemma: 'Haus',
+                                inflected: 'Haus',
+                                trans: 'дом_hydrated_s1',
+                                ipa: '/haʊs/',
+                                morph: '<b>N</b>; Nom, Sg',
+                                token_order: '0',
+                                sentence_idx: '1'
+                            },
+                            1: {
+                                lemma: 'Baum',
+                                inflected: 'Baum',
+                                trans: 'дерево_hydrated_s2',
+                                ipa: '/baʊm/',
+                                morph: '<b>N</b>; Nom, Sg',
+                                token_order: '1',
+                                sentence_idx: '2'
+                            }
+                        }
+                    })
+                };
+            }
+            return origFetch(url, options);
+        };
+    }""")
+
+    # Click Update button to trigger /session/status hydration
+    update_btn = page.locator("#kw-btn-update")
+    update_btn.click()
+    page.wait_for_timeout(100)
+
+    # Assert rows remain in global frequency order with updated values
+    assert "Haus" in row0_lemma.inner_text()
+    assert "дом_hydrated_s1" in row0_trans.inner_text()
+    assert "Baum" in row1_lemma.inner_text()
+    assert "дерево_hydrated_s2" in row1_trans.inner_text()
+
+
+
 
 
 
