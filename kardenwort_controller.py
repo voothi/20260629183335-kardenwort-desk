@@ -744,19 +744,36 @@ class SessionArbiter:
         storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
-        results_dir = resolve_results_dir(self.resolved_paths, self.config)
-        tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
-        if not tsv_path:
-            tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
-
-        if not is_sqlite and (not tsv_path or not tsv_path.exists()):
-            raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
-
+        tsv_path = None
         session_text = ""
         with self._lock:
             if session_zid in self.sessions:
                 sess = self.sessions[session_zid]
                 session_text = sess.get("text", "")
+                if sess.get("tsv_path"):
+                    cand = Path(sess["tsv_path"])
+                    if cand.exists():
+                        tsv_path = cand
+                    else:
+                        tsv_path = cand
+                        comments = sess.get("comments", [])
+                        headers = sess.get("headers", [])
+                        data_rows = sess.get("data_rows", [])
+                        if headers and data_rows:
+                            try:
+                                tsv_path.parent.mkdir(parents=True, exist_ok=True)
+                                save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                            except Exception:
+                                pass
+
+        if not tsv_path:
+            results_dir = resolve_results_dir(self.resolved_paths, self.config)
+            tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
+            if not tsv_path:
+                tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
+
+        if not is_sqlite and (not tsv_path or not tsv_path.exists()):
+            raise StructuredError(ErrorCode.DESK_FAILED, f"Working TSV file not found for session {session_zid}")
 
         source_txt = tsv_path.with_suffix('.txt') if tsv_path else None
         if not is_sqlite and source_txt and source_txt.exists():
