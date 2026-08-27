@@ -4140,6 +4140,64 @@ def test_table_row_lmb_audio_interactions(page):
     assert len(play_calls) == 1
     assert play_calls[0]["arg"].endswith("de\\nHäuser ||| Bäume ||| Kinder")
 
+    # --- Scenario 8: Ctrl + Drag plays range even when table_range_mode = none ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate", table_range_mode="none"))
+
+    page.evaluate("""() => {
+        const r0 = document.querySelector("tr[data-row-id='0']");
+        const r1 = document.querySelector("tr[data-row-id='1']");
+        const r2 = document.querySelector("tr[data-row-id='2']");
+        r0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, ctrlKey: true }));
+        r1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1, ctrlKey: true }));
+        r2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1, ctrlKey: true }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0, ctrlKey: true }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1, "Ctrl + Drag should force sequential range playback"
+    assert play_calls[0]["arg"].endswith("de\\nHaus ||| Baum ||| Kind")
+
+    # --- Scenario 9: Ctrl + Shift + Click plays range even when table_range_mode = none ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection", lmb_chain_mode="separate", table_range_mode="none"))
+
+    # Single click row 0 first
+    page.evaluate("""() => {
+        const r0 = document.querySelector("tr[data-row-id='0']");
+        r0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    page.evaluate("window.__ahkCalls = [];")
+    # Ctrl + Shift + Click row 2
+    page.evaluate("""() => {
+        const r2 = document.querySelector("tr[data-row-id='2']");
+        r2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, shiftKey: true, ctrlKey: true }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0, shiftKey: true, ctrlKey: true }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1, "Ctrl + Shift + Click should force range playback"
+    assert play_calls[0]["arg"].endswith("de\\nHäuser ||| Bäume ||| Kinder")
+
+    # --- Scenario 10: Single Ctrl + Click plays only clicked row ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", table_range_mode="none"))
+
+    page.evaluate("""() => {
+        const r1 = document.querySelector("tr[data-row-id='1']");
+        r1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, ctrlKey: true }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0, ctrlKey: true }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1, "Single Ctrl + Click should play only the targeted row"
+    assert play_calls[0]["arg"].endswith("de\\nBaum")
+
+
 
 
 

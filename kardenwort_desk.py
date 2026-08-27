@@ -9981,6 +9981,7 @@ html, body {{
         var dragStartRowId = null;
         var dragLastRowId = null;
         var isShiftClick = false;
+        var isCtrlKey = false;
         var mousedownTargetRow = null;
         var dragSelectMode = true;
         var isTokenDragSelecting = false;
@@ -11458,6 +11459,7 @@ html, body {{
                         dragOccurred = false;
                         mousedownTargetRow = row;
                         isShiftClick = !!(e.shiftKey && lastClickedRowId !== null);
+                        isCtrlKey = !!(e.ctrlKey || e.metaKey);
                         
                         if (e.shiftKey && lastClickedRowId !== null) {
                             dragStartRowId = lastClickedRowId;
@@ -11598,6 +11600,8 @@ html, body {{
         
         function handleMouseUp(e) {
             e = e || window.event;
+            var isMouseUpCtrl = !!(e && (e.ctrlKey || e.metaKey));
+            var activeCtrl = isCtrlKey || isMouseUpCtrl;
             var needNotify = false;
             if (isDragSelecting || isTokenDragSelecting || isRmbDragFlipping) {
                 if (dragOccurred) {
@@ -11622,7 +11626,7 @@ html, body {{
                                 }
                             }
                         } else {
-                            if (audioTableRangeMode === 'all') {
+                            if (audioTableRangeMode === 'all' || activeCtrl) {
                                 var start = (dragStartRowId !== null) ? dragStartRowId : 0;
                                 var end = (dragLastRowId !== null) ? dragLastRowId : start;
                                 var minRow = Math.min(start, end);
@@ -11761,6 +11765,7 @@ html, body {{
             dragStartRowId = null;
             dragLastRowId = null;
             isShiftClick = false;
+            isCtrlKey = false;
             tokenDragStartIdx = -1;
             tokenDragLastIdx = -1;
             if (needNotify) {
