@@ -32,10 +32,15 @@ def inject_mock_fetch(html):
     mock_script = """<script>
 window.__fetches = [];
 window.__reloads = 0;
+window.onSessionReload = function() {
+    window.__reloads = (window.__reloads || 0) + 1;
+};
 if (window.location) {
-    window.location.reload = function() {
-        window.__reloads = (window.__reloads || 0) + 1;
-    };
+    try {
+        window.location.reload = function() {
+            window.__reloads = (window.__reloads || 0) + 1;
+        };
+    } catch(e) {}
 }
 window.fetch = async function(url, options) {
     var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
@@ -93,6 +98,9 @@ window.fetch = async function(url, options) {
         };
     }
     if (url.indexOf('/session/status') !== -1) {
+        if (window.__failStatus) {
+            throw new Error("Network connection lost");
+        }
         return {
             ok: true,
             status: 200,
@@ -590,9 +598,8 @@ window.EventSource = function(url) {
     # Verify EventSource was created and is active
     instances = page.evaluate("window.__sseInstances.length")
     assert instances == 1
-    assert page.evaluate("window._kwEvtSource !== null") is True
-    # Mutual exclusion: watchdog poll timer should NOT be started while SSE is active
-    assert page.evaluate("!window._kwSkeletonPollTimer") is True
+    # Concurrent polling: watchdog poll timer runs concurrently with EventSource
+    assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
 
     # Simulate SSE message with is_finished: true
     page.evaluate("""
@@ -610,10 +617,11 @@ window.EventSource = function(url) {
     """)
     page.wait_for_timeout(100)
 
-    # Verify EventSource was closed and reference cleared
+    # Verify EventSource was closed, reference cleared, and poll timer stopped
     is_closed = page.evaluate("window.__sseInstances[0].closed")
     assert is_closed is True
     assert page.evaluate("window._kwEvtSource === null") is True
+    assert page.evaluate("!window._kwSkeletonPollTimer") is True
 
 
 def test_eventsource_error_fallback_to_watchdog_polling(page, tmp_path):
@@ -817,6 +825,41 @@ window.EventSource = undefined;
     toast = page.locator(".kw-toast-warning")
     assert toast.is_visible()
     assert "Background loading timed out. Restored table editing." in toast.inner_text()
+
+
+def test_update_button_in_place_hydration_and_fallback_reload(page, tmp_path):
+    """
+    Verify that clicking Update updates cells in-place when hydrated rows are present,
+    and falls back to prompt-free reload (onbeforeunload=null) on network/server error.
+    """
+    html = inject_mock_fetch(get_desk_page_html(tmp_path))
+    page.set_content(html)
+
+    update_btn = page.locator("#kw-btn-update")
+    cell_trans = page.locator("tr[data-row-id='0'] td:nth-child(3)")
+
+    # 1. Successful update with hydrated rows -> updates DOM in-place without reload
+    update_btn.click()
+    page.wait_for_timeout(100)
+    assert page.evaluate("window.__reloads") == 0
+    assert "дом_status_updated" in cell_trans.inner_text()
+    toast = page.locator(".kw-toast-success")
+    assert toast.is_visible()
+    assert "Session updated" in toast.inner_text()
+
+    # 2. Simulate dirty page state with active beforeunload handler
+    page.evaluate("window.onbeforeunload = function() { return 'Unsaved changes!'; };")
+    assert page.evaluate("window.onbeforeunload !== null") is True
+
+    # 3. Simulate network failure on /session/status -> triggers prompt-free reload
+    page.evaluate("window.__failStatus = true;")
+    update_btn.click()
+    page.wait_for_timeout(100)
+
+    # Asserts that reload was triggered and onbeforeunload prompt was neutralized
+    assert page.evaluate("window.__reloads") == 1
+    assert page.evaluate("window.onbeforeunload === null") is True
+
 
 
 

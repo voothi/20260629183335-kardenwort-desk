@@ -10278,7 +10278,7 @@ html, body {{
             if (isWebMode && curZid && hasSkeletons) {
                 var startTime = Date.now();
                 var maxBudgetMs = 30000; // 30-second safety budget
-                var pollIntervalMs = 500;
+                var pollIntervalMs = 1000;
                 var isPolling = false;
                 var resolved = false;
 
@@ -10289,14 +10289,21 @@ html, body {{
                             var el = pendings[i];
                             el.classList.remove("skeleton-loader");
                             el.removeAttribute("data-pending");
-                            if (el.tagName === 'SPAN' || el.tagName === 'DIV') {
-                                if (el.parentNode && (el.parentNode.classList.contains('scrollable-cell') || el.parentNode.tagName === 'TD' || el.parentNode.id === 'translation-container')) {
-                                    el.textContent = '';
-                                }
-                            }
                         }
                         if (typeof window.showToast === 'function') {
                             window.showToast("Background loading timed out. Restored table editing.", "warning");
+                        }
+                        if (typeof fetch !== 'undefined' && curZid) {
+                            var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                            fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                                .then(function(res) { if (res.ok) return res.json(); })
+                                .then(function(resObj) {
+                                    var data = (resObj && resObj.data) ? resObj.data : resObj;
+                                    if (data && data.rows && window.receiveUpdate) {
+                                        window.receiveUpdate(data);
+                                    }
+                                })
+                                .catch(function() {});
                         }
                     }
                 };
@@ -10356,6 +10363,7 @@ html, body {{
                                         clearTimeout(window._kwWatchdogMaxTimer);
                                         window._kwWatchdogMaxTimer = null;
                                     }
+                                    closeEvtSource();
                                     stopPolling();
                                     if (window.onSessionReload) {
                                         window.onSessionReload();
@@ -10375,6 +10383,7 @@ html, body {{
                                             clearTimeout(window._kwWatchdogMaxTimer);
                                             window._kwWatchdogMaxTimer = null;
                                         }
+                                        closeEvtSource();
                                         stopPolling();
                                         if (window.onSessionReload) {
                                             window.onSessionReload();
@@ -10411,16 +10420,16 @@ html, body {{
                     } else {
                         var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
                         if (remaining > 0 && !resolved) {
-                            if (!window._kwEvtSource && !window._kwSkeletonPollTimer) {
-                                startWatchdogPolling();
-                            } else if (window._kwSkeletonPollTimer) {
-                                pollSessionStatus();
-                            }
+                            startWatchdogPolling();
+                            pollSessionStatus();
                         }
                     }
                 });
 
-                // Primary channel: EventSource (SSE) with Mutual Exclusion against Polling
+                // Start concurrent watchdog polling
+                startWatchdogPolling();
+
+                // Channel: EventSource (SSE) running concurrently with watchdog polling
                 if (typeof EventSource !== 'undefined') {
                     try {
                         var sseUrl = "/events?zid=" + encodeURIComponent(curZid);
@@ -10430,19 +10439,11 @@ html, body {{
                         // 30-second safety timer to ensure EventSource is closed and slot is released
                         window._kwSseSafetyTimer = setTimeout(function() {
                             closeEvtSource();
-                            var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
-                            if (remaining > 0 && !resolved) {
-                                startWatchdogPolling();
-                            }
                         }, maxBudgetMs);
 
-                        // On error: immediately close socket to prevent browser auto-reconnect loops, fallback to polling
+                        // On error: immediately close socket to prevent browser auto-reconnect loops
                         evtSource.onerror = function(err) {
                             closeEvtSource();
-                            var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
-                            if (remaining > 0 && !resolved) {
-                                startWatchdogPolling();
-                            }
                         };
 
                         evtSource.onmessage = function(e) {
@@ -10470,11 +10471,7 @@ html, body {{
                         };
                     } catch(sseErr) {
                         closeEvtSource();
-                        startWatchdogPolling();
                     }
-                } else {
-                    // Fallback to watchdog polling when EventSource is not supported
-                    startWatchdogPolling();
                 }
 
                 window.startPolling = startWatchdogPolling;
@@ -12551,7 +12548,8 @@ html, body {{
             var isForce = (forceReload === true);
             if (isForce || !sZid || typeof fetch === 'undefined') {
                 window.onbeforeunload = null;
-                if (window.location && window.location.reload) window.location.reload();
+                if (window.onSessionReload) window.onSessionReload();
+                else if (window.location && window.location.reload) window.location.reload();
                 return;
             }
             var updateBtn = document.getElementById('kw-btn-update');
@@ -12567,17 +12565,22 @@ html, body {{
                 .then(function(resObj) {
                     setButtonLoading(updateBtn, false, "", "Update");
                     var payload = (resObj && resObj.data && resObj.data.data) ? resObj.data.data : ((resObj && resObj.data) ? resObj.data : resObj);
-                    if (resObj.ok && payload && window.receiveUpdate) {
+                    var hasRows = payload && payload.rows && typeof payload.rows === 'object' && Object.keys(payload.rows).length > 0;
+                    var hasTrans = payload && (payload.translatedText || payload.translated_text);
+                    if (resObj.ok && payload && (hasRows || hasTrans) && window.receiveUpdate) {
                         window.receiveUpdate(payload);
                         window.showToast("Session updated", "success");
-                    } else if (!resObj.ok) {
-                        window.showToast("Update failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
+                    } else {
+                        window.onbeforeunload = null;
+                        if (window.onSessionReload) window.onSessionReload();
+                        else if (window.location && window.location.reload) window.location.reload();
                     }
                 })
                 .catch(function(err) {
                     setButtonLoading(updateBtn, false, "", "Update");
                     window.onbeforeunload = null;
-                    if (window.location && window.location.reload) window.location.reload();
+                    if (window.onSessionReload) window.onSessionReload();
+                    else if (window.location && window.location.reload) window.location.reload();
                 });
         };
 

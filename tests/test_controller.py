@@ -953,3 +953,87 @@ def test_controller_enrichment_queue_error_recovery(running_controller):
     eq.shutdown()
 
 
+def test_session_status_hydrated_rows_and_translated_text(running_controller):
+    """
+    Verify GET /session/status returns hydrated rows dictionary and translatedText
+    both for in-memory sessions in arbiter and persistent storage sessions.
+    """
+    server_url, server = running_controller
+    arbiter = server.arbiter
+    sess_zid = kardenwort_desk.generate_unique_zid()
+
+    # 1. Test in-memory arbiter session
+    headers = ["WordSource", "WordDestination", "TokenOrder", "SentenceSourceIndex", "SentenceDestination"]
+    data_rows = [
+        ["Katze", "cat", "0", "1", "Die Katze schläft"],
+        ["Hund", "dog", "1", "1", "Die Katze schläft"],
+    ]
+    with arbiter._lock:
+        arbiter.sessions[sess_zid] = {
+            "session_zid": sess_zid,
+            "language": "de",
+            "target_lang": "en",
+            "text": "Die Katze schläft",
+            "headers": headers,
+            "data_rows": data_rows,
+            "sentence_translation": "The cat sleeps",
+            "fingerprint": "test_fp",
+            "created_at": time.time(),
+        }
+
+    try:
+        req_status = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}")
+        with urllib.request.urlopen(req_status, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode("utf-8"))
+            data = res.get("data", res)
+            assert "rows" in data
+            assert isinstance(data["rows"], dict)
+            row0 = data["rows"].get("0") or data["rows"].get(0)
+            assert row0 is not None
+            assert row0.get("lemma") == "Katze"
+            assert row0.get("trans") == "cat"
+            assert "translatedText" in data
+            assert "The cat sleeps" in data["translatedText"]
+    finally:
+        with arbiter._lock:
+            arbiter.sessions.pop(sess_zid, None)
+
+    # 2. Test persistent storage fallback session
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    storage_zid = kardenwort_desk.generate_unique_zid()
+    storage_adapter.save_session(
+        session_zid=storage_zid,
+        slug="test-storage-status",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text="Der Hund rennt",
+        sentences=[{"sentence_index": 0, "sentence_source": "Der Hund rennt", "sentence_destination": "The dog runs"}],
+        headers=["WordSource", "WordDestination", "TokenOrder"],
+        data_rows=[["Hund", "dog", "0"], ["rennt", "runs", "1"]],
+    )
+    try:
+        req_storage = urllib.request.Request(f"{server_url}/session/status?zid={storage_zid}")
+        with urllib.request.urlopen(req_storage, timeout=5.0) as resp:
+            assert resp.status == 200
+            res = json.loads(resp.read().decode("utf-8"))
+            data = res.get("data", res)
+            assert data.get("ok") is True
+            assert data.get("is_finished") is True
+            assert "rows" in data
+            assert isinstance(data["rows"], dict)
+            row0 = data["rows"].get("0") or data["rows"].get(0)
+            assert row0 is not None
+            assert row0.get("lemma") == "Hund"
+            assert row0.get("trans") == "dog"
+            assert "translatedText" in data
+            assert "The dog runs" in data["translatedText"]
+    finally:
+        try:
+            storage_adapter.delete_session(storage_zid)
+        except Exception:
+            pass
+
+
+

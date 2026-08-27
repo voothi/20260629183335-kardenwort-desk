@@ -3673,6 +3673,147 @@ def test_web_view_skeleton_auto_resolution(page):
     assert any("/session/status" in f and "20260827120000" in f for f in fetches)
 
 
+def test_watchdog_polling_concurrent_with_eventsource(page):
+    """
+    Verify that watchdog status polling runs concurrently with active EventSource connection
+    and does not wait for EventSource error/timeout.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260827120000">
+<div class="container">
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSource">Haus</td>
+        <td data-col="WordDestination"><div class="skeleton-loader"></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    # Mock EventSource to remain connected without errors, and mock fetch to track status polling
+    page.evaluate("""
+        window.__fetches = [];
+        window.__sseConnected = false;
+
+        function MockEventSource(url) {
+            this.url = url;
+            this.readyState = 1;
+            window.__sseConnected = true;
+            window._mockSSE = this;
+        }
+        MockEventSource.prototype.close = function() {
+            this.readyState = 2;
+            window.__sseClosed = true;
+        };
+        window.EventSource = MockEventSource;
+
+        window.fetch = function(url, options) {
+            window.__fetches.push(String(url));
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() {
+                    return Promise.resolve({
+                        status: "success",
+                        data: {
+                            ok: true,
+                            is_finished: true,
+                            stage: "finished",
+                            zid: "20260827120000",
+                            rows: {
+                                "0": { "trans": "House" }
+                            }
+                        }
+                    });
+                }
+            });
+        };
+    """)
+
+    page.evaluate(extract_desk_js())
+
+    # Watchdog polling must execute even though EventSource is alive
+    page.wait_for_function("() => window.__fetches && window.__fetches.some(f => f && f.indexOf('/session/status') !== -1)", timeout=5000)
+    assert page.evaluate("window.__sseConnected") is True
+    fetches = page.evaluate("window.__fetches")
+    assert any("/session/status" in f for f in fetches)
+
+
+def test_cleanup_orphan_skeletons_non_destructive(page):
+    """
+    Verify cleanupOrphanSkeletons removes .skeleton-loader and data-pending
+    without wiping existing text content to empty strings, and dispatches a recovery query.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260827120000">
+<div class="container">
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true">Pending Translation Text</span>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSource">Haus</td>
+        <td data-col="WordDestination">
+          <div class="scrollable-cell">
+            <span class="skeleton-loader" data-pending="true">Pending Lemma Text</span>
+          </div>
+        </td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.__recoveryCalls = [];
+        window.fetch = function(url, options) {
+            window.__recoveryCalls.push(String(url));
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() {
+                    return Promise.resolve({
+                        status: "success",
+                        data: { ok: true, rows: {} }
+                    });
+                }
+            });
+        };
+    """)
+    page.evaluate(extract_desk_js())
+
+    # Execute cleanup
+    page.evaluate("window.cleanupOrphanSkeletons()")
+
+    # 1. Classes and attributes removed
+    assert page.locator(".skeleton-loader").count() == 0
+    assert page.locator("[data-pending='true']").count() == 0
+
+    # 2. Text is NOT wiped to empty strings
+    lemma_cell_text = page.locator("td[data-col='WordDestination']").inner_text()
+    assert "Pending Lemma Text" in lemma_cell_text
+
+    trans_text = page.locator("#translation-container").inner_text()
+    assert "Pending Translation Text" in trans_text
+
+    # 3. Recovery query was dispatched
+    page.wait_for_function("() => window.__recoveryCalls && window.__recoveryCalls.length > 0", timeout=3000)
+    recovery_calls = page.evaluate("window.__recoveryCalls")
+    assert any("/session/status" in c and "20260827120000" in c for c in recovery_calls)
+
+
+
 
 
 

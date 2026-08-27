@@ -102,7 +102,7 @@ def test_spawn_tabs_endpoint(running_controller, monkeypatch):
 def test_session_status_fallback_to_persistent_storage(running_controller):
     """
     Verify GET /session/status falls back to persistent storage (SQLite/TSV)
-    when not in arbiter memory and reports is_finished=True.
+    when not in arbiter memory and reports is_finished=True along with hydrated rows and translatedText.
     """
     server_url, server = running_controller
     storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
@@ -123,7 +123,7 @@ def test_session_status_fallback_to_persistent_storage(running_controller):
         target_language="ru",
         text_mode="single",
         source_raw_text="The quick brown fox",
-        sentences=[{"sentence_index": 0, "sentence_source": "The quick brown fox"}],
+        sentences=[{"sentence_index": 0, "sentence_source": "The quick brown fox", "sentence_destination": "Быстрая бурая лиса"}],
         headers=["WordSource", "WordDestination", "TokenOrder"],
         data_rows=[["quick", "быстрый", "0"], ["fox", "лиса", "1"]],
     )
@@ -138,9 +138,68 @@ def test_session_status_fallback_to_persistent_storage(running_controller):
             assert res_data.get("ok") is True
             assert res_data.get("is_finished") is True
             assert res_data.get("stage") == "finished"
+            assert "rows" in res_data
+            assert isinstance(res_data["rows"], dict)
+            assert len(res_data["rows"]) == 2
+            row0 = res_data["rows"].get("0") or res_data["rows"].get(0)
+            assert row0 is not None
+            assert row0.get("lemma") == "quick"
+            assert row0.get("trans") == "быстрый"
+            assert "translatedText" in res_data
+            assert "Быстрая бурая лиса" in res_data["translatedText"]
     finally:
         try:
             storage_adapter.delete_session(sess_zid)
+        except Exception:
+            pass
+
+
+def test_session_status_tsv_fallback(running_controller):
+    """
+    Verify GET /session/status falls back to TSV session file when present
+    and correctly hydrates rows dictionary and translatedText.
+    """
+    server_url, server = running_controller
+    results_dir = kardenwort_desk.resolve_results_dir(server.resolved_paths, server.config)
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    tsv_zid = kardenwort_desk.generate_unique_zid()
+    tsv_file = results_dir / f"{tsv_zid}-test-status.tsv"
+    txt_file = results_dir / f"{tsv_zid}-test-status.txt"
+
+    txt_file.write_text("Hello world", encoding="utf-8")
+    headers = ["WordSource", "WordDestination", "TokenOrder", "SentenceSourceIndex", "SentenceDestination"]
+    data_rows = [
+        ["hello", "привет", "0", "1", "Привет мир"],
+        ["world", "мир", "1", "1", "Привет мир"],
+    ]
+    kardenwort_desk.save_tsv_rows_safely(tsv_file, ["# test TSV"], headers, data_rows)
+
+    try:
+        req_status = urllib.request.Request(f"{server_url}/session/status?zid={tsv_zid}")
+        with urllib.request.urlopen(req_status, timeout=5.0) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read().decode("utf-8"))
+            assert data.get("status") == "success"
+            res_data = data.get("data", {})
+            assert res_data.get("ok") is True
+            assert res_data.get("is_finished") is True
+            assert res_data.get("stage") == "finished"
+            assert "rows" in res_data
+            assert isinstance(res_data["rows"], dict)
+            assert len(res_data["rows"]) == 2
+            row0 = res_data["rows"].get("0") or res_data["rows"].get(0)
+            assert row0 is not None
+            assert row0.get("lemma") == "hello"
+            assert row0.get("trans") == "привет"
+            assert "translatedText" in res_data
+            assert "Привет мир" in res_data["translatedText"]
+    finally:
+        try:
+            if tsv_file.exists():
+                tsv_file.unlink()
+            if txt_file.exists():
+                txt_file.unlink()
         except Exception:
             pass
 

@@ -1714,12 +1714,37 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             zid = qs.get('zid', [''])[0]
             if not zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'zid' query parameter")
+
+            mapping_path = None
+            if self.server.resolved_paths and "anki_mapping_file" in self.server.resolved_paths:
+                mapping_path = Path(self.server.resolved_paths["anki_mapping_file"])
+            elif self.server.config and hasattr(self.server.config, "get"):
+                raw_mp = self.server.config.get(SEC_SETTINGS, "anki_mapping_file", fallback="./anki-mapping.ini")
+                mapping_path = Path(raw_mp)
+            mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
+
             sess = None
             if hasattr(self.server, 'arbiter') and self.server.arbiter:
                 with self.server.arbiter._lock:
                     sess = self.server.arbiter.sessions.get(zid)
             if sess:
                 safe_sess = {k: v for k, v in sess.items() if k != "lock"}
+                headers = safe_sess.get("headers", [])
+                data_rows = safe_sess.get("data_rows", [])
+                role_fields = get_role_fields(mapping, headers) if mapping else {}
+                if "rows" not in safe_sess or not isinstance(safe_sess["rows"], dict):
+                    safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields)
+                if "translatedText" not in safe_sess or not safe_sess["translatedText"]:
+                    st = safe_sess.get("sentence_translation")
+                    if st:
+                        safe_sess["translatedText"] = format_translated_html(
+                            st,
+                            text_mode=safe_sess.get("text_mode", "single"),
+                            text=safe_sess.get("text", ""),
+                            config=self.server.config,
+                        )
+                    else:
+                        safe_sess["translatedText"] = ""
                 self._send_json(200, safe_sess)
                 return
 
@@ -1730,10 +1755,24 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             tsv_path = find_working_tsv(results_dir, zid) if results_dir else None
             session_found = False
             is_busy = False
+            restored = None
 
             if tsv_path and tsv_path.exists():
                 session_found = True
                 is_busy = check_coordination_busy(tsv_path)
+                try:
+                    restored = storage_adapter.restore_session(zid, results_dir=results_dir)
+                except Exception:
+                    try:
+                        comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                        restored = {
+                            "session_zid": zid,
+                            "headers": headers,
+                            "data_rows": data_rows,
+                            "tsv_path": tsv_path,
+                        }
+                    except Exception:
+                        pass
             else:
                 try:
                     restored = storage_adapter.restore_session(zid, results_dir=results_dir)
@@ -1752,6 +1791,60 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not session_found:
                 raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{zid}' not active in arbiter memory or persistent storage")
 
+            # Extract headers, data_rows, and translatedText from restored session
+            headers = []
+            data_rows = []
+            sentence_translation = ""
+            source_text = ""
+            text_mode = "single"
+
+            if restored:
+                headers = restored.get("headers", [])
+                data_rows = restored.get("data_rows", [])
+                source_text = restored.get("source_text", "")
+                sentence_translation = restored.get("sentence_translation", "")
+                if restored.get("session") and isinstance(restored["session"], dict):
+                    text_mode = restored["session"].get("text_mode", "single")
+
+            # If sentence_translation not found directly, try extracting from TSV columns or SQLite sentences
+            role_fields = get_role_fields(mapping, headers) if mapping else {}
+            if not sentence_translation and data_rows and headers:
+                col_sent_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+                col_sent_idx = headers.index(role_fields['sentence_index']) if 'sentence_index' in role_fields and role_fields['sentence_index'] in headers else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
+                if col_sent_dest != -1:
+                    seen_idx = set()
+                    sent_trans_list = []
+                    for r in data_rows:
+                        if len(r) > col_sent_dest and r[col_sent_dest].strip():
+                            idx = r[col_sent_idx] if col_sent_idx != -1 and len(r) > col_sent_idx else len(sent_trans_list)
+                            if idx not in seen_idx:
+                                seen_idx.add(idx)
+                                sent_trans_list.append(r[col_sent_dest].strip())
+                    if sent_trans_list:
+                        sentence_translation = "\n".join(sent_trans_list)
+
+            if not sentence_translation and hasattr(storage_adapter, 'backend_name') and storage_adapter.backend_name == 'sqlite' and hasattr(storage_adapter, 'db'):
+                try:
+                    db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                    clean_translations = []
+                    if db_sents:
+                        for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
+                            s_dest = s.get("sentence_destination")
+                            if s_dest and str(s_dest).strip():
+                                clean_translations.append(str(s_dest).strip())
+                    if clean_translations:
+                        sentence_translation = "\n".join(clean_translations)
+                except Exception:
+                    pass
+
+            rows_dict = format_update_rows_dict(data_rows, headers, role_fields)
+            translated_html = format_translated_html(
+                sentence_translation,
+                text_mode=text_mode,
+                text=source_text,
+                config=self.server.config
+            ) if sentence_translation else ""
+
             self._send_json(200, {
                 "ok": True,
                 "zid": zid,
@@ -1761,7 +1854,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "status": {
                     "is_finished": not is_busy,
                     "stage": "translating" if is_busy else "finished"
-                }
+                },
+                "rows": rows_dict,
+                "translatedText": translated_html,
             })
             return
 
