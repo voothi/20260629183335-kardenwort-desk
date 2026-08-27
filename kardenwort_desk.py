@@ -10027,12 +10027,15 @@ html, body {{
 
         // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling)
         try {
-            var isWebMode = (window.location.protocol !== 'file:');
+            var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
             var sessZidEl = document.getElementById('session-zid');
             var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
             if (!curZid) {
                 var params = new URLSearchParams(window.location.search);
                 curZid = params.get('session_zid') || params.get('zid') || "";
+            }
+            if (!curZid && document.body && document.body.getAttribute('data-zid')) {
+                curZid = document.body.getAttribute('data-zid');
             }
 
             var hasSkeletons = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0;
@@ -10082,15 +10085,20 @@ html, body {{
                             if (res.ok) return res.json();
                             throw new Error("status endpoint error");
                         })
-                        .then(function(data) {
+                        .then(function(resObj) {
                             isPolling = false;
-                            if (data && (data.is_finished || data.stage === 'finished' || (data.status && data.status.is_finished))) {
+                            var data = (resObj && resObj.data) ? resObj.data : resObj;
+                            if (data && (data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
                                 resolved = true;
                                 if (window._kwSkeletonPollTimer) {
                                     clearInterval(window._kwSkeletonPollTimer);
                                     window._kwSkeletonPollTimer = null;
                                 }
-                                window.location.reload();
+                                if (window.onSessionReload) {
+                                    window.onSessionReload();
+                                } else {
+                                    window.location.reload();
+                                }
                             } else if (data && data.rows) {
                                 if (window.receiveUpdate) {
                                     window.receiveUpdate(data);
@@ -10117,7 +10125,11 @@ html, body {{
                                             clearInterval(window._kwSkeletonPollTimer);
                                             window._kwSkeletonPollTimer = null;
                                         }
-                                        window.location.reload();
+                                        if (window.onSessionReload) {
+                                            window.onSessionReload();
+                                        } else {
+                                            window.location.reload();
+                                        }
                                     }
                                 })
                                 .catch(function() {
@@ -12344,14 +12356,42 @@ html, body {{
 
         function spawnChildTabs(children) {
             var childSessions = extractChildSessions(children);
+            if (!childSessions || childSessions.length === 0) return;
+            var urls = [];
             for (var i = 0; i < childSessions.length; i++) {
                 var c = childSessions[i];
                 var childUrl = '/session/render?session_zid=' + encodeURIComponent(c.zid) + '&seq_num=' + encodeURIComponent(c.seq_num) + '&bypass_lang_check=true';
-                try {
-                    window.open(childUrl, '_blank');
-                } catch(e) {
-                    console.error("Failed spawning child tab", e);
+                urls.push(childUrl);
+            }
+            if (urls.length === 0) return;
+
+            var fallbackOpen = function() {
+                for (var j = 0; j < urls.length; j++) {
+                    try {
+                        window.open(urls[j], '_blank');
+                    } catch(e) {
+                        console.error("Failed spawning child tab", e);
+                    }
                 }
+            };
+
+            if (typeof fetch !== 'undefined') {
+                fetch('/api/v1/spawn-tabs', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ urls: urls, children: childSessions })
+                })
+                .then(function(res) {
+                    if (!res.ok) {
+                        fallbackOpen();
+                    }
+                })
+                .catch(function(e) {
+                    console.warn("Server spawn-tabs failed, falling back to window.open", e);
+                    fallbackOpen();
+                });
+            } else {
+                fallbackOpen();
             }
         }
 

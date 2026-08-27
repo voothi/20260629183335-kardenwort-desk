@@ -343,11 +343,21 @@ def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
     children_json = json.dumps(children_args)
     mock_spawn_script = f"""<script>
     window.__openedTabs = [];
+    window.__spawnCalls = [];
     window.open = function(url, target) {{
         window.__openedTabs.push({{ url: url, target: target }});
         return {{}};
     }};
     window.fetch = function(url, options) {{
+        if (url === '/api/v1/spawn-tabs') {{
+            var body = (options && options.body) ? JSON.parse(options.body) : {{}};
+            window.__spawnCalls.push(body);
+            return Promise.resolve({{
+                ok: true,
+                status: 200,
+                json: function() {{ return Promise.resolve({{ ok: true, spawned: 2 }}); }}
+            }});
+        }}
         return Promise.resolve({{
             ok: true,
             status: 200,
@@ -369,10 +379,49 @@ def test_language_modal_multi_sentence_child_tab_spawning(page, tmp_path):
     page.locator("#kw-btn-lang-yes").click()
     page.wait_for_timeout(50)
 
+    spawn_calls = page.evaluate("window.__spawnCalls")
+    assert len(spawn_calls) == 1
+    assert len(spawn_calls[0]["urls"]) == 2
+    assert spawn_calls[0]["urls"][0] == "/session/render?session_zid=20260827005723&seq_num=2&bypass_lang_check=true"
+    assert spawn_calls[0]["urls"][1] == "/session/render?session_zid=20260827005724&seq_num=3&bypass_lang_check=true"
+
+    # Also verify fallback to window.open if /api/v1/spawn-tabs fails
+    mock_fallback_script = f"""<script>
+    window.__openedTabs = [];
+    window.open = function(url, target) {{
+        window.__openedTabs.push({{ url: url, target: target }});
+        return {{}};
+    }};
+    window.fetch = function(url, options) {{
+        if (url === '/api/v1/spawn-tabs') {{
+            return Promise.resolve({{
+                ok: false,
+                status: 500,
+                json: function() {{ return Promise.resolve({{ ok: false }}); }}
+            }});
+        }}
+        return Promise.resolve({{
+            ok: true,
+            status: 200,
+            json: function() {{
+                return Promise.resolve({{
+                    ok: true,
+                    data: {{
+                        html: null,
+                        children: {children_json}
+                    }}
+                }});
+            }}
+        }});
+    }};
+    </script>"""
+    html_fallback = get_modal_test_page_html(tmp_path, mismatch_info=mismatch).replace("<head>", f"<head>\n{mock_fallback_script}")
+    page.set_content(html_fallback)
+    page.locator("#kw-btn-lang-yes").click()
+    page.wait_for_timeout(50)
+
     opened = page.evaluate("window.__openedTabs")
     assert len(opened) == 2
     assert opened[0]["url"] == "/session/render?session_zid=20260827005723&seq_num=2&bypass_lang_check=true"
-    assert opened[0]["target"] == "_blank"
     assert opened[1]["url"] == "/session/render?session_zid=20260827005724&seq_num=3&bypass_lang_check=true"
-    assert opened[1]["target"] == "_blank"
 

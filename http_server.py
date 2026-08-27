@@ -7,6 +7,7 @@ import socket
 import logging
 import threading
 import traceback
+import webbrowser
 import urllib.parse
 from pathlib import Path
 from datetime import datetime
@@ -637,6 +638,51 @@ class APIRequestHandler(BaseHTTPRequestHandler):
                     logger.error(f"Error during server shutdown: {e}")
 
             threading.Thread(target=shutdown_server, daemon=True).start()
+            return
+
+        # Browser tab spawning endpoint
+        if path == '/api/v1/spawn-tabs':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            raw_urls = body.get('urls') or []
+            if isinstance(raw_urls, str):
+                raw_urls = [raw_urls]
+            elif not isinstance(raw_urls, list):
+                raw_urls = []
+
+            if not raw_urls and 'children' in body:
+                children = body.get('children')
+                if isinstance(children, list):
+                    for c in children:
+                        if isinstance(c, dict):
+                            z = c.get('zid') or c.get('session_zid')
+                            s = c.get('seq_num', '1')
+                            if z:
+                                raw_urls.append(f"/session/render?session_zid={urllib.parse.quote(str(z))}&seq_num={urllib.parse.quote(str(s))}&bypass_lang_check=true")
+                        elif isinstance(c, str):
+                            raw_urls.append(c)
+
+            port = getattr(self.server, 'server_port', None) or (self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335)
+            host = self.server.server_address[0] if hasattr(self.server, 'server_address') and self.server.server_address[0] not in ('0.0.0.0', '') else '127.0.0.1'
+            base_url = f"http://{host}:{port}"
+
+            spawned_urls = []
+            for u in raw_urls:
+                if not u:
+                    continue
+                full_url = str(u) if (str(u).startswith('http://') or str(u).startswith('https://')) else f"{base_url}{str(u) if str(u).startswith('/') else '/' + str(u)}"
+                try:
+                    webbrowser.open_new_tab(full_url)
+                    spawned_urls.append(full_url)
+                except Exception as e:
+                    logger.warning(f"Failed to spawn tab for url {full_url}: {e}")
+
+            self._send_json(200, {
+                "ok": True,
+                "spawned": len(spawned_urls),
+                "urls": spawned_urls
+            })
             return
 
         raise StructuredError(ErrorCode.NOT_FOUND, f"Unknown API endpoint: {path}")

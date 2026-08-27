@@ -9,6 +9,7 @@ import logging
 import threading
 import traceback
 import subprocess
+import webbrowser
 import urllib.parse
 import urllib.request
 import urllib.error
@@ -29,6 +30,7 @@ from kardenwort_desk import (
     save_tsv_rows_safely,
     compute_content_fingerprint,
     file_lock,
+    check_coordination_busy,
     core_lookup,
     core_export,
     core_edit_save,
@@ -1289,12 +1291,55 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             zid = qs.get('zid', [''])[0]
             if not zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'zid' query parameter")
-            with self.server.arbiter._lock:
-                sess = self.server.arbiter.sessions.get(zid)
-            if not sess:
-                raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{zid}' not active in arbiter memory")
-            safe_sess = {k: v for k, v in sess.items() if k != "lock"}
-            self._send_json(200, safe_sess)
+            sess = None
+            if hasattr(self.server, 'arbiter') and self.server.arbiter:
+                with self.server.arbiter._lock:
+                    sess = self.server.arbiter.sessions.get(zid)
+            if sess:
+                safe_sess = {k: v for k, v in sess.items() if k != "lock"}
+                self._send_json(200, safe_sess)
+                return
+
+            # Fallback: check persistent storage (SQLite or TSV)
+            results_dir = resolve_results_dir(self.server.resolved_paths, self.server.config)
+            storage_adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+
+            tsv_path = find_working_tsv(results_dir, zid) if results_dir else None
+            session_found = False
+            is_busy = False
+
+            if tsv_path and tsv_path.exists():
+                session_found = True
+                is_busy = check_coordination_busy(tsv_path)
+            else:
+                try:
+                    restored = storage_adapter.restore_session(zid, results_dir=results_dir)
+                    if restored:
+                        session_found = True
+                        if results_dir and results_dir.exists():
+                            possible_locks = list(results_dir.glob(f"{zid}*.lock"))
+                            for lk in possible_locks:
+                                dummy_tsv = lk.with_suffix('')
+                                if check_coordination_busy(dummy_tsv):
+                                    is_busy = True
+                                    break
+                except Exception:
+                    session_found = False
+
+            if not session_found:
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Session '{zid}' not active in arbiter memory or persistent storage")
+
+            self._send_json(200, {
+                "ok": True,
+                "zid": zid,
+                "session_zid": zid,
+                "is_finished": not is_busy,
+                "stage": "translating" if is_busy else "finished",
+                "status": {
+                    "is_finished": not is_busy,
+                    "stage": "translating" if is_busy else "finished"
+                }
+            })
             return
 
         # Render endpoint (HTTP Fast-Path for AutoHotkey & Client UI)
@@ -1975,6 +2020,51 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 language=body.get("language"),
             )
             self._send_json(200, res)
+            return
+
+        # Browser tab spawning endpoint (bypasses browser popup blocking)
+        if path == '/api/v1/spawn-tabs':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            raw_urls = body.get('urls') or []
+            if isinstance(raw_urls, str):
+                raw_urls = [raw_urls]
+            elif not isinstance(raw_urls, list):
+                raw_urls = []
+
+            if not raw_urls and 'children' in body:
+                children = body.get('children')
+                if isinstance(children, list):
+                    for c in children:
+                        if isinstance(c, dict):
+                            z = c.get('zid') or c.get('session_zid')
+                            s = c.get('seq_num', '1')
+                            if z:
+                                raw_urls.append(f"/session/render?session_zid={urllib.parse.quote(str(z))}&seq_num={urllib.parse.quote(str(s))}&bypass_lang_check=true")
+                        elif isinstance(c, str):
+                            raw_urls.append(c)
+
+            port = getattr(self.server, 'server_port', None) or (self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335)
+            host = self.server.server_address[0] if hasattr(self.server, 'server_address') and self.server.server_address[0] not in ('0.0.0.0', '') else '127.0.0.1'
+            base_url = f"http://{host}:{port}"
+
+            spawned_urls = []
+            for u in raw_urls:
+                if not u:
+                    continue
+                full_url = str(u) if (str(u).startswith('http://') or str(u).startswith('https://')) else f"{base_url}{str(u) if str(u).startswith('/') else '/' + str(u)}"
+                try:
+                    webbrowser.open_new_tab(full_url)
+                    spawned_urls.append(full_url)
+                except Exception as e:
+                    logger.warning(f"Failed to spawn tab for url {full_url}: {e}")
+
+            self._send_json(200, {
+                "ok": True,
+                "spawned": len(spawned_urls),
+                "urls": spawned_urls
+            })
             return
 
         # 5. Admin Panel UI & Static Assets

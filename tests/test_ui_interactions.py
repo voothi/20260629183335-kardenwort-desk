@@ -3616,6 +3616,64 @@ def test_abbreviation_single_token_audio_chain_modes(page):
     assert play_calls[0]["arg"].endswith("ru\\nграфический ||| пользователь ||| интерфейс")
 
 
+def test_web_view_skeleton_auto_resolution(page):
+    """
+    Verify that web client watchdog polling against /session/status automatically
+    detects is_finished=True and triggers reload / resolution without manual update click.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260827120000">
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">Das Haus</div>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSource">Haus</td>
+        <td data-col="WordDestination"><div class="skeleton-loader"></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.__fetches = [];
+        window.__reloaded = false;
+        window.onSessionReload = function() { window.__reloaded = true; };
+        window.fetch = function(url, options) {
+            window.__fetches.push(String(url));
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() {
+                    return Promise.resolve({
+                        status: "success",
+                        data: {
+                            ok: true,
+                            is_finished: true,
+                            stage: "finished",
+                            zid: "20260827120000"
+                        }
+                    });
+                }
+            });
+        };
+    """)
+    page.evaluate(extract_desk_js())
+
+    page.wait_for_function("() => window.__reloaded === true", timeout=5000)
+    fetches = page.evaluate("window.__fetches")
+    assert len(fetches) >= 1
+    assert any("/session/status" in f and "20260827120000" in f for f in fetches)
+
+
+
 
 
 
