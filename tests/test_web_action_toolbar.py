@@ -567,5 +567,125 @@ window.fetch = async function(url, options) {
     assert page.locator(".kw-toast-error").count() == 0
 
 
+def test_eventsource_auto_closure_on_finished_event(page, tmp_path):
+    mock_sse_script = """<script>
+window.__sseInstances = [];
+window.EventSource = function(url) {
+    this.url = url;
+    this.closed = false;
+    this.close = function() {
+        this.closed = true;
+    };
+    window.__sseInstances.push(this);
+};
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html_with_skeleton = html.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
+    )
+    html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_sse_script}")
+    page.set_content(html_with_skeleton)
+
+    # Verify EventSource was created and is active
+    instances = page.evaluate("window.__sseInstances.length")
+    assert instances == 1
+    assert page.evaluate("window._kwEvtSource !== null") is True
+    # Mutual exclusion: watchdog poll timer should NOT be started while SSE is active
+    assert page.evaluate("!window._kwSkeletonPollTimer") is True
+
+    # Simulate SSE message with is_finished: true
+    page.evaluate("""
+        var sse = window.__sseInstances[0];
+        sse.onmessage({
+            data: JSON.stringify({
+                type: "update",
+                is_finished: true,
+                stage: "finished",
+                rows: {
+                    0: { lemma: "Haus", inflected: "Haus", trans: "дом", ipa: "/haʊs/", morph: "N", token_order: "0", sentence_idx: "1" }
+                }
+            })
+        });
+    """)
+    page.wait_for_timeout(100)
+
+    # Verify EventSource was closed and reference cleared
+    is_closed = page.evaluate("window.__sseInstances[0].closed")
+    assert is_closed is True
+    assert page.evaluate("window._kwEvtSource === null") is True
+
+
+def test_eventsource_error_fallback_to_watchdog_polling(page, tmp_path):
+    mock_sse_error_script = """<script>
+window.__sseInstances = [];
+window.EventSource = function(url) {
+    this.url = url;
+    this.closed = false;
+    this.close = function() {
+        this.closed = true;
+    };
+    window.__sseInstances.push(this);
+    var self = this;
+    setTimeout(function() {
+        if (self.onerror) self.onerror(new Error("Connection refused"));
+    }, 50);
+};
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html_with_skeleton = html.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
+    )
+    html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_sse_error_script}")
+    page.set_content(html_with_skeleton)
+
+    # Wait for onerror to trigger
+    page.wait_for_timeout(150)
+
+    # EventSource must be closed immediately on error
+    is_closed = page.evaluate("window.__sseInstances[0].closed")
+    assert is_closed is True
+    assert page.evaluate("window._kwEvtSource === null") is True
+
+    # Watchdog polling should have engaged as fallback
+    has_timer = page.evaluate("window._kwSkeletonPollTimer !== null && window._kwSkeletonPollTimer !== undefined")
+    assert has_timer is True
+
+
+def test_visibilitychange_pauses_and_resumes_watchdog_polling(page, tmp_path):
+    # Disable EventSource to test watchdog polling directly
+    mock_no_sse_script = """<script>
+window.EventSource = undefined;
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html_with_skeleton = html.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
+    )
+    html_with_skeleton = html_with_skeleton.replace("<head>", f"<head>\n{mock_no_sse_script}")
+    page.set_content(html_with_skeleton)
+
+    # Polling is initially active
+    assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
+
+    # 1. Simulate tab hidden (user switches tab) -> Polling must pause
+    page.evaluate("""
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+    """)
+    page.wait_for_timeout(50)
+    assert page.evaluate("window._kwSkeletonPollTimer === null") is True
+
+    # 2. Simulate tab visible (user returns to tab) -> Polling must resume
+    page.evaluate("""
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+    """)
+    page.wait_for_timeout(50)
+    assert page.evaluate("window._kwSkeletonPollTimer !== null") is True
+
+
+
 
 

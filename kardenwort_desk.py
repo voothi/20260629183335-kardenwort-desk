@@ -10275,40 +10275,37 @@ html, body {{
 
             var hasSkeletons = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0;
 
-            // 1. SSE Real-time Listener (only in web mode with EventSource support)
-            if (isWebMode && curZid && typeof EventSource !== 'undefined') {
-                try {
-                    var sseUrl = "/events?zid=" + encodeURIComponent(curZid);
-                    var evtSource = new EventSource(sseUrl);
-                    evtSource.onmessage = function(e) {
-                        try {
-                            var parsed = JSON.parse(e.data);
-                            if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage || parsed.is_finished)) {
-                                window.receiveUpdate(parsed);
-                                var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
-                                if (remaining === 0 || parsed.is_finished || parsed.stage === 'finished') {
-                                    try { evtSource.close(); } catch(err) {}
-                                }
-                            }
-                        } catch(err) {}
-                    };
-                } catch(sseErr) {}
-            }
-
-            // 2. Automated watchdog polling when skeleton loaders are present (only in web mode with fetch support)
-            if (isWebMode && typeof fetch !== 'undefined' && hasSkeletons && curZid) {
+            if (isWebMode && curZid && hasSkeletons) {
                 var startTime = Date.now();
-                var maxBudgetMs = 15000; // 15-second watchdog budget
+                var maxBudgetMs = 15000; // 15-second safety budget
                 var pollIntervalMs = 500;
                 var isPolling = false;
                 var resolved = false;
 
+                var stopPolling = function() {
+                    if (window._kwSkeletonPollTimer) {
+                        clearInterval(window._kwSkeletonPollTimer);
+                        window._kwSkeletonPollTimer = null;
+                    }
+                };
+
+                var closeEvtSource = function() {
+                    if (window._kwEvtSource) {
+                        try { window._kwEvtSource.close(); } catch(err) {}
+                        window._kwEvtSource = null;
+                    }
+                    if (window._kwSseSafetyTimer) {
+                        clearTimeout(window._kwSseSafetyTimer);
+                        window._kwSseSafetyTimer = null;
+                    }
+                };
+
                 var pollSessionStatus = function() {
+                    if (document.hidden) {
+                        return;
+                    }
                     if (resolved || (Date.now() - startTime > maxBudgetMs)) {
-                        if (window._kwSkeletonPollTimer) {
-                            clearInterval(window._kwSkeletonPollTimer);
-                            window._kwSkeletonPollTimer = null;
-                        }
+                        stopPolling();
                         return;
                     }
                     if (isPolling) return;
@@ -10323,27 +10320,16 @@ html, body {{
                         .then(function(resObj) {
                             isPolling = false;
                             var data = (resObj && resObj.data) ? resObj.data : resObj;
-                            if (data && (data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
-                                resolved = true;
-                                if (window._kwSkeletonPollTimer) {
-                                    clearInterval(window._kwSkeletonPollTimer);
-                                    window._kwSkeletonPollTimer = null;
-                                }
-                                if (window.onSessionReload) {
-                                    window.onSessionReload();
-                                } else {
-                                    window.location.reload();
-                                }
-                            } else if (data && data.rows) {
-                                if (window.receiveUpdate) {
+                            if (data && (data.rows || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
+                                if (data.rows && window.receiveUpdate) {
                                     window.receiveUpdate(data);
                                 }
                                 var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
-                                if (remaining === 0) {
+                                if (remaining === 0 || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished'))) {
                                     resolved = true;
-                                    if (window._kwSkeletonPollTimer) {
-                                        clearInterval(window._kwSkeletonPollTimer);
-                                        window._kwSkeletonPollTimer = null;
+                                    stopPolling();
+                                    if (window.onSessionReload) {
+                                        window.onSessionReload();
                                     }
                                 }
                             }
@@ -10356,14 +10342,9 @@ html, body {{
                                     isPolling = false;
                                     if (htmlText && htmlText.indexOf('skeleton-loader') === -1) {
                                         resolved = true;
-                                        if (window._kwSkeletonPollTimer) {
-                                            clearInterval(window._kwSkeletonPollTimer);
-                                            window._kwSkeletonPollTimer = null;
-                                        }
+                                        stopPolling();
                                         if (window.onSessionReload) {
                                             window.onSessionReload();
-                                        } else {
-                                            window.location.reload();
                                         }
                                     }
                                 })
@@ -10373,8 +10354,85 @@ html, body {{
                         });
                 };
 
-                window._kwSkeletonPollTimer = setInterval(pollSessionStatus, pollIntervalMs);
-                setTimeout(pollSessionStatus, 200);
+                var startWatchdogPolling = function() {
+                    if (resolved || window._kwSkeletonPollTimer) return;
+                    if (typeof fetch === 'undefined') return;
+                    var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                    if (remaining === 0) return;
+                    window._kwSkeletonPollTimer = setInterval(pollSessionStatus, pollIntervalMs);
+                    setTimeout(pollSessionStatus, 200);
+                };
+
+                // Visibility-aware listener: pause polling when hidden, resume/check on tab activation
+                document.addEventListener('visibilitychange', function() {
+                    if (document.hidden) {
+                        stopPolling();
+                    } else {
+                        var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        if (remaining > 0 && !resolved) {
+                            if (!window._kwEvtSource && !window._kwSkeletonPollTimer) {
+                                startWatchdogPolling();
+                            } else if (window._kwSkeletonPollTimer) {
+                                pollSessionStatus();
+                            }
+                        }
+                    }
+                });
+
+                // Primary channel: EventSource (SSE) with Mutual Exclusion against Polling
+                if (typeof EventSource !== 'undefined') {
+                    try {
+                        var sseUrl = "/events?zid=" + encodeURIComponent(curZid);
+                        var evtSource = new EventSource(sseUrl);
+                        window._kwEvtSource = evtSource;
+
+                        // 15-second safety timer to ensure EventSource is closed and slot is released
+                        window._kwSseSafetyTimer = setTimeout(function() {
+                            closeEvtSource();
+                            var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                            if (remaining > 0 && !resolved) {
+                                startWatchdogPolling();
+                            }
+                        }, maxBudgetMs);
+
+                        // On error: immediately close socket to prevent browser auto-reconnect loops, fallback to polling
+                        evtSource.onerror = function(err) {
+                            closeEvtSource();
+                            var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                            if (remaining > 0 && !resolved) {
+                                startWatchdogPolling();
+                            }
+                        };
+
+                        evtSource.onmessage = function(e) {
+                            try {
+                                var parsed = JSON.parse(e.data);
+                                if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage || parsed.is_finished)) {
+                                    if (window.receiveUpdate) {
+                                        window.receiveUpdate(parsed);
+                                    }
+                                    var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                                    if (remaining === 0 || parsed.is_finished || parsed.stage === 'finished') {
+                                        resolved = true;
+                                        closeEvtSource();
+                                        stopPolling();
+                                        if (window.onSessionReload) {
+                                            window.onSessionReload();
+                                        }
+                                    }
+                                }
+                            } catch(err) {}
+                        };
+                    } catch(sseErr) {
+                        closeEvtSource();
+                        startWatchdogPolling();
+                    }
+                } else {
+                    // Fallback to watchdog polling when EventSource is not supported
+                    startWatchdogPolling();
+                }
+
+                window.startPolling = startWatchdogPolling;
             }
         } catch(e) {}
 
