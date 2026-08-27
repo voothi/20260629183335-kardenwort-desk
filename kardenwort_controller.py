@@ -781,7 +781,31 @@ class SessionArbiter:
             except Exception:
                 pass
         else:
-            raise StructuredError(ErrorCode.DESK_FAILED, f"Source text file missing for session {session_zid}")
+            # Third fallback: recover source text from SQLite session record
+            storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+            recovered_text = ""
+            try:
+                bundle = storage_adapter.restore_session(session_zid)
+                recovered_text = bundle.get("source_text", "") or ""
+                if recovered_text:
+                    # Lazy session warm-up: populate in-memory cache so subsequent calls skip SQLite
+                    with self._lock:
+                        if session_zid not in self.sessions:
+                            self.sessions[session_zid] = {}
+                        self.sessions[session_zid]["text"] = recovered_text
+                        if bundle.get("tsv_path"):
+                            self.sessions[session_zid]["tsv_path"] = str(bundle["tsv_path"])
+                        if bundle.get("data_rows") is not None:
+                            self.sessions[session_zid]["data_rows"] = bundle["data_rows"]
+                        if bundle.get("headers") is not None:
+                            self.sessions[session_zid]["headers"] = bundle["headers"]
+                        if bundle.get("comments") is not None:
+                            self.sessions[session_zid]["comments"] = bundle["comments"]
+            except Exception:
+                pass
+            if not recovered_text:
+                raise StructuredError(ErrorCode.DESK_FAILED, f"Source text not recoverable for session {session_zid}")
+            text = recovered_text
         provider = self.config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
 
         # Translate in-memory
@@ -900,17 +924,27 @@ class SessionArbiter:
 
         if selected_rows:
             if is_sqlite:
-                storage_adapter.enrich_session_intellifiller(
-                    session_zid=session_zid,
-                    prompt_name=prompt_name,
-                    selected_rows=selected_rows,
-                    reprocess=True,
-                    zid=req_zid,
-                )
+                try:
+                    storage_adapter.enrich_session_intellifiller(
+                        session_zid=session_zid,
+                        prompt_name=prompt_name,
+                        selected_rows=selected_rows,
+                        reprocess=True,
+                        zid=req_zid,
+                    )
+                except StructuredError:
+                    raise
+                except Exception as e:
+                    raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
                 data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
             else:
-                run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
+                try:
+                    run_headless_intellifiller(tsv_path, prompt_name, self.config, self.resolved_paths, selected_rows=selected_rows, reprocess=True, zid=req_zid)
+                except StructuredError:
+                    raise
+                except Exception as e:
+                    raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
                 data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 

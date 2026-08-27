@@ -736,6 +736,105 @@ def test_controller_api_token_auth_headers(running_controller):
         assert res_data["status"] == "success"
 
 
+def test_retext_after_controller_restart(running_controller):
+    """
+    Verify that /session/retext succeeds after the controller's in-memory session
+    cache is cleared, by recovering source text from SQLite storage.
+    """
+    server_url, server = running_controller
+
+    # 1. Create a session via /session/create
+    create_url = f"{server_url}/session/create"
+    create_payload = json.dumps({
+        "text": "apple",
+        "language": "en",
+        "bypass_lang_check": True
+    }).encode("utf-8")
+    req_create = urllib.request.Request(
+        create_url,
+        data=create_payload,
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_create, timeout=30.0) as resp:
+        assert resp.status == 200
+        create_res = json.loads(resp.read().decode("utf-8"))
+        session_zid = create_res["data"]["session_zid"]
+
+    # 2. Simulate controller restart: clear in-memory session cache
+    with server.arbiter._lock:
+        server.arbiter.sessions.clear()
+
+    # 3. Call /session/retext — must succeed via SQLite recovery fallback
+    retext_url = f"{server_url}/session/retext"
+    retext_payload = json.dumps({
+        "session_zid": session_zid,
+        "language": "en",
+        "text_mode": "single"
+    }).encode("utf-8")
+    req_retext = urllib.request.Request(
+        retext_url,
+        data=retext_payload,
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_retext, timeout=30.0) as resp:
+        assert resp.status == 200
+        retext_res = json.loads(resp.read().decode("utf-8"))
+        assert retext_res["status"] == "success"
 
 
+def test_reword_structured_error_on_failure(running_controller, monkeypatch):
+    """
+    Verify that when enrich_session_intellifiller raises an exception,
+    /session/reword responds with a structured JSON body containing a 'message' field
+    rather than a bare HTTP 500 with no body.
+    """
+    import kardenwort_desk as kd
+    server_url, server = running_controller
 
+    # 1. Create a session so a valid session_zid exists in storage
+    create_url = f"{server_url}/session/create"
+    create_payload = json.dumps({
+        "text": "apple",
+        "language": "en",
+        "bypass_lang_check": True
+    }).encode("utf-8")
+    req_create = urllib.request.Request(
+        create_url,
+        data=create_payload,
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    with urllib.request.urlopen(req_create, timeout=30.0) as resp:
+        assert resp.status == 200
+        create_res = json.loads(resp.read().decode("utf-8"))
+        session_zid = create_res["data"]["session_zid"]
+
+    # 2. Patch enrich_session_intellifiller to raise a RuntimeError
+    original_enrich = kd.SqliteStorageAdapter.enrich_session_intellifiller
+
+    def failing_enrich(self, *args, **kwargs):
+        raise RuntimeError("IntelliFiller service unavailable (test)")
+
+    monkeypatch.setattr(kd.SqliteStorageAdapter, "enrich_session_intellifiller", failing_enrich)
+
+    # 3. Call /session/reword — must return a structured error with 'message' field, not a bare 500
+    reword_url = f"{server_url}/session/reword"
+    reword_payload = json.dumps({
+        "session_zid": session_zid,
+        "row_ids": [0],
+        "language": "en"
+    }).encode("utf-8")
+    req_reword = urllib.request.Request(
+        reword_url,
+        data=reword_payload,
+        headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+    )
+    try:
+        with urllib.request.urlopen(req_reword, timeout=10.0) as resp:
+            # If for some reason the response is 200, we fail the test
+            body = json.loads(resp.read().decode("utf-8"))
+            pytest.fail(f"Expected error response but got 200: {body}")
+    except urllib.error.HTTPError as exc:
+        err_body = json.loads(exc.read().decode("utf-8"))
+        assert "message" in err_body, f"Expected 'message' key in error body, got: {err_body}"
+        assert err_body["status"] == "error"
+        assert "Re-word failed" in err_body["message"]

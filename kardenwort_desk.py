@@ -2842,7 +2842,15 @@ class SqliteStorageAdapter(StorageAdapter):
             db_sentences = bundle.get("sentences", [])
             db_words = bundle.get("words", [])
 
-            source_text = session.get("source_raw_text", "")
+            source_text = session.get("source_raw_text", "") or ""
+            if not source_text:
+                # Fallback: reconstruct from sentences.sentence_source in sentence_index order
+                sentence_parts = [
+                    s["sentence_source"]
+                    for s in sorted(db_sentences, key=lambda s: s.get("sentence_index", 0))
+                    if s.get("sentence_source")
+                ]
+                source_text = " ".join(sentence_parts)
             comments = [f"# Restored from SQLite session {zid}"]
 
             # Load headers from anki-mapping.ini [fields]

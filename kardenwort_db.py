@@ -2277,7 +2277,7 @@ class KardenwortDB:
         with self.get_connection(read_only=True, zid=zid) as conn:
             cursor = conn.cursor()
 
-            # 1. Fetch session record
+            # 1. Fetch session record (includes source_raw_text used by restore_session)
             cursor.execute("SELECT * FROM sessions WHERE zid = ? AND deleted_at IS NULL;", (session_zid,))
             session_row = cursor.fetchone()
             if not session_row:
