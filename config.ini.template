@@ -476,6 +476,11 @@ lmb_play = true
 lmb_source = lemma
 ; Playback mode for multi-token LMB drag selections: 'joined' (default, single phrase) or 'separate' (individual word calls)
 lmb_chain_mode = joined
+; What to play when a range of rows is selected in the table of lemmas (via drag or Shift+click)
+; Options:
+;   none       - Keep range selection silent (default: avoids audio on multi-row selection)
+;   all        - Play all rows in the selected range (chained according to lmb_chain_mode: 'separate' or 'joined')
+table_range_mode = none
 ; Enable audio playback on RMB click (translation / reverse side of the word)
 rmb_play = false
 ; Playback mode for multi-token RMB drag selections: 'separate' (default, individual word calls) or 'joined' (single phrase)

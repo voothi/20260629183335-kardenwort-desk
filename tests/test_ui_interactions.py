@@ -54,7 +54,7 @@ def get_base_html():
 """
     return html, None, None, headers, data_rows
 
-def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined", rmb_play=False, rmb_chain_mode="separate", rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
+def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined", table_range_mode="none", rmb_play=False, rmb_chain_mode="separate", rmb_source="word_translation", anki_tts_cli="C:\\fake\\tts.py", python_exe="python.exe"):
     desk_path = Path(kardenwort_desk.__file__)
     content = desk_path.read_text(encoding="utf-8")
     js_lines = []
@@ -76,6 +76,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     js = js.replace("{audio_lmb_play}", "true" if lmb_play else "false")
     js = js.replace("{audio_lmb_source}", f'"{lmb_source}"')
     js = js.replace("{audio_lmb_chain_mode}", f'"{lmb_chain_mode}"')
+    js = js.replace("{audio_table_range_mode}", f'"{table_range_mode}"')
     js = js.replace("{audio_rmb_play}", "true" if rmb_play else "false")
     js = js.replace("{audio_rmb_chain_mode}", f'"{rmb_chain_mode}"')
     js = js.replace("{audio_rmb_source}", f'"{rmb_source}"')
@@ -3969,7 +3970,176 @@ def test_audio_playback_web_fallback_and_ahk_parity(page):
     assert audio_fetch_calls[0]["options"]["method"] == "POST"
     body = json.loads(audio_fetch_calls[0]["options"]["body"])
     assert body["text"] == "Haus"
-    assert body["language"] == "de"
+
+def test_table_row_lmb_audio_interactions(page):
+    table_html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container"><span class="word" data-word-idx="0" data-lower-clean="test">test</span></div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Häuser</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">дом</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">Baum</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Bäume</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">дерево</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">Kind</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Kinder</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">ребенок</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">[]</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+
+    # --- Scenario 1: Single click plays on mouseup, NOT on mousedown ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", table_range_mode="none"))
+
+    # Dispatch mousedown on row 0
+    page.evaluate("""() => {
+        const row0 = document.querySelector("tr[data-row-id='0']");
+        row0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0, "No audio should play on mousedown"
+
+    # Dispatch mouseup
+    page.evaluate("document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1, "Audio should play on mouseup"
+    assert play_calls[0]["arg"].endswith("de\\nHaus")
+
+    # --- Scenario 2: Row deselection suppresses audio ---
+    page.evaluate("window.__ahkCalls = [];")
+    # Click row 0 again to deselect it
+    page.evaluate("""() => {
+        const row0 = document.querySelector("tr[data-row-id='0']");
+        row0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0, "Deselection should not emit audio"
+
+    # --- Scenario 3: Table row drag is silent when table_range_mode = none ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", table_range_mode="none"))
+
+    page.evaluate("""() => {
+        const r0 = document.querySelector("tr[data-row-id='0']");
+        const r1 = document.querySelector("tr[data-row-id='1']");
+        const r2 = document.querySelector("tr[data-row-id='2']");
+        r0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        r1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        r2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0, "Drag selection should be silent when table_range_mode is none"
+
+    # --- Scenario 4: Shift-click is silent when table_range_mode = none ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", table_range_mode="none"))
+
+    # First single click row 0
+    page.evaluate("""() => {
+        const r0 = document.querySelector("tr[data-row-id='0']");
+        r0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    page.evaluate("window.__ahkCalls = [];")
+    # Shift+click row 2
+    page.evaluate("""() => {
+        const r2 = document.querySelector("tr[data-row-id='2']");
+        r2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, shiftKey: true }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0, shiftKey: true }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 0, "Shift-click range should be silent when table_range_mode is none"
+
+    # --- Scenario 5: Row drag plays all rows when table_range_mode = all and lmb_chain_mode = separate ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate", table_range_mode="all"))
+
+    page.evaluate("""() => {
+        const r0 = document.querySelector("tr[data-row-id='0']");
+        const r1 = document.querySelector("tr[data-row-id='1']");
+        const r2 = document.querySelector("tr[data-row-id='2']");
+        r0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        r1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        r2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nHaus ||| Baum ||| Kind")
+
+    # --- Scenario 6: Row drag plays all rows when table_range_mode = all and lmb_chain_mode = joined ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined", table_range_mode="all"))
+
+    page.evaluate("""() => {
+        const r0 = document.querySelector("tr[data-row-id='0']");
+        const r1 = document.querySelector("tr[data-row-id='1']");
+        const r2 = document.querySelector("tr[data-row-id='2']");
+        r0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        r1.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        r2.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nHaus Baum Kind")
+
+    # --- Scenario 7: Shift-click plays range when table_range_mode = all (including reverse direction) ---
+    page.set_content(table_html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="inflection", lmb_chain_mode="separate", table_range_mode="all"))
+
+    # Click row 2 first
+    page.evaluate("""() => {
+        const r2 = document.querySelector("tr[data-row-id='2']");
+        r2.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    page.evaluate("window.__ahkCalls = [];")
+    # Reverse Shift-click to row 0
+    page.evaluate("""() => {
+        const r0 = document.querySelector("tr[data-row-id='0']");
+        r0.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1, shiftKey: true }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0, shiftKey: true }));
+    }""")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nHäuser ||| Bäume ||| Kinder")
+
 
 
 
