@@ -122,7 +122,7 @@ window.fetch = async function(url, options) {
     return html.replace("<head>", f"<head>\n{mock_script}")
 
 def test_toolbar_markup_and_styles_rendered(tmp_path):
-    html = get_desk_page_html(tmp_path)
+    html = get_desk_page_html(tmp_path, theme="dark")
     assert 'class="kw-action-toolbar"' in html
     assert '>Save (Ctrl+S)</button>' in html
     assert '>Update</button>' in html
@@ -134,7 +134,11 @@ def test_toolbar_markup_and_styles_rendered(tmp_path):
     assert 'id="kw-toast-container"' in html
     assert 'min-width: 110px;' in html
     assert 'padding-bottom: 70px;' in html
+    assert 'background: #161b22;' in html
+    assert 'background: #30363d;' in html
+    assert 'kw-seq-badge' not in html
     assert '.kw-toast' in html
+    assert 'word-break: break-word;' in html
     assert '.kw-toast-success' in html
     assert '.kw-toast-warning' in html
     assert '.kw-toast-error' in html
@@ -150,6 +154,13 @@ def test_toolbar_across_themes(tmp_path):
         assert f'theme-{theme}' in html
         assert 'id="kw-action-toolbar"' in html
         assert 'id="kw-toast-container"' in html
+        assert 'kw-seq-badge' not in html
+        if theme in ("light", "white"):
+            assert 'background: #ffffff;' in html
+            assert 'background: #eaeef2;' in html
+        else:
+            assert 'background: #161b22;' in html
+            assert 'background: #30363d;' in html
 
 def test_save_button_dirty_state_and_rest_dispatch(page, tmp_path):
     html = inject_mock_fetch(get_desk_page_html(tmp_path))
@@ -306,29 +317,27 @@ def test_hand_tool_and_delete_and_shortcuts(page, tmp_path):
 
 
 def test_window_sequence_branding_in_web_view(page, tmp_path):
-    # 1. Test with seq_num = 1 (Master window) - clean title without bracketed sequence prefix
+    # 1. Test with seq_num = 1 (Master window) - clean title, favicon #1, no toolbar badge element
     html_seq1 = get_desk_page_html(tmp_path, zid="20260826235951", seq_num=1)
     page.set_content(html_seq1)
     assert page.title() == "Kardenwort - de (single)"
     favicon = page.locator("link[rel='icon']")
     assert favicon.get_attribute("href") == "/assets/numbers/1.ico"
-    badge = page.locator("#kw-seq-badge")
-    assert badge.is_visible()
-    assert badge.inner_text() == "#1"
+    assert page.locator("#kw-seq-badge").count() == 0
 
-    # 2. Test with seq_num = 3 (Child window) - clean title, sequence icon + badge preserved
+    # 2. Test with seq_num = 3 (Child window) - clean title, favicon #3, no toolbar badge element
     html_seq3 = get_desk_page_html(tmp_path, zid="20260826235953", seq_num=3)
     page.set_content(html_seq3)
     assert page.title() == "Kardenwort - de (single)"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/3.ico"
-    assert page.locator("#kw-seq-badge").inner_text() == "#3"
+    assert page.locator("#kw-seq-badge").count() == 0
 
     # 3. Test without seq_num (Default fallback)
     html_default = get_desk_page_html(tmp_path, zid="20260826235950", seq_num=None)
     page.set_content(html_default)
     assert page.title() == "Kardenwort - de (single)"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/1.ico"
-    assert not page.locator("#kw-seq-badge").is_visible()
+    assert page.locator("#kw-seq-badge").count() == 0
 
 def test_ahk_host_toolbar_suppression(page, tmp_path):
     # 1. Standard web browser mode: toolbar is visible, kw-ahk-native-host is absent
@@ -444,6 +453,118 @@ def test_toolbar_api_token_propagation(page, tmp_path):
     assert fetches[3]["url"] == "/session/export"
     assert fetches[3]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
     assert fetches[3]["body"]["token"] == "secret-test-token-42"
+
+def test_toolbar_button_loading_states(page, tmp_path):
+    # Inject a delayed mock fetch to observe in-flight loading text & disabled state
+    delayed_fetch_script = """<script>
+window.__fetchResolve = null;
+window.fetch = function(url, options) {
+    return new Promise(function(resolve) {
+        window.__fetchResolve = function(data) {
+            resolve({
+                ok: true,
+                status: 200,
+                json: async () => data
+            });
+        };
+    });
+};
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html = html.replace("<head>", f"<head>\n{delayed_fetch_script}")
+    page.set_content(html)
+
+    # 1. Test Reword button loading transition
+    page.locator("tr[data-row-id='0']").click()
+    reword_btn = page.locator("#kw-btn-reword")
+    assert reword_btn.inner_text() == "Re-word"
+    assert not reword_btn.is_disabled()
+
+    reword_btn.click()
+    page.wait_for_timeout(50)
+    assert reword_btn.inner_text() == "Rewording..."
+    assert reword_btn.is_disabled()
+
+    # Resolve fetch
+    page.evaluate("window.__fetchResolve({ ok: true, status: 'success', rows: {} })")
+    page.wait_for_timeout(50)
+    assert reword_btn.inner_text() == "Re-word"
+    assert not reword_btn.is_disabled()
+
+    # 2. Test Retext button loading transition
+    retext_btn = page.locator("#kw-btn-retext")
+    assert retext_btn.inner_text() == "Re-text"
+    retext_btn.click()
+    page.wait_for_timeout(50)
+    assert retext_btn.inner_text() == "Retexting..."
+    assert retext_btn.is_disabled()
+
+    page.evaluate("window.__fetchResolve({ ok: true, status: 'success' })")
+    page.wait_for_timeout(50)
+    assert retext_btn.inner_text() == "Re-text"
+    assert not retext_btn.is_disabled()
+
+    # 3. Test Save button loading transition
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    cell.dblclick()
+    cell.locator("input").fill("neues_wort")
+    page.keyboard.press("Enter")
+
+    save_btn = page.locator("#kw-btn-save")
+    assert not save_btn.is_disabled()
+    save_btn.click()
+    page.wait_for_timeout(50)
+    assert save_btn.inner_text() == "Saving..."
+    assert save_btn.is_disabled()
+
+    page.evaluate("window.__fetchResolve({ ok: true, status: 'success' })")
+    page.wait_for_timeout(50)
+    assert save_btn.inner_text() == "Save (Ctrl+S)"
+    assert save_btn.is_disabled()  # Clean state after successful save
+
+def test_toolbar_error_trace_toast_and_state_recovery(page, tmp_path):
+    # Inject mock fetch returning rich error payloads
+    error_fetch_script = """<script>
+window.__errorPayload = null;
+window.fetch = async function(url, options) {
+    return {
+        ok: false,
+        status: 500,
+        json: async () => window.__errorPayload || {
+            ok: false,
+            status: 'error',
+            error: 'Backend engine failure',
+            trace_id: 'tr-test-8899',
+            error_trace: 'Traceback (most recent call last):\\n  File "worker.py", line 42\\nException: Backend engine failure'
+        }
+    };
+};
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html = html.replace("<head>", f"<head>\n{error_fetch_script}")
+    page.set_content(html)
+
+    # 1. Trigger Re-word failure and verify error trace toast and button recovery
+    page.locator("tr[data-row-id='0']").click()
+    reword_btn = page.locator("#kw-btn-reword")
+    reword_btn.click()
+    page.wait_for_timeout(100)
+
+    # Button must be restored to enabled state
+    assert reword_btn.inner_text() == "Re-word"
+    assert not reword_btn.is_disabled()
+
+    # Toast must display message and trace_id
+    err_toast = page.locator(".kw-toast-error")
+    assert err_toast.is_visible()
+    toast_text = err_toast.inner_text()
+    assert "Backend engine failure" in toast_text
+    assert "[Trace: tr-test-8899]" in toast_text
+
+    # Clicking toast should dismiss it
+    err_toast.click()
+    page.wait_for_timeout(300)
+    assert page.locator(".kw-toast-error").count() == 0
 
 
 

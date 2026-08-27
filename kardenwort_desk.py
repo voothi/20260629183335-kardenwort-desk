@@ -9116,7 +9116,7 @@ html, body {{
     bottom: 0;
     left: 0;
     right: 0;
-    background: {section_bg};
+    background: {toolbar_bg};
     border-top: 1px solid {section_border};
     padding: 8px 16px;
     display: flex;
@@ -9156,7 +9156,7 @@ html, body {{
     -webkit-user-select: none;
   }
   .kw-action-toolbar button:hover:not(:disabled) {
-    background: {row_hover};
+    background: {toolbar_btn_hover};
     border-color: {text_muted};
   }
   .kw-action-toolbar button:disabled {
@@ -9183,27 +9183,6 @@ html, body {{
     border-color: {flipped_border};
     color: {flipped_text};
   }
-  .kw-seq-badge {
-    font-family: inherit;
-    font-size: 13px;
-    font-weight: 700;
-    padding: 6px 12px;
-    border-radius: 4px;
-    border: 1px solid {section_border};
-    background: {input_bg};
-    color: {text_muted};
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    user-select: none;
-    -webkit-user-select: none;
-  }
-  body.theme-light .kw-seq-badge,
-  body.theme-white .kw-seq-badge {
-    background: #e1e4e8;
-    color: #24292f;
-    border: 1px solid #d0d7de;
-  }
   /* In-Page Toast Notifications */
   .kw-toast-container {
     position: fixed;
@@ -9218,7 +9197,8 @@ html, body {{
   .kw-toast {
     pointer-events: auto;
     min-width: 200px;
-    max-width: 380px;
+    max-width: 480px;
+    word-break: break-word;
     padding: 10px 16px;
     border-radius: 6px;
     font-size: 13px;
@@ -9431,7 +9411,6 @@ html, body {{
   </div>
 </div>
 <div class="kw-action-toolbar" id="kw-action-toolbar">
-  {seq_badge_html}
   <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
   <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
   <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
@@ -10143,12 +10122,9 @@ html, body {{
                 var updated = false;
                 var rowData = window.AppState.rows[rowId];
                 if (!rowData) return false;
-                var tr = null;
-                if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
+                var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                if (!tr && rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
                     tr = document.querySelector('tr[data-token-order="' + rowData.token_order + '"]');
-                }
-                if (!tr) {
-                    tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
                 }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
@@ -12259,6 +12235,57 @@ html, body {{
         }
         window.updateToolbarState = updateToolbarState;
 
+        function setButtonLoading(btn, isLoading, loadingText, defaultText) {
+            if (typeof btn === 'string') {
+                btn = document.getElementById(btn);
+            }
+            if (!btn) return;
+            if (isLoading) {
+                if (!btn.hasAttribute('data-default-text')) {
+                    btn.setAttribute('data-default-text', defaultText || btn.textContent || btn.innerText || "");
+                }
+                btn.disabled = true;
+                btn.textContent = loadingText || "Loading...";
+            } else {
+                btn.disabled = false;
+                var original = btn.getAttribute('data-default-text') || defaultText;
+                if (original) {
+                    btn.textContent = original;
+                }
+                if (btn.id === 'kw-btn-save') {
+                    updateToolbarState();
+                }
+            }
+        }
+        window.setButtonLoading = setButtonLoading;
+
+        function formatErrorWithTrace(resObj, fallback) {
+            fallback = fallback || "Operation failed";
+            if (!resObj) return fallback;
+            if (typeof resObj === 'string') return resObj;
+            if (resObj instanceof Error) return resObj.message || String(resObj);
+            
+            var data = (resObj && resObj.data) ? resObj.data : resObj;
+            if (typeof data === 'string') return data;
+            
+            var msg = data.message || data.error || (data.data && (data.data.message || data.data.error)) || "";
+            var trace = data.error_trace || (data.data && data.data.error_trace) || "";
+            var traceId = data.trace_id || (data.data && data.data.trace_id) || "";
+            
+            var parts = [];
+            if (msg) parts.push(msg);
+            else if (!trace && !traceId) parts.push(fallback);
+            
+            if (traceId) {
+                parts.push("[Trace: " + traceId + "]");
+            }
+            if (trace && trace !== msg) {
+                parts.push(trace);
+            }
+            return parts.length > 0 ? parts.join(" - ") : fallback;
+        }
+        window.formatErrorWithTrace = formatErrorWithTrace;
+
         window.showToast = function(msg, type, durationMs) {
             type = type || 'info';
             durationMs = durationMs || 3000;
@@ -12341,7 +12368,7 @@ html, body {{
             } catch(e) {}
             
             var saveBtn = document.getElementById('kw-btn-save');
-            if (saveBtn) saveBtn.disabled = true;
+            setButtonLoading(saveBtn, true, "Saving...", "Save (Ctrl+S)");
 
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
@@ -12362,18 +12389,20 @@ html, body {{
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
             })
             .then(function(resObj) {
+                setButtonLoading(saveBtn, false, "", "Save (Ctrl+S)");
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success')) {
                     window.clearDirty();
                     updateToolbarState();
                     window.showToast("Edits saved successfully", "success");
                 } else {
                     updateToolbarState();
-                    window.showToast("Save failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                    window.showToast("Save failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
                 }
             })
             .catch(function(err) {
+                setButtonLoading(saveBtn, false, "", "Save (Ctrl+S)");
                 updateToolbarState();
-                window.showToast("Save error: " + (err.message || String(err)), "error");
+                window.showToast("Save error: " + formatErrorWithTrace(err, "Network error"), "error");
             });
         };
 
@@ -12386,19 +12415,28 @@ html, body {{
                 if (window.location && window.location.reload) window.location.reload();
                 return;
             }
+            var updateBtn = document.getElementById('kw-btn-update');
+            setButtonLoading(updateBtn, true, "Updating...", "Update");
+
             var tok = getApiToken();
             var headers = { 'Accept': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
             fetch('/session/status?zid=' + encodeURIComponent(sZid), { method: 'GET', headers: headers })
-                .then(function(res) { return res.json(); })
+                .then(function(res) {
+                    return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+                })
                 .then(function(resObj) {
-                    var payload = (resObj && resObj.data) ? resObj.data : resObj;
-                    if (payload && window.receiveUpdate) {
+                    setButtonLoading(updateBtn, false, "", "Update");
+                    var payload = (resObj && resObj.data && resObj.data.data) ? resObj.data.data : ((resObj && resObj.data) ? resObj.data : resObj);
+                    if (resObj.ok && payload && window.receiveUpdate) {
                         window.receiveUpdate(payload);
                         window.showToast("Session updated", "success");
+                    } else if (!resObj.ok) {
+                        window.showToast("Update failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
                     }
                 })
-                .catch(function() {
+                .catch(function(err) {
+                    setButtonLoading(updateBtn, false, "", "Update");
                     window.onbeforeunload = null;
                     if (window.location && window.location.reload) window.location.reload();
                 });
@@ -12415,6 +12453,9 @@ html, body {{
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
+            var retextBtn = document.getElementById('kw-btn-retext');
+            setButtonLoading(retextBtn, true, "Retexting...", "Re-text");
+
             window.showToast("Retexting session...", "info");
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
@@ -12434,6 +12475,7 @@ html, body {{
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
             })
             .then(function(resObj) {
+                setButtonLoading(retextBtn, false, "", "Re-text");
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.retext_started)) {
                     window.showToast("Retext completed", "success");
                     var payload = (resObj.data && resObj.data.data) ? resObj.data.data : resObj.data;
@@ -12443,11 +12485,12 @@ html, body {{
                         window.onUpdateClick();
                     }
                 } else {
-                    window.showToast("Retext failed: " + (resObj.data.message || (resObj.data.data && resObj.data.data.message) || resObj.data.error || "Server error"), "error");
+                    window.showToast("Retext failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
                 }
             })
             .catch(function(err) {
-                window.showToast("Retext error: " + (err.message || String(err)), "error");
+                setButtonLoading(retextBtn, false, "", "Re-text");
+                window.showToast("Retext error: " + formatErrorWithTrace(err, "Network error"), "error");
             });
         };
 
@@ -12467,6 +12510,9 @@ html, body {{
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
+            var rewordBtn = document.getElementById('kw-btn-reword');
+            setButtonLoading(rewordBtn, true, "Rewording...", "Re-word");
+
             window.showToast("Re-wording " + rows.length + " rows...", "info");
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
@@ -12487,6 +12533,7 @@ html, body {{
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
             })
             .then(function(resObj) {
+                setButtonLoading(rewordBtn, false, "", "Re-word");
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.reprocess_started)) {
                     window.showToast("Re-word completed for " + rows.length + " rows", "success");
                     var payload = (resObj.data && resObj.data.data) ? resObj.data.data : resObj.data;
@@ -12496,11 +12543,12 @@ html, body {{
                         window.onUpdateClick();
                     }
                 } else {
-                    window.showToast("Re-word failed: " + (resObj.data.message || (resObj.data.data && resObj.data.data.message) || resObj.data.error || "Server error"), "error");
+                    window.showToast("Re-word failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
                 }
             })
             .catch(function(err) {
-                window.showToast("Re-word error: " + (err.message || String(err)), "error");
+                setButtonLoading(rewordBtn, false, "", "Re-word");
+                window.showToast("Re-word error: " + formatErrorWithTrace(err, "Network error"), "error");
             });
         };
 
@@ -12520,6 +12568,9 @@ html, body {{
                 window.showToast("Session ZID missing.", "error");
                 return;
             }
+            var exportBtn = document.getElementById('kw-btn-export');
+            setButtonLoading(exportBtn, true, "Sending...", "Send to Anki");
+
             window.showToast("Exporting to Anki...", "info");
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
@@ -12540,14 +12591,16 @@ html, body {{
                 return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
             })
             .then(function(resObj) {
+                setButtonLoading(exportBtn, false, "", "Send to Anki");
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || resObj.data.import_complete || resObj.data.import_started)) {
                     window.showToast("✓ " + rows.length + " cards exported to Anki", "success");
                 } else {
-                    window.showToast("Export failed: " + (resObj.data.message || resObj.data.error || "Server error"), "error");
+                    window.showToast("Export failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
                 }
             })
             .catch(function(err) {
-                window.showToast("Export error: " + (err.message || String(err)), "error");
+                setButtonLoading(exportBtn, false, "", "Send to Anki");
+                window.showToast("Export error: " + formatErrorWithTrace(err, "Network error"), "error");
             });
         };
 
@@ -13119,7 +13172,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{audio_anki_tts_cli}", anki_tts_cli_path.replace("\\", "\\\\"))
     html_page = html_page.replace("{audio_python_exe}", python_exe_path.replace("\\", "\\\\"))
 
-    # Format Title, Favicon, and Sequence Badge
+    # Format Title and Favicon
     mode_label = "multi" if (eff_mode == "multi" or text_mode == "multi") else "single"
     page_title = f"Kardenwort - {language} ({mode_label})"
     if seq_num is not None and str(seq_num).strip():
@@ -13129,14 +13182,11 @@ setTimeout(function() {{
             seq_int = 1
         favicon_num = seq_int if 1 <= seq_int <= 99 else 1
         favicon_href = f"/assets/numbers/{favicon_num}.ico"
-        seq_badge_html = f'<span class="kw-seq-badge" id="kw-seq-badge">#{seq_int}</span>'
     else:
         favicon_href = "/assets/numbers/1.ico"
-        seq_badge_html = ""
 
     html_page = html_page.replace("{page_title}", page_title)
     html_page = html_page.replace("{favicon_href}", favicon_href)
-    html_page = html_page.replace("{seq_badge_html}", seq_badge_html)
     html_page = html_page.replace("{theme_class}", f"theme-{theme}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if eff_mode == "multi" else "normal")
     html_page = html_page.replace("{selected_col_name}", selected_col_name)
@@ -13144,9 +13194,9 @@ setTimeout(function() {{
 
     theme = theme.lower()
     
-    light_defaults = {'bg_color': '#f6f8fa', 'text_color': '#24292f', 'section_bg': '#ffffff', 'section_border': '#d0d7de', 'text_muted': '#57606a', 'table_border': '#d8dee4', 'table_th_border': '#d0d7de', 'table_text': '#24292f', 'row_hover': '#f3f4f6', 'word_hover': 'rgba(0, 0, 0, 0.05)', 'highlight_orange_active_bg': 'rgba(255, 225, 105, 0.4)', 'highlight_orange_active_text': '#b07e00', 'highlight_orange_active_hover_bg': 'rgba(255, 225, 105, 0.6)', 'highlight_purple_active_bg': '#dcd0ff', 'highlight_purple_active_text': '#24292f', 'highlight_purple_active_hover_bg': '#b89bf8', 'selected_orange_row_bg': 'rgba(255, 225, 105, 0.3)', 'selected_orange_row_text': '#b07e00', 'selected_purple_row_bg': 'rgba(220, 208, 255, 0.3)', 'selected_purple_row_text': '#6f42c1', 'flipped_bg': 'rgba(56, 166, 255, 0.15)', 'flipped_text': '#0969da', 'flipped_border': 'rgba(9, 105, 218, 0.6)', 'input_bg': '#ffffff', 'input_border': '#0969da', 'scrollbar_track': '#f6f8fa', 'scrollbar_thumb': '#d0d7de', 'scrollbar_thumb_hover': '#afb8c1', 'not_connected_bg': 'rgba(175, 184, 193, 0.15)', 'not_connected_text': '#57606a', 'level_3k_color': '#0969da', 'level_5k_color': '#bc4c00', 'level_goethe_color': '#1a7f37', 'modal_bg': '#ffffff', 'modal_border': '#d0d7de'}
+    light_defaults = {'bg_color': '#f6f8fa', 'text_color': '#24292f', 'section_bg': '#ffffff', 'section_border': '#d0d7de', 'text_muted': '#57606a', 'table_border': '#d8dee4', 'table_th_border': '#d0d7de', 'table_text': '#24292f', 'row_hover': '#f3f4f6', 'word_hover': 'rgba(0, 0, 0, 0.05)', 'highlight_orange_active_bg': 'rgba(255, 225, 105, 0.4)', 'highlight_orange_active_text': '#b07e00', 'highlight_orange_active_hover_bg': 'rgba(255, 225, 105, 0.6)', 'highlight_purple_active_bg': '#dcd0ff', 'highlight_purple_active_text': '#24292f', 'highlight_purple_active_hover_bg': '#b89bf8', 'selected_orange_row_bg': 'rgba(255, 225, 105, 0.3)', 'selected_orange_row_text': '#b07e00', 'selected_purple_row_bg': 'rgba(220, 208, 255, 0.3)', 'selected_purple_row_text': '#6f42c1', 'flipped_bg': 'rgba(56, 166, 255, 0.15)', 'flipped_text': '#0969da', 'flipped_border': 'rgba(9, 105, 218, 0.6)', 'input_bg': '#ffffff', 'input_border': '#0969da', 'scrollbar_track': '#f6f8fa', 'scrollbar_thumb': '#d0d7de', 'scrollbar_thumb_hover': '#afb8c1', 'not_connected_bg': 'rgba(175, 184, 193, 0.15)', 'not_connected_text': '#57606a', 'level_3k_color': '#0969da', 'level_5k_color': '#bc4c00', 'level_goethe_color': '#1a7f37', 'modal_bg': '#ffffff', 'modal_border': '#d0d7de', 'toolbar_bg': '#ffffff', 'toolbar_btn_hover': '#eaeef2'}
     
-    dark_defaults = {'bg_color': '#0d0f12', 'text_color': '#e3e6eb', 'section_bg': 'rgba(255, 255, 255, 0.03)', 'section_border': 'rgba(255, 255, 255, 0.1)', 'text_muted': '#8b949e', 'table_border': 'rgba(255, 255, 255, 0.05)', 'table_th_border': 'rgba(255, 255, 255, 0.1)', 'table_text': '#e3e6eb', 'row_hover': 'rgba(255, 255, 255, 0.02)', 'word_hover': 'rgba(255, 255, 255, 0.1)', 'highlight_orange_active_bg': 'rgba(255, 204, 0, 0.25)', 'highlight_orange_active_text': '#ffcc00', 'highlight_orange_active_hover_bg': 'rgba(255, 204, 0, 0.4)', 'highlight_purple_active_bg': '#9370db', 'highlight_purple_active_text': '#ffffff', 'highlight_purple_active_hover_bg': '#7b59c4', 'selected_orange_row_bg': 'rgba(255, 204, 0, 0.15)', 'selected_orange_row_text': '#ffcc00', 'selected_purple_row_bg': 'rgba(147, 112, 219, 0.15)', 'selected_purple_row_text': '#b39ddb', 'flipped_bg': 'rgba(56, 166, 255, 0.22)', 'flipped_text': '#a5d6ff', 'flipped_border': 'rgba(165, 214, 255, 0.6)', 'input_bg': '#1c1f24', 'input_border': '#58a6ff', 'scrollbar_track': '#0d0f12', 'scrollbar_thumb': '#30363d', 'scrollbar_thumb_hover': '#8b949e', 'not_connected_bg': 'rgba(139, 148, 158, 0.15)', 'not_connected_text': '#8b949e', 'level_3k_color': '#58a6ff', 'level_5k_color': '#ff9d5c', 'level_goethe_color': '#3fb950', 'modal_bg': '#161b22', 'modal_border': 'rgba(255, 255, 255, 0.15)'}
+    dark_defaults = {'bg_color': '#0d0f12', 'text_color': '#e3e6eb', 'section_bg': 'rgba(255, 255, 255, 0.03)', 'section_border': 'rgba(255, 255, 255, 0.1)', 'text_muted': '#8b949e', 'table_border': 'rgba(255, 255, 255, 0.05)', 'table_th_border': 'rgba(255, 255, 255, 0.1)', 'table_text': '#e3e6eb', 'row_hover': 'rgba(255, 255, 255, 0.02)', 'word_hover': 'rgba(255, 255, 255, 0.1)', 'highlight_orange_active_bg': 'rgba(255, 204, 0, 0.25)', 'highlight_orange_active_text': '#ffcc00', 'highlight_orange_active_hover_bg': 'rgba(255, 204, 0, 0.4)', 'highlight_purple_active_bg': '#9370db', 'highlight_purple_active_text': '#ffffff', 'highlight_purple_active_hover_bg': '#7b59c4', 'selected_orange_row_bg': 'rgba(255, 204, 0, 0.15)', 'selected_orange_row_text': '#ffcc00', 'selected_purple_row_bg': 'rgba(147, 112, 219, 0.15)', 'selected_purple_row_text': '#b39ddb', 'flipped_bg': 'rgba(56, 166, 255, 0.22)', 'flipped_text': '#a5d6ff', 'flipped_border': 'rgba(165, 214, 255, 0.6)', 'input_bg': '#1c1f24', 'input_border': '#58a6ff', 'scrollbar_track': '#0d0f12', 'scrollbar_thumb': '#30363d', 'scrollbar_thumb_hover': '#8b949e', 'not_connected_bg': 'rgba(139, 148, 158, 0.15)', 'not_connected_text': '#8b949e', 'level_3k_color': '#58a6ff', 'level_5k_color': '#ff9d5c', 'level_goethe_color': '#3fb950', 'modal_bg': '#161b22', 'modal_border': 'rgba(255, 255, 255, 0.15)', 'toolbar_bg': '#161b22', 'toolbar_btn_hover': '#30363d'}
     
     if theme in ("light", "white"):
         theme_colors = dict(light_defaults)
