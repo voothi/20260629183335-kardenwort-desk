@@ -532,8 +532,8 @@ def test_orthogonal_tsv_column_mapping(tmp_path, monkeypatch):
     assert 'data-col="MyCustomIPA"' in html_out
     
     # Assert JavaScript variables correctly use the custom lemma
-    assert "getAttribute('data-col') === 'MyCustomLemma'" in html_out
-    assert "getAttribute('data-col') === 'MyCustomInflection'" in html_out
+    assert "col === 'MyCustomLemma'" in html_out
+    assert "col === 'MyCustomInflection'" in html_out
     
     # Assert editable classes are properly resolved
     assert 'class="editable" data-col="MyCustomLemma"' in html_out
