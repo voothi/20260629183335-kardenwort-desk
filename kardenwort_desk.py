@@ -9422,8 +9422,10 @@ html, body {{
     bottom: 0;
     left: 0;
     right: 0;
-    background: {toolbar_bg};
-    border-top: 1px solid {section_border};
+    background: rgba(22, 27, 34, 0.8);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
     padding: 8px 16px;
     display: flex;
     gap: 8px;
@@ -9431,6 +9433,11 @@ html, body {{
     align-items: center;
     z-index: 1000;
     box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+  }
+  .kw-action-toolbar:hover {
+    background: #161b22;
+    border-top-color: rgba(255, 255, 255, 0.15);
   }
   body.kw-ahk-native-host {
     padding-bottom: 0px !important;
@@ -9672,6 +9679,19 @@ html, body {{
   }
   body.theme-light .kw-workspace-tab-bar.kw-tab-dock-bottom:hover,
   body.theme-white .kw-workspace-tab-bar.kw-tab-dock-bottom:hover {
+    background: #ffffff;
+    border-top-color: #afb8c1;
+  }
+  body.theme-light .kw-action-toolbar,
+  body.theme-white .kw-action-toolbar {
+    background: rgba(255, 255, 255, 0.85);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid #d0d7de;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+  }
+  body.theme-light .kw-action-toolbar:hover,
+  body.theme-white .kw-action-toolbar:hover {
     background: #ffffff;
     border-top-color: #afb8c1;
   }
