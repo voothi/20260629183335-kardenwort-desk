@@ -361,3 +361,73 @@ def test_simulated_swarm_concurrent_translation_requests():
         server.server_close()
 
 
+# ---------------------------------------------------------------------------
+# 7. Unified Controller Delegation & Session Status Test (Task 3.2)
+# ---------------------------------------------------------------------------
+def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
+    """
+    Verify cmd_server starts the unified controller daemon with ProcessSupervisor,
+    registers /session/status and /session/queue/status, and shuts down cleanly.
+    """
+    port = get_free_port()
+    args = DummyArgs(port=port, no_sidecars=True)
+
+    server_thread = threading.Thread(target=cmd_server, args=(args,), daemon=True)
+    server_thread.start()
+    time.sleep(0.2)
+
+    try:
+        # 1. Health probe includes status, services map, and controller info
+        health_req = urllib.request.Request(f"http://127.0.0.1:{port}/api/v1/health")
+        with urllib.request.urlopen(health_req, timeout=5.0) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read().decode('utf-8'))
+            assert data.get("status") == "success"
+            res = data.get("data", {})
+            assert res.get("ok") is True
+            assert res.get("status") == "running"
+            assert "services" in res
+            assert "controller" in res
+            assert res["controller"]["port"] == port
+
+        # 2. Session queue status is available on port 18335 / unified port
+        queue_req = urllib.request.Request(f"http://127.0.0.1:{port}/session/queue/status")
+        with urllib.request.urlopen(queue_req, timeout=5.0) as resp:
+            assert resp.status == 200
+            qdata = json.loads(resp.read().decode('utf-8'))
+            assert qdata.get("status") == "success"
+
+        # 3. Session status query is active (returns 404 for unknown ZID rather than unknown route)
+        status_req = urllib.request.Request(f"http://127.0.0.1:{port}/session/status?zid=99999999999999")
+        with pytest.raises(urllib.error.HTTPError) as exc_info:
+            urllib.request.urlopen(status_req, timeout=5.0)
+        assert exc_info.value.code == 404
+
+        # 4. Clean shutdown via POST /api/v1/shutdown
+        desk_dir = Path(__file__).resolve().parent.parent
+        cfg, _, _, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+        api_token = cfg.get("server", "api_key", fallback="")
+        shut_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/v1/shutdown",
+            data=json.dumps({"token": api_token}).encode('utf-8'),
+            headers={"Content-Type": "application/json", "X-API-Token": api_token}
+        )
+        with urllib.request.urlopen(shut_req, timeout=5.0) as resp:
+            assert resp.status == 200
+
+        server_thread.join(timeout=3.0)
+    except Exception:
+        # Fallback shutdown attempt
+        try:
+            shut_req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/api/v1/shutdown",
+                data=json.dumps({}).encode('utf-8'),
+                headers={"Content-Type": "application/json"}
+            )
+            urllib.request.urlopen(shut_req, timeout=1.0)
+        except Exception:
+            pass
+        raise
+
+
+

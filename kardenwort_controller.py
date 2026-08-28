@@ -2358,13 +2358,24 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         parsed_url = urllib.parse.urlparse(self.path)
         path = parsed_url.path
         qs = urllib.parse.parse_qs(parsed_url.query)
+        ctrl_mod = sys.modules.get('kardenwort_controller')
+        http_mod = sys.modules.get('http_server')
+        render_flow_fn = ctrl_mod.run_render_flow if (ctrl_mod and hasattr(ctrl_mod, 'run_render_flow')) else run_render_flow
+        if http_mod and hasattr(http_mod, 'run_render_flow') and getattr(http_mod.run_render_flow, '__module__', None) != 'http_server':
+            render_flow_fn = http_mod.run_render_flow
 
         # 1. Health Probe (Controller + Supervisor Sidecars + Database)
         if path in ('/health', '/api/v1/health'):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             uptime = round(time.time() - getattr(self.server, 'start_time', time.time()), 2)
-            supervisor_report = self.server.supervisor.get_status_report() if hasattr(self.server, 'supervisor') else {}
+            services_status = {}
+            supervisor_report = {}
+            if hasattr(self.server, 'supervisor') and self.server.supervisor:
+                if hasattr(self.server.supervisor, 'get_service_status'):
+                    services_status = self.server.supervisor.get_service_status()
+                if hasattr(self.server.supervisor, 'get_status_report'):
+                    supervisor_report = self.server.supervisor.get_status_report()
             
             db_status = {}
             try:
@@ -2374,12 +2385,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             except Exception as e:
                 db_status = {"ok": False, "error": str(e)}
 
+            ctrl_port = getattr(self.server, 'server_port', None)
+            if ctrl_port is None:
+                ctrl_port = self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335
+
             self._send_json(200, {
                 "ok": True,
+                "status": "running",
                 "controller": {
-                    "port": self.server.server_port,
+                    "port": ctrl_port,
                     "uptime_seconds": uptime
                 },
+                "services": services_status,
                 "sidecars": supervisor_report,
                 "database": db_status
             })
@@ -2816,7 +2833,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     slug_suffix = f"-{slug}" if slug else ""
                     resolved_tsv = Path(tsv_path) if tsv_path else (results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv")
 
-                    render_out = run_render_flow(
+                    render_out = render_flow_fn(
                         text=source_text,
                         language=sess_lang,
                         zid=session_zid,
@@ -2876,7 +2893,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                 elif lang_res.action == "warn":
                                     logger.warning(lang_res.message)
 
-                        render_out = run_render_flow(
+                        render_out = render_flow_fn(
                             text=text,
                             language=language,
                             zid=active_zid,
@@ -2937,7 +2954,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         elif lang_res.action == "warn":
                             logger.warning(lang_res.message)
 
-                render_out = run_render_flow(
+                render_out = render_flow_fn(
                     text=text,
                     language=language,
                     zid=active_zid,
@@ -3086,7 +3103,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     slug_suffix = f"-{slug}" if slug else ""
                     tsv_path = results_dir / f"{synth_zid}{slug_suffix}.{sess_lang}.tsv"
                     save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                    html = run_render_flow(
+                    html = render_flow_fn(
                         text=source_text,
                         language=sess_lang,
                         zid=synth_zid,
@@ -3115,7 +3132,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     if draft:
                         req_theme = qs.get('theme', [None])[0] or draft.get("theme", "dark")
                         seq_num = qs.get('seq_num', [None])[0] or qs.get('seq-num', [None])[0] or draft.get("seq_num")
-                        html = run_render_flow(
+                        html = render_flow_fn(
                             text=draft.get("text", ""),
                             language=draft.get("language", language or "en"),
                             zid=session_zid,
@@ -3205,7 +3222,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     slug_suffix = f"-{slug}" if slug else ""
                     tsv_path = results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv"
                     seq_num = qs.get('seq_num', [None])[0] or qs.get('seq-num', [None])[0]
-                    html = run_render_flow(
+                    html = render_flow_fn(
                         text=source_text,
                         language=sess_lang,
                         zid=session_zid,
@@ -3573,7 +3590,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 target_lang = draft.get("language") or "en"
 
             # Execute run_render_flow
-            render_out = run_render_flow(
+            render_out = render_flow_fn(
                 text=draft.get("text", ""),
                 language=target_lang,
                 zid=session_zid,
@@ -4365,7 +4382,7 @@ def run_controller(args=None):
 
     port = getattr(args, 'port', None) if args else None
     if not port:
-        port = config.getint('server', 'controller_port', fallback=config.getint('server', 'port', fallback=8080))
+        port = config.getint('server', 'controller_port', fallback=config.getint('server', 'port', fallback=goldendict.get('server_port', 18335)))
 
     if host not in ('127.0.0.1', 'localhost', '::1'):
         raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"Controller host must be loopback (127.0.0.1). Specified: {host}")
