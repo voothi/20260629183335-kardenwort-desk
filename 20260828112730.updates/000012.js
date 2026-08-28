@@ -1,1 +1,0 @@
-if (typeof window.receiveUpdate === 'function') { window.receiveUpdate({"stage": "translated", "status": "success", "rows": {"0": {"lemma": "Flugzeug", "inflected": "Flugzeug", "trans": "\u0441\u0430\u043c\u043e\u043b\u0451\u0442", "ipa": "", "morph": "", "token_order": "0", "sentence_idx": "1"}}, "zid": "20260828112730", "trace_id": "20260828112730:update"}); }

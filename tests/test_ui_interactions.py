@@ -4344,6 +4344,206 @@ def test_source_text_token_range_lmb_audio_interactions(page):
     assert play_calls[0]["arg"].endswith("de\\nHaus")
 
 
+def test_render_row_unresolved_terminal_renders_retry_badge(page):
+    """
+    Verify AppState.renderRow renders .btn-retry-cell badge for unresolved cell
+    when globalStage is finished or lastError is present.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260828120000">
+<div class="container">
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Häuser</div></td>
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader"></span></div></td>
+        <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
+        <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Emit terminal update with unresolved/blank translation
+    page.evaluate("""
+        window.receiveUpdate({
+            type: "stage",
+            stage: "finished",
+            status: "failed",
+            error: { code: "ERR_TRANSLATION_FAILED", message: "Timeout" },
+            rows: {
+                "0": { "trans": "" }
+            }
+        });
+    """)
+
+    # Verify that .btn-retry-cell is rendered
+    retry_btn = page.locator(".btn-retry-cell")
+    assert retry_btn.count() == 1
+    assert retry_btn.get_attribute("data-row-id") == "0"
+    assert "Retry" in retry_btn.inner_text()
+
+
+def test_retry_cell_click_dispatches_retry_endpoint_and_resolves_inplace(page):
+    """
+    Verify that clicking .btn-retry-cell transitions cell to skeleton loader,
+    dispatches POST /session/retry with row_ids: [0], and updates text in-place.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260828120000">
+<div class="container">
+  <div id="session-zid">20260828120000</div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Häuser</div></td>
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><button class="btn-retry-cell" data-row-id="0">Retry</button></div></td>
+        <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
+        <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.__retryCalls = [];
+        window.fetch = function(url, options) {
+            window.__retryCalls.push({
+                url: String(url),
+                method: options ? options.method : 'GET',
+                body: options && options.body ? JSON.parse(options.body) : null
+            });
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() {
+                    return Promise.resolve({
+                        status: "success",
+                        session_zid: "20260828120000",
+                        retried_rows: [0],
+                        rows: {
+                            "0": { "trans": "House" }
+                        }
+                    });
+                }
+            });
+        };
+    """)
+    page.evaluate(extract_desk_js())
+
+    retry_btn = page.locator(".btn-retry-cell")
+    assert retry_btn.count() == 1
+
+    # Click the retry button
+    retry_btn.click()
+
+    page.wait_for_function("() => window.__retryCalls && window.__retryCalls.length > 0", timeout=3000)
+    calls = page.evaluate("window.__retryCalls")
+    retry_calls = [c for c in calls if c.get("url") == "/session/retry"]
+    assert len(retry_calls) == 1
+    assert retry_calls[0]["method"] == "POST"
+    assert retry_calls[0]["body"]["session_zid"] == "20260828120000"
+    assert retry_calls[0]["body"]["row_ids"] == [0]
+
+    # Verify cell resolved in-place to "House"
+    cell_text = page.locator("tr[data-row-id='0'] td:nth-child(3)").inner_text()
+    assert "House" in cell_text
+    assert page.locator(".btn-retry-cell").count() == 0
+
+
+def test_retry_session_toast_triggers_batch_retry(page):
+    """
+    Verify that watchdog timeout renders retry badges and clicking the toast
+    triggers batch retry for the session.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260828120000">
+<div class="container">
+  <div id="session-zid">20260828120000</div>
+  <div id="kw-toast-container"></div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Häuser</div></td>
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true">...</span></div></td>
+        <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
+        <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.__retryCalls = [];
+        window.fetch = function(url, options) {
+            if (options && options.method === 'POST' && String(url).indexOf('/session/retry') !== -1) {
+                window.__retryCalls.push({
+                    url: String(url),
+                    method: options.method,
+                    body: options.body ? JSON.parse(options.body) : null
+                });
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: function() {
+                        return Promise.resolve({
+                            status: "success",
+                            rows: { "0": { "trans": "House" } }
+                        });
+                    }
+                });
+            }
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() { return Promise.resolve({ status: "success", data: {} }); }
+            });
+        };
+    """)
+    page.evaluate(extract_desk_js())
+
+    # Trigger watchdog cleanup
+    page.evaluate("window.cleanupOrphanSkeletons()")
+
+    # Skeletons converted to retry buttons
+    assert page.locator(".skeleton-loader").count() == 0
+    assert page.locator(".btn-retry-cell").count() == 1
+
+    # Toast displayed
+    toast = page.locator(".kw-toast-warning")
+    assert toast.is_visible()
+    assert "Some translations timed out. Click to retry." in toast.inner_text()
+
+    # Click toast to trigger batch retry
+    toast.click()
+
+    page.wait_for_function("() => window.__retryCalls && window.__retryCalls.length > 0", timeout=3000)
+    calls = page.evaluate("window.__retryCalls")
+    assert len(calls) == 1
+    assert calls[0]["url"] == "/session/retry"
+    assert calls[0]["body"]["session_zid"] == "20260828120000"
+
+
+
 
 
 

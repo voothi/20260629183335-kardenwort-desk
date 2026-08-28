@@ -876,6 +876,60 @@ def test_progressive_translation_failure_preserves_cell_state(monkeypatch, tmp_p
     assert len(failed_event) >= 1
     assert failed_event[0]["stage"] == "translated"
     assert failed_event[0]["error"]["code"] == "ERR_TRANSLATION_FAILED"
+    assert failed_event[0]["error"]["retryable"] is True
+    assert "failed_lemmas" in failed_event[0]["error"]["details"]
+
+
+def test_progressive_worker_sqlite_mode_exception_non_destructive(monkeypatch, tmp_path):
+    """
+    Verify that in SQLite mode, when an exception occurs in progressive worker translation,
+    existing word records are preserved and not wiped to empty strings.
+    """
+    config, resolved_paths = setup_test_env(tmp_path)
+    tsv_file = tmp_path / "20260828114000-failtest.de.tsv"
+    headers = ["WordSource", "WordDestination", "TokenOrder"]
+    rows = [["Apfel", "", "0"], ["Birne", "груша", "1"]]
+    desk.save_tsv_rows_safely(tsv_file, [], headers, rows)
+
+    args = types.SimpleNamespace(
+        tsv=str(tsv_file),
+        config=str(tmp_path / "config.ini"),
+        language="de",
+        target_lang="ru",
+        prompt="",
+        provider="google",
+        text_mode="single",
+        skip_intellifiller=True,
+        zid="20260828114000",
+        trace_id="test:trace:sqlite",
+    )
+
+    written_events = []
+    def mock_safe_write_update_js(path, r_rows, h_headers, r_fields, stage=None, status=None, error=None, **kw):
+        written_events.append({"stage": stage, "status": status, "error": error, "rows": r_rows})
+
+    class MockSqliteStorageAdapter:
+        backend_name = "sqlite"
+        def file_lock(self, path):
+            import contextlib
+            return contextlib.nullcontext()
+        def load_tsv_rows(self, path):
+            return [], headers, [list(r) for r in rows]
+        def batch_update_words(self, session_zid, updates_list, zid=None):
+            pass
+
+    monkeypatch.setattr(desk, 'load_config', lambda *a, **kw: (config, resolved_paths, {}, {}))
+    monkeypatch.setattr(desk, 'get_storage_adapter', lambda *a, **kw: MockSqliteStorageAdapter())
+    monkeypatch.setattr(desk, 'translate_lemmas_fast_path', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError("Network failure")))
+    monkeypatch.setattr(desk, 'safe_write_update_js', mock_safe_write_update_js)
+
+    desk.cmd_progressive_worker(args)
+
+    failed_events = [e for e in written_events if e.get("status") == "failed"]
+    assert len(failed_events) >= 1
+    assert failed_events[0]["error"]["code"] == "ERR_TRANSLATION_FAILED"
+    assert failed_events[0]["error"]["retryable"] is True
+
 
 
 
