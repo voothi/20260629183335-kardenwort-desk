@@ -44,8 +44,8 @@ def build_word_list_internal(text: str, keep_spaces: bool) -> list:
             "visual_idx": curr_visual_idx
         }
 
-        # 1. Handle ASS Tags (Atomize)
-        if c == "{":
+        # 1. Handle ASS Tags (Atomize only if {\)
+        if c == "{" and i + 1 < n and chars[i + 1] == "\\":
             start = i
             while i < n and chars[i] != "}":
                 i += 1
@@ -143,8 +143,8 @@ def build_orthographic_token_spans(text: str) -> list:
             "visual_idx": curr_visual_idx
         }
 
-        # 1. Handle ASS Tags
-        if c == "{":
+        # 1. Handle ASS Tags (Atomize only if {\)
+        if c == "{" and i + 1 < n and chars[i + 1] == "\\":
             start = i
             while i < n and chars[i] != "}":
                 i += 1

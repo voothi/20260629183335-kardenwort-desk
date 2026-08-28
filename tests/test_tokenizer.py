@@ -203,6 +203,45 @@ def test_decompose_function_signatures_with_brackets():
     assert tok.extract_identifier_subtokens("curr_logical_idx") == ["curr", "logical", "idx"]
 
 
+def test_build_word_list_curly_braces_and_ass_tags():
+    text = "The placeholder {lang} and {status} are active with {\\an8} ASS tag."
+    tokens = tok.build_word_list_internal(text, keep_spaces=True)
+    word_texts = [t["text"] for t in tokens if t["is_word"]]
+    assert "The" in word_texts
+    assert "placeholder" in word_texts
+    assert "lang" in word_texts
+    assert "status" in word_texts
+    assert "active" in word_texts
+    assert "ASS" in word_texts
+    assert "tag" in word_texts
+    assert "{\\an8}" not in word_texts
+
+    non_words = [t["text"] for t in tokens if not t["is_word"]]
+    assert "{\\an8}" in non_words
+    assert "{" in non_words
+    assert "}" in non_words
+
+    words = tok.build_word_list(text)
+    assert "lang" in words
+    assert "status" in words
+    assert "{\\an8}" not in words
+
+
+def test_build_orthographic_token_spans_curly_braces():
+    text = "Expression {lang} <tag> [index] {\\b1}bold{\\b0}"
+    spans = tok.build_orthographic_token_spans(text)
+    words = [s["text"] for s in spans if s["is_word"]]
+    assert "Expression" in words
+    assert "lang" in words
+    assert "tag" in words
+    assert "index" in words
+    assert "bold" in words
+
+    ass_tags = [s["text"] for s in spans if s["text"].startswith("{\\")]
+    assert ass_tags == ["{\\b1}", "{\\b0}"]
+
+
+
 
 
 
