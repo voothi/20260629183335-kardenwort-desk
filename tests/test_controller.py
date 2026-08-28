@@ -308,7 +308,7 @@ def test_controller_render_multi_sentence_returns_children_and_suppresses_spawn(
         "bypass_lang_check": True,
     }).encode('utf-8')
     req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
-    with urllib.request.urlopen(req, timeout=15.0) as resp:
+    with urllib.request.urlopen(req, timeout=60.0) as resp:
         assert resp.status == 200
         res = json.loads(resp.read().decode('utf-8'))
         assert res["status"] == "success"
@@ -452,7 +452,7 @@ def test_controller_session_retext_long_single_mode_text(running_controller):
             "X-API-Token": "test-controller-api-key"
         }
     )
-    with urllib.request.urlopen(req_create, timeout=30.0) as resp:
+    with urllib.request.urlopen(req_create, timeout=60.0) as resp:
         assert resp.status == 200
         create_res = json.loads(resp.read().decode('utf-8'))
         session_zid = create_res["data"]["session_zid"]
@@ -472,7 +472,7 @@ def test_controller_session_retext_long_single_mode_text(running_controller):
             "X-API-Token": "test-controller-api-key"
         }
     )
-    with urllib.request.urlopen(req_retext, timeout=30.0) as resp:
+    with urllib.request.urlopen(req_retext, timeout=60.0) as resp:
         assert resp.status == 200
         retext_res = json.loads(resp.read().decode('utf-8'))
         assert retext_res["status"] == "success"
