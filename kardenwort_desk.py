@@ -14372,17 +14372,15 @@ setTimeout(function() {{
     if zoom_level.isdigit():
         zoom_level = f"{zoom_level}%"
         
+    # Stage 1: System and environment placeholder replacements
     html_page = html_page.replace("{zoom_level}", zoom_level)
     html_page = html_page.replace("{inverse_zoom_width}", inverse_width)
-    html_page = html_page.replace("{source_html}", source_html)
-    html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{workspace_tab_bar_html}", workspace_tab_bar_html)
     html_page = html_page.replace("{sentence_cards_json}", json.dumps(sentence_cards, ensure_ascii=False))
     html_page = html_page.replace("{delivery_mode_js}", smc.delivery_mode)
     html_page = html_page.replace("{web_tab_mode_js}", smc.web_tab_mode)
     html_page = html_page.replace("{tab_bar_position_js}", smc.tab_bar_position)
     html_page = html_page.replace("{table_header_html}", table_header_html)
-    html_page = html_page.replace("{table_rows_html}", table_rows_html)
     html_page = html_page.replace("{token_manifest}", json.dumps(token_manifest))
     html_page = html_page.replace("{working_tsv_path}", str(working_tsv_path))
     html_page = html_page.replace("{llm_filled_js}", "true" if llm_filled else "false")
@@ -14472,6 +14470,11 @@ setTimeout(function() {{
 
     for key, val in theme_colors.items():
         html_page = html_page.replace('{' + key + '}', val)
+
+    # Stage 2: User content injection (isolated dedicated pass preventing collisions)
+    html_page = html_page.replace("{source_html}", source_html)
+    html_page = html_page.replace("{sentence_html}", sentence_html)
+    html_page = html_page.replace("{table_rows_html}", table_rows_html)
 
     if children_tsv_paths:
         paths_str = ",".join(str(path) for path in children_tsv_paths)

@@ -670,3 +670,35 @@ def test_terminal_payload_sets_dom_status_and_catches_ahk_errors(page, tmp_path)
     assert body_status == "finished"
     assert page.evaluate("() => window.AppState.isFinished") is True
 
+
+def test_literal_template_placeholders_rendered_verbatim(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Configuration uses {language} and {status} as template parameters."
+    tsv_file = tmp_path / "20260828233000-placeholder.en.tsv"
+    tsv_file.write_text("# comment\nWordSource\tWordDestination\nlanguage\tязык\nstatus\tстатус\n", encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260828233000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    source_container = page.locator("#source-container")
+    container_text = source_container.inner_text()
+    assert "{language}" in container_text
+    assert "{status}" in container_text
+    assert "{en}" not in container_text
+
+    lang_span = page.locator("#source-container span.word", has_text="language")
+    assert lang_span.count() >= 1
+
+    status_span = page.locator("#source-container span.word", has_text="status")
+    assert status_span.count() >= 1
+
+
