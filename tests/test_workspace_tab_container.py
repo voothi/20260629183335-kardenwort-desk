@@ -199,7 +199,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     
     # 5 sentences for scrolling verification
     text = "First sentence.\nSecond sentence.\nThird sentence.\nFourth sentence.\nFifth sentence."
-    tsv_file = tmp_path / "20260828170000-master.en.tsv"
+    tsv_file = tmp_path / "20260828170000-first-sentence-second-sentence.en.tsv"
     tsv_file.write_text(
         "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
         "First\tFirst\tпервый\t1\t\n"
@@ -380,7 +380,7 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
     config.set("sentences_mode", "enabled", "true")
     
     text = "First sentence.\nSecond sentence."
-    tsv_file = tmp_path / "20260828181000-dyn-title.en.tsv"
+    tsv_file = tmp_path / "20260828181000-first-sentence-second-sentence.en.tsv"
     tsv_file.write_text(
         "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
         "First\tFirst\tпервый\t1\t\n"

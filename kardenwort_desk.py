@@ -7856,7 +7856,7 @@ html, body {{
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
     cached_session_bundle = None
-    if is_sqlite:
+    if is_sqlite and not tsv_path:
         ttl_val = config.getint(SEC_STORAGE, 'cache_ttl_seconds', fallback=config.getint(SEC_SETTINGS, 'lookup_ttl_seconds', fallback=86400))
         if ttl_val > 0:
             cached_session_bundle = storage_adapter.get_cached_session(
@@ -7873,13 +7873,13 @@ html, body {{
         comments = []
         headers = ["WordSource", "WordDestination", "WordSourceInflectedForm", "WordSourceIPA", "WordSourceMorphologyAI", "DeskSelected"]
         data_rows = []
+    elif tsv_path and (Path(tsv_path).exists() or is_sqlite):
+        working_tsv_path = Path(tsv_path)
+        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
+        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     elif cached_session_bundle and cached_session_bundle.get("session"):
         cached_zid = cached_session_bundle["session"].get("zid")
         working_tsv_path = results_dir / f"{cached_zid}-{slug}.{language}.tsv"
-        mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
-        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
-    elif tsv_path and (Path(tsv_path).exists() or is_sqlite):
-        working_tsv_path = Path(tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     else:
