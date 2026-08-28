@@ -9146,6 +9146,35 @@ html, body {{
     50% { background-position: 100% 50% }
     100% { background-position: 0% 50% }
   }
+  .btn-retry-cell {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    font-family: inherit;
+    font-size: 11px;
+    font-weight: 500;
+    line-height: 1;
+    padding: 2px 6px;
+    border-radius: 3px;
+    border: 1px solid {section_border};
+    background: {input_bg};
+    color: {text_muted};
+    cursor: pointer;
+    text-decoration: none;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+    vertical-align: middle;
+  }
+  .btn-retry-cell:hover:not(:disabled) {
+    background: {toolbar_btn_hover};
+    color: {text_color};
+    border-color: {text_muted};
+  }
+  .btn-retry-cell:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+  }
   .level-3k {
     color: {level_3k_color};
   }
@@ -10221,18 +10250,30 @@ html, body {{
                         } else if (globalStage === 'translated_words' || isTerm) {
                             var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
                             var targetVal = val;
-                            if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1) {
+                            if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1 && oldVal.indexOf('btn-retry-cell') === -1) {
                                 targetVal = oldVal;
                             }
-                            if (div) setCellText(div, targetVal);
-                            else if (!tds[2].classList.contains('editing')) setCellText(tds[2], targetVal);
+                            if (targetVal === "" && isTerm) {
+                                var retryBadge = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                                if (div) div.innerHTML = retryBadge;
+                                else if (!tds[2].classList.contains('editing')) tds[2].innerHTML = retryBadge;
+                            } else {
+                                if (div) setCellText(div, targetVal);
+                                else if (!tds[2].classList.contains('editing')) setCellText(tds[2], targetVal);
+                            }
                             updated = true;
                         } else {
                             var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
                             var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
-                                if (div) setCellText(div, val);
-                                else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
+                                if (val === "" && isTerm) {
+                                    var retryBadge = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                                    if (div) div.innerHTML = retryBadge;
+                                    else if (!tds[2].classList.contains('editing')) tds[2].innerHTML = retryBadge;
+                                } else {
+                                    if (div) setCellText(div, val);
+                                    else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
+                                }
                                 updated = true;
                             }
                         }
@@ -10345,9 +10386,24 @@ html, body {{
                             var el = pendings[i];
                             el.classList.remove("skeleton-loader");
                             el.removeAttribute("data-pending");
+                            var tr = el.closest ? el.closest('tr') : (function(node) {
+                                while (node && node.nodeName !== 'TR') { node = node.parentNode; }
+                                return node;
+                            })(el);
+                            var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
+                            var currentText = (el.textContent || el.innerText || "").trim();
+                            if (!currentText || currentText === '...' || currentText === 'Loading...' || currentText === 'Loading translation...') {
+                                if (rowId !== null && rowId !== undefined) {
+                                    el.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                                }
+                            }
                         }
                         if (typeof window.showToast === 'function') {
-                            window.showToast("Background loading timed out. Restored table editing.", "warning");
+                            window.showToast("Background loading timed out. Restored table editing. Some translations timed out. Click to retry.", "warning", 8000, function() {
+                                if (window.retrySession) {
+                                    window.retrySession(curZid);
+                                }
+                            });
                         }
                         if (typeof fetch !== 'undefined' && curZid) {
                             var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
@@ -12572,7 +12628,7 @@ html, body {{
         }
         window.formatErrorWithTrace = formatErrorWithTrace;
 
-        window.showToast = function(msg, type, durationMs) {
+        window.showToast = function(msg, type, durationMs, onClick) {
             type = type || 'info';
             durationMs = durationMs || 3000;
             var container = document.getElementById('kw-toast-container');
@@ -12595,7 +12651,15 @@ html, body {{
                 }, 250);
             }
             
-            toast.onclick = dismiss;
+            if (typeof onClick === 'function') {
+                toast.style.cursor = 'pointer';
+                toast.onclick = function(e) {
+                    onClick(e);
+                    dismiss();
+                };
+            } else {
+                toast.onclick = dismiss;
+            }
             container.appendChild(toast);
             setTimeout(dismiss, durationMs);
         };
@@ -12632,6 +12696,144 @@ html, body {{
             }
         }
         window.getApiToken = getApiToken;
+
+        function retryRow(rowId, btnElement) {
+            var curZid = getSessionZid();
+            if (!curZid) {
+                var sessZidEl = document.getElementById('session-zid');
+                curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
+            }
+            if (!curZid) {
+                if (typeof window.showToast === 'function') window.showToast("Session ZID missing.", "error");
+                return;
+            }
+
+            var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+            var cellDiv = null;
+            if (tr) {
+                var tds = tr.getElementsByTagName('td');
+                if (tds.length >= 3) {
+                    cellDiv = tds[2].querySelector('.scrollable-cell') || tds[2];
+                }
+            }
+            if (btnElement) {
+                btnElement.disabled = true;
+            }
+            if (cellDiv) {
+                cellDiv.innerHTML = '<span class="skeleton-loader" style="width: 60px;" title="Retrying translation..."></span>';
+            }
+
+            var token = getApiToken ? getApiToken() : "";
+            var headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            };
+            if (token) headers['X-API-Token'] = token;
+
+            fetch('/session/retry', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    session_zid: curZid,
+                    row_ids: [parseInt(rowId, 10)]
+                })
+            })
+            .then(function(res) {
+                if (!res.ok) throw new Error("Retry failed with status " + res.status);
+                return res.json();
+            })
+            .then(function(resObj) {
+                var data = (resObj && resObj.data) ? resObj.data : resObj;
+                if (data && data.rows && window.receiveUpdate) {
+                    window.receiveUpdate(data);
+                } else if (data && data.status === 'success') {
+                    fetch('/session/status?zid=' + encodeURIComponent(curZid), { method: 'GET', headers: { 'Accept': 'application/json' } })
+                        .then(function(r) { if (r.ok) return r.json(); })
+                        .then(function(d) {
+                            var statusData = (d && d.data) ? d.data : d;
+                            if (statusData && statusData.rows && window.receiveUpdate) {
+                                window.receiveUpdate(statusData);
+                            }
+                        }).catch(function() {});
+                }
+            })
+            .catch(function(err) {
+                if (cellDiv) {
+                    cellDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                }
+                if (typeof window.showToast === 'function') {
+                    window.showToast("Retry failed: " + (err.message || String(err)), "error");
+                }
+            });
+        }
+        window.retryRow = retryRow;
+
+        function retrySession(sessionZid) {
+            var curZid = sessionZid || getSessionZid();
+            if (!curZid) return;
+            var token = getApiToken ? getApiToken() : "";
+            var headers = {
+                'Content-Type': 'application/json',
+                'Accept': 'application/json'
+            };
+            if (token) headers['X-API-Token'] = token;
+
+            var retryButtons = document.querySelectorAll('.btn-retry-cell');
+            for (var i = 0; i < retryButtons.length; i++) {
+                var btn = retryButtons[i];
+                var parent = btn.parentNode;
+                if (parent) {
+                    parent.innerHTML = '<span class="skeleton-loader" style="width: 60px;" title="Retrying translation..."></span>';
+                }
+            }
+
+            if (typeof window.showToast === 'function') {
+                window.showToast("Retrying unresolved translations...", "info");
+            }
+
+            fetch('/session/retry', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({
+                    session_zid: curZid
+                })
+            })
+            .then(function(res) {
+                if (!res.ok) throw new Error("Batch retry failed with status " + res.status);
+                return res.json();
+            })
+            .then(function(resObj) {
+                var data = (resObj && resObj.data) ? resObj.data : resObj;
+                if (data && data.rows && window.receiveUpdate) {
+                    window.receiveUpdate(data);
+                }
+                if (typeof window.showToast === 'function') {
+                    window.showToast("Retry complete", "success");
+                }
+            })
+            .catch(function(err) {
+                if (typeof window.showToast === 'function') {
+                    window.showToast("Retry failed: " + (err.message || String(err)), "error");
+                }
+                if (typeof window.cleanupOrphanSkeletons === 'function') {
+                    window.cleanupOrphanSkeletons();
+                }
+            });
+        }
+        window.retrySession = retrySession;
+
+        document.addEventListener('click', function(e) {
+            var target = e.target;
+            if (target && (target.classList.contains('btn-retry-cell') || (target.closest && target.closest('.btn-retry-cell')))) {
+                var btn = target.classList.contains('btn-retry-cell') ? target : target.closest('.btn-retry-cell');
+                var rowId = btn.getAttribute('data-row-id');
+                if (rowId !== null && rowId !== undefined) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    retryRow(rowId, btn);
+                }
+            }
+        });
 
         window.onSaveClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
