@@ -831,4 +831,51 @@ def test_progressive_worker_nonblocking_zero_timeout(monkeypatch, tmp_path):
     assert rows[0][1] == "car", "Child worker should have independently translated its own lemma"
 
 
+def test_progressive_translation_failure_preserves_cell_state(monkeypatch, tmp_path):
+    """
+    Verify that when translation encounters an exception or failure,
+    pending cells and existing translations are preserved and not wiped out to empty strings.
+    """
+    config, resolved_paths = setup_test_env(tmp_path)
+    tsv_file = tmp_path / "20260828113000-failtest.de.tsv"
+    headers = ["WordSource", "WordDestination", "TokenOrder"]
+    rows = [["Testwort", "", "0"], ["ZweitesWort", "preserved_translation", "1"]]
+    desk.save_tsv_rows_safely(tsv_file, [], headers, rows)
+
+    args = types.SimpleNamespace(
+        tsv=str(tsv_file),
+        config=str(tmp_path / "config.ini"),
+        language="de",
+        target_lang="ru",
+        prompt="",
+        provider="google",
+        text_mode="single",
+        skip_intellifiller=True,
+        zid="20260828113000",
+        trace_id="test:trace",
+    )
+
+    written_events = []
+    def mock_safe_write_update_js(path, r_rows, h_headers, r_fields, stage=None, status=None, error=None, **kw):
+        written_events.append({"stage": stage, "status": status, "error": error, "rows": r_rows})
+
+    def mock_failing_fast_path(*a, **kw):
+        raise RuntimeError("External translation service timeout")
+
+    monkeypatch.setattr(desk, 'load_config', lambda *a, **kw: (config, resolved_paths, {}, {}))
+    monkeypatch.setattr(desk, 'translate_lemmas_fast_path', mock_failing_fast_path)
+    monkeypatch.setattr(desk, 'safe_write_update_js', mock_safe_write_update_js)
+
+    desk.cmd_progressive_worker(args)
+
+    _, updated_headers, updated_rows = desk.load_tsv_rows(tsv_file)
+    # Existing cell must NOT have been wiped to empty string ""
+    assert updated_rows[1][1] == "preserved_translation"
+    # An error event should be captured with failed status
+    finished_event = [e for e in written_events if e.get("stage") == "finished"]
+    assert len(finished_event) >= 1
+    assert finished_event[-1]["status"] == "failed"
+
+
+
 

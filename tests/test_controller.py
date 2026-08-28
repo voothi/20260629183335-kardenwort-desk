@@ -1294,3 +1294,59 @@ def test_audio_play_endpoint_success_and_validation(running_controller, monkeypa
         urllib.request.urlopen(req_get, timeout=5.0)
     assert exc_info.value.code == 405
 
+
+def test_progressive_queue_bounded_concurrency_and_pacing(tmp_path):
+    """
+    Assert that EnrichmentQueue enforces bounded translation worker concurrency
+    and respects rate-limiting pacing under multi-session burst conditions.
+    """
+    import configparser
+    from kardenwort_controller import EnrichmentQueue
+
+    config = configparser.ConfigParser()
+    config.read_string("""
+[translation]
+google_max_concurrency = 2
+google_request_delay = 0.05
+[pipeline]
+lemma_base_provider = google
+""")
+    resolved_paths = {"results_dir": tmp_path}
+    eq = EnrichmentQueue(config, resolved_paths, translation_max_workers=2)
+
+    active_workers = 0
+    max_active_observed = 0
+    call_timestamps = []
+    lock = threading.Lock()
+
+    def mock_execute(lemma, source_lang, target_lang, provider, zid, trace_id):
+        nonlocal active_workers, max_active_observed
+        with lock:
+            active_workers += 1
+            if active_workers > max_active_observed:
+                max_active_observed = active_workers
+            call_timestamps.append(time.time())
+        time.sleep(0.04)
+        with lock:
+            active_workers -= 1
+        return f"trans_{lemma}"
+
+    eq._execute_translate_lemma = mock_execute
+
+    threads = [
+        threading.Thread(target=eq.translate_lemma, args=(f"Lemma_{i}", "de", "ru"))
+        for i in range(6)
+    ]
+    for t in threads:
+        t.start()
+    for t in threads:
+        t.join()
+
+    assert max_active_observed <= 2, f"Expected concurrency <= 2, got {max_active_observed}"
+    status = eq.get_status()
+    assert status["translation_max_workers"] == 2
+    assert status["translation_cache_size"] == 6
+
+    eq.shutdown()
+
+

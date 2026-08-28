@@ -528,3 +528,118 @@ def test_session_status_untranslated_lemmas_reports_translating(running_controll
             pass
 
 
+def test_progressive_enqueue_endpoint_and_queue_status(running_controller, monkeypatch):
+    """
+    Verify POST /session/progressive/enqueue enqueues tasks and GET /api/v1/queue/status reports queue metrics.
+    """
+    server_url, server = running_controller
+    sess_zid = kardenwort_desk.generate_unique_zid()
+
+    monkeypatch.setattr(server.arbiter.enrichment_queue, "_execute_progressive_task", lambda *a, **kw: None)
+
+    # Pre-create session in arbiter
+    server.arbiter.sessions[sess_zid] = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Das ist ein Test.",
+        "tsv_path": None,
+        "comments": [],
+        "headers": ["WordSource", "WordDestination", "TokenOrder"],
+        "data_rows": [["Test", "", "0"]],
+        "sentence_translation": "",
+        "fingerprint": "fp1",
+        "lock": threading.Lock(),
+        "created_at": time.time(),
+    }
+
+    # Test enqueue
+    req_body = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "token": server.api_key,
+    }
+    req = urllib.request.Request(
+        f"{server_url}/session/progressive/enqueue",
+        data=json.dumps(req_body).encode('utf-8'),
+        headers={"Content-Type": "application/json", "X-API-Token": server.api_key}
+    )
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        res = json.loads(resp.read().decode('utf-8'))
+        data = res.get("data", res)
+        assert data.get("status") in ("queued", "in_progress")
+        assert data.get("session_zid") == sess_zid
+
+    # Test queue status endpoint
+    req_status = urllib.request.Request(
+        f"{server_url}/api/v1/queue/status",
+        headers={"X-API-Token": server.api_key}
+    )
+    with urllib.request.urlopen(req_status, timeout=5.0) as resp:
+        assert resp.status == 200
+        res = json.loads(resp.read().decode('utf-8'))
+        data = res.get("data", res)
+        assert "max_workers" in data
+        assert "translation_max_workers" in data
+        assert "translation_cache_size" in data
+
+
+def test_progressive_in_flight_deduplication_and_sibling_sse_broadcast(running_controller):
+    """
+    Verify in-flight deduplication coalescing and SSE broadcast across sibling sessions.
+    """
+    server_url, server = running_controller
+    sess_a = kardenwort_desk.generate_unique_zid()
+    sess_b = kardenwort_desk.generate_unique_zid()
+
+    headers = ["WordSource", "WordDestination", "TokenOrder"]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination"}
+
+    server.arbiter.sessions[sess_a] = {
+        "session_zid": sess_a,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Flugzeug",
+        "tsv_path": None,
+        "comments": [],
+        "headers": headers,
+        "data_rows": [["Flugzeug", "", "0"]],
+        "role_fields": role_fields,
+        "sentence_translation": "",
+        "fingerprint": "fpa",
+        "lock": threading.Lock(),
+        "created_at": time.time(),
+    }
+
+    server.arbiter.sessions[sess_b] = {
+        "session_zid": sess_b,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Flugzeug",
+        "tsv_path": None,
+        "comments": [],
+        "headers": headers,
+        "data_rows": [["Flugzeug", "", "0"]],
+        "role_fields": role_fields,
+        "sentence_translation": "",
+        "fingerprint": "fpb",
+        "lock": threading.Lock(),
+        "created_at": time.time(),
+    }
+
+    sub_b = server.arbiter.register_subscriber(sess_b)
+
+    # Propagate translation to sibling sessions
+    translations = {"Flugzeug": "самолёт"}
+    server.arbiter.propagate_translations_to_siblings(translations, exclude_session_zid=sess_a, language="de")
+
+    assert server.arbiter.sessions[sess_b]["data_rows"][0][1] == "самолёт"
+    event = sub_b.get(timeout=2.0)
+    assert event["type"] == "update"
+    assert event["stage"] == "translated"
+    server.arbiter.unregister_subscriber(sess_b, sub_b)
+
+
+

@@ -6128,9 +6128,7 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
             close_fds=True
         )
 
-def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False, text_mode='single', zid=None, trace_id=None, resolved_paths=None):
-    python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
-    desk_script = Path(__file__).resolve()
+def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, lemmas_provider, word_translations_empty, skip_intellifiller=False, text_mode='single', zid=None, trace_id=None, resolved_paths=None, config=None):
     if not zid:
         import re
         m = re.match(r"^(\d{14})", Path(tsv_path).name)
@@ -6138,6 +6136,53 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
             zid = m.group(1)
     if not trace_id and zid:
         trace_id = f"{zid}:progressive:worker"
+
+    # Attempt to route through active controller daemon if available
+    try:
+        cfg = config
+        if not cfg and isinstance(resolved_paths, dict):
+            cfg = resolved_paths.get('config')
+        port = 18335
+        api_key = ''
+        if cfg:
+            if hasattr(cfg, 'getint'):
+                port = cfg.getint('server', 'controller_port', fallback=cfg.getint('server', 'port', fallback=18335))
+            if hasattr(cfg, 'get'):
+                api_key = cfg.get('server', 'api_key', fallback='')
+
+        import urllib.request
+        import json
+        req_body = json.dumps({
+            "session_zid": zid,
+            "language": language,
+            "target_lang": target_lang,
+            "text_mode": text_mode,
+            "prompt": prompt_name,
+            "skip_intellifiller": skip_intellifiller,
+            "zid": zid,
+            "trace_id": trace_id,
+            "token": api_key,
+        }).encode('utf-8')
+
+        headers = {"Content-Type": "application/json"}
+        if api_key:
+            headers["X-API-Token"] = api_key
+
+        req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/session/progressive/enqueue",
+            data=req_body,
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req, timeout=0.5) as resp:
+            if resp.status == 200:
+                logger.info(f"Progressive translation task successfully enqueued in controller daemon for {zid}")
+                return True
+    except Exception as e:
+        logger.debug(f"Controller daemon not available or enqueue failed ({e}); falling back to detached subprocess")
+
+    python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
+    desk_script = Path(__file__).resolve()
 
     cmd = [
         str(python_exe),
@@ -10199,8 +10244,13 @@ html, body {{
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
-                            if (div) setCellText(div, val);
-                            else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
+                            var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
+                            var targetVal = val;
+                            if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1) {
+                                targetVal = oldVal;
+                            }
+                            if (div) setCellText(div, targetVal);
+                            else if (!tds[2].classList.contains('editing')) setCellText(tds[2], targetVal);
                             updated = true;
                         } else {
                             var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
@@ -16314,7 +16364,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"Translation stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
         safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed", error=err_obj, zid=zid, trace_id=trace_id)
-    return data_rows
+        raise
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     m = re.match(r'^(\d{14})', tsv_path.name)
@@ -17011,7 +17061,7 @@ def cmd_progressive_worker(args):
                                     if col_word_dest != -1:
                                         if len(row) <= col_word_dest:
                                             row.extend([''] * (col_word_dest - len(row) + 1))
-                                        if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
+                                        if 'skeleton-loader' in row[col_word_dest]:
                                             row[col_word_dest] = ""
                                             modified_sweep = True
                                             if is_sqlite:

@@ -65,6 +65,7 @@ from kardenwort_desk import (
     apply_wordfill_to_rows,
     resolve_wordfill_config,
     sort_rows_by_frequency,
+    resolve_translations,
     SEC_SETTINGS,
     SEC_LANGUAGES,
     SEC_PIPELINE,
@@ -581,7 +582,7 @@ class ProcessSupervisor:
 class EnrichmentQueue:
     """
     Centralized controller task queue with bounded worker concurrency,
-    in-memory lemma deduplication cache, and in-flight request coalescing.
+    in-memory lemma deduplication cache, rate-limiting pacing, and in-flight request coalescing.
     """
 
     def __init__(
@@ -589,6 +590,7 @@ class EnrichmentQueue:
         config: Any,
         resolved_paths: Dict[str, Any],
         max_workers: Optional[int] = None,
+        translation_max_workers: Optional[int] = None,
     ):
         self.config = config
         self.resolved_paths = resolved_paths
@@ -599,13 +601,35 @@ class EnrichmentQueue:
         else:
             self.max_workers = 1
 
+        if translation_max_workers is not None:
+            self.translation_max_workers = max(1, int(translation_max_workers))
+        elif config and hasattr(config, "getint"):
+            self.translation_max_workers = config.getint("translation", "google_max_concurrency", fallback=2)
+        else:
+            self.translation_max_workers = 2
+
+        # Rate limiting pacing delay (seconds)
+        if config and hasattr(config, "getfloat"):
+            self.translation_delay = config.getfloat("translation", "google_request_delay", fallback=0.0)
+        else:
+            self.translation_delay = 0.0
+
         self._executor = concurrent.futures.ThreadPoolExecutor(
             max_workers=self.max_workers,
             thread_name_prefix="EnrichmentWorker",
         )
+        self._translation_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=self.translation_max_workers,
+            thread_name_prefix="TranslationWorker",
+        )
         self._cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._inflight_lemmas: Dict[Tuple[str, str], concurrent.futures.Future] = {}
+        self._lemma_trans_cache: Dict[Tuple[str, str, str], str] = {}
+        self._inflight_trans: Dict[Tuple[str, str, str], concurrent.futures.Future] = {}
+        self._active_progressive_sessions: Dict[str, concurrent.futures.Future] = {}
         self._lock = threading.Lock()
+        self._pacing_lock = threading.Lock()
+        self._last_request_time = 0.0
 
     def get_cached(self, lemma: str, language: str = "de") -> Optional[Dict[str, Any]]:
         norm_lemma = lemma.strip()
@@ -623,6 +647,159 @@ class EnrichmentQueue:
     def clear_cache(self):
         with self._lock:
             self._cache.clear()
+            self._lemma_trans_cache.clear()
+
+    def get_cached_translation(self, lemma: str, source_lang: str = "de", target_lang: str = "ru") -> Optional[str]:
+        norm_lemma = (lemma or "").strip()
+        norm_src = (source_lang or "de").strip()
+        norm_tgt = (target_lang or "ru").strip()
+        with self._lock:
+            return self._lemma_trans_cache.get((norm_lemma, norm_src, norm_tgt))
+
+    def set_cached_translation(self, lemma: str, source_lang: str, target_lang: str, translation: str):
+        norm_lemma = (lemma or "").strip()
+        norm_src = (source_lang or "de").strip()
+        norm_tgt = (target_lang or "ru").strip()
+        with self._lock:
+            self._lemma_trans_cache[(norm_lemma, norm_src, norm_tgt)] = translation
+
+    def translate_lemma(
+        self,
+        lemma: str,
+        source_lang: str = "de",
+        target_lang: str = "ru",
+        provider: Optional[str] = None,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> str:
+        norm_lemma = (lemma or "").strip()
+        norm_src = (source_lang or "de").strip()
+        norm_tgt = (target_lang or "ru").strip()
+        if not norm_lemma:
+            return ""
+
+        key = (norm_lemma, norm_src, norm_tgt)
+        fut = None
+        with self._lock:
+            if key in self._lemma_trans_cache:
+                return self._lemma_trans_cache[key]
+            if key in self._inflight_trans:
+                fut = self._inflight_trans[key]
+            else:
+                fut = self._translation_executor.submit(
+                    self._execute_translate_lemma,
+                    norm_lemma,
+                    norm_src,
+                    norm_tgt,
+                    provider,
+                    zid,
+                    trace_id,
+                )
+                self._inflight_trans[key] = fut
+
+        try:
+            res = fut.result()
+            if isinstance(res, str) and res:
+                with self._lock:
+                    self._lemma_trans_cache[key] = res
+            return res if isinstance(res, str) else ""
+        finally:
+            with self._lock:
+                if self._inflight_trans.get(key) is fut:
+                    del self._inflight_trans[key]
+
+    def _execute_translate_lemma(
+        self,
+        lemma: str,
+        source_lang: str = "de",
+        target_lang: str = "ru",
+        provider: Optional[str] = None,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> str:
+        norm_lemma = (lemma or "").strip()
+        norm_src = (source_lang or "de").strip()
+        norm_tgt = (target_lang or "ru").strip()
+        if self.translation_delay > 0:
+            with self._pacing_lock:
+                now = time.time()
+                elapsed = now - self._last_request_time
+                if elapsed < self.translation_delay:
+                    time.sleep(self.translation_delay - elapsed)
+                self._last_request_time = time.time()
+
+        prov = provider or (self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google')
+        res_dict = translate_lemmas_fast_path(
+            [norm_lemma],
+            norm_src,
+            norm_tgt,
+            self.config,
+            self.resolved_paths,
+            prov,
+        )
+        return res_dict.get(norm_lemma, "")
+
+    def translate_lemmas_coalesced(
+        self,
+        lemmas: List[str],
+        source_lang: str = "de",
+        target_lang: str = "ru",
+        provider: Optional[str] = None,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, str]:
+        results: Dict[str, str] = {}
+        missing_lemmas = []
+        for l in lemmas:
+            norm_l = (l or "").strip()
+            if not norm_l:
+                continue
+            cached = self.get_cached_translation(norm_l, source_lang, target_lang)
+            if cached is not None:
+                results[norm_l] = cached
+            else:
+                missing_lemmas.append(norm_l)
+
+        if not missing_lemmas:
+            return results
+
+        futures = {}
+        for l in missing_lemmas:
+            key = (l, source_lang, target_lang)
+            with self._lock:
+                if key in self._lemma_trans_cache:
+                    results[l] = self._lemma_trans_cache[key]
+                    continue
+                if key in self._inflight_trans:
+                    futures[l] = self._inflight_trans[key]
+                else:
+                    fut = self._translation_executor.submit(
+                        self._execute_translate_lemma,
+                        l,
+                        source_lang,
+                        target_lang,
+                        provider,
+                        zid,
+                        trace_id,
+                    )
+                    self._inflight_trans[key] = fut
+                    futures[l] = fut
+
+        for l, fut in futures.items():
+            try:
+                res = fut.result()
+                if isinstance(res, str) and res:
+                    results[l] = res
+                    self.set_cached_translation(l, source_lang, target_lang, res)
+            except Exception as e:
+                logger.warning(f"Coalesced translation for lemma '{l}' failed: {e}")
+            finally:
+                key = (l, source_lang, target_lang)
+                with self._lock:
+                    if self._inflight_trans.get(key) is fut:
+                        del self._inflight_trans[key]
+
+        return results
 
     def enrich_lemma(
         self,
@@ -769,8 +946,359 @@ class EnrichmentQueue:
 
         return {}
 
+    def enqueue_progressive_task(
+        self,
+        session_zid: str,
+        arbiter: Any,
+        language: str = "de",
+        target_lang: str = "ru",
+        text_mode: str = "single",
+        prompt_name: str = "",
+        skip_intellifiller: bool = False,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        with self._lock:
+            if session_zid in self._active_progressive_sessions:
+                existing_fut = self._active_progressive_sessions[session_zid]
+                if not existing_fut.done():
+                    return {"status": "in_progress", "session_zid": session_zid}
+
+            fut = self._translation_executor.submit(
+                self._execute_progressive_task,
+                session_zid,
+                arbiter,
+                language,
+                target_lang,
+                text_mode,
+                prompt_name,
+                skip_intellifiller,
+                zid,
+                trace_id,
+            )
+            self._active_progressive_sessions[session_zid] = fut
+            return {"status": "queued", "session_zid": session_zid}
+
+    def _execute_progressive_task(
+        self,
+        session_zid: str,
+        arbiter: Any,
+        language: str = "de",
+        target_lang: str = "ru",
+        text_mode: str = "single",
+        prompt_name: str = "",
+        skip_intellifiller: bool = False,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ):
+        req_zid = zid or session_zid
+        eff_trace_id = trace_id or f"{req_zid}:progressive:worker"
+        storage_adapter = getattr(arbiter, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+        results_dir = resolve_results_dir(self.resolved_paths, self.config)
+        mapping_path = Path(self.resolved_paths['anki_mapping_file']) if (self.resolved_paths and 'anki_mapping_file' in self.resolved_paths) else None
+        mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
+
+        worker_error = None
+        data_rows = []
+        headers = []
+        role_fields = {}
+        sess_lang = language
+        sess_target = target_lang
+        tsv_path = None
+
+        try:
+            # 1. Recover / Load session data
+            session_data = None
+            with arbiter._lock:
+                sess = arbiter.sessions.get(session_zid)
+                if sess:
+                    session_data = {
+                        "text": sess.get("text", ""),
+                        "comments": list(sess.get("comments", [])),
+                        "headers": list(sess.get("headers", [])),
+                        "data_rows": [list(r) for r in sess.get("data_rows", [])],
+                        "language": sess.get("language") or language,
+                        "target_lang": sess.get("target_lang") or target_lang,
+                        "text_mode": sess.get("text_mode") or text_mode,
+                        "tsv_path": sess.get("tsv_path"),
+                    }
+
+            if not session_data:
+                t_cand = find_working_tsv(results_dir, session_zid, language, storage_adapter=storage_adapter)
+                if t_cand and t_cand.exists():
+                    c, h, dr = storage_adapter.load_tsv_rows(t_cand)
+                    source_txt = t_cand.with_suffix('.txt')
+                    st_text = source_txt.read_text(encoding='utf-8') if source_txt.exists() else ""
+                    session_data = {
+                        "text": st_text,
+                        "comments": c,
+                        "headers": h,
+                        "data_rows": dr,
+                        "language": language,
+                        "target_lang": target_lang,
+                        "text_mode": text_mode,
+                        "tsv_path": str(t_cand),
+                    }
+                elif is_sqlite:
+                    restored = storage_adapter.restore_session(session_zid, results_dir=results_dir)
+                    if restored:
+                        session_data = {
+                            "text": restored.get("source_text") or restored.get("source_raw_text", ""),
+                            "comments": restored.get("comments", []),
+                            "headers": restored.get("headers", []),
+                            "data_rows": restored.get("data_rows", []),
+                            "language": restored.get("source_language") or language,
+                            "target_lang": restored.get("target_language") or target_lang,
+                            "text_mode": text_mode,
+                            "tsv_path": restored.get("tsv_path"),
+                        }
+
+            if not session_data:
+                logger.warning(f"Progressive task could not find session {session_zid}")
+                return
+
+            headers = session_data["headers"]
+            data_rows = session_data["data_rows"]
+            text = session_data["text"]
+            sess_lang = session_data["language"] or language
+            sess_target = session_data["target_lang"] or target_lang
+            role_fields = get_role_fields(mapping, headers) if mapping else {}
+            tsv_path = Path(session_data["tsv_path"]) if session_data.get("tsv_path") else (results_dir / f"{session_zid}.{sess_lang}.tsv" if results_dir else Path(f"{session_zid}.tsv"))
+
+            col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
+            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
+            col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+            col_sentence_idx = headers.index(role_fields['sentence_index']) if 'sentence_index' in role_fields and role_fields['sentence_index'] in headers else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+
+            # Emit initial source stage if not already emitted
+            sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=session_zid, trace_id=eff_trace_id)
+            arbiter.emit_event(session_zid, {
+                "type": "stage",
+                "stage": "source",
+                "status": "success",
+                "rows": format_update_rows_dict(sorted_rows, headers, role_fields),
+                "fingerprint": compute_content_fingerprint(data_rows),
+            })
+
+            # Stage 1: Text / Sentence Translation
+            run_text = self.config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto') if self.config else 'auto'
+            sentence_translated = False
+            if col_sentence_dest != -1:
+                if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
+                    sentence_translated = True
+
+            if not sentence_translated and run_text == 'auto' and text:
+                main_text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
+                try:
+                    sentence_translations_raw = translate_source_text(
+                        text, sess_lang, sess_target, text_mode, self.config, self.resolved_paths, main_text_provider, zid=req_zid, trace_id=eff_trace_id
+                    )
+                    if is_sqlite and isinstance(sentence_translations_raw, dict):
+                        for s_idx_raw, trans in sentence_translations_raw.items():
+                            if trans and isinstance(trans, str):
+                                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                                try:
+                                    storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid)
+                                except Exception:
+                                    pass
+
+                    resolve_translations(
+                        text, text_mode, data_rows, col_sentence_idx, col_sentence_dest,
+                        sentence_translations_raw, tsv_path, session_data["comments"], headers,
+                        persist=(not is_sqlite), return_single=False
+                    )
+
+                    new_fp = compute_content_fingerprint(data_rows)
+                    with arbiter._lock:
+                        if session_zid in arbiter.sessions:
+                            arbiter.sessions[session_zid]["data_rows"] = data_rows
+                            arbiter.sessions[session_zid]["fingerprint"] = new_fp
+                            arbiter.sessions[session_zid]["sentence_translation"] = sentence_translations_raw
+
+                    translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
+                    sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                    structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html)
+                    arbiter.emit_event(session_zid, {
+                        "type": "update",
+                        "stage": "translated_text",
+                        "status": "success",
+                        "fingerprint": new_fp,
+                        "rows": structured_rows,
+                        "translated_text": translated_html,
+                        "translatedText": translated_html,
+                    })
+                except Exception as text_err:
+                    logger.warning(f"Sentence translation error in progressive queue for {session_zid}: {text_err}")
+
+            # Stage 2: Lemma Base Translation
+            run_base = self.config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto') if self.config else 'auto'
+            if run_base == 'auto' and col_lemma != -1:
+                # 2a. Wordfill pre-fill
+                wordfill_cfg = getattr(arbiter, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
+                if wordfill_cfg and wordfill_cfg.get('enabled', False):
+                    wf_applied = False
+                    for row in data_rows:
+                        if len(row) > col_lemma and row[col_lemma].strip():
+                            l_val = row[col_lemma].strip()
+                            is_trans = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
+                            if not is_trans:
+                                match = find_wordfill_match(l_val, sess_lang, wordfill_cfg, exclude_path=tsv_path)
+                                if match:
+                                    apply_wordfill_to_rows([row], headers, match)
+                                    wf_applied = True
+                    if wf_applied:
+                        if is_sqlite:
+                            updates = []
+                            for row_idx, row in enumerate(data_rows):
+                                if col_lemma != -1 and len(row) > col_lemma and col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
+                                    t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                                    updates.append({"token_order": t_ord, "field": "word_destination", "value": row[col_word_dest]})
+                            if updates:
+                                storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
+                        else:
+                            with storage_adapter.file_lock(tsv_path):
+                                storage_adapter.save_tsv_rows_safely(tsv_path, session_data["comments"], headers, data_rows)
+
+                # 2b. Coalesced lemma translations
+                lemmas_to_translate = []
+                seen_lemmas = set()
+                for row in data_rows:
+                    if len(row) > col_lemma and row[col_lemma].strip():
+                        val = row[col_lemma].strip()
+                        is_trans = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
+                        if not is_trans and val not in seen_lemmas:
+                            seen_lemmas.add(val)
+                            lemmas_to_translate.append(val)
+
+                trans_order = (self.config.get(SEC_TRANSLATION, 'translation_order', fallback='top_to_bottom') if self.config else 'top_to_bottom').strip().lower()
+                if trans_order == 'bottom_to_top':
+                    lemmas_to_translate = list(reversed(lemmas_to_translate))
+
+                if lemmas_to_translate:
+                    lemma_provider = self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google'
+                    translated_map = self.translate_lemmas_coalesced(
+                        lemmas_to_translate,
+                        source_lang=sess_lang,
+                        target_lang=sess_target,
+                        provider=lemma_provider,
+                        zid=req_zid,
+                        trace_id=eff_trace_id,
+                    )
+
+                    if translated_map:
+                        updates = []
+                        for row_idx, row in enumerate(data_rows):
+                            if col_lemma != -1 and len(row) > col_lemma:
+                                l_val = row[col_lemma].strip()
+                                if l_val in translated_map and col_word_dest != -1:
+                                    t_val = translated_map[l_val]
+                                    while len(row) <= col_word_dest:
+                                        row.append("")
+                                    row[col_word_dest] = t_val
+                                    t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                                    updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+
+                        if is_sqlite:
+                            if updates:
+                                storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
+                        else:
+                            with storage_adapter.file_lock(tsv_path):
+                                storage_adapter.save_tsv_rows_safely(tsv_path, session_data["comments"], headers, data_rows)
+
+                        # Propagate newly resolved lemma translations to sibling tabs!
+                        arbiter.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=sess_lang)
+
+                new_fp = compute_content_fingerprint(data_rows)
+                with arbiter._lock:
+                    if session_zid in arbiter.sessions:
+                        arbiter.sessions[session_zid]["data_rows"] = data_rows
+                        arbiter.sessions[session_zid]["fingerprint"] = new_fp
+
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id)
+                arbiter.emit_event(session_zid, {
+                    "type": "update",
+                    "stage": "translated",
+                    "status": "success",
+                    "fingerprint": new_fp,
+                    "rows": structured_rows,
+                })
+
+            # Stage 3: Enrichment (IntelliFiller)
+            run_enrich = self.config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='manual') if self.config else 'manual'
+            enrich_provider = self.config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller') if self.config else 'intellifiller'
+            if not skip_intellifiller and run_enrich == 'auto' and enrich_provider == 'intellifiller':
+                selected_rows = []
+                col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+                col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphology')) if role_fields.get('morphology', 'WordSourceMorphology') in headers else -1
+                for idx, r in enumerate(data_rows):
+                    if col_lemma != -1 and len(r) > col_lemma and r[col_lemma].strip():
+                        need_dest = col_word_dest == -1 or len(r) <= col_word_dest or not r[col_word_dest].strip()
+                        need_ipa = col_ipa != -1 and (len(r) <= col_ipa or not r[col_ipa].strip())
+                        need_morph = col_morph != -1 and (len(r) <= col_morph or not r[col_morph].strip())
+                        if need_dest or need_ipa or need_morph:
+                            selected_rows.append(idx)
+
+                if selected_rows:
+                    arbiter.reword_session(
+                        session_zid=session_zid,
+                        selected_rows=selected_rows,
+                        prompt=prompt_name,
+                        language=sess_lang,
+                        zid=req_zid,
+                    )
+
+        except Exception as e:
+            logger.error(f"Error in progressive queue task for session {session_zid}: {e}\n{traceback.format_exc()}")
+            worker_error = {
+                "code": "ERR_PROGRESSIVE_TASK_FAILED",
+                "message": str(e),
+                "provider": "controller",
+                "details": {},
+            }
+        finally:
+            with self._lock:
+                if session_zid in self._active_progressive_sessions:
+                    del self._active_progressive_sessions[session_zid]
+
+            # Emit final finished event
+            status_val = "failed" if worker_error else "success"
+            new_fp = compute_content_fingerprint(data_rows) if data_rows else ""
+            structured_rows = format_update_rows_dict(data_rows, headers, role_fields) if (data_rows and headers and role_fields) else {}
+            if tsv_path and data_rows and headers:
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id)
+
+            arbiter.emit_event(session_zid, {
+                "type": "update",
+                "stage": "finished",
+                "status": status_val,
+                "error": worker_error,
+                "fingerprint": new_fp,
+                "rows": structured_rows,
+            })
+
+    def get_status(self) -> Dict[str, Any]:
+        with self._lock:
+            return {
+                "max_workers": self.max_workers,
+                "translation_max_workers": self.translation_max_workers,
+                "translation_delay_seconds": self.translation_delay,
+                "enrichment_cache_size": len(self._cache),
+                "translation_cache_size": len(self._lemma_trans_cache),
+                "inflight_enrichments": len(self._inflight_lemmas),
+                "inflight_translations": len(self._inflight_trans),
+                "active_progressive_sessions": list(self._active_progressive_sessions.keys()),
+            }
+
     def shutdown(self, wait: bool = True):
         self._executor.shutdown(wait=wait)
+        self._translation_executor.shutdown(wait=wait)
 
 
 # ---------------------------------------------------------------------------
@@ -1361,6 +1889,123 @@ class SessionArbiter:
             "rows": structured_rows
         }
 
+    def enqueue_progressive_translation(
+        self,
+        session_zid: str,
+        language: str = "de",
+        target_lang: str = "ru",
+        text_mode: str = "single",
+        prompt_name: str = "",
+        skip_intellifiller: bool = False,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        return self.enrichment_queue.enqueue_progressive_task(
+            session_zid=session_zid,
+            arbiter=self,
+            language=language,
+            target_lang=target_lang,
+            text_mode=text_mode,
+            prompt_name=prompt_name,
+            skip_intellifiller=skip_intellifiller,
+            zid=zid,
+            trace_id=trace_id,
+        )
+
+    def propagate_translations_to_siblings(
+        self,
+        lemma_translations: Dict[str, str],
+        exclude_session_zid: Optional[str] = None,
+        language: str = "de",
+    ):
+        """
+        Propagates newly translated lemmas simultaneously to all active sibling sessions and their subscribers.
+        """
+        if not lemma_translations:
+            return
+
+        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+        results_dir = resolve_results_dir(self.resolved_paths, self.config)
+
+        with self._lock:
+            sibling_zids = [z for z in self.sessions.keys() if z != exclude_session_zid]
+
+        for sib_zid in sibling_zids:
+            with self._lock:
+                sess = self.sessions.get(sib_zid)
+                if not sess:
+                    continue
+                sess_lang = sess.get("language") or language
+                if sess_lang != language:
+                    continue
+                data_rows = [list(r) for r in sess.get("data_rows", [])]
+                headers = list(sess.get("headers", []))
+                role_fields = dict(sess.get("role_fields", {}))
+
+            if not data_rows or not headers:
+                continue
+
+            col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
+            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+
+            if col_lemma == -1 or col_word_dest == -1:
+                continue
+
+            modified = False
+            updates = []
+            for row_idx, row in enumerate(data_rows):
+                if len(row) <= col_lemma:
+                    continue
+                lemma_val = row[col_lemma].strip()
+                if lemma_val in lemma_translations:
+                    trans_val = lemma_translations[lemma_val]
+                    while len(row) <= col_word_dest:
+                        row.append("")
+                    if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest] or row[col_word_dest] == '[FAILED]':
+                        row[col_word_dest] = trans_val
+                        modified = True
+                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                        updates.append({"token_order": t_ord, "field": "word_destination", "value": trans_val})
+
+            if modified:
+                new_fp = compute_content_fingerprint(data_rows)
+                with self._lock:
+                    if sib_zid in self.sessions:
+                        self.sessions[sib_zid]["data_rows"] = data_rows
+                        self.sessions[sib_zid]["fingerprint"] = new_fp
+
+                if is_sqlite:
+                    if updates:
+                        try:
+                            storage_adapter.batch_update_words(session_zid=sib_zid, updates_list=updates, zid=sib_zid)
+                        except Exception as e:
+                            logger.warning(f"Failed to batch update SQLite words for sibling {sib_zid}: {e}")
+                else:
+                    sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
+                    if sib_tsv:
+                        try:
+                            with storage_adapter.file_lock(sib_tsv):
+                                comments, _, _ = storage_adapter.load_tsv_rows(sib_tsv)
+                                storage_adapter.save_tsv_rows_safely(sib_tsv, comments, headers, data_rows)
+                        except Exception as e:
+                            logger.warning(f"Failed to save propagated sibling TSV {sib_zid}: {e}")
+
+                sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+                safe_write_update_js(sib_tsv if not is_sqlite and sib_tsv else Path(f"{sib_zid}.tsv"), sorted_rows, headers, role_fields, stage="translated", zid=sib_zid)
+                self.emit_event(sib_zid, {
+                    "type": "update",
+                    "stage": "translated",
+                    "status": "success",
+                    "fingerprint": new_fp,
+                    "rows": structured_rows,
+                })
+
+    def get_queue_status(self) -> Dict[str, Any]:
+        return self.enrichment_queue.get_status()
+
 
 # ---------------------------------------------------------------------------
 # Controller HTTP Request Handler
@@ -1705,6 +2350,36 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 zid=body.get('zid') or session_zid,
                 trace_id=f"{session_zid}:export:selection",
             )
+            self._send_json(200, res)
+            return
+
+        if path == '/session/progressive/enqueue':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+
+            session_zid = body.get('session_zid') or body.get('zid')
+            if not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+
+            res = self.server.arbiter.enqueue_progressive_translation(
+                session_zid=session_zid,
+                language=body.get('language') or 'de',
+                target_lang=body.get('target_lang') or 'ru',
+                text_mode=body.get('text_mode', 'single'),
+                prompt_name=body.get('prompt', ''),
+                skip_intellifiller=body.get('skip_intellifiller', False),
+                zid=body.get('zid'),
+                trace_id=body.get('trace_id'),
+            )
+            self._send_json(200, res)
+            return
+
+        if path in ('/api/v1/queue/status', '/session/queue/status', '/queue/status'):
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            res = self.server.arbiter.get_queue_status()
             self._send_json(200, res)
             return
 
