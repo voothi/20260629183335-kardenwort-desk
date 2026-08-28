@@ -2828,7 +2828,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     source_text = restored.get("source_text", "")
                     sess_lang = restored.get("source_language") or language or "de"
                     t_mode = restored.get("text_mode") or text_mode or "single"
-                    slug = restored.get("slug") or ""
+                    slug = restored.get("slug") or restored.get("session", {}).get("slug", "") or (generate_slug(source_text) if source_text else "")
                     results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
                     slug_suffix = f"-{slug}" if slug else ""
                     resolved_tsv = Path(tsv_path) if tsv_path else (results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv")
@@ -3185,7 +3185,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
                 req_theme = qs.get('theme', [None])[0]
                 view_mode = qs.get('view', [None])[0]
-                slug = restored.get("slug") or ""
+                slug = restored.get("slug") or restored.get("session", {}).get("slug", "") or (generate_slug(source_text) if source_text else "")
                 text_mode = restored.get("text_mode") or "single"
 
                 if view_mode == 'goldendict':
@@ -4120,7 +4120,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             from kardenwort_db import KardenwortDB
             db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
             sess = db.get_session(str(target_zid)) or {}
-            slug = sess.get("slug") or restored.get("slug") or ""
+            slug = sess.get("slug") or restored.get("slug") or restored.get("session", {}).get("slug", "") or ""
             lang = sess.get("source_language") or sess.get("source_lang") or restored.get("language") or ""
             
             slug_part = f"-{slug}" if slug else ""

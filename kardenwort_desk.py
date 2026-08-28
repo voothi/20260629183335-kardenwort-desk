@@ -2499,8 +2499,16 @@ class TsvStorageAdapter(StorageAdapter):
             except Exception:
                 pass
 
+        slug = ""
+        m_slug = re.match(r'^\d{14}-(.*?)(?:\.[a-z]{2})?\.tsv$', tsv_path.name, re.IGNORECASE)
+        if m_slug:
+            slug = m_slug.group(1)
+        elif source_text:
+            slug = generate_slug(source_text)
+
         return {
             "session_zid": zid,
+            "slug": slug,
             "source_text": source_text,
             "comments": comments,
             "headers": headers,
@@ -3148,6 +3156,7 @@ class SqliteStorageAdapter(StorageAdapter):
 
             return {
                 "session_zid": zid,
+                "slug": session.get("slug", ""),
                 "source_text": source_text,
                 "sentence_translation": sentence_translation,
                 "source_language": session.get("source_language", ""),
@@ -8852,12 +8861,14 @@ html, body {{
                     master_tsv_name = w_name
             else:
                 master_tsv_name = w_name
+        master_card_slug = master_slug if 'master_slug' in locals() else (tsv_slug or (generate_slug(text) if text else ""))
         sentence_cards.append({
             "index": 0,
             "seq_num": 1,
             "sentence_idx": 0,
             "label": "1",
             "zid": zid,
+            "slug": master_card_slug,
             "tsv_filename": master_tsv_name,
             "source_text": text,
             "translated_text": master_trans_full,
@@ -8876,6 +8887,7 @@ html, body {{
             elif sentence_translations and idx in sentence_translations:
                 s_trans = sentence_translations[idx]
 
+            c_slug = generate_slug(s_src) if s_src else ""
             c_zid = ""
             if 'sub_tsv_paths' in locals() and sub_tsv_paths and idx < len(sub_tsv_paths):
                 c_zid = extract_zid(sub_tsv_paths[idx])
@@ -8889,7 +8901,14 @@ html, body {{
                     c_zid = (master_time + timedelta(seconds=idx+1)).strftime('%Y%m%d%H%M%S')
                 except Exception:
                     c_zid = f"{zid}-{idx+1:02d}"
-                c_tsv_name = f"{c_zid}.{language}.tsv" if not tsv_slug else f"{c_zid}-{tsv_slug}.{language}.tsv"
+                c_tsv_name = f"{c_zid}-{c_slug}.{language}.tsv" if c_slug else f"{c_zid}.{language}.tsv"
+
+            if c_tsv_name and c_slug and not re.match(r'^\d{14}-.+\.[a-z]{2}\.tsv$', c_tsv_name, re.IGNORECASE):
+                bare_c_match = re.match(r'^(\d{14})(?:\.([a-z]{2}))?\.tsv$', c_tsv_name, re.IGNORECASE)
+                if bare_c_match:
+                    z_p = bare_c_match.group(1)
+                    l_p = bare_c_match.group(2) or language
+                    c_tsv_name = f"{z_p}-{c_slug}.{l_p}.tsv"
 
             sentence_cards.append({
                 "index": idx + 1,
@@ -8897,6 +8916,7 @@ html, body {{
                 "sentence_idx": sent_i,
                 "label": str(seq),
                 "zid": c_zid,
+                "slug": c_slug,
                 "tsv_filename": c_tsv_name,
                 "source_text": s_src,
                 "translated_text": s_trans,
