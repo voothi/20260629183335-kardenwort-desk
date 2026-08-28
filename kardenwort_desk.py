@@ -8828,12 +8828,14 @@ html, body {{
         elif sentence_translations:
             master_trans_full = "\n".join(sentence_translations.values())
         
+        master_tsv_name = Path(str(working_tsv_path)).name if working_tsv_path else f"{zid}.{language}.tsv"
         sentence_cards.append({
             "index": 0,
             "seq_num": 1,
             "sentence_idx": 0,
             "label": "1",
             "zid": zid,
+            "tsv_filename": master_tsv_name,
             "source_text": text,
             "translated_text": master_trans_full,
         })
@@ -8854,14 +8856,17 @@ html, body {{
             c_zid = ""
             if 'sub_tsv_paths' in locals() and sub_tsv_paths and idx < len(sub_tsv_paths):
                 c_zid = extract_zid(sub_tsv_paths[idx])
+                c_tsv_name = Path(str(sub_tsv_paths[idx])).name
             elif children_tsv_paths and idx < len(children_tsv_paths):
                 c_zid = extract_zid(children_tsv_paths[idx])
+                c_tsv_name = Path(str(children_tsv_paths[idx])).name
             else:
                 try:
                     master_time = datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
                     c_zid = (master_time + timedelta(seconds=idx+1)).strftime('%Y%m%d%H%M%S')
                 except Exception:
                     c_zid = f"{zid}-{idx+1:02d}"
+                c_tsv_name = f"{c_zid}.{language}.tsv" if not tsv_slug else f"{c_zid}-{tsv_slug}.{language}.tsv"
 
             sentence_cards.append({
                 "index": idx + 1,
@@ -8869,6 +8874,7 @@ html, body {{
                 "sentence_idx": sent_i,
                 "label": str(seq),
                 "zid": c_zid,
+                "tsv_filename": c_tsv_name,
                 "source_text": s_src,
                 "translated_text": s_trans,
             })
@@ -13648,7 +13654,26 @@ html, body {{
                 updateBidirectionalHighlights();
                 updateRowStyles();
                 updateFavicon(activeTabSeq);
+                updateTitle(targetCard);
                 if (window.forceRepaint) window.forceRepaint();
+            }
+
+            function updateTitle(targetCard) {
+                var lang = getSessionLang() || 'en';
+                var tMode = getTextMode() || 'single';
+                var cardTsv = (targetCard && targetCard.tsv_filename) ? targetCard.tsv_filename : '';
+                if (!cardTsv) {
+                    if (targetCard && targetCard.zid) {
+                        cardTsv = targetCard.zid + '.' + lang + '.tsv';
+                    } else {
+                        var tsvPathEl = document.getElementById('tsv-path');
+                        if (tsvPathEl) {
+                            var fullPath = (tsvPathEl.textContent || tsvPathEl.innerText || '').trim();
+                            cardTsv = fullPath.split(/[/\\\\]/).pop();
+                        }
+                    }
+                }
+                document.title = 'Kardenwort - ' + lang + ' (' + tMode + ') - ' + cardTsv + ' - Ready';
             }
 
             function updateFavicon(seq) {
@@ -14160,7 +14185,8 @@ setTimeout(function() {{
 
     # Format Title and Favicon
     mode_label = "multi" if (eff_mode == "multi" or text_mode == "multi") else "single"
-    page_title = f"Kardenwort - {language} ({mode_label})"
+    tsv_filename = Path(str(working_tsv_path)).name if working_tsv_path else f"{zid}.{language}.tsv"
+    page_title = f"Kardenwort - {language} ({mode_label}) - {tsv_filename} - Ready"
     if seq_num is not None and str(seq_num).strip():
         try:
             seq_int = int(seq_num)

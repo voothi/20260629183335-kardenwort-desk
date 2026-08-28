@@ -139,3 +139,27 @@ def test_sentence_chunks_encapsulation_structure(tmp_path):
     assert '<span class="kw-sentence-chunk" data-sentence-idx="2">' in html
     assert '<span class="kw-sentence-chunk" data-sentence-idx="3">' in html
 
+def test_window_title_parity_with_ahk(tmp_path):
+    """Test that generated <title> strictly adheres to Kardenwort - {lang} ({text_mode}) - {tsv_filename} - Ready."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    text = "First sentence. Second sentence."
+    tsv_file = tmp_path / "20260828161106-test.en.tsv"
+    tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nFirst\tFirst\tпервый\t1\t\nSecond\tSecond\tвторой\t2\t\n", encoding="utf-8")
+    
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260828161106",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+    
+    assert "<title>Kardenwort - en (multi) - 20260828161106-test.en.tsv - Ready</title>" in html
+
+
