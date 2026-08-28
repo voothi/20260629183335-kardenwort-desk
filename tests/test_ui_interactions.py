@@ -4549,7 +4549,7 @@ def test_workspace_tabs_switching_and_filtering(page):
             "index": 0,
             "seq_num": 1,
             "sentence_idx": 0,
-            "label": "1: All",
+            "label": "1",
             "zid": "20260828111800",
             "source_text": "Das Haus ist gross. Die Katze schlaeft.",
             "translated_text": "The house is big. The cat sleeps."
@@ -4577,11 +4577,14 @@ def test_workspace_tabs_switching_and_filtering(page):
 
     html = f"""<!DOCTYPE html>
 <html>
-<head><meta charset="utf-8"></head>
+<head>
+<meta charset="utf-8">
+<link rel="icon" type="image/x-icon" href="/assets/numbers/1.ico">
+</head>
 <body class="theme-dark">
 <div class="container">
   <div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar">
-    <button type="button" class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0">1: All</button>
+    <button type="button" class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0">1</button>
     <button type="button" class="kw-tab-chip" data-tab-seq="2" data-sentence-idx="1">2</button>
     <button type="button" class="kw-tab-chip" data-tab-seq="3" data-sentence-idx="2">3</button>
   </div>
@@ -4666,6 +4669,7 @@ def test_workspace_tabs_switching_and_filtering(page):
     chip2.click()
     assert "active" not in chip1.get_attribute("class")
     assert "active" in chip2.get_attribute("class")
+    assert "/assets/numbers/2.ico" in page.locator("link[rel*='icon']").get_attribute("href")
 
     # Row 0 visible, Row 1 hidden
     assert row0.is_visible()
@@ -4676,6 +4680,7 @@ def test_workspace_tabs_switching_and_filtering(page):
     # Keyboard shortcut Ctrl+3 -> Switch to Sentence 2
     page.keyboard.press("Control+3")
     assert "active" in chip3.get_attribute("class")
+    assert "/assets/numbers/3.ico" in page.locator("link[rel*='icon']").get_attribute("href")
     assert not row0.is_visible()
     assert row1.is_visible()
     assert not page.locator("span[data-word-idx='1']").is_visible() # Haus
@@ -4684,18 +4689,21 @@ def test_workspace_tabs_switching_and_filtering(page):
     # Keyboard shortcut [ -> Cycle to previous tab (Sentence 1)
     page.keyboard.press("[")
     assert "active" in chip2.get_attribute("class")
+    assert "/assets/numbers/2.ico" in page.locator("link[rel*='icon']").get_attribute("href")
     assert row0.is_visible()
     assert not row1.is_visible()
 
     # Keyboard shortcut ] -> Cycle to next tab (Sentence 2)
     page.keyboard.press("]")
     assert "active" in chip3.get_attribute("class")
+    assert "/assets/numbers/3.ico" in page.locator("link[rel*='icon']").get_attribute("href")
     assert not row0.is_visible()
     assert row1.is_visible()
 
     # Switch back to tab 1 (All)
     chip1.click()
     assert "active" in chip1.get_attribute("class")
+    assert "/assets/numbers/1.ico" in page.locator("link[rel*='icon']").get_attribute("href")
     assert row0.is_visible()
     assert row1.is_visible()
     assert page.locator("span[data-word-idx='1']").is_visible()

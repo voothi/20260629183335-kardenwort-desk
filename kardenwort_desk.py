@@ -8559,11 +8559,11 @@ html, body {{
             classes_str = " ".join(classes)
             compound_id = token.get("compound_id")
             compound_attr = f' data-compound-id="{compound_id}"' if compound_id is not None else ""
+            sent_attr = f' data-sentence-idx="{tok_sent_idx}"' if (smc.enabled and len(source_sentences) >= 2) else ""
             span_htmls.append(
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
-                f'data-sentence-idx="{tok_sent_idx}" '
                 f'data-line-idx="{current_a_idx}"{compound_attr} '
-                f'data-lower-clean="{lower_clean}">{text_escaped}</span>'
+                f'data-lower-clean="{lower_clean}"{sent_attr}>{text_escaped}</span>'
             )
             word_counter += 1
         else:
@@ -8793,7 +8793,7 @@ html, body {{
             "index": 0,
             "seq_num": 1,
             "sentence_idx": 0,
-            "label": "1: All",
+            "label": "1",
             "zid": zid,
             "source_text": text,
             "translated_text": master_trans_full,
@@ -9459,6 +9459,7 @@ html, body {{
     pointer-events: auto;
     min-width: 200px;
     max-width: 480px;
+    word-break: break-word;
     padding: 10px 16px;
     border-radius: 6px;
     font-size: 13px;
@@ -9574,8 +9575,8 @@ html, body {{
     font-family: inherit;
     font-size: 13px;
     font-weight: 500;
-    min-width: 80px;
-    height: 30px;
+    min-width: 84px;
+    height: 28px;
     padding: 4px 14px;
     border-radius: 4px;
     border: 1px solid {section_border};
@@ -13573,7 +13574,25 @@ html, body {{
                 buildLcIndex();
                 updateBidirectionalHighlights();
                 updateRowStyles();
+                updateFavicon(activeTabSeq);
                 if (window.forceRepaint) window.forceRepaint();
+            }
+
+            function updateFavicon(seq) {
+                var num = (seq >= 1 && seq <= 99) ? seq : 1;
+                var iconUrl = '/assets/numbers/' + num + '.ico';
+                var links = document.querySelectorAll("link[rel*='icon']");
+                if (links && links.length > 0) {
+                    for (var k = 0; k < links.length; k++) {
+                        links[k].href = iconUrl;
+                    }
+                } else {
+                    var link = document.createElement('link');
+                    link.rel = 'icon';
+                    link.type = 'image/x-icon';
+                    link.href = iconUrl;
+                    document.getElementsByTagName('head')[0].appendChild(link);
+                }
             }
 
             function nextTab() {
