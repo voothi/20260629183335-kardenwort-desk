@@ -145,7 +145,7 @@ def test_sentence_chunks_encapsulation_structure(tmp_path):
     assert '<span class="kw-sentence-chunk" data-sentence-idx="3">' in html
 
 def test_window_title_parity_with_ahk(tmp_path):
-    """Test that generated <title> strictly adheres to Kardenwort - {lang} ({text_mode}) - {tsv_filename} - Ready."""
+    """Test that container mode prefixes sequence [1/3] and multi_window mode strictly adheres to un-prefixed AHK title."""
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
@@ -168,7 +168,25 @@ def test_window_title_parity_with_ahk(tmp_path):
     import re
     m = re.search(r"<title>(.*?)</title>", html)
     actual_title = m.group(0) if m else ""
-    assert actual_title == "<title>Kardenwort - en (multi) - 20260828161106-first-sentence-second-sentence.en.tsv - Ready</title>"
+    assert actual_title == "<title>[1/3] Kardenwort - en (multi) - 20260828161106-first-sentence-second-sentence.en.tsv - Ready</title>"
+
+    # Parity in multi_window mode: no prefix
+    config.set("sentences_mode", "delivery_mode", "multi_window")
+    html_mw = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260828161106",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+    m_mw = re.search(r"<title>(.*?)</title>", html_mw)
+    actual_title_mw = m_mw.group(0) if m_mw else ""
+    assert actual_title_mw == "<title>Kardenwort - en (multi) - 20260828161106-first-sentence-second-sentence.en.tsv - Ready</title>"
+
 
 def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     """Test tab bar track, chevron clicks, keyboard switching, dynamic titles, and sentence chunk visibility."""

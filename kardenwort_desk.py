@@ -13892,7 +13892,8 @@ html, body {{
                         }
                     }
                 }
-                document.title = 'Kardenwort - ' + lang + ' (' + tMode + ') - ' + cardTsv + ' - Ready';
+                var prefix = (getDeliveryMode() === 'container' && cards && cards.length > 1) ? ('[' + (targetCard ? targetCard.seq_num : activeTabSeq) + '/' + cards.length + '] ') : '';
+                document.title = prefix + 'Kardenwort - ' + lang + ' (' + tMode + ') - ' + cardTsv + ' - Ready';
             }
 
             function updateFavicon(seq) {
@@ -14427,7 +14428,6 @@ setTimeout(function() {{
     # Format Title and Favicon
     mode_label = "multi" if (eff_mode == "multi" or text_mode == "multi") else "single"
     tsv_filename = Path(str(working_tsv_path)).name if working_tsv_path else f"{zid}.{language}.tsv"
-    page_title = f"Kardenwort - {language} ({mode_label}) - {tsv_filename} - Ready"
     if seq_num is not None and str(seq_num).strip():
         try:
             seq_int = int(seq_num)
@@ -14436,7 +14436,12 @@ setTimeout(function() {{
         favicon_num = seq_int if 1 <= seq_int <= 99 else 1
         favicon_href = f"/assets/numbers/{favicon_num}.ico"
     else:
+        seq_int = 1
         favicon_href = "/assets/numbers/1.ico"
+
+    total_cards = len(sentence_cards) if 'sentence_cards' in locals() and sentence_cards else 0
+    prefix = f"[{seq_int}/{total_cards}] " if (smc.delivery_mode == "container" and total_cards > 1) else ""
+    page_title = f"{prefix}Kardenwort - {language} ({mode_label}) - {tsv_filename} - Ready"
 
     html_page = html_page.replace("{page_title}", page_title)
     html_page = html_page.replace("{favicon_href}", favicon_href)
