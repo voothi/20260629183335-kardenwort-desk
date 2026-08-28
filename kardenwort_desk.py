@@ -2724,12 +2724,15 @@ class SqliteStorageAdapter(StorageAdapter):
                 ipa_val = row[col_sent_ipa] if col_sent_ipa is not None and col_sent_ipa < len(row) and str(row[col_sent_ipa]).strip() else existing_sent.get("sentence_source_ipa")
                 aud_val = row[col_sent_aud] if col_sent_aud is not None and col_sent_aud < len(row) and str(row[col_sent_aud]).strip() else existing_sent.get("sentence_source_audio")
 
-                if src_val or s_idx in existing_sents_by_idx:
+                if not src_val and source_raw_text:
+                    src_val = source_raw_text
+
+                if src_val or dst_val or s_idx in existing_sents_by_idx:
                     if s_idx not in sent_map:
                         sent_map[s_idx] = {
                             "session_zid": session_zid,
                             "sentence_index": s_idx,
-                            "sentence_source": src_val,
+                            "sentence_source": src_val or "",
                             "sentence_destination": dst_val,
                             "sentence_destination2": dst2_val,
                             "sentence_source_ipa": ipa_val,
@@ -2799,6 +2802,22 @@ class SqliteStorageAdapter(StorageAdapter):
                     norm_sentences = []
             else:
                 norm_sentences = list(sent_map.values())
+
+            existing_sent_indices = {s["sentence_index"] for s in norm_sentences}
+            for w in word_list:
+                s_idx = w["sentence_index"]
+                if s_idx not in existing_sent_indices:
+                    norm_sentences.append({
+                        "session_zid": session_zid,
+                        "sentence_index": s_idx,
+                        "sentence_source": source_raw_text or "",
+                        "sentence_destination": None,
+                        "sentence_destination2": None,
+                        "sentence_source_ipa": None,
+                        "sentence_source_audio": None,
+                    })
+                    existing_sent_indices.add(s_idx)
+
             norm_words = word_list
 
         with TraceTimer("sqlite_save", session_zid, self.config, self.resolved_paths):
