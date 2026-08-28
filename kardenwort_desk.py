@@ -8235,35 +8235,10 @@ html, body {{
             try:
                 with storage_adapter.file_lock(working_tsv_path):
                     comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(working_tsv_path)
-                    col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
-                    col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
-                    
-                    modified_sweep = False
-                    updates = []
-                    for row_idx, row in enumerate(current_rows):
-                        if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                            if col_word_dest != -1:
-                                if len(row) <= col_word_dest:
-                                    row.extend([''] * (col_word_dest - len(row) + 1))
-                                if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest]:
-                                    row[col_word_dest] = ""
-                                    modified_sweep = True
-                                    if is_sqlite:
-                                        updates.append({
-                                            "token_order": row_idx,
-                                            "field": "word_destination",
-                                            "value": "",
-                                        })
-                    if modified_sweep:
-                        if is_sqlite:
-                            if updates:
-                                storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
-                        else:
-                            save_tsv_rows_safely(working_tsv_path, comments, headers_latest, current_rows)
-                        current_rows = sort_rows_by_frequency(current_rows, headers_latest, language, config, resolved_paths, role_fields=role_fields)
-                        data_rows = current_rows
+                    current_rows = sort_rows_by_frequency(current_rows, headers_latest, language, config, resolved_paths, role_fields=role_fields)
+                    data_rows = current_rows
             except Exception as e:
-                logger.error(f"Error sweeping FAILED (WordDestination) in UI thread: {e}")
+                logger.error(f"Error loading rows in UI thread: {e}")
 
         if not is_sqlite:
             try:
@@ -16353,11 +16328,15 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
+        failed_lemmas = chunk if 'chunk' in locals() else (lemmas_to_translate if 'lemmas_to_translate' in locals() else [])
         err_obj = getattr(e, 'envelope', None) or {
             "code": "ERR_TRANSLATION_FAILED",
             "message": str(e),
             "provider": "desk",
-            "details": {}
+            "retryable": True,
+            "details": {
+                "failed_lemmas": failed_lemmas
+            }
         }
         results_dir = resolve_results_dir(resolved_paths, config)
         if zid and results_dir:
@@ -17037,6 +17016,7 @@ def cmd_progressive_worker(args):
                     "code": "ERR_PROGRESSIVE_WORKER_FAILED",
                     "message": str(e),
                     "provider": "desk",
+                    "retryable": True,
                     "details": {}
                 }
                 if sess_logger:
@@ -17044,42 +17024,13 @@ def cmd_progressive_worker(args):
                 import traceback
                 logger.error(traceback.format_exc())
             finally:
-                # Final sweep for FAILED to prevent stuck skeleton loaders
+                # Non-destructive sweep: retain existing rows without wiping cell contents to ""
                 try:
-                    run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
-                    if run_base == 'auto':
-                        with storage_adapter.file_lock(tsv_path):
-                            comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(tsv_path)
-                            col_lemma = headers_latest.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers_latest else -1
-                            col_word_dest = headers_latest.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers_latest else -1
-                            col_token_order = headers_latest.index("TokenOrder") if "TokenOrder" in headers_latest else -1
-                            
-                            modified_sweep = False
-                            updates = []
-                            for row_idx, row in enumerate(current_rows):
-                                if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
-                                    if col_word_dest != -1:
-                                        if len(row) <= col_word_dest:
-                                            row.extend([''] * (col_word_dest - len(row) + 1))
-                                        if 'skeleton-loader' in row[col_word_dest]:
-                                            row[col_word_dest] = ""
-                                            modified_sweep = True
-                                            if is_sqlite:
-                                                t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                                updates.append({
-                                                    "token_order": t_ord,
-                                                    "field": "word_destination",
-                                                    "value": "",
-                                                })
-                            if modified_sweep:
-                                if is_sqlite:
-                                    if updates:
-                                        storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
-                                else:
-                                    save_tsv_rows_safely(tsv_path, comments, headers_latest, current_rows)
-                            data_rows = current_rows
+                    with storage_adapter.file_lock(tsv_path):
+                        comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(tsv_path)
+                        data_rows = current_rows
                 except Exception as e:
-                    logger.error(f"Error in progressive worker FAILED sweep: {e}")
+                    logger.error(f"Error loading final progressive rows: {e}")
 
                 # 3. Finished Event
                 if not is_sqlite:
