@@ -8525,12 +8525,16 @@ html, body {{
             curr_search_offset += len(sent_str)
 
     def _get_sentence_idx(char_pos):
-        for s_idx, start_p, end_p in sentence_ranges:
+        if not sentence_ranges:
+            return 1
+        if char_pos < sentence_ranges[0][1]:
+            return sentence_ranges[0][0]
+        for i, (s_idx, start_p, end_p) in enumerate(sentence_ranges):
             if start_p <= char_pos < end_p:
                 return s_idx
-        if sentence_ranges:
-            return sentence_ranges[-1][0]
-        return 1
+            if i + 1 < len(sentence_ranges) and end_p <= char_pos < sentence_ranges[i + 1][1]:
+                return s_idx
+        return sentence_ranges[-1][0]
 
     char_cursor = 0
     for token in source_tokens:
@@ -8922,11 +8926,37 @@ html, body {{
                 "translated_text": s_trans,
             })
 
+    active_seq_num = 1
+    if len(sentence_cards) > 1 and smc.delivery_mode == "container":
+        if seq_num is not None and str(seq_num).strip():
+            try:
+                active_seq_num = int(seq_num)
+            except (ValueError, TypeError):
+                active_seq_num = 1
+        else:
+            if smc.spawn_order == "reverse":
+                active_seq_num = 2
+            elif smc.spawn_order == "normal":
+                active_seq_num = len(sentence_cards)
+            else:
+                active_seq_num = 1
+
+        if sentence_cards:
+            valid_seqs = {c["seq_num"] for c in sentence_cards}
+            if active_seq_num not in valid_seqs:
+                active_seq_num = 1
+
+    elif seq_num is not None and str(seq_num).strip():
+        try:
+            active_seq_num = int(seq_num)
+        except (ValueError, TypeError):
+            active_seq_num = 1
+
     dock_body_class = ""
     if len(sentence_cards) > 1 and smc.delivery_mode == "container":
         chips = []
         for c in sentence_cards:
-            active_cls = " active" if c["seq_num"] == 1 else ""
+            active_cls = " active" if c["seq_num"] == active_seq_num else ""
             chips.append(
                 f'<button type="button" class="kw-tab-chip{active_cls}" data-tab-seq="{c["seq_num"]}" data-sentence-idx="{c["sentence_idx"]}" title="Ctrl+{min(c["seq_num"], 9)}: Sentence {c["sentence_idx"] if c["sentence_idx"] > 0 else "All"}">{c["label"]}</button>'
             )
@@ -13745,9 +13775,9 @@ html, body {{
                 window._kwSentenceCards = cards;
 
                 var srcContainer = document.getElementById('source-container');
-                if (srcContainer) masterSourceHtml = srcContainer.innerHTML;
+                if (srcContainer && !masterSourceHtml) masterSourceHtml = srcContainer.innerHTML;
                 var transContainer = document.getElementById('translation-container');
-                if (transContainer) masterTransHtml = transContainer.innerHTML;
+                if (transContainer && !masterTransHtml) masterTransHtml = transContainer.innerHTML;
 
                 var tabButtons = document.querySelectorAll('.kw-tab-chip');
                 for (var i = 0; i < tabButtons.length; i++) {
@@ -13797,6 +13827,18 @@ html, body {{
                     addEvent(window, 'resize', updateNavButtons);
                     updateNavButtons();
                 }
+
+                var initialSeq = 1;
+                var activeChip = document.querySelector('.kw-tab-chip.active');
+                if (activeChip) {
+                    var parsedSeq = parseInt(activeChip.getAttribute('data-tab-seq'), 10);
+                    if (!isNaN(parsedSeq)) {
+                        initialSeq = parsedSeq;
+                    }
+                }
+                if (cards && cards.length > 0) {
+                    switchToTab(initialSeq, true);
+                }
             }
 
             function updateNavButtons() {
@@ -13823,7 +13865,7 @@ html, body {{
                 return cards;
             }
 
-            function switchToTab(seqOrSentIdx) {
+            function switchToTab(seqOrSentIdx, isImmediate) {
                 if (!cards || cards.length === 0) return;
                 var targetCard = null;
                 for (var i = 0; i < cards.length; i++) {
@@ -13852,7 +13894,11 @@ html, body {{
                 if (activeBtn) {
                     if (activeBtn.scrollIntoView) {
                         try {
-                            activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+                            if (isImmediate) {
+                                activeBtn.scrollIntoView({ behavior: 'auto', inline: 'nearest', block: 'nearest' });
+                            } else {
+                                activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+                            }
                         } catch(e) {
                             activeBtn.scrollIntoView(false);
                         }
@@ -14480,16 +14526,9 @@ setTimeout(function() {{
 
     # Format Title and Favicon
     mode_label = "multi" if (eff_mode == "multi" or text_mode == "multi") else "single"
-    if seq_num is not None and str(seq_num).strip():
-        try:
-            seq_int = int(seq_num)
-        except (ValueError, TypeError):
-            seq_int = 1
-        favicon_num = seq_int if 1 <= seq_int <= 99 else 1
-        favicon_href = f"/assets/numbers/{favicon_num}.ico"
-    else:
-        seq_int = 1
-        favicon_href = "/assets/numbers/1.ico"
+    seq_int = active_seq_num if 'active_seq_num' in locals() else 1
+    favicon_num = seq_int if 1 <= seq_int <= 99 else 1
+    favicon_href = f"/assets/numbers/{favicon_num}.ico"
 
     if not working_tsv_path:
         eff_slug = tsv_slug or (generate_slug(text) if text else "")

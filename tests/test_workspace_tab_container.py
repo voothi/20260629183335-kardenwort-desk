@@ -85,8 +85,8 @@ def test_render_flow_multi_sentence_container_tabs(tmp_path):
     assert '<button type="button" class="kw-tab-nav kw-tab-nav-prev" id="kw-tab-prev"' in html
     assert '<div class="kw-tab-track" id="kw-tab-track">' in html
     assert '<button type="button" class="kw-tab-nav kw-tab-nav-next" id="kw-tab-next"' in html
-    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0"' in html
-    assert '<button type="button" class="kw-tab-chip" data-tab-seq="2" data-sentence-idx="1"' in html
+    assert '<button type="button" class="kw-tab-chip" data-tab-seq="1" data-sentence-idx="0"' in html
+    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="2" data-sentence-idx="1"' in html
     assert '<button type="button" class="kw-tab-chip" data-tab-seq="3" data-sentence-idx="2"' in html
     assert '<script id="delivery-mode" type="text/plain">container</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">container</script>' in html
@@ -165,7 +165,8 @@ def test_window_title_parity_with_ahk(tmp_path):
         resolved_paths=resolved_paths,
         tsv_path=str(tsv_file),
         spawn_children=False,
-        return_children=False
+        return_children=False,
+        seq_num=1
     )
     
     import re
@@ -219,7 +220,8 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
         resolved_paths=resolved_paths,
         tsv_path=str(tsv_file),
         spawn_children=False,
-        return_children=False
+        return_children=False,
+        seq_num=1
     )
     
     page.set_content(html)
@@ -391,7 +393,7 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
     html = kardenwort_desk.run_render_flow(
         text=text, language="en", zid="20260828181000", text_mode="multi",
         config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
-        spawn_children=False, return_children=False
+        spawn_children=False, return_children=False, seq_num=1
     )
     page.set_content(html)
     page.wait_for_selector("#kw-workspace-tab-bar")
@@ -432,6 +434,7 @@ def test_clean_window_title_and_fallback_slug_synthesis(tmp_path):
         resolved_paths=resolved_paths,
         spawn_children=False,
         return_children=False,
+        seq_num=1,
     )
     import re
     m = re.search(r"<title>(.*?)</title>", html)
@@ -528,6 +531,159 @@ def test_action_toolbar_glassmorphism_css(tmp_path):
     assert "body.theme-light .kw-action-toolbar" in html_light
     assert "background: rgba(255, 255, 255, 0.85);" in html_light
     assert "body.theme-light .kw-action-toolbar:hover" in html_light
+
+
+def test_container_initial_active_tab_spawn_order_reverse(page, tmp_path):
+    """Test 3.1: Verify tab [2] is initial active tab and DOM filters reflect it when spawn_order = reverse."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "reverse")
+
+    text = "First sentence.\nSecond sentence.\nThird sentence.\nFourth sentence."
+    tsv_file = tmp_path / "20260829011000-first-sentence-second-sentence.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\t\n"
+        "Second\tSecond\tвторой\t2\t\n"
+        "Third\tThird\tтретий\t3\t\n"
+        "Fourth\tFourth\tчетвертый\t4\t\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260829011000",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+
+    # Server HTML check
+    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="2" data-sentence-idx="1"' in html
+    assert '<button type="button" class="kw-tab-chip" data-tab-seq="1" data-sentence-idx="0"' in html
+    assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/2.ico">' in html
+    assert "20260829011001-first-sentence.en.tsv" in html
+
+    # Playwright client-side check
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    active_chip = page.locator(".kw-tab-chip.active")
+    assert active_chip.inner_text() == "2"
+    assert "20260829011001-first-sentence.en.tsv" in page.title()
+
+    chunk1 = page.locator('#source-container > .kw-sentence-chunk[data-sentence-idx="1"]')
+    chunk2 = page.locator('#source-container > .kw-sentence-chunk[data-sentence-idx="2"]')
+    assert chunk1.is_visible()
+    assert not chunk2.is_visible()
+
+
+def test_container_initial_active_tab_spawn_order_normal(page, tmp_path):
+    """Test 3.2: Verify final tab [N] is initial active tab and DOM filters reflect it when spawn_order = normal."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "First sentence.\nSecond sentence.\nThird sentence.\nFourth sentence."
+    tsv_file = tmp_path / "20260829011000-first-sentence-second-sentence.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\t\n"
+        "Second\tSecond\tвторой\t2\t\n"
+        "Third\tThird\tтретий\t3\t\n"
+        "Fourth\tFourth\tчетвертый\t4\t\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260829011000",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+
+    # 4 sentences + 1 overview = 5 total cards; last tab is [5] (Sentence 4)
+    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="5" data-sentence-idx="4"' in html
+    assert '<button type="button" class="kw-tab-chip" data-tab-seq="1" data-sentence-idx="0"' in html
+    assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/5.ico">' in html
+    assert "20260829011004-fourth-sentence.en.tsv" in html
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    active_chip = page.locator(".kw-tab-chip.active")
+    assert active_chip.inner_text() == "5"
+    assert "20260829011004-fourth-sentence.en.tsv" in page.title()
+
+    chunk4 = page.locator('#source-container > .kw-sentence-chunk[data-sentence-idx="4"]')
+    chunk1 = page.locator('#source-container > .kw-sentence-chunk[data-sentence-idx="1"]')
+    assert chunk4.is_visible()
+    assert not chunk1.is_visible()
+
+
+def test_container_initial_active_tab_explicit_seq_num_override(tmp_path):
+    """Test 3.3: Verify explicit seq_num overrides both reverse and normal spawn_order."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+
+    text = "First sentence.\nSecond sentence.\nThird sentence."
+    tsv_file = tmp_path / "20260829011000-override.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\t\n"
+        "Second\tSecond\tвторой\t2\t\n"
+        "Third\tThird\tтретий\t3\t\n",
+        encoding="utf-8"
+    )
+
+    # 1. Reverse spawn order with explicit seq_num=3 (Sentence 2)
+    config.set("sentences_mode", "spawn_order", "reverse")
+    html_seq3 = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260829011000",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=3
+    )
+    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="3" data-sentence-idx="2"' in html_seq3
+    assert '<button type="button" class="kw-tab-chip" data-tab-seq="2" data-sentence-idx="1"' in html_seq3
+    assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/3.ico">' in html_seq3
+
+    # 2. Normal spawn order with explicit seq_num=1 (Master overview)
+    config.set("sentences_mode", "spawn_order", "normal")
+    html_seq1 = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260829011000",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0"' in html_seq1
+    assert '<button type="button" class="kw-tab-chip" data-tab-seq="4" data-sentence-idx="3"' in html_seq1
+    assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/1.ico">' in html_seq1
+
 
 
 
