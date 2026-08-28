@@ -1037,6 +1037,98 @@ def test_persistent_text_selection_and_dismissal(page, tmp_path):
     assert page.evaluate("window.getSelection().toString()") == ""
 
 
+def test_hidden_tab_does_not_fire_watchdog_timeout(page, tmp_path):
+    mock_no_sse_script = """<script>
+window.EventSource = undefined;
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html_with_skeletons = html.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
+    ).replace(
+        '<td><div class="scrollable-cell">Haus</div></td>',
+        '<td><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" style="width:60px;"></span></div></td>'
+    )
+    html_with_skeletons = html_with_skeletons.replace("<head>", f"<head>\n{mock_no_sse_script}")
+    page.set_content(html_with_skeletons)
+
+    # 1. Tab is switched to background / hidden
+    page.evaluate("""
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+    """)
+    page.wait_for_timeout(50)
+
+    # Watchdog timer is paused/cleared when hidden
+    assert page.evaluate("window._kwWatchdogMaxTimer === null") is True
+    assert page.evaluate("window._kwSkeletonPollTimer === null") is True
+
+    # Ensure no timeout warning toast was triggered while hidden
+    toasts = page.locator(".kw-toast-warning")
+    assert toasts.count() == 0
+
+    # Skeleton elements are still intact in background
+    assert page.locator(".skeleton-loader").count() >= 1
+
+
+def test_switching_to_completed_background_tab_hydrates_without_error_toast(page, tmp_path):
+    mock_no_sse_script = """<script>
+window.EventSource = undefined;
+window.fetch = async function(url, options) {
+    if (url.indexOf('/session/status') !== -1) {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                status: 'success',
+                data: {
+                    is_finished: true,
+                    stage: 'finished',
+                    rows: {
+                        "0": { "WordDestination": "дом", "Translation": "Das Haus" }
+                    }
+                }
+            })
+        };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+};
+</script>"""
+    html = get_desk_page_html(tmp_path)
+    html_with_skeletons = html.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span>'
+    ).replace(
+        '<td><div class="scrollable-cell">Haus</div></td>',
+        '<td><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" style="width:60px;"></span></div></td>'
+    )
+    html_with_skeletons = html_with_skeletons.replace("<head>", f"<head>\n{mock_no_sse_script}")
+    page.set_content(html_with_skeletons)
+
+    # Initial state: hidden tab
+    page.evaluate("""
+        Object.defineProperty(document, 'hidden', { value: true, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+    """)
+    page.wait_for_timeout(50)
+
+    # 2. Switch tab to visible -> Visibilitychange probe immediately triggers status sync
+    page.evaluate("""
+        Object.defineProperty(document, 'hidden', { value: false, configurable: true });
+        document.dispatchEvent(new Event('visibilitychange'));
+    """)
+    page.wait_for_timeout(100)
+
+    # Skeletons cleared / resolved
+    assert page.locator(".skeleton-loader").count() == 0
+    assert page.locator("[data-pending='true']").count() == 0
+
+    # No timeout warning toast displayed
+    toasts = page.locator(".kw-toast-warning")
+    assert toasts.count() == 0
+
+
+
 
 
 

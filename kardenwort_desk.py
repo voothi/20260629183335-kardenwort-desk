@@ -10394,50 +10394,98 @@ html, body {{
             var hasSkeletons = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0;
 
             if (isWebMode && curZid && hasSkeletons) {
-                var startTime = Date.now();
                 var maxBudgetMs = 30000; // 30-second safety budget
+                var activeElapsedMs = 0;
+                var lastVisibleTime = (!document.hidden) ? Date.now() : null;
                 var pollIntervalMs = 1000;
                 var isPolling = false;
                 var resolved = false;
 
+                var getActiveElapsedMs = function() {
+                    var elapsed = activeElapsedMs;
+                    if (!document.hidden && lastVisibleTime) {
+                        elapsed += (Date.now() - lastVisibleTime);
+                    }
+                    return elapsed;
+                };
+
+                var pauseWatchdogTimer = function() {
+                    if (lastVisibleTime) {
+                        activeElapsedMs += (Date.now() - lastVisibleTime);
+                        lastVisibleTime = null;
+                    }
+                    if (window._kwWatchdogMaxTimer) {
+                        clearTimeout(window._kwWatchdogMaxTimer);
+                        window._kwWatchdogMaxTimer = null;
+                    }
+                };
+
+                var resumeWatchdogTimer = function() {
+                    if (resolved) return;
+                    if (document.hidden) return;
+                    if (!lastVisibleTime) {
+                        lastVisibleTime = Date.now();
+                    }
+                    if (window._kwWatchdogMaxTimer) {
+                        clearTimeout(window._kwWatchdogMaxTimer);
+                        window._kwWatchdogMaxTimer = null;
+                    }
+                    var remaining = maxBudgetMs - getActiveElapsedMs();
+                    if (remaining <= 0) {
+                        closeEvtSource();
+                        stopPolling();
+                        cleanupOrphanSkeletons();
+                    } else {
+                        window._kwWatchdogMaxTimer = setTimeout(function() {
+                            if (!resolved) {
+                                closeEvtSource();
+                                stopPolling();
+                                cleanupOrphanSkeletons();
+                            }
+                        }, remaining);
+                    }
+                };
+
                 var cleanupOrphanSkeletons = function() {
+                    if (resolved) return;
                     var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
-                    if (pendings.length > 0) {
-                        for (var i = 0; i < pendings.length; i++) {
-                            var el = pendings[i];
-                            el.classList.remove("skeleton-loader");
-                            el.removeAttribute("data-pending");
-                            var tr = el.closest ? el.closest('tr') : (function(node) {
-                                while (node && node.nodeName !== 'TR') { node = node.parentNode; }
-                                return node;
-                            })(el);
-                            var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
-                            var currentText = (el.textContent || el.innerText || "").trim();
-                            if (!currentText || currentText === '...' || currentText === 'Loading...' || currentText === 'Loading translation...') {
-                                if (rowId !== null && rowId !== undefined) {
-                                    el.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
-                                }
+                    if (pendings.length === 0) {
+                        return;
+                    }
+                    for (var i = 0; i < pendings.length; i++) {
+                        var el = pendings[i];
+                        el.classList.remove("skeleton-loader");
+                        el.removeAttribute("data-pending");
+                        var tr = el.closest ? el.closest('tr') : (function(node) {
+                            while (node && node.nodeName !== 'TR') { node = node.parentNode; }
+                            return node;
+                        })(el);
+                        var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
+                        var currentText = (el.textContent || el.innerText || "").trim();
+                        if (!currentText || currentText === '...' || currentText === 'Loading...' || currentText === 'Loading translation...') {
+                            if (rowId !== null && rowId !== undefined) {
+                                el.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
                             }
                         }
-                        if (typeof window.showToast === 'function') {
-                            window.showToast("Background loading timed out. Restored table editing. Some translations timed out. Click to retry.", "warning", 8000, function() {
-                                if (window.retrySession) {
-                                    window.retrySession(curZid);
+                    }
+                    if (typeof window.showToast === 'function') {
+                        window.showToast("Background loading timed out. Restored table editing. Some translations timed out. Click to retry.", "warning", 8000, function() {
+                            if (window.retrySession) {
+                                window.retrySession(curZid);
+                            }
+                        });
+                    }
+                    if (typeof fetch !== 'undefined' && curZid) {
+                        var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                        fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                            .then(function(res) { if (res.ok) return res.json(); })
+                            .then(function(resObj) {
+                                var data = (resObj && resObj.data) ? resObj.data : resObj;
+                                if (data && data.rows && window.receiveUpdate) {
+                                    window.receiveUpdate(data);
                                 }
-                            });
-                        }
-                        if (typeof fetch !== 'undefined' && curZid) {
-                            var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                            fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
-                                .then(function(res) { if (res.ok) return res.json(); })
-                                .then(function(resObj) {
-                                    var data = (resObj && resObj.data) ? resObj.data : resObj;
-                                    if (data && data.rows && window.receiveUpdate) {
-                                        window.receiveUpdate(data);
-                                    }
-                                })
-                                .catch(function() {});
-                        }
+                            })
+                            .catch(function() {});
                     }
                 };
                 window.cleanupOrphanSkeletons = cleanupOrphanSkeletons;
@@ -10468,7 +10516,7 @@ html, body {{
                         stopPolling();
                         return;
                     }
-                    if (Date.now() - startTime > maxBudgetMs) {
+                    if (getActiveElapsedMs() >= maxBudgetMs) {
                         stopPolling();
                         cleanupOrphanSkeletons();
                         return;
@@ -10538,19 +10586,17 @@ html, body {{
                     setTimeout(pollSessionStatus, 500);
                 };
 
-                window._kwWatchdogMaxTimer = setTimeout(function() {
-                    if (!resolved) {
-                        closeEvtSource();
-                        stopPolling();
-                        cleanupOrphanSkeletons();
-                    }
-                }, maxBudgetMs);
+                if (!document.hidden) {
+                    resumeWatchdogTimer();
+                }
 
-                // Visibility-aware listener: pause polling when hidden, resume/check on tab activation
+                // Visibility-aware listener: pause polling & watchdog timer when hidden, resume & probe on tab activation
                 document.addEventListener('visibilitychange', function() {
                     if (document.hidden) {
+                        pauseWatchdogTimer();
                         stopPolling();
                     } else {
+                        resumeWatchdogTimer();
                         var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
                         if (remaining > 0 && !resolved) {
                             startWatchdogPolling();
@@ -10559,8 +10605,10 @@ html, body {{
                     }
                 });
 
-                // Start concurrent watchdog polling
-                startWatchdogPolling();
+                // Start concurrent watchdog polling if visible
+                if (!document.hidden) {
+                    startWatchdogPolling();
+                }
 
                 // Channel: EventSource (SSE) running concurrently with watchdog polling
                 if (typeof EventSource !== 'undefined') {
