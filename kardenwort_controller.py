@@ -2003,6 +2003,157 @@ class SessionArbiter:
                     "rows": structured_rows,
                 })
 
+    def retry_session_rows(
+        self,
+        session_zid: str,
+        row_ids: Optional[List[int]] = None,
+        language: Optional[str] = None,
+        target_lang: Optional[str] = None,
+        zid: Optional[str] = None,
+        trace_id: Optional[str] = None,
+    ) -> Dict[str, Any]:
+        req_zid = zid or generate_unique_zid()
+        eff_trace_id = trace_id or f"{session_zid}:retry"
+        lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        target_l = target_lang or self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
+
+        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+        tsv_path = None
+        with self._lock:
+            if session_zid in self.sessions:
+                sess = self.sessions[session_zid]
+                if sess.get("language"):
+                    lang = sess["language"]
+                if sess.get("target_lang"):
+                    target_l = sess["target_lang"]
+                if sess.get("tsv_path"):
+                    cand = Path(sess["tsv_path"])
+                    if cand.exists() or is_sqlite:
+                        tsv_path = cand
+
+        results_dir = resolve_results_dir(self.resolved_paths, self.config)
+        if not tsv_path:
+            tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
+            if not tsv_path:
+                tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
+
+        if not is_sqlite and (not tsv_path or not tsv_path.exists()):
+            raise StructuredError(ErrorCode.NOT_FOUND, f"Working session {session_zid} not found")
+
+        comments, headers, data_rows = [], [], []
+        with storage_adapter.file_lock(tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+
+        mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
+        role_fields = get_role_fields(mapping, headers)
+        col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
+        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+
+        data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+
+        if col_lemma == -1:
+            raise StructuredError(ErrorCode.DESK_FAILED, f"Lemma column not found for session {session_zid}")
+
+        target_indices = []
+        if row_ids is not None and len(row_ids) > 0:
+            target_indices = [idx for idx in row_ids if 0 <= idx < len(data_rows)]
+        else:
+            for idx, r in enumerate(data_rows):
+                if len(r) > col_lemma and r[col_lemma].strip():
+                    dest_val = r[col_word_dest].strip() if col_word_dest != -1 and len(r) > col_word_dest else ""
+                    if not dest_val or 'skeleton-loader' in dest_val or dest_val == '[FAILED]':
+                        target_indices.append(idx)
+
+        lemmas_to_retry = []
+        seen = set()
+        for idx in target_indices:
+            row = data_rows[idx]
+            if len(row) > col_lemma and row[col_lemma].strip():
+                l_val = row[col_lemma].strip()
+                if l_val not in seen:
+                    seen.add(l_val)
+                    lemmas_to_retry.append(l_val)
+
+        translated_map = {}
+        if lemmas_to_retry:
+            provider = self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google'
+            try:
+                translated_map = translate_lemmas_fast_path(
+                    lemmas_to_retry,
+                    lang,
+                    target_l,
+                    self.config,
+                    self.resolved_paths,
+                    provider,
+                )
+            except Exception as e:
+                logger.error(f"Retry translation failed: {e}")
+                raise StructuredError(ErrorCode.DESK_FAILED, f"Retry translation failed: {e}") from e
+
+        if translated_map:
+            if col_word_dest == -1:
+                headers.append(role_fields.get('word_translation', 'WordDestination'))
+                col_word_dest = len(headers) - 1
+                for r in data_rows:
+                    r.append("")
+
+            updates = []
+            for row_idx in target_indices:
+                row = data_rows[row_idx]
+                if len(row) > col_lemma:
+                    l_val = row[col_lemma].strip()
+                    if l_val in translated_map:
+                        t_val = translated_map[l_val]
+                        while len(row) <= col_word_dest:
+                            row.append("")
+                        row[col_word_dest] = t_val
+                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                        updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+
+            if is_sqlite:
+                if updates:
+                    try:
+                        storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
+                    except Exception as e:
+                        logger.warning(f"Failed to batch update words during retry for session {session_zid}: {e}")
+            else:
+                with storage_adapter.file_lock(tsv_path):
+                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+
+            self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
+
+        new_fp = compute_content_fingerprint(data_rows)
+        with self._lock:
+            if session_zid in self.sessions:
+                self.sessions[session_zid]["data_rows"] = data_rows
+                self.sessions[session_zid]["headers"] = headers
+                self.sessions[session_zid]["fingerprint"] = new_fp
+
+        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", zid=session_zid, trace_id=eff_trace_id)
+
+        self.emit_event(session_zid, {
+            "type": "update",
+            "stage": "translated",
+            "status": "success",
+            "fingerprint": new_fp,
+            "rows": structured_rows,
+            "retried_rows": target_indices,
+        })
+
+        return {
+            "status": "success",
+            "session_zid": session_zid,
+            "fingerprint": new_fp,
+            "retried_rows": target_indices,
+            "data_rows": data_rows,
+            "rows": structured_rows,
+        }
+
     def get_queue_status(self) -> Dict[str, Any]:
         return self.enrichment_queue.get_status()
 
@@ -2326,6 +2477,34 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 prompt=body.get('prompt'),
                 language=body.get('language'),
                 zid=body.get('zid')
+            )
+            self._send_json(200, res)
+            return
+
+        if path == '/session/retry':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+
+            session_zid = body.get('session_zid') or body.get('zid')
+            if not session_zid:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
+
+            row_ids = body.get('row_ids') or body.get('selected_rows') or []
+            if isinstance(row_ids, (int, str)) and str(row_ids).isdigit():
+                row_ids = [int(row_ids)]
+            elif not isinstance(row_ids, list):
+                row_ids = []
+            row_ids = [int(r) for r in row_ids if str(r).isdigit() or isinstance(r, int)]
+
+            res = self.server.arbiter.retry_session_rows(
+                session_zid=session_zid,
+                row_ids=row_ids if row_ids else None,
+                language=body.get('language'),
+                target_lang=body.get('target_lang'),
+                zid=body.get('zid'),
+                trace_id=body.get('trace_id'),
             )
             self._send_json(200, res)
             return
