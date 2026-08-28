@@ -79,7 +79,9 @@ def test_render_flow_multi_sentence_container_tabs(tmp_path):
         return_children=False
     )
     
-    assert '<div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar">' in html
+    assert '<div class="kw-workspace-tab-bar kw-tab-dock-top" id="kw-workspace-tab-bar">' in html
+    assert 'has-dock-top' in html
+    assert '<script id="tab-bar-position" type="text/plain">top</script>' in html
     assert '<button type="button" class="kw-tab-nav kw-tab-nav-prev" id="kw-tab-prev"' in html
     assert '<div class="kw-tab-track" id="kw-tab-track">' in html
     assert '<button type="button" class="kw-tab-nav kw-tab-nav-next" id="kw-tab-next"' in html

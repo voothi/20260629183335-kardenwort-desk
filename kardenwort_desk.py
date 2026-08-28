@@ -8886,6 +8886,7 @@ html, body {{
                 "translated_text": s_trans,
             })
 
+    dock_body_class = ""
     if len(sentence_cards) > 1 and smc.delivery_mode == "container":
         chips = []
         for c in sentence_cards:
@@ -8893,8 +8894,14 @@ html, body {{
             chips.append(
                 f'<button type="button" class="kw-tab-chip{active_cls}" data-tab-seq="{c["seq_num"]}" data-sentence-idx="{c["sentence_idx"]}" title="Ctrl+{min(c["seq_num"], 9)}: Sentence {c["sentence_idx"] if c["sentence_idx"] > 0 else "All"}">{c["label"]}</button>'
             )
+        dock_pos = smc.tab_bar_position if smc.tab_bar_position in ("top", "bottom", "inline") else "top"
+        dock_class = f" kw-tab-dock-{dock_pos}"
+        if dock_pos == "top":
+            dock_body_class = " has-dock-top"
+        elif dock_pos == "bottom":
+            dock_body_class = " has-dock-bottom"
         workspace_tab_bar_html = (
-            '<div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar">'
+            f'<div class="kw-workspace-tab-bar{dock_class}" id="kw-workspace-tab-bar">'
             '<button type="button" class="kw-tab-nav kw-tab-nav-prev" id="kw-tab-prev" title="Scroll Left (Shift+Wheel)">&lt;</button>'
             f'<div class="kw-tab-track" id="kw-tab-track">{"".join(chips)}</div>'
             '<button type="button" class="kw-tab-nav kw-tab-nav-next" id="kw-tab-next" title="Scroll Right (Shift+Wheel)">&gt;</button>'
@@ -8964,6 +8971,18 @@ html, body {{
     padding-bottom: 70px;
     display: inline-block;
     min-width: 100%;
+  }
+  body.has-dock-top .container {
+    padding-top: 48px;
+  }
+  body.has-dock-bottom .container {
+    padding-bottom: 95px;
+  }
+  body.kw-ahk-native-host.has-dock-top .container {
+    padding-top: 16px !important;
+  }
+  body.kw-ahk-native-host.has-dock-bottom .container {
+    padding-bottom: 15px !important;
   }
   .section {
     background: {section_bg};
@@ -9450,6 +9469,42 @@ html, body {{
     max-width: 100%;
     overflow: hidden;
   }
+  .kw-workspace-tab-bar.kw-tab-dock-top {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    padding: 8px 16px;
+    background: rgba(22, 27, 34, 0.8);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.1);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+  }
+  .kw-workspace-tab-bar.kw-tab-dock-top:hover {
+    background: #161b22;
+    border-bottom-color: rgba(255, 255, 255, 0.15);
+  }
+  .kw-workspace-tab-bar.kw-tab-dock-bottom {
+    position: fixed;
+    bottom: 50px;
+    left: 0;
+    right: 0;
+    z-index: 1000;
+    padding: 8px 16px;
+    background: rgba(22, 27, 34, 0.8);
+    backdrop-filter: blur(8px);
+    -webkit-backdrop-filter: blur(8px);
+    border-top: 1px solid rgba(255, 255, 255, 0.08);
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.1);
+    transition: background-color 0.2s ease, border-color 0.2s ease;
+  }
+  .kw-workspace-tab-bar.kw-tab-dock-bottom:hover {
+    background: #161b22;
+    border-top-color: rgba(255, 255, 255, 0.15);
+  }
   body.kw-ahk-native-host .kw-workspace-tab-bar {
     display: none !important;
   }
@@ -9561,6 +9616,28 @@ html, body {{
     background: #0969da;
     border-color: #0969da;
     color: #ffffff;
+  }
+  body.theme-light .kw-workspace-tab-bar.kw-tab-dock-top,
+  body.theme-white .kw-workspace-tab-bar.kw-tab-dock-top {
+    background: rgba(255, 255, 255, 0.82);
+    border-bottom: 1px solid #d0d7de;
+    box-shadow: 0 2px 10px rgba(0, 0, 0, 0.05);
+  }
+  body.theme-light .kw-workspace-tab-bar.kw-tab-dock-top:hover,
+  body.theme-white .kw-workspace-tab-bar.kw-tab-dock-top:hover {
+    background: #ffffff;
+    border-bottom-color: #afb8c1;
+  }
+  body.theme-light .kw-workspace-tab-bar.kw-tab-dock-bottom,
+  body.theme-white .kw-workspace-tab-bar.kw-tab-dock-bottom {
+    background: rgba(255, 255, 255, 0.82);
+    border-top: 1px solid #d0d7de;
+    box-shadow: 0 -2px 10px rgba(0, 0, 0, 0.05);
+  }
+  body.theme-light .kw-workspace-tab-bar.kw-tab-dock-bottom:hover,
+  body.theme-white .kw-workspace-tab-bar.kw-tab-dock-bottom:hover {
+    background: #ffffff;
+    border-top-color: #afb8c1;
   }
   /* In-Page Toast Notifications */
   .kw-toast-container {
@@ -9763,6 +9840,7 @@ html, body {{
 </script>
 <script id="delivery-mode" type="text/plain">{delivery_mode_js}</script>
 <script id="web-tab-mode" type="text/plain">{web_tab_mode_js}</script>
+<script id="tab-bar-position" type="text/plain">{tab_bar_position_js}</script>
 <script id="mismatch-info" type="application/json">
 {mismatch_info_json}
 </script>
@@ -14299,6 +14377,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{sentence_cards_json}", json.dumps(sentence_cards, ensure_ascii=False))
     html_page = html_page.replace("{delivery_mode_js}", smc.delivery_mode)
     html_page = html_page.replace("{web_tab_mode_js}", smc.web_tab_mode)
+    html_page = html_page.replace("{tab_bar_position_js}", smc.tab_bar_position)
     html_page = html_page.replace("{table_header_html}", table_header_html)
     html_page = html_page.replace("{table_rows_html}", table_rows_html)
     html_page = html_page.replace("{token_manifest}", json.dumps(token_manifest))
@@ -14361,7 +14440,7 @@ setTimeout(function() {{
 
     html_page = html_page.replace("{page_title}", page_title)
     html_page = html_page.replace("{favicon_href}", favicon_href)
-    html_page = html_page.replace("{theme_class}", f"theme-{theme}")
+    html_page = html_page.replace("{theme_class}", f"theme-{theme}{dock_body_class}")
     html_page = html_page.replace("{source_white_space}", "pre-wrap" if eff_mode == "multi" else "normal")
     html_page = html_page.replace("{selected_col_name}", selected_col_name)
     html_page = html_page.replace("{has_highlight_col}", "true" if col_highlighted != -1 else "false")
