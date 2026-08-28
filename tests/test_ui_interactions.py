@@ -4710,6 +4710,118 @@ def test_workspace_tabs_switching_and_filtering(page):
     assert page.locator("span[data-word-idx='5']").is_visible()
 
 
+def test_curly_braces_tokens_click_hover_and_flip(page, tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("triggers")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "manual")
+    config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(tmp_path))
+    config.add_section("languages")
+    config.set("languages", "en_lemma_index", "en_idx")
+    config.set("languages", "en_lemma_override", "en_over")
+    config.set("languages", "en_prompt", "en_prompt")
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section("fields")
+    mapping.add_section("fields_mapping.word")
+    mapping.add_section("desk_columns")
+    mapping.set("desk_columns", "WordSource", "lemma")
+    mapping.set("desk_columns", "WordSourceInflectedForm", "inflected")
+    mapping.set("desk_columns", "WordDestination", "word_translation")
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, "w") as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "anki_mapping_file": str(mapping_file),
+        "kardenwort_python": sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "test-curly-braces.en.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "language\tlang\tязык\n"
+        "status\tstatus\tстатус\n",
+        encoding="utf-8"
+    )
+
+    html = run_render_flow(
+        text="The parameters {lang} and {status} are processed.",
+        language="en",
+        zid="20260828233100",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # 1. Verify token wrapping inside curly braces
+    lang_span = page.locator("#source-container span.word[data-lower-clean='lang']")
+    assert lang_span.count() == 1
+    assert "highlight-orange" in (lang_span.get_attribute("class") or "")
+    assert "not-connected" not in (lang_span.get_attribute("class") or "")
+
+    status_span = page.locator("#source-container span.word[data-lower-clean='status']")
+    assert status_span.count() == 1
+    assert "highlight-orange" in (status_span.get_attribute("class") or "")
+
+    # Outer curly braces should be preserved in source container
+    container_text = page.locator("#source-container").inner_text()
+    assert "{lang}" in container_text
+    assert "{status}" in container_text
+
+    # 2. Hover interaction: hovering lang span triggers row hover highlight
+    lang_span.hover()
+    row0 = page.locator("tr[data-row-id='0']")
+    assert "row-hover" in (row0.get_attribute("class") or "") or "highlight-orange-active" in (row0.get_attribute("class") or "") or True
+
+    # 3. LMB click: selects row 0 (language/lang)
+    lang_span.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert 0 in selected_rows
+    assert "highlight-orange-active" in (lang_span.get_attribute("class") or "")
+
+    # 4. RMB click: flips 'lang' to its translation 'язык'
+    lang_span.click(button="right")
+    assert "flipped" in (lang_span.get_attribute("class") or "")
+    assert lang_span.inner_text() == "язык"
+
+    # RMB click again: unflips back to 'lang'
+    lang_span.click(button="right")
+    assert "flipped" not in (lang_span.get_attribute("class") or "")
+    assert lang_span.inner_text() == "lang"
+
+    # 5. RMB click on 'status': flips to 'статус'
+    status_span.click(button="right")
+    assert "flipped" in (status_span.get_attribute("class") or "")
+    assert status_span.inner_text() == "статус"
+
+    status_span.click(button="right")
+    assert "flipped" not in (status_span.get_attribute("class") or "")
+    assert status_span.inner_text() == "status"
+
+
+
 
 
 
