@@ -1297,7 +1297,12 @@ class SentencesModeConfig:
     multi_mode_decompose: bool = False
     legacy_spawn_children: bool = False
     deduplication_scope: str = "sentence"
-    web_tab_mode: str = "container"
+    delivery_mode: str = "container"
+
+    @property
+    def web_tab_mode(self) -> str:
+        """Backward-compatible property for legacy consumers expecting 'container' or 'tabs'."""
+        return "container" if self.delivery_mode == "container" else "tabs"
     
     def should_split_sentences(self, num_sentences: int) -> bool:
         """Returns True if the configuration dictates that this text should be decomposed into multiple sentence windows."""
@@ -1324,7 +1329,7 @@ class SentencesModeConfig:
         multi_mode_decompose = False
         legacy_spawn_children = False
         deduplication_scope = "sentence"
-        web_tab_mode = "container"
+        delivery_mode = "container"
 
         if config and hasattr(config, "has_section") and hasattr(config, "get"):
             try:
@@ -1339,8 +1344,13 @@ class SentencesModeConfig:
                     spawn_order = config.get(SEC_SENTENCES_MODE, "spawn_order", fallback="normal")
                     parent_mode = config.get(SEC_SENTENCES_MODE, "parent_mode", fallback="full")
                     deduplication_scope = config.get(SEC_SENTENCES_MODE, "deduplication_scope", fallback="sentence").strip().lower()
-                    raw_wtm = config.get(SEC_SENTENCES_MODE, "web_tab_mode", fallback="container").strip().lower()
-                    web_tab_mode = raw_wtm if raw_wtm in ("container", "tabs") else "container"
+                    raw_del = config.get(SEC_SENTENCES_MODE, "delivery_mode", fallback=None)
+                    if raw_del is not None:
+                        del_val = raw_del.strip().lower()
+                        delivery_mode = del_val if del_val in ("container", "multi_window") else "container"
+                    else:
+                        raw_wtm = config.get(SEC_SENTENCES_MODE, "web_tab_mode", fallback="container").strip().lower()
+                        delivery_mode = "multi_window" if raw_wtm == "tabs" else "container"
             except Exception:
                 pass
 
@@ -1353,7 +1363,7 @@ class SentencesModeConfig:
             multi_mode_decompose=multi_mode_decompose,
             legacy_spawn_children=legacy_spawn_children,
             deduplication_scope=deduplication_scope,
-            web_tab_mode=web_tab_mode,
+            delivery_mode=delivery_mode,
         )
 
 
@@ -8834,7 +8844,7 @@ html, body {{
                 "translated_text": s_trans,
             })
 
-    if len(sentence_cards) > 1 and smc.web_tab_mode == "container":
+    if len(sentence_cards) > 1 and smc.delivery_mode == "container":
         chips = []
         for c in sentence_cards:
             active_cls = " active" if c["seq_num"] == 1 else ""
@@ -9643,6 +9653,7 @@ html, body {{
 <script id="sentence-cards" type="application/json">
 {sentence_cards_json}
 </script>
+<script id="delivery-mode" type="text/plain">{delivery_mode_js}</script>
 <script id="web-tab-mode" type="text/plain">{web_tab_mode_js}</script>
 <script id="mismatch-info" type="application/json">
 {mismatch_info_json}
@@ -13400,17 +13411,27 @@ html, body {{
             return results;
         }
 
-        function getWebTabMode() {
-            var el = document.getElementById('web-tab-mode');
+        function getDeliveryMode() {
+            var el = document.getElementById('delivery-mode');
             if (el) {
                 var t = (el.textContent || el.innerText || '').trim();
                 if (t) return t.toLowerCase();
             }
+            var legacyEl = document.getElementById('web-tab-mode');
+            if (legacyEl) {
+                var lt = (legacyEl.textContent || legacyEl.innerText || '').trim().toLowerCase();
+                if (lt === 'tabs') return 'multi_window';
+                if (lt === 'container') return 'container';
+            }
             return 'container';
         }
 
+        function getWebTabMode() {
+            return getDeliveryMode() === 'container' ? 'container' : 'tabs';
+        }
+
         function spawnChildTabs(children) {
-            if (getWebTabMode() === 'container') {
+            if (getDeliveryMode() === 'container') {
                 return;
             }
             var childSessions = extractChildSessions(children);
@@ -14037,6 +14058,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{workspace_tab_bar_html}", workspace_tab_bar_html)
     html_page = html_page.replace("{sentence_cards_json}", json.dumps(sentence_cards, ensure_ascii=False))
+    html_page = html_page.replace("{delivery_mode_js}", smc.delivery_mode)
     html_page = html_page.replace("{web_tab_mode_js}", smc.web_tab_mode)
     html_page = html_page.replace("{table_header_html}", table_header_html)
     html_page = html_page.replace("{table_rows_html}", table_rows_html)

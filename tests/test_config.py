@@ -431,7 +431,7 @@ alignment_method = proportion
 min_sentences = 3
 spawn_order = reverse
 parent_mode = stub
-web_tab_mode = container
+delivery_mode = container
 """
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
@@ -448,27 +448,48 @@ web_tab_mode = container
         assert config.getint(SEC_SENTENCES_MODE, 'min_sentences') == 3
         assert config.get(SEC_SENTENCES_MODE, 'spawn_order') == 'reverse'
         assert config.get(SEC_SENTENCES_MODE, 'parent_mode') == 'stub'
-        assert config.get(SEC_SENTENCES_MODE, 'web_tab_mode') == 'container'
+        assert config.get(SEC_SENTENCES_MODE, 'delivery_mode') == 'container'
 
         smc = kardenwort_desk.SentencesModeConfig.from_config(config)
+        assert smc.delivery_mode == 'container'
         assert smc.web_tab_mode == 'container'
 
 
-def test_sentences_mode_web_tab_mode_default_and_fallback(tmp_path):
-    """Test web_tab_mode default value and invalid fallback to container."""
+def test_sentences_mode_delivery_mode_default_and_fallback(tmp_path):
+    """Test delivery_mode default value, multi_window parsing, invalid fallback, and legacy web_tab_mode fallback."""
     from kardenwort_desk import SentencesModeConfig, SEC_SENTENCES_MODE
     import configparser
 
+    # Default
     cp = configparser.ConfigParser()
     cp.add_section(SEC_SENTENCES_MODE)
     smc = SentencesModeConfig.from_config(cp)
+    assert smc.delivery_mode == "container"
     assert smc.web_tab_mode == "container"
 
-    cp.set(SEC_SENTENCES_MODE, "web_tab_mode", "tabs")
-    smc_tabs = SentencesModeConfig.from_config(cp)
-    assert smc_tabs.web_tab_mode == "tabs"
+    # Direct delivery_mode = multi_window
+    cp.set(SEC_SENTENCES_MODE, "delivery_mode", "multi_window")
+    smc_mw = SentencesModeConfig.from_config(cp)
+    assert smc_mw.delivery_mode == "multi_window"
+    assert smc_mw.web_tab_mode == "tabs"
 
-    cp.set(SEC_SENTENCES_MODE, "web_tab_mode", "invalid_mode")
+    # Invalid delivery_mode falls back to container
+    cp.set(SEC_SENTENCES_MODE, "delivery_mode", "invalid_mode")
     smc_invalid = SentencesModeConfig.from_config(cp)
+    assert smc_invalid.delivery_mode == "container"
     assert smc_invalid.web_tab_mode == "container"
+
+    # Legacy fallback: delivery_mode not present, web_tab_mode = tabs -> delivery_mode = multi_window
+    cp.remove_option(SEC_SENTENCES_MODE, "delivery_mode")
+    cp.set(SEC_SENTENCES_MODE, "web_tab_mode", "tabs")
+    smc_legacy_tabs = SentencesModeConfig.from_config(cp)
+    assert smc_legacy_tabs.delivery_mode == "multi_window"
+    assert smc_legacy_tabs.web_tab_mode == "tabs"
+
+    # Legacy fallback: delivery_mode not present, web_tab_mode = container -> delivery_mode = container
+    cp.set(SEC_SENTENCES_MODE, "web_tab_mode", "container")
+    smc_legacy_cont = SentencesModeConfig.from_config(cp)
+    assert smc_legacy_cont.delivery_mode == "container"
+    assert smc_legacy_cont.web_tab_mode == "container"
+
 

@@ -36,7 +36,7 @@ def create_mock_config(web_tab_mode="container", sentences_enabled=True):
 
 def test_render_flow_single_sentence_no_tabs(tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
-    config.set("sentences_mode", "web_tab_mode", "container")
+    config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     text = "Das Haus ist gross."
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
@@ -55,12 +55,13 @@ def test_render_flow_single_sentence_no_tabs(tmp_path):
     )
     
     assert 'id="kw-workspace-tab-bar" style="display:none;"' in html
+    assert '<script id="delivery-mode" type="text/plain">container</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">container</script>' in html
     assert '<script id="sentence-cards" type="application/json">\n[]\n</script>' in html
 
 def test_render_flow_multi_sentence_container_tabs(tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
-    config.set("sentences_mode", "web_tab_mode", "container")
+    config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     text = "Das Haus ist gross. Die Katze schlaeft."
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
@@ -82,13 +83,14 @@ def test_render_flow_multi_sentence_container_tabs(tmp_path):
     assert '<button type="button" class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0"' in html
     assert '<button type="button" class="kw-tab-chip" data-tab-seq="2" data-sentence-idx="1"' in html
     assert '<button type="button" class="kw-tab-chip" data-tab-seq="3" data-sentence-idx="2"' in html
+    assert '<script id="delivery-mode" type="text/plain">container</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">container</script>' in html
     assert 'data-sentence-idx="1"' in html
     assert 'data-sentence-idx="2"' in html
 
 def test_render_flow_multi_sentence_tabs_mode(tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
-    config.set("sentences_mode", "web_tab_mode", "tabs")
+    config.set("sentences_mode", "delivery_mode", "multi_window")
     config.set("sentences_mode", "enabled", "true")
     text = "Das Haus ist gross. Die Katze schlaeft."
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
@@ -107,4 +109,5 @@ def test_render_flow_multi_sentence_tabs_mode(tmp_path):
     )
     
     assert 'id="kw-workspace-tab-bar" style="display:none;"' in html
+    assert '<script id="delivery-mode" type="text/plain">multi_window</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">tabs</script>' in html

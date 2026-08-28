@@ -3623,10 +3623,16 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 return u
 
             parent_mode = "full"
-            web_tab_mode = "container"
+            delivery_mode = "container"
             if hasattr(self.server, 'config') and self.server.config and self.server.config.has_section("sentences_mode"):
                 parent_mode = self.server.config.get("sentences_mode", "parent_mode", fallback="full").lower()
-                web_tab_mode = self.server.config.get("sentences_mode", "web_tab_mode", fallback="container").lower()
+                raw_delivery = self.server.config.get("sentences_mode", "delivery_mode", fallback=None)
+                if raw_delivery is not None:
+                    del_val = raw_delivery.strip().lower()
+                    delivery_mode = del_val if del_val in ("container", "multi_window") else "container"
+                else:
+                    raw_wtm = self.server.config.get("sentences_mode", "web_tab_mode", fallback="container").strip().lower()
+                    delivery_mode = "multi_window" if raw_wtm == "tabs" else "container"
 
             child_items = []
             i = 0
@@ -3652,7 +3658,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if parent_mode != 'stub' or not child_items:
                 spawn_urls.append(build_browser_url(session_zid, 1))
 
-            if web_tab_mode != 'container':
+            if delivery_mode != 'container':
                 for c_seq, c_zid in child_items:
                     spawn_urls.append(build_browser_url(c_zid, c_seq))
 

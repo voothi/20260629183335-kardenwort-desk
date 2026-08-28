@@ -50,11 +50,11 @@
       "default": "sentence",
       "description": "Scope at which deduplication is applied: 'sentence' (per-sentence local), 'global' (cross-sentence combined), or 'none'."
     },
-    "web_tab_mode": {
+    "delivery_mode": {
       "type": "string",
-      "enum": ["container", "tabs"],
+      "enum": ["container", "multi_window"],
       "default": "container",
-      "description": "Delivery format for web browser mode: 'container' (in-page tabs in single browser tab) or 'tabs' (multi-browser-tab cascade)."
+      "description": "Delivery format for sentences mode: 'container' (in-page tabs in single workspace container) or 'multi_window' (multi-window / multi-tab cascade)."
     }
   },
   "required": [
@@ -66,7 +66,7 @@
     "multi_mode_decompose",
     "legacy_spawn_children",
     "deduplication_scope",
-    "web_tab_mode"
+    "delivery_mode"
   ],
   "additionalProperties": false
 }
