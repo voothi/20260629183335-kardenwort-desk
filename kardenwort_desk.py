@@ -1757,6 +1757,16 @@ def _migrate_config(config):
             val_sib_timeout = 0.0
     config.set(SEC_PIPELINE, 'sibling_coordination_timeout', str(val_sib_timeout))
 
+    raw_fast_fail = config.get(SEC_PIPELINE, 'translation_fast_fail_timeout', fallback=None)
+    val_fast_fail = 3.0
+    if raw_fast_fail is not None:
+        try:
+            val_fast_fail = float(raw_fast_fail)
+        except ValueError:
+            val_fast_fail = 3.0
+    config.set(SEC_PIPELINE, 'translation_fast_fail_timeout', str(val_fast_fail))
+
+
 def resolve_wordfill_config(config, resolved_paths=None):
     """
     Parse and resolve wordfill configuration dictionary from config (ConfigParser or dict)
@@ -7402,6 +7412,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         # in a loop). Use the local variables display_mode_val and
         # is_progressive_translation_enabled throughout this function to track effective mode.
     
+    translation_fast_failed = False
+
     if will_split:
         main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
         master_slug = generate_slug(text)
@@ -7412,6 +7424,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         master_tsv_path = None
         
         parallelize = config.getboolean(SEC_PIPELINE, 'parallelize_core_and_translation', fallback=True)
+        fast_fail_timeout = config.getfloat(SEC_PIPELINE, 'translation_fast_fail_timeout', fallback=3.0)
         
         def do_translation():
             if is_progressive_translation_enabled:
@@ -7434,27 +7447,25 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 future_trans = executor.submit(do_translation)
                 future_core = executor.submit(do_core)
                 
-                concurrent.futures.wait(
-                    [future_trans, future_core], 
-                    return_when=concurrent.futures.FIRST_EXCEPTION
-                )
-                
-                core_exc = future_core.exception()
-                if core_exc:
+                try:
+                    master_tsv_path = future_core.result()
+                except Exception as core_exc:
                     logger.error(f"[{zid}] Core TSV generation failed in parallel executor: {core_exc}")
                     raise core_exc
                     
-                trans_exc = future_trans.exception()
-                if trans_exc:
+                try:
+                    translated_paragraph = future_trans.result(timeout=max(0.0, fast_fail_timeout))
+                    translated_sentences = split_single_mode_text(
+                        translated_paragraph, wrap_max_chars, abbrevs=None,
+                        terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks
+                    )
+                except concurrent.futures.TimeoutError:
+                    translation_fast_failed = True
+                    logger.warning(f"[{zid}] Holistic translation exceeded fast-fail timeout ({fast_fail_timeout}s); proceeding without initial translation")
+                    with TraceTimer("translation_fast_fail", zid, config, resolved_paths, extra={"timeout": fast_fail_timeout}):
+                        pass
+                except Exception as trans_exc:
                     logger.warning(f"[{zid}] Holistic translation failed in parallel executor: {trans_exc}")
-                else:
-                    try:
-                        translated_paragraph = future_trans.result()
-                        translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
-                    except Exception as e:
-                        logger.warning(f"[{zid}] Holistic translation failed in parallel executor during split: {e}")
-                        
-                master_tsv_path = future_core.result()
             finally:
                 if sys.version_info >= (3, 9):
                     executor.shutdown(wait=False, cancel_futures=True)
@@ -7470,7 +7481,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             master_tsv_path = do_core()
                 
         # Fallback to newline_join block translation when sentence-count alignment fails
-        attempt_newline_join = not is_progressive_translation_enabled and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
+        attempt_newline_join = not is_progressive_translation_enabled and not translation_fast_failed and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
         if attempt_newline_join and alignment_method != 'proportion':
             try:
                 translations_dict = translate_source_text(
@@ -7482,7 +7493,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 logger.error(f"[{zid}] Newline-join alignment fallback failed: {e}")
                 
         # Final proportional safety net fallback
-        if not is_progressive_translation_enabled and len(translated_sentences) != len(source_sentences):
+        if not is_progressive_translation_enabled and not translation_fast_failed and len(translated_sentences) != len(source_sentences):
             if not translated_paragraph:
                 try:
                     translated_paragraph = translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
@@ -8053,7 +8064,7 @@ html, body {{
     # If monolithic mode and run_base is auto, run base translation synchronously
     if not is_mismatch and not is_progressive and run_base == 'auto':
         try:
-            if not sentence_translated:
+            if not sentence_translated and not translation_fast_failed:
                 with TraceTimer("monolithic_text_translation", zid, config, resolved_paths):
                     sentence_translations_raw = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, main_text_provider, zid=zid)
                 resolve_translations(
