@@ -346,7 +346,7 @@ def test_window_sequence_branding_in_web_view(page, tmp_path):
     # 1. Test with seq_num = 1 (Master window) - clean title, favicon #1, no toolbar badge element
     html_seq1 = get_desk_page_html(tmp_path, zid="20260826235951", seq_num=1)
     page.set_content(html_seq1)
-    assert page.title() == "Kardenwort - de (single)"
+    assert page.title() == "Kardenwort - de (single) - 20260826235951-test.de.tsv - Ready"
     favicon = page.locator("link[rel='icon']")
     assert favicon.get_attribute("href") == "/assets/numbers/1.ico"
     assert page.locator("#kw-seq-badge").count() == 0
@@ -354,14 +354,14 @@ def test_window_sequence_branding_in_web_view(page, tmp_path):
     # 2. Test with seq_num = 3 (Child window) - clean title, favicon #3, no toolbar badge element
     html_seq3 = get_desk_page_html(tmp_path, zid="20260826235953", seq_num=3)
     page.set_content(html_seq3)
-    assert page.title() == "Kardenwort - de (single)"
+    assert page.title() == "Kardenwort - de (single) - 20260826235953-test.de.tsv - Ready"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/3.ico"
     assert page.locator("#kw-seq-badge").count() == 0
 
     # 3. Test without seq_num (Default fallback)
     html_default = get_desk_page_html(tmp_path, zid="20260826235950", seq_num=None)
     page.set_content(html_default)
-    assert page.title() == "Kardenwort - de (single)"
+    assert page.title() == "Kardenwort - de (single) - 20260826235950-test.de.tsv - Ready"
     assert page.locator("link[rel='icon']").get_attribute("href") == "/assets/numbers/1.ico"
     assert page.locator("#kw-seq-badge").count() == 0
 

@@ -7,8 +7,9 @@ from kardenwort_desk import (
     get_language_display_name,
 )
 
-def get_modal_test_page_html(tmp_path: Path, mismatch_info=None, theme="dark") -> str:
+def get_modal_test_page_html(tmp_path: Path, mismatch_info=None, theme="dark", delivery_mode="multi_window") -> str:
     config, resolved, _, _ = load_config()
+    config.set("sentences_mode", "delivery_mode", delivery_mode)
     tsv_file = tmp_path / "20260827005722-test.en.tsv"
     tsv_file.write_text("# Headers\tLemma\tInflected\n# Data\tHaus\tHäuser\n", encoding="utf-8")
     
@@ -186,7 +187,7 @@ def test_language_modal_cancel_click_action(page, tmp_path):
     assert len(render_fetches) == 0
 
 
-def test_language_modal_keyboard_enter_and_escape(page, tmp_path):
+def test_language_modal_keyboard_shortcuts(page, tmp_path):
     mismatch = {
         "is_mismatch": True,
         "detected_language": "de",
@@ -268,12 +269,12 @@ def test_language_modal_title_formatting_and_dynamic_update(page, tmp_path):
         mismatch_info=mismatch,
     )
     page.set_content(inject_mock_fetch(html_single))
-    assert page.title() == "Kardenwort - en (single)"
+    assert page.title() == "Kardenwort - en (single) - 20260827005722-test.en.tsv - Ready"
 
     # Clicking Yes updates title immediately to German
     page.locator("#kw-btn-lang-yes").click()
     page.wait_for_timeout(50)
-    assert page.title() == "Kardenwort - de (single)"
+    assert page.title() == "Kardenwort - de (single) - 20260827005722-test.de.tsv - Ready"
 
     # 2. Multi mode title formatting
     html_multi = run_render_flow(
@@ -288,12 +289,12 @@ def test_language_modal_title_formatting_and_dynamic_update(page, tmp_path):
         mismatch_info=mismatch,
     )
     page.set_content(inject_mock_fetch(html_multi))
-    assert page.title() == "Kardenwort - en (multi)"
+    assert page.title() == "Kardenwort - en (multi) - 20260827005722-test.en.tsv - Ready"
 
     # Clicking No updates title in expected language
     page.locator("#kw-btn-lang-no").click()
     page.wait_for_timeout(50)
-    assert page.title() == "Kardenwort - en (multi)"
+    assert page.title() == "Kardenwort - en (multi) - 20260827005722-test.en.tsv - Ready"
 
 
 def test_language_modal_button_state_during_inflight_request(page, tmp_path):

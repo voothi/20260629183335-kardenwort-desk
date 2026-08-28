@@ -349,6 +349,7 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     """
     from kardenwort_controller import _DRAFT_SESSIONS, _DRAFT_SESSIONS_LOCK
     server_url, server = running_controller
+    server.config.set("sentences_mode", "delivery_mode", "multi_window")
 
     session_zid = "20260827010101"
     with _DRAFT_SESSIONS_LOCK:

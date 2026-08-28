@@ -13882,7 +13882,19 @@ html, body {{
             var tok = getApiToken();
             var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
 
-            document.title = "Kardenwort - " + detLang + " (" + effMode + ")";
+            var cardTsv = "";
+            var tsvPathEl = document.getElementById('tsv-path');
+            if (tsvPathEl) {
+                var fullPath = (tsvPathEl.textContent || tsvPathEl.innerText || '').trim();
+                cardTsv = fullPath.split(/[/\\\\]/).pop();
+                if (cardTsv && sZid && detLang) {
+                    cardTsv = cardTsv.replace(new RegExp('\\.[a-z]{2}\\.tsv$', 'i'), '.' + detLang + '.tsv');
+                }
+            }
+            if (!cardTsv && sZid && detLang) {
+                cardTsv = sZid + '.' + detLang + '.tsv';
+            }
+            document.title = cardTsv ? ("Kardenwort - " + detLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + detLang + " (" + effMode + ") - Ready");
             window.showToast("Switching language to " + detName + "...", "info");
             setLangModalLoading(true);
 
@@ -13963,7 +13975,16 @@ html, body {{
             var tok = getApiToken();
             var tokenQuery = tok ? '&token=' + encodeURIComponent(tok) : '';
 
-            document.title = "Kardenwort - " + expLang + " (" + effMode + ")";
+            var cardTsv = "";
+            var tsvPathEl = document.getElementById('tsv-path');
+            if (tsvPathEl) {
+                var fullPath = (tsvPathEl.textContent || tsvPathEl.innerText || '').trim();
+                cardTsv = fullPath.split(/[/\\\\]/).pop();
+            }
+            if (!cardTsv && sZid && expLang) {
+                cardTsv = sZid + '.' + expLang + '.tsv';
+            }
+            document.title = cardTsv ? ("Kardenwort - " + expLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + expLang + " (" + effMode + ") - Ready");
             window.showToast("Processing in " + expName + "...", "info");
             setLangModalLoading(true);
 
