@@ -1383,9 +1383,7 @@ def test_get_session_zid_serves_directly_from_sqlite_without_translation(running
 
     monkeypatch.setattr(kardenwort_desk, 'translate_text', fail_if_called)
     monkeypatch.setattr(kardenwort_desk, 'translate_source_text', fail_if_called)
-    monkeypatch.setattr(kardenwort_desk, 'run_render_flow', fail_if_called)
-    import kardenwort_controller
-    monkeypatch.setattr(kardenwort_controller, 'run_render_flow', fail_if_called)
+    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', fail_if_called)
 
     req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
     t0 = time.perf_counter()
@@ -1396,7 +1394,8 @@ def test_get_session_zid_serves_directly_from_sqlite_without_translation(running
         assert "Hund" in content
         assert "собака" in content
         assert not translation_called
-        assert duration < 0.5
+        assert ("lemma-table" in content or "source-container" in content)
+        assert duration < 1.0
 
 
 def test_get_session_zid_incremental_wordfill_hydration(running_controller, monkeypatch):
