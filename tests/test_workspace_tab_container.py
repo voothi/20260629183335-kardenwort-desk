@@ -171,7 +171,7 @@ def test_window_title_parity_with_ahk(tmp_path):
     import re
     m = re.search(r"<title>(.*?)</title>", html)
     actual_title = m.group(0) if m else ""
-    assert actual_title == "<title>[1/3] Kardenwort - en (multi) - 20260828161106-first-sentence-second-sentence.en.tsv - Ready</title>"
+    assert actual_title == "<title>Kardenwort - en (multi) - 20260828161106-first-sentence-second-sentence.en.tsv - Ready</title>"
 
     # Parity in multi_window mode: no prefix
     config.set("sentences_mode", "delivery_mode", "multi_window")
@@ -225,11 +225,11 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     page.set_content(html)
     page.wait_for_selector("#kw-workspace-tab-bar")
     
-    # Check initial active tab and title
+    # Check initial active tab and title (no prefix)
     active_chip = page.locator(".kw-tab-chip.active")
     assert active_chip.inner_text() == "1"
-    assert page.title().startswith("[1/6] ")
-    assert "20260828170000-first-sentence-second-sentence.en.tsv - Ready" in page.title()
+    assert not page.title().startswith("[")
+    assert page.title() == "Kardenwort - en (multi) - 20260828170000-first-sentence-second-sentence.en.tsv - Ready"
     
     # Click Tab 2 (Sentence 1: sentence_idx = 1)
     tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
@@ -241,9 +241,9 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     assert chunk1.is_visible()
     assert not chunk2.is_visible()
     
-    # Check title updated for sentence 1
-    assert page.title().startswith("[2/6] ")
-    assert "20260828170001-first-sentence-second-sentence.en.tsv - Ready" in page.title()
+    # Check title updated for sentence 1 with distinct sentence slug and without prefix
+    assert not page.title().startswith("[")
+    assert page.title() == "Kardenwort - en (multi) - 20260828170001-first-sentence.en.tsv - Ready"
     
     # Press ']' key to go to Tab 3 (Sentence 2: sentence_idx = 2)
     page.keyboard.press("]")
@@ -251,8 +251,8 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     assert not chunk1.is_visible()
     assert chunk2.is_visible()
     assert not chunk3.is_visible()
-    assert page.title().startswith("[3/6] ")
-    assert "20260828170002-first-sentence-second-sentence.en.tsv - Ready" in page.title()
+    assert not page.title().startswith("[")
+    assert page.title() == "Kardenwort - en (multi) - 20260828170002-second-sentence.en.tsv - Ready"
     
     # Set narrow viewport so tab strip overflows and activates chevrons
     page.set_viewport_size({"width": 180, "height": 600})
@@ -396,25 +396,138 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
     page.set_content(html)
     page.wait_for_selector("#kw-workspace-tab-bar")
 
-    # Initial title: [1/3]
-    assert page.title().startswith("[1/3] ")
-    assert "Kardenwort - en (multi) - " in page.title()
-    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+    # Initial title: no [1/3] prefix
+    assert not page.title().startswith("[")
+    assert page.title() == "Kardenwort - en (multi) - 20260828181000-first-sentence-second-sentence.en.tsv - Ready"
 
-    # Click tab 2 (Sentence 1): updates dynamically to [2/3]
+    # Click tab 2 (Sentence 1): updates dynamically without prefix, with sentence 1 slug
     page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
-    assert page.title().startswith("[2/3] ")
-    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+    assert not page.title().startswith("[")
+    assert page.title() == "Kardenwort - en (multi) - 20260828181001-first-sentence.en.tsv - Ready"
 
-    # Click tab 3 (Sentence 2): updates dynamically to [3/3]
+    # Click tab 3 (Sentence 2): updates dynamically without prefix, with sentence 2 slug
     page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
-    assert page.title().startswith("[3/3] ")
-    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+    assert not page.title().startswith("[")
+    assert page.title() == "Kardenwort - en (multi) - 20260828181002-second-sentence.en.tsv - Ready"
 
-    # Click tab 1 (All overview): updates dynamically back to [1/3]
+    # Click tab 1 (All overview): updates dynamically back to overview without prefix
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
-    assert page.title().startswith("[1/3] ")
-    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+    assert not page.title().startswith("[")
+    assert page.title() == "Kardenwort - en (multi) - 20260828181000-first-sentence-second-sentence.en.tsv - Ready"
+
+
+def test_clean_window_title_and_fallback_slug_synthesis(tmp_path):
+    """Verifies that render flow produces clean document title without sequence fraction prefix and synthesizes slug when omitted."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+
+    text = "Alpha sentence.\nBeta sentence."
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260828235000",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        spawn_children=False,
+        return_children=False,
+    )
+    import re
+    m = re.search(r"<title>(.*?)</title>", html)
+    assert m is not None
+    title = m.group(1)
+    assert not title.startswith("[")
+    assert title == "Kardenwort - en (multi) - 20260828235000-alpha-sentence-beta-sentence.en.tsv - Ready"
+
+
+def test_distinct_per_sentence_card_slugs_and_restore_session(tmp_path):
+    """Verifies each sentence card has a distinct slug and restore_session exposes slug at top level."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+
+    text = "It works by restoring.\nAnd on a drive without encryption."
+    tsv_file = tmp_path / "20260828233844-it-works-by-restoring.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "It\tIt\tОно\t1\t\n"
+        "And\tAnd\tИ\t2\t\n",
+        encoding="utf-8"
+    )
+
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "cache_ttl_seconds", "0")
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260828233844",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+    )
+    import json, re
+    cards_match = re.search(r'<script id="sentence-cards"[^>]*>(.*?)</script>', html, re.DOTALL)
+    assert cards_match is not None
+    cards_data = json.loads(cards_match.group(1).strip())
+    assert len(cards_data) == 3
+    # Master card
+    assert cards_data[0]["seq_num"] == 1
+    assert cards_data[0]["slug"] == "it-works-by-restoring"
+    # Child card 1
+    assert cards_data[1]["seq_num"] == 2
+    assert cards_data[1]["slug"] == "it-works-by-restoring"
+    assert "20260828233845-it-works-by-restoring.en.tsv" in cards_data[1]["tsv_filename"]
+    # Child card 2 has distinct sentence slug!
+    assert cards_data[2]["seq_num"] == 3
+    assert cards_data[2]["slug"] == "and-on-a-drive"
+    assert "20260828233846-and-on-a-drive.en.tsv" in cards_data[2]["tsv_filename"]
+
+    # Test restore_session top-level slug exposure
+    adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
+    restored = adapter.restore_session("20260828233844", results_dir=tmp_path)
+    assert "slug" in restored
+    assert restored["slug"] == "it-works-by-restoring"
+
+
+def test_action_toolbar_glassmorphism_css(tmp_path):
+    """Verifies that .kw-action-toolbar includes translucent glassmorphism backdrop, blur, and hover rules."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    html_dark = kardenwort_desk.run_render_flow(
+        text="Test text.",
+        language="en",
+        zid="20260828235500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        spawn_children=False,
+    )
+    assert ".kw-action-toolbar {" in html_dark
+    assert "backdrop-filter: blur(8px);" in html_dark
+    assert "-webkit-backdrop-filter: blur(8px);" in html_dark
+    assert "background: rgba(22, 27, 34, 0.8);" in html_dark
+    assert ".kw-action-toolbar:hover {" in html_dark
+    assert "background: #161b22;" in html_dark
+
+    html_light = kardenwort_desk.run_render_flow(
+        text="Test text.",
+        language="en",
+        zid="20260828235501",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="light",
+        spawn_children=False,
+    )
+    assert "body.theme-light .kw-action-toolbar" in html_light
+    assert "background: rgba(255, 255, 255, 0.85);" in html_light
+    assert "body.theme-light .kw-action-toolbar:hover" in html_light
 
 
 
