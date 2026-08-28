@@ -493,3 +493,40 @@ def test_sentences_mode_delivery_mode_default_and_fallback(tmp_path):
     assert smc_legacy_cont.web_tab_mode == "container"
 
 
+def test_sentences_mode_tab_bar_position_default_and_fallback():
+    """Test tab_bar_position default value, valid options, and invalid fallback."""
+    from kardenwort_desk import SentencesModeConfig, SEC_SENTENCES_MODE
+    import configparser
+
+    # Default
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_SENTENCES_MODE)
+    smc = SentencesModeConfig.from_config(cp)
+    assert smc.tab_bar_position == "top"
+
+    # None config
+    empty_smc = SentencesModeConfig.from_config(None)
+    assert empty_smc.tab_bar_position == "top"
+
+    # Explicit top
+    cp.set(SEC_SENTENCES_MODE, "tab_bar_position", "top")
+    smc_top = SentencesModeConfig.from_config(cp)
+    assert smc_top.tab_bar_position == "top"
+
+    # Explicit bottom
+    cp.set(SEC_SENTENCES_MODE, "tab_bar_position", "bottom")
+    smc_bottom = SentencesModeConfig.from_config(cp)
+    assert smc_bottom.tab_bar_position == "bottom"
+
+    # Explicit inline
+    cp.set(SEC_SENTENCES_MODE, "tab_bar_position", "inline")
+    smc_inline = SentencesModeConfig.from_config(cp)
+    assert smc_inline.tab_bar_position == "inline"
+
+    # Invalid fallback to top
+    cp.set(SEC_SENTENCES_MODE, "tab_bar_position", "invalid_position")
+    smc_invalid = SentencesModeConfig.from_config(cp)
+    assert smc_invalid.tab_bar_position == "top"
+
+
+

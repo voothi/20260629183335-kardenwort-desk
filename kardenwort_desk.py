@@ -1298,6 +1298,7 @@ class SentencesModeConfig:
     legacy_spawn_children: bool = False
     deduplication_scope: str = "sentence"
     delivery_mode: str = "container"
+    tab_bar_position: str = "top"
 
     @property
     def web_tab_mode(self) -> str:
@@ -1330,6 +1331,7 @@ class SentencesModeConfig:
         legacy_spawn_children = False
         deduplication_scope = "sentence"
         delivery_mode = "container"
+        tab_bar_position = "top"
 
         if config and hasattr(config, "has_section") and hasattr(config, "get"):
             try:
@@ -1351,6 +1353,10 @@ class SentencesModeConfig:
                     else:
                         raw_wtm = config.get(SEC_SENTENCES_MODE, "web_tab_mode", fallback="container").strip().lower()
                         delivery_mode = "multi_window" if raw_wtm == "tabs" else "container"
+                    raw_tbp = config.get(SEC_SENTENCES_MODE, "tab_bar_position", fallback="top")
+                    if raw_tbp is not None:
+                        tbp_val = str(raw_tbp).strip().lower()
+                        tab_bar_position = tbp_val if tbp_val in ("top", "bottom", "inline") else "top"
             except Exception:
                 pass
 
@@ -1364,6 +1370,7 @@ class SentencesModeConfig:
             legacy_spawn_children=legacy_spawn_children,
             deduplication_scope=deduplication_scope,
             delivery_mode=delivery_mode,
+            tab_bar_position=tab_bar_position,
         )
 
 

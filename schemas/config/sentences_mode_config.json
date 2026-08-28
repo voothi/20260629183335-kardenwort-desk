@@ -55,6 +55,12 @@
       "enum": ["container", "multi_window"],
       "default": "container",
       "description": "Delivery format for sentences mode: 'container' (in-page tabs in single workspace container) or 'multi_window' (multi-window / multi-tab cascade)."
+    },
+    "tab_bar_position": {
+      "type": "string",
+      "enum": ["top", "bottom", "inline"],
+      "default": "top",
+      "description": "Tab bar position in container mode: 'top' (fixed motionless at top of viewport with glassmorphism), 'bottom' (fixed motionless directly above action toolbar), or 'inline' (in document flow at top of container)."
     }
   },
   "required": [
@@ -66,7 +72,8 @@
     "multi_mode_decompose",
     "legacy_spawn_children",
     "deduplication_scope",
-    "delivery_mode"
+    "delivery_mode",
+    "tab_bar_position"
   ],
   "additionalProperties": false
 }

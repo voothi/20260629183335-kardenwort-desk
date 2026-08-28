@@ -557,6 +557,13 @@ parent_mode = full
 ;   - multi_window: Spawns a separate window/tab for each sentence card in the configured spawn_order.
 delivery_mode = container
 
+; Tab bar position in container mode.
+; Options:
+;   - top (default): Fixed motionless at the top of the browser viewport with glassmorphism.
+;   - bottom: Fixed motionless directly above the bottom action toolbar.
+;   - inline: Placed in document flow at the top of the content container.
+tab_bar_position = top
+
 [theme_light]
 ; Overrides for the light theme UI colors
 ; highlight_orange_active_bg = rgba(255, 225, 105, 0.4)
