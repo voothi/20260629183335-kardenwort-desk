@@ -1994,7 +1994,8 @@ class SessionArbiter:
 
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                safe_write_update_js(sib_tsv if not is_sqlite and sib_tsv else Path(f"{sib_zid}.tsv"), sorted_rows, headers, role_fields, stage="translated", zid=sib_zid)
+                if not is_sqlite and sib_tsv:
+                    safe_write_update_js(sib_tsv, sorted_rows, headers, role_fields, stage="translated", zid=sib_zid)
                 self.emit_event(sib_zid, {
                     "type": "update",
                     "stage": "translated",
@@ -2134,7 +2135,8 @@ class SessionArbiter:
 
         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
         structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", zid=session_zid, trace_id=eff_trace_id)
+        if not is_sqlite and tsv_path:
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", zid=session_zid, trace_id=eff_trace_id)
 
         self.emit_event(session_zid, {
             "type": "update",

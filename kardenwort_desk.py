@@ -2116,6 +2116,8 @@ class SessionLogger:
         self._write_entry("DEBUG", message, trace_id)
 
 def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None):
+    if not tsv_path:
+        return None
     import inspect
     kwargs = {
         "stage": stage,
@@ -16146,9 +16148,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         m = re.match(r"^(\d{14})", tsv_path.name)
         if m:
             zid = m.group(1)
-    if trace_id is None and zid:
-        trace_id = f"{zid}:update"
-    
+    if not tsv_path:
+        return None
+    tsv_path = Path(tsv_path)
+    if not tsv_path.is_absolute() and not str(tsv_path).startswith((".", "/", "\\")):
+        return None
+
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     updates_dir.mkdir(parents=True, exist_ok=True)
     update_js_path = updates_dir / f"{_update_seq_counter:06d}.js"
