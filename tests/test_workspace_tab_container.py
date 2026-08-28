@@ -149,6 +149,9 @@ def test_window_title_parity_with_ahk(tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "cache_ttl_seconds", "0")
     text = "First sentence.\nSecond sentence."
     tsv_file = tmp_path / "20260828161106-first-sentence-second-sentence.en.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nFirst\tFirst\tпервый\t1\t\nSecond\tSecond\tвторой\t2\t\n", encoding="utf-8")
@@ -225,6 +228,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     # Check initial active tab and title
     active_chip = page.locator(".kw-tab-chip.active")
     assert active_chip.inner_text() == "1"
+    assert page.title().startswith("[1/6] ")
     assert "20260828170000-first-sentence-second-sentence.en.tsv - Ready" in page.title()
     
     # Click Tab 2 (Sentence 1: sentence_idx = 1)
@@ -238,6 +242,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     assert not chunk2.is_visible()
     
     # Check title updated for sentence 1
+    assert page.title().startswith("[2/6] ")
     assert "20260828170001-first-sentence-second-sentence.en.tsv - Ready" in page.title()
     
     # Press ']' key to go to Tab 3 (Sentence 2: sentence_idx = 2)
@@ -246,6 +251,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     assert not chunk1.is_visible()
     assert chunk2.is_visible()
     assert not chunk3.is_visible()
+    assert page.title().startswith("[3/6] ")
     assert "20260828170002-first-sentence-second-sentence.en.tsv - Ready" in page.title()
     
     # Set narrow viewport so tab strip overflows and activates chevrons
@@ -258,6 +264,158 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     next_btn.click()
     assert not prev_btn.is_disabled()
     prev_btn.click()
+
+
+def test_playwright_tab_docking_positions(page, tmp_path):
+    """Test fixed top docking, bottom docking, and inline modes in Playwright."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    
+    text = "First sentence.\nSecond sentence."
+    tsv_file = tmp_path / "20260828180000-dock.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\t\n"
+        "Second\tSecond\tвторой\t2\t\n",
+        encoding="utf-8"
+    )
+
+    # 1. Top docking
+    config.set("sentences_mode", "tab_bar_position", "top")
+    html_top = kardenwort_desk.run_render_flow(
+        text=text, language="en", zid="20260828180000", text_mode="multi",
+        config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
+        spawn_children=False, return_children=False
+    )
+    page.set_content(html_top)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+    tab_bar = page.locator("#kw-workspace-tab-bar")
+    container = page.locator(".container")
+    
+    assert tab_bar.evaluate("el => window.getComputedStyle(el).position") == "fixed"
+    assert tab_bar.evaluate("el => window.getComputedStyle(el).top") == "0px"
+    assert tab_bar.evaluate("el => window.getComputedStyle(el).zIndex") == "1000"
+    assert page.locator("body").evaluate("el => el.classList.contains('has-dock-top')") is True
+    assert container.evaluate("el => window.getComputedStyle(el).paddingTop") == "48px"
+
+    # 2. Bottom docking
+    config.set("sentences_mode", "tab_bar_position", "bottom")
+    html_bottom = kardenwort_desk.run_render_flow(
+        text=text, language="en", zid="20260828180000", text_mode="multi",
+        config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
+        spawn_children=False, return_children=False
+    )
+    page.set_content(html_bottom)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+    tab_bar = page.locator("#kw-workspace-tab-bar")
+    container = page.locator(".container")
+    
+    assert tab_bar.evaluate("el => window.getComputedStyle(el).position") == "fixed"
+    assert tab_bar.evaluate("el => window.getComputedStyle(el).bottom") == "50px"
+    assert tab_bar.evaluate("el => window.getComputedStyle(el).zIndex") == "1000"
+    assert page.locator("body").evaluate("el => el.classList.contains('has-dock-bottom')") is True
+    assert container.evaluate("el => window.getComputedStyle(el).paddingBottom") == "95px"
+
+    # 3. Inline mode
+    config.set("sentences_mode", "tab_bar_position", "inline")
+    html_inline = kardenwort_desk.run_render_flow(
+        text=text, language="en", zid="20260828180000", text_mode="multi",
+        config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
+        spawn_children=False, return_children=False
+    )
+    page.set_content(html_inline)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+    tab_bar = page.locator("#kw-workspace-tab-bar")
+    
+    assert tab_bar.evaluate("el => window.getComputedStyle(el).position") == "static"
+    assert page.locator("body").evaluate("el => !el.classList.contains('has-dock-top') && !el.classList.contains('has-dock-bottom')") is True
+    assert tab_bar.evaluate("el => el.classList.contains('kw-tab-dock-inline')") is True
+
+
+def test_playwright_glassmorphic_styling_and_hover(page, tmp_path):
+    """Test backdrop-filter blur and hover transition between translucent and opaque backgrounds."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "tab_bar_position", "top")
+    
+    text = "First sentence.\nSecond sentence."
+    tsv_file = tmp_path / "20260828180500-glass.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\t\n"
+        "Second\tSecond\tвторой\t2\t\n",
+        encoding="utf-8"
+    )
+
+    # Dark Theme
+    html_dark = kardenwort_desk.run_render_flow(
+        text=text, language="en", zid="20260828180500", text_mode="multi",
+        config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
+        spawn_children=False, return_children=False
+    )
+    page.set_content(html_dark)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+    tab_bar = page.locator("#kw-workspace-tab-bar")
+    
+    bf = tab_bar.evaluate("el => window.getComputedStyle(el).backdropFilter || window.getComputedStyle(el).webkitBackdropFilter")
+    assert "blur(8px)" in bf
+    
+    # Idle translucent background (dark: rgba(22, 27, 34, 0.8))
+    bg_idle = tab_bar.evaluate("el => window.getComputedStyle(el).backgroundColor")
+    assert "rgba(22, 27, 34, 0.8)" in bg_idle or "0.8" in bg_idle
+    
+    # Hover solid opaque background (dark: #161b22 -> rgb(22, 27, 34))
+    tab_bar.hover()
+    page.wait_for_timeout(300)
+    bg_hover = tab_bar.evaluate("el => window.getComputedStyle(el).backgroundColor")
+    assert "rgb(22, 27, 34)" in bg_hover
+
+
+def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
+    """Test dynamic document.title card sequence prefixing ([1/3], [2/3], [3/3]) upon tab navigation."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    
+    text = "First sentence.\nSecond sentence."
+    tsv_file = tmp_path / "20260828181000-dyn-title.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\t\n"
+        "Second\tSecond\tвторой\t2\t\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text, language="en", zid="20260828181000", text_mode="multi",
+        config=config, resolved_paths=resolved_paths, tsv_path=str(tsv_file),
+        spawn_children=False, return_children=False
+    )
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Initial title: [1/3]
+    assert page.title().startswith("[1/3] ")
+    assert "Kardenwort - en (multi) - " in page.title()
+    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+
+    # Click tab 2 (Sentence 1): updates dynamically to [2/3]
+    page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
+    assert page.title().startswith("[2/3] ")
+    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+
+    # Click tab 3 (Sentence 2): updates dynamically to [3/3]
+    page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
+    assert page.title().startswith("[3/3] ")
+    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+
+    # Click tab 1 (All overview): updates dynamically back to [1/3]
+    page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
+    assert page.title().startswith("[1/3] ")
+    assert "first-sentence-second-sentence.en.tsv - Ready" in page.title()
+
 
 
 

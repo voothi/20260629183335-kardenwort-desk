@@ -243,6 +243,7 @@ def test_language_modal_suppresses_content_on_mismatch(page, tmp_path):
 
 def test_language_modal_title_formatting_and_dynamic_update(page, tmp_path):
     config, resolved, _, _ = load_config()
+    config.set("sentences_mode", "delivery_mode", "multi_window")
     tsv_file = tmp_path / "20260827005722-test.en.tsv"
     tsv_file.write_text("# Headers\tLemma\tInflected\n# Data\tHaus\tHäuser\n", encoding="utf-8")
 

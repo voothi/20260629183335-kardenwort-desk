@@ -13980,7 +13980,8 @@ html, body {{
             if (!cardTsv && sZid && detLang) {
                 cardTsv = sZid + '.' + detLang + '.tsv';
             }
-            document.title = cardTsv ? ("Kardenwort - " + detLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + detLang + " (" + effMode + ") - Ready");
+            var prefix = (getDeliveryMode() === 'container' && typeof WorkspaceTabs !== 'undefined' && WorkspaceTabs.getCards && WorkspaceTabs.getCards().length > 1) ? ('[' + WorkspaceTabs.getActiveTabSeq() + '/' + WorkspaceTabs.getCards().length + '] ') : '';
+            document.title = prefix + (cardTsv ? ("Kardenwort - " + detLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + detLang + " (" + effMode + ") - Ready"));
             window.showToast("Switching language to " + detName + "...", "info");
             setLangModalLoading(true);
 
@@ -14070,7 +14071,8 @@ html, body {{
             if (!cardTsv && sZid && expLang) {
                 cardTsv = sZid + '.' + expLang + '.tsv';
             }
-            document.title = cardTsv ? ("Kardenwort - " + expLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + expLang + " (" + effMode + ") - Ready");
+            var prefix = (getDeliveryMode() === 'container' && typeof WorkspaceTabs !== 'undefined' && WorkspaceTabs.getCards && WorkspaceTabs.getCards().length > 1) ? ('[' + WorkspaceTabs.getActiveTabSeq() + '/' + WorkspaceTabs.getCards().length + '] ') : '';
+            document.title = prefix + (cardTsv ? ("Kardenwort - " + expLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + expLang + " (" + effMode + ") - Ready"));
             window.showToast("Processing in " + expName + "...", "info");
             setLangModalLoading(true);
 
