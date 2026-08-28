@@ -8835,7 +8835,23 @@ html, body {{
         elif sentence_translations:
             master_trans_full = "\n".join(sentence_translations.values())
         
-        master_tsv_name = Path(str(working_tsv_path)).name if working_tsv_path else f"{zid}.{language}.tsv"
+        if not working_tsv_path:
+            master_slug = tsv_slug or (generate_slug(text) if text else "")
+            master_tsv_name = f"{zid}-{master_slug}.{language}.tsv" if master_slug else f"{zid}.{language}.tsv"
+        else:
+            w_name = Path(str(working_tsv_path)).name
+            has_slug_match = re.match(r'^\d{14}-.+\.[a-z]{2}\.tsv$', w_name, re.IGNORECASE)
+            if not has_slug_match:
+                master_slug = tsv_slug or (generate_slug(text) if text else "")
+                bare_match = re.match(r'^(\d{14})(?:\.([a-z]{2}))?\.tsv$', w_name, re.IGNORECASE)
+                if bare_match and master_slug:
+                    z_part = bare_match.group(1)
+                    l_part = bare_match.group(2) or language
+                    master_tsv_name = f"{z_part}-{master_slug}.{l_part}.tsv"
+                else:
+                    master_tsv_name = w_name
+            else:
+                master_tsv_name = w_name
         sentence_cards.append({
             "index": 0,
             "seq_num": 1,
@@ -13892,8 +13908,7 @@ html, body {{
                         }
                     }
                 }
-                var prefix = (getDeliveryMode() === 'container' && cards && cards.length > 1) ? ('[' + (targetCard ? targetCard.seq_num : activeTabSeq) + '/' + cards.length + '] ') : '';
-                document.title = prefix + 'Kardenwort - ' + lang + ' (' + tMode + ') - ' + cardTsv + ' - Ready';
+                document.title = 'Kardenwort - ' + lang + ' (' + tMode + ') - ' + cardTsv + ' - Ready';
             }
 
             function updateFavicon(seq) {
@@ -13980,8 +13995,7 @@ html, body {{
             if (!cardTsv && sZid && detLang) {
                 cardTsv = sZid + '.' + detLang + '.tsv';
             }
-            var prefix = (getDeliveryMode() === 'container' && typeof WorkspaceTabs !== 'undefined' && WorkspaceTabs.getCards && WorkspaceTabs.getCards().length > 1) ? ('[' + WorkspaceTabs.getActiveTabSeq() + '/' + WorkspaceTabs.getCards().length + '] ') : '';
-            document.title = prefix + (cardTsv ? ("Kardenwort - " + detLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + detLang + " (" + effMode + ") - Ready"));
+            document.title = cardTsv ? ("Kardenwort - " + detLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + detLang + " (" + effMode + ") - Ready");
             window.showToast("Switching language to " + detName + "...", "info");
             setLangModalLoading(true);
 
@@ -14071,8 +14085,7 @@ html, body {{
             if (!cardTsv && sZid && expLang) {
                 cardTsv = sZid + '.' + expLang + '.tsv';
             }
-            var prefix = (getDeliveryMode() === 'container' && typeof WorkspaceTabs !== 'undefined' && WorkspaceTabs.getCards && WorkspaceTabs.getCards().length > 1) ? ('[' + WorkspaceTabs.getActiveTabSeq() + '/' + WorkspaceTabs.getCards().length + '] ') : '';
-            document.title = prefix + (cardTsv ? ("Kardenwort - " + expLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + expLang + " (" + effMode + ") - Ready"));
+            document.title = cardTsv ? ("Kardenwort - " + expLang + " (" + effMode + ") - " + cardTsv + " - Ready") : ("Kardenwort - " + expLang + " (" + effMode + ") - Ready");
             window.showToast("Processing in " + expName + "...", "info");
             setLangModalLoading(true);
 
@@ -14427,7 +14440,6 @@ setTimeout(function() {{
 
     # Format Title and Favicon
     mode_label = "multi" if (eff_mode == "multi" or text_mode == "multi") else "single"
-    tsv_filename = Path(str(working_tsv_path)).name if working_tsv_path else f"{zid}.{language}.tsv"
     if seq_num is not None and str(seq_num).strip():
         try:
             seq_int = int(seq_num)
@@ -14439,9 +14451,33 @@ setTimeout(function() {{
         seq_int = 1
         favicon_href = "/assets/numbers/1.ico"
 
-    total_cards = len(sentence_cards) if 'sentence_cards' in locals() and sentence_cards else 0
-    prefix = f"[{seq_int}/{total_cards}] " if (smc.delivery_mode == "container" and total_cards > 1) else ""
-    page_title = f"{prefix}Kardenwort - {language} ({mode_label}) - {tsv_filename} - Ready"
+    if not working_tsv_path:
+        eff_slug = tsv_slug or (generate_slug(text) if text else "")
+        tsv_filename = f"{zid}-{eff_slug}.{language}.tsv" if eff_slug else f"{zid}.{language}.tsv"
+    else:
+        w_name = Path(str(working_tsv_path)).name
+        has_slug_match = re.match(r'^\d{14}-.+\.[a-z]{2}\.tsv$', w_name, re.IGNORECASE)
+        if not has_slug_match:
+            eff_slug = tsv_slug or (generate_slug(text) if text else "")
+            bare_match = re.match(r'^(\d{14})(?:\.([a-z]{2}))?\.tsv$', w_name, re.IGNORECASE)
+            if bare_match and eff_slug:
+                z_part = bare_match.group(1)
+                l_part = bare_match.group(2) or language
+                tsv_filename = f"{z_part}-{eff_slug}.{l_part}.tsv"
+            else:
+                tsv_filename = w_name
+        else:
+            tsv_filename = w_name
+
+    if 'sentence_cards' in locals() and sentence_cards:
+        if seq_int > 1:
+            target_c = next((c for c in sentence_cards if c.get("seq_num") == seq_int), None)
+            if target_c and target_c.get("tsv_filename"):
+                tsv_filename = target_c["tsv_filename"]
+        elif sentence_cards[0].get("tsv_filename"):
+            tsv_filename = sentence_cards[0]["tsv_filename"]
+
+    page_title = f"Kardenwort - {language} ({mode_label}) - {tsv_filename} - Ready"
 
     html_page = html_page.replace("{page_title}", page_title)
     html_page = html_page.replace("{favicon_href}", favicon_href)
