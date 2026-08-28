@@ -1350,3 +1350,118 @@ lemma_base_provider = google
     eq.shutdown()
 
 
+def test_get_session_zid_serves_directly_from_sqlite_without_translation(running_controller, monkeypatch):
+    """Verifies that GET /?session_zid=... restores directly from SQLite without invoking render_flow_fn or translation providers."""
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+
+    sess_zid = kardenwort_desk.generate_unique_zid()
+    headers = ["SentenceSourceIndex", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination"]
+    data_rows = [["1", "Hund", "собака", "Der Hund rennt.", "Собака бежит."]]
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="test-direct-restore",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Der Hund rennt.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[{
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "sentence_source": "Der Hund rennt.",
+            "sentence_destination": "Собака бежит.",
+        }],
+    )
+
+    translation_called = []
+    def fail_if_called(*args, **kwargs):
+        translation_called.append(True)
+        raise RuntimeError("Translation provider should NOT be contacted on direct session restore!")
+
+    monkeypatch.setattr(kardenwort_desk, 'translate_text', fail_if_called)
+    monkeypatch.setattr(kardenwort_desk, 'translate_source_text', fail_if_called)
+    monkeypatch.setattr(kardenwort_desk, 'run_render_flow', fail_if_called)
+    import kardenwort_controller
+    monkeypatch.setattr(kardenwort_controller, 'run_render_flow', fail_if_called)
+
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    t0 = time.perf_counter()
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        duration = time.perf_counter() - t0
+        assert resp.status == 200
+        content = resp.read().decode('utf-8')
+        assert "Hund" in content
+        assert "собака" in content
+        assert not translation_called
+        assert duration < 0.5
+
+
+def test_get_session_zid_incremental_wordfill_hydration(running_controller, monkeypatch):
+    """Verifies that GET /?session_zid=... incrementally hydrates missing fields from wordfill."""
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+
+    sess_zid = kardenwort_desk.generate_unique_zid()
+    headers = ["SentenceSourceIndex", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "SentenceSource", "SentenceDestination"]
+    data_rows = [["1", "Katze", "", "", "", "Die Katze schläft.", "Кошка спит."]]
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="test-wordfill-restore",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Die Katze schläft.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[{
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "sentence_source": "Die Katze schläft.",
+            "sentence_destination": "Кошка спит.",
+        }],
+    )
+
+    server.wordfill = {
+        'enabled': True,
+        'backend': 'sqlite',
+        'sqlite_db_path': server.resolved_paths.get('sqlite_db_path'),
+    }
+    server.goldendict['lemma_columns'] = ['inflected', 'lemma', 'ipa', 'morphology', 'translation']
+
+    def mock_find_wordfill_match(word, lang, cfg, **kwargs):
+        if word.lower() == "katze":
+            return {
+                "WordDestination": "кошка",
+                "WordSourceIPA": "/ˈkat͡sə/",
+                "WordSourceMorphologyAI": "Noun|Fem|Sing|Nom",
+            }
+        return None
+
+    import kardenwort_controller
+    monkeypatch.setattr(kardenwort_controller, 'find_wordfill_match', mock_find_wordfill_match)
+    monkeypatch.setattr(kardenwort_desk, 'find_wordfill_match', mock_find_wordfill_match)
+
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        content = resp.read().decode('utf-8')
+        assert "Katze" in content
+        assert "кошка" in content
+        assert "/ˈkat͡sə/" in content
+
+    restored = storage_adapter.restore_session(sess_zid)
+    r_headers = restored["headers"]
+    r_rows = restored["data_rows"]
+    dest_idx = r_headers.index("WordDestination")
+    ipa_idx = r_headers.index("WordSourceIPA")
+    morph_idx = r_headers.index("WordSourceMorphologyAI")
+    assert r_rows[0][dest_idx] == "кошка"
+    assert r_rows[0][ipa_idx] == "/ˈkat͡sə/"
+    assert r_rows[0][morph_idx] == "Noun|Fem|Sing|Nom"
+
+
+

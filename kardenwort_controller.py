@@ -3176,6 +3176,59 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 mapping = load_anki_mapping(mapping_path) if mapping_path and mapping_path.exists() else None
                 role_fields = get_role_fields(mapping, headers) if mapping else {}
 
+                # Incremental wordfill hydration for missing lemma fields
+                wordfill_cfg = getattr(self.server, 'wordfill', None)
+                if wordfill_cfg is None and self.server.config is not None:
+                    wordfill_cfg = resolve_wordfill_config(self.server.config, self.server.resolved_paths)
+
+                hydrated_any = False
+                if wordfill_cfg and wordfill_cfg.get('enabled', False) and data_rows and headers:
+                    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
+                    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
+                    col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else (headers.index('WordSourceIPA') if 'WordSourceIPA' in headers else -1)
+                    col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else (headers.index('WordSourceMorphologyAI') if 'WordSourceMorphologyAI' in headers else -1)
+                    col_lemma_wf = col_lemma
+                    if col_lemma_wf != -1:
+                        seen_lemmas = {}
+                        for i, row in enumerate(data_rows):
+                            if len(row) > col_lemma_wf:
+                                lemma_val = row[col_lemma_wf].strip()
+                                if lemma_val:
+                                    seen_lemmas.setdefault(lemma_val, []).append(i)
+                        for lemma_val, row_indices in seen_lemmas.items():
+                            needs_hydration = False
+                            for idx in row_indices:
+                                row = data_rows[idx]
+                                need_dest = col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip()
+                                need_ipa = col_ipa != -1 and (len(row) <= col_ipa or not row[col_ipa].strip())
+                                need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
+                                if need_dest or need_ipa or need_morph:
+                                    needs_hydration = True
+                                    break
+                            if needs_hydration:
+                                match = find_wordfill_match(lemma_val, sess_lang, wordfill_cfg)
+                                if match:
+                                    lemma_rows = [data_rows[i] for i in row_indices]
+                                    apply_wordfill_to_rows(lemma_rows, headers, match)
+                                    hydrated_any = True
+
+                if hydrated_any:
+                    try:
+                        adapter.save_session(
+                            session_zid=session_zid,
+                            slug=restored.get("slug") or "",
+                            source_language=sess_lang,
+                            target_language=target_lang,
+                            text_mode=restored.get("text_mode") or "single",
+                            source_raw_text=source_text,
+                            comments=comments,
+                            headers=headers,
+                            data_rows=data_rows,
+                            sentences=restored.get("sentences"),
+                        )
+                    except Exception as save_err:
+                        logger.warning(f"Could not persist hydrated session to storage: {save_err}")
+
                 if data_rows and headers:
                     data_rows = sort_rows_by_frequency(
                         data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
@@ -3188,51 +3241,36 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 slug = restored.get("slug") or restored.get("session", {}).get("slug", "") or (generate_slug(source_text) if source_text else "")
                 text_mode = restored.get("text_mode") or "single"
 
+                goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
+                goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
+                goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
+                goldendict['theme'] = req_theme or (self.server.goldendict.get('theme', 'dark') if self.server.goldendict else 'dark')
                 if view_mode == 'goldendict':
-                    goldendict = dict(self.server.goldendict) if self.server.goldendict else {}
-                    goldendict.setdefault('sections', ['source', 'translation', 'lemmas'])
-                    goldendict.setdefault('lemma_columns', ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
-                    goldendict['theme'] = req_theme or 'dark'
-                    goldendict.setdefault('heading_source', '__default__')
-                    goldendict.setdefault('heading_translation', '__default__')
-                    goldendict.setdefault('heading_lemmas', '__default__')
-                    goldendict.setdefault('run_intellifiller', False)
-                    goldendict['server_enabled'] = True
-                    goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
+                    goldendict.setdefault('theme', 'compact')
+                goldendict.setdefault('heading_source', '__default__')
+                goldendict.setdefault('heading_translation', '__default__')
+                goldendict.setdefault('heading_lemmas', '__default__')
+                goldendict.setdefault('run_intellifiller', False)
+                goldendict['server_enabled'] = True
+                goldendict['server_api_key'] = getattr(self.server, 'api_key', '')
 
-                    html = render_lookup_html(
-                        text=source_text,
-                        language=sess_lang,
-                        target_lang=target_lang,
-                        config=self.server.config,
-                        resolved_paths=self.server.resolved_paths,
-                        zid=session_zid,
-                        goldendict=goldendict,
-                        comments=comments,
-                        headers=headers,
-                        data_rows=data_rows,
-                        sentence_translation=sentence_translation,
-                        session_zid=session_zid,
-                        api_token=getattr(self.server, 'api_key', ''),
-                        server_enabled=True,
-                        fingerprint=fingerprint,
-                    )
-                else:
-                    results_dir = Path(self.server.resolved_paths.get('kardenwort_workspace', '.')) / "results"
-                    slug_suffix = f"-{slug}" if slug else ""
-                    tsv_path = results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv"
-                    seq_num = qs.get('seq_num', [None])[0] or qs.get('seq-num', [None])[0]
-                    html = render_flow_fn(
-                        text=source_text,
-                        language=sess_lang,
-                        zid=session_zid,
-                        text_mode=text_mode,
-                        config=self.server.config,
-                        resolved_paths=self.server.resolved_paths,
-                        theme=req_theme or 'dark',
-                        tsv_path=tsv_path,
-                        seq_num=int(seq_num) if seq_num else None,
-                    )
+                html = render_lookup_html(
+                    text=source_text,
+                    language=sess_lang,
+                    target_lang=target_lang,
+                    config=self.server.config,
+                    resolved_paths=self.server.resolved_paths,
+                    zid=session_zid,
+                    goldendict=goldendict,
+                    comments=comments,
+                    headers=headers,
+                    data_rows=data_rows,
+                    sentence_translation=sentence_translation,
+                    session_zid=session_zid,
+                    api_token=getattr(self.server, 'api_key', ''),
+                    server_enabled=True,
+                    fingerprint=fingerprint,
+                )
                 body = html.encode('utf-8')
                 self.send_response(200)
                 self._send_cors_headers()

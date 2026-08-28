@@ -15074,7 +15074,7 @@ def render_section(token, ctx):
         heading = make_heading("source", "Source Text")
         normalized_text = normalize_blank_lines(ctx["text"])
         safe_text = normalized_text.replace('\r', '')
-        html_output += f'<div class="kw-section">{heading}<div class="kw-source-text">{safe_text}</div></div>\n'
+        html_output += f'<div class="kw-section source-container" id="source-container">{heading}<div class="kw-source-text">{safe_text}</div></div>\n'
         
     elif token == "translation":
         heading = make_heading("translation", "Translation")
@@ -15085,7 +15085,7 @@ def render_section(token, ctx):
     elif token == "lemmas":
         heading = make_heading("lemmas", "Lemmas")
         html_output += f'<div class="kw-section">{heading}'
-        html_output += '<div class="kw-table-container"><table class="kw-lemmas-table">\n'
+        html_output += '<div class="kw-table-container"><table class="kw-lemmas-table lemma-table" id="lemma-table">\n'
         
         role_fields = ctx.get('role_fields', {})
         COLUMN_TOKEN_MAP = {
