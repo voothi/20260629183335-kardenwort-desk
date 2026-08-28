@@ -16364,7 +16364,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"Translation stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
         safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed", error=err_obj, zid=zid, trace_id=trace_id)
-        raise
+    return data_rows
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     m = re.match(r'^(\d{14})', tsv_path.name)

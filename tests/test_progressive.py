@@ -871,10 +871,11 @@ def test_progressive_translation_failure_preserves_cell_state(monkeypatch, tmp_p
     _, updated_headers, updated_rows = desk.load_tsv_rows(tsv_file)
     # Existing cell must NOT have been wiped to empty string ""
     assert updated_rows[1][1] == "preserved_translation"
-    # An error event should be captured with failed status
-    finished_event = [e for e in written_events if e.get("stage") == "finished"]
-    assert len(finished_event) >= 1
-    assert finished_event[-1]["status"] == "failed"
+    # A failure event should be captured with failed status
+    failed_event = [e for e in written_events if e.get("status") == "failed"]
+    assert len(failed_event) >= 1
+    assert failed_event[0]["stage"] == "translated"
+    assert failed_event[0]["error"]["code"] == "ERR_TRANSLATION_FAILED"
 
 
 
