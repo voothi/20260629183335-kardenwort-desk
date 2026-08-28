@@ -8886,7 +8886,13 @@ html, body {{
             chips.append(
                 f'<button type="button" class="kw-tab-chip{active_cls}" data-tab-seq="{c["seq_num"]}" data-sentence-idx="{c["sentence_idx"]}" title="Ctrl+{min(c["seq_num"], 9)}: Sentence {c["sentence_idx"] if c["sentence_idx"] > 0 else "All"}">{c["label"]}</button>'
             )
-        workspace_tab_bar_html = f'<div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar">{"".join(chips)}</div>'
+        workspace_tab_bar_html = (
+            '<div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar">'
+            '<button type="button" class="kw-tab-nav kw-tab-nav-prev" id="kw-tab-prev" title="Scroll Left (Shift+Wheel)">&lt;</button>'
+            f'<div class="kw-tab-track" id="kw-tab-track">{"".join(chips)}</div>'
+            '<button type="button" class="kw-tab-nav kw-tab-nav-next" id="kw-tab-next" title="Scroll Right (Shift+Wheel)">&gt;</button>'
+            '</div>'
+        )
     else:
         workspace_tab_bar_html = '<div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar" style="display:none;"></div>'
 
@@ -9430,15 +9436,74 @@ html, body {{
   .kw-workspace-tab-bar {
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 4px;
     padding: 0 0 10px 0;
-    overflow-x: auto;
-    scrollbar-width: thin;
     user-select: none;
     -webkit-user-select: none;
+    max-width: 100%;
+    overflow: hidden;
   }
   body.kw-ahk-native-host .kw-workspace-tab-bar {
     display: none !important;
+  }
+  .kw-tab-nav {
+    font-family: inherit;
+    font-size: 13px;
+    font-weight: 600;
+    min-width: 24px;
+    width: 24px;
+    height: 26px;
+    padding: 0;
+    border-radius: 4px;
+    border: 1px solid {section_border};
+    background: {input_bg};
+    color: {text_muted};
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    flex: 0 0 auto;
+    user-select: none;
+    -webkit-user-select: none;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s, opacity 0.15s;
+  }
+  .kw-tab-nav:hover:not(:disabled) {
+    background: {toolbar_btn_hover};
+    color: {text_color};
+    border-color: {text_muted};
+  }
+  .kw-tab-nav:disabled {
+    opacity: 0.3;
+    cursor: default;
+    pointer-events: none;
+  }
+  body.theme-light .kw-tab-nav,
+  body.theme-white .kw-tab-nav {
+    background: #f6f8fa;
+    border-color: #d0d7de;
+    color: #57606a;
+  }
+  body.theme-light .kw-tab-nav:hover:not(:disabled),
+  body.theme-white .kw-tab-nav:hover:not(:disabled) {
+    background: #eaeef2;
+    border-color: #afb8c1;
+    color: #24292f;
+  }
+  .kw-tab-track {
+    display: flex;
+    flex-wrap: nowrap;
+    gap: 6px;
+    overflow-x: auto;
+    scrollbar-width: none;
+    -ms-overflow-style: none;
+    scroll-behavior: smooth;
+    flex: 1 1 auto;
+    align-items: center;
+    padding: 1px 0;
+  }
+  .kw-tab-track::-webkit-scrollbar {
+    display: none;
   }
   .kw-tab-chip {
     font-family: inherit;
@@ -9457,6 +9522,7 @@ html, body {{
     align-items: center;
     justify-content: center;
     text-align: center;
+    flex: 0 0 auto;
     user-select: none;
     -webkit-user-select: none;
   }
@@ -13551,6 +13617,61 @@ html, body {{
                         });
                     })(tabButtons[i]);
                 }
+
+                var prevBtn = document.getElementById('kw-tab-prev');
+                var nextBtn = document.getElementById('kw-tab-next');
+                var track = document.getElementById('kw-tab-track');
+                if (prevBtn && track) {
+                    addEvent(prevBtn, 'click', function(e) {
+                        if (e && e.preventDefault) e.preventDefault();
+                        track.scrollLeft -= 140;
+                        updateNavButtons();
+                    });
+                }
+                if (nextBtn && track) {
+                    addEvent(nextBtn, 'click', function(e) {
+                        if (e && e.preventDefault) e.preventDefault();
+                        track.scrollLeft += 140;
+                        updateNavButtons();
+                    });
+                }
+                if (track) {
+                    addEvent(track, 'scroll', updateNavButtons);
+                    var tabTabBar = document.getElementById('kw-workspace-tab-bar');
+                    if (tabTabBar) {
+                        var handleTabWheel = function(e) {
+                            e = e || window.event;
+                            var delta = e.deltaY || e.deltaX || (e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0));
+                            if (delta !== 0) {
+                                if (e.preventDefault) e.preventDefault();
+                                track.scrollLeft += delta;
+                                updateNavButtons();
+                                return false;
+                            }
+                        };
+                        addEvent(tabTabBar, 'wheel', handleTabWheel);
+                        addEvent(tabTabBar, 'mousewheel', handleTabWheel);
+                        addEvent(tabTabBar, 'DOMMouseScroll', handleTabWheel);
+                    }
+                    addEvent(window, 'resize', updateNavButtons);
+                    updateNavButtons();
+                }
+            }
+
+            function updateNavButtons() {
+                var prevBtn = document.getElementById('kw-tab-prev');
+                var nextBtn = document.getElementById('kw-tab-next');
+                var track = document.getElementById('kw-tab-track');
+                if (!track || !prevBtn || !nextBtn) return;
+                var sl = track.scrollLeft;
+                var maxScroll = track.scrollWidth - track.clientWidth;
+                if (maxScroll <= 1) {
+                    prevBtn.disabled = true;
+                    nextBtn.disabled = true;
+                } else {
+                    prevBtn.disabled = (sl <= 1);
+                    nextBtn.disabled = (sl >= maxScroll - 1);
+                }
             }
 
             function getActiveTabSeq() {
@@ -13576,18 +13697,31 @@ html, body {{
                 activeSentenceIdx = targetCard.sentence_idx;
                 window._kwActiveTabSeq = activeTabSeq;
 
+                var activeBtn = null;
                 var tabButtons = document.querySelectorAll('.kw-tab-chip');
                 for (var i = 0; i < tabButtons.length; i++) {
                     var bSeq = parseInt(tabButtons[i].getAttribute('data-tab-seq'), 10);
                     if (bSeq === activeTabSeq) {
                         addClass(tabButtons[i], 'active');
+                        activeBtn = tabButtons[i];
                     } else {
                         removeClass(tabButtons[i], 'active');
                     }
                 }
+                if (activeBtn) {
+                    if (activeBtn.scrollIntoView) {
+                        try {
+                            activeBtn.scrollIntoView({ behavior: 'smooth', inline: 'nearest', block: 'nearest' });
+                        } catch(e) {
+                            activeBtn.scrollIntoView(false);
+                        }
+                    }
+                }
+                updateNavButtons();
 
                 var srcContainer = document.getElementById('source-container');
                 var transContainer = document.getElementById('translation-container');
+                var tableRows = document.querySelectorAll('#lemma-table tbody tr');
 
                 if (activeSentenceIdx === 0) {
                     if (srcContainer) {
