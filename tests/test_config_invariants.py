@@ -130,7 +130,8 @@ def generate_sentences_mode_config_matrix() -> List[Dict[str, Any]]:
     """
     keys = [
         "enabled", "min_sentences", "alignment_method", "spawn_order", 
-        "parent_mode", "multi_mode_decompose", "legacy_spawn_children", "dedup_scope"
+        "parent_mode", "multi_mode_decompose", "legacy_spawn_children", "dedup_scope",
+        "web_tab_mode"
     ]
     values = [
         [True, False],
@@ -140,7 +141,8 @@ def generate_sentences_mode_config_matrix() -> List[Dict[str, Any]]:
         ["full", "stub"],
         [True, False],
         [True, False],
-        ["sentence", "global", "none"]
+        ["sentence", "global", "none"],
+        ["container", "tabs"]
     ]
     matrix = list(itertools.product(*values))
     return [dict(zip(keys, item)) for item in matrix]
@@ -169,7 +171,7 @@ def test_matrix_generator_dimensions():
     assert len(sbc_matrix) == 32
 
     smc_matrix = generate_sentences_mode_config_matrix()
-    assert len(smc_matrix) == 576
+    assert len(smc_matrix) == 1152
 
 
 @pytest.mark.parametrize("params", generate_runtime_token_config_matrix())
@@ -767,6 +769,7 @@ def test_sentences_mode_config_matrix_resolution(params):
     cp.set(SEC_SENTENCES_MODE, "multi_mode_sentence_decomposition", str(params["multi_mode_decompose"]))
     cp.set(SEC_SENTENCES_MODE, "legacy_spawn_children", str(params["legacy_spawn_children"]))
     cp.set(SEC_SENTENCES_MODE, "deduplication_scope", params["dedup_scope"])
+    cp.set(SEC_SENTENCES_MODE, "web_tab_mode", params["web_tab_mode"])
 
     cfg = SentencesModeConfig.from_config(cp)
     
@@ -778,6 +781,7 @@ def test_sentences_mode_config_matrix_resolution(params):
     assert cfg.multi_mode_decompose == params["multi_mode_decompose"]
     assert cfg.legacy_spawn_children == params["legacy_spawn_children"]
     assert cfg.deduplication_scope == params["dedup_scope"]
+    assert cfg.web_tab_mode == params["web_tab_mode"]
     
     validate_dataclass(cfg)
     

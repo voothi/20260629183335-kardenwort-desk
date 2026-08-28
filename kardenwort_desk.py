@@ -1297,6 +1297,7 @@ class SentencesModeConfig:
     multi_mode_decompose: bool = False
     legacy_spawn_children: bool = False
     deduplication_scope: str = "sentence"
+    web_tab_mode: str = "container"
     
     def should_split_sentences(self, num_sentences: int) -> bool:
         """Returns True if the configuration dictates that this text should be decomposed into multiple sentence windows."""
@@ -1323,6 +1324,7 @@ class SentencesModeConfig:
         multi_mode_decompose = False
         legacy_spawn_children = False
         deduplication_scope = "sentence"
+        web_tab_mode = "container"
 
         if config and hasattr(config, "has_section") and hasattr(config, "get"):
             try:
@@ -1337,6 +1339,8 @@ class SentencesModeConfig:
                     spawn_order = config.get(SEC_SENTENCES_MODE, "spawn_order", fallback="normal")
                     parent_mode = config.get(SEC_SENTENCES_MODE, "parent_mode", fallback="full")
                     deduplication_scope = config.get(SEC_SENTENCES_MODE, "deduplication_scope", fallback="sentence").strip().lower()
+                    raw_wtm = config.get(SEC_SENTENCES_MODE, "web_tab_mode", fallback="container").strip().lower()
+                    web_tab_mode = raw_wtm if raw_wtm in ("container", "tabs") else "container"
             except Exception:
                 pass
 
@@ -1349,6 +1353,7 @@ class SentencesModeConfig:
             multi_mode_decompose=multi_mode_decompose,
             legacy_spawn_children=legacy_spawn_children,
             deduplication_scope=deduplication_scope,
+            web_tab_mode=web_tab_mode,
         )
 
 
@@ -8478,12 +8483,43 @@ html, body {{
                 absolute_to_c_idx[a_idx] = c_idx
                 c_idx += 1
 
+    sentence_ranges = []
+    curr_search_offset = 0
+    for s_idx, sent_str in enumerate(source_sentences):
+        if not sent_str.strip():
+            continue
+        found_pos = text.find(sent_str, curr_search_offset)
+        if found_pos != -1:
+            start_p = found_pos
+            end_p = found_pos + len(sent_str)
+            sentence_ranges.append((s_idx + 1, start_p, end_p))
+            curr_search_offset = end_p
+        else:
+            sentence_ranges.append((s_idx + 1, curr_search_offset, curr_search_offset + len(sent_str)))
+            curr_search_offset += len(sent_str)
+
+    def _get_sentence_idx(char_pos):
+        for s_idx, start_p, end_p in sentence_ranges:
+            if start_p <= char_pos < end_p:
+                return s_idx
+        if sentence_ranges:
+            return sentence_ranges[-1][0]
+        return 1
+
+    char_cursor = 0
+    for token in source_tokens:
+        tok_len = len(token["text"])
+        token_sent_idx = _get_sentence_idx(char_cursor)
+        token["sentence_idx"] = token_sent_idx
+        char_cursor += tok_len
+
     span_htmls = []
     word_counter = 0
     current_a_idx = 0
     for token in source_tokens:
         tok_text = token["text"]
         text_escaped = tok_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+        tok_sent_idx = token.get("sentence_idx", 1)
         
         if token["is_word"]:
             lower_clean = token.get("lower_clean", "")
@@ -8525,21 +8561,22 @@ html, body {{
             compound_attr = f' data-compound-id="{compound_id}"' if compound_id is not None else ""
             span_htmls.append(
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
+                f'data-sentence-idx="{tok_sent_idx}" '
                 f'data-line-idx="{current_a_idx}"{compound_attr} '
                 f'data-lower-clean="{lower_clean}">{text_escaped}</span>'
             )
             word_counter += 1
         else:
             if tok_text in ("\\N", "\\n"):
-                span_htmls.append("<br>")
+                span_htmls.append(f'<br data-sentence-idx="{tok_sent_idx}">')
                 current_a_idx += 1
             elif "\n" in tok_text or "\r" in tok_text:
                 normalized = tok_text.replace("\r\n", "\n").replace("\r", "\n")
                 parts = normalized.split("\n")
                 current_a_idx += len(parts) - 1
-                span_htmls.append("<br>".join(parts))
+                span_htmls.append(f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">' + "<br>".join(parts) + '</span>')
             else:
-                span_htmls.append(text_escaped)
+                span_htmls.append(f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">{text_escaped}</span>' if len(source_sentences) >= 2 else text_escaped)
                 
     source_html = "" if is_mismatch else "".join(span_htmls)
     
@@ -8744,9 +8781,70 @@ html, body {{
             word_counter += 1
         token_manifest.append(tok_data)
         
-    if is_mismatch:
-        token_manifest = []
+    sentence_cards = []
+    if smc.enabled and len(source_sentences) >= 2:
+        master_trans_full = ""
+        if 'translated_paragraph' in locals() and translated_paragraph:
+            master_trans_full = translated_paragraph
+        elif sentence_translations:
+            master_trans_full = "\n".join(sentence_translations.values())
         
+        sentence_cards.append({
+            "index": 0,
+            "seq_num": 1,
+            "sentence_idx": 0,
+            "label": "1: All",
+            "zid": zid,
+            "source_text": text,
+            "translated_text": master_trans_full,
+        })
+        
+        for idx, s_src in enumerate(source_sentences):
+            seq = idx + 2
+            sent_i = idx + 1
+            s_trans = ""
+            if 'translated_sentences' in locals() and translated_sentences and idx < len(translated_sentences):
+                s_trans = translated_sentences[idx]
+            elif 'padded_translated_sentences' in locals() and padded_translated_sentences and idx < len(padded_translated_sentences):
+                s_trans = padded_translated_sentences[idx]
+            elif extracted_translations and idx in extracted_translations:
+                s_trans = extracted_translations[idx]
+            elif sentence_translations and idx in sentence_translations:
+                s_trans = sentence_translations[idx]
+
+            c_zid = ""
+            if 'sub_tsv_paths' in locals() and sub_tsv_paths and idx < len(sub_tsv_paths):
+                c_zid = extract_zid(sub_tsv_paths[idx])
+            elif children_tsv_paths and idx < len(children_tsv_paths):
+                c_zid = extract_zid(children_tsv_paths[idx])
+            else:
+                try:
+                    master_time = datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
+                    c_zid = (master_time + timedelta(seconds=idx+1)).strftime('%Y%m%d%H%M%S')
+                except Exception:
+                    c_zid = f"{zid}-{idx+1:02d}"
+
+            sentence_cards.append({
+                "index": idx + 1,
+                "seq_num": seq,
+                "sentence_idx": sent_i,
+                "label": str(seq),
+                "zid": c_zid,
+                "source_text": s_src,
+                "translated_text": s_trans,
+            })
+
+    if len(sentence_cards) > 1 and smc.web_tab_mode == "container":
+        chips = []
+        for c in sentence_cards:
+            active_cls = " active" if c["seq_num"] == 1 else ""
+            chips.append(
+                f'<button type="button" class="kw-tab-chip{active_cls}" data-tab-seq="{c["seq_num"]}" data-sentence-idx="{c["sentence_idx"]}" title="Ctrl+{min(c["seq_num"], 9)}: Sentence {c["sentence_idx"] if c["sentence_idx"] > 0 else "All"}">{c["label"]}</button>'
+            )
+        workspace_tab_bar_html = f'<div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar">{"".join(chips)}</div>'
+    else:
+        workspace_tab_bar_html = '<div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar" style="display:none;"></div>'
+
     _html_gen_timer = TraceTimer("html_generation", zid, config, resolved_paths)
     _html_gen_timer.__enter__()
     
@@ -9283,6 +9381,69 @@ html, body {{
     border-color: {flipped_border};
     color: {flipped_text};
   }
+  /* Workspace Tab Bar */
+  .kw-workspace-tab-bar {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 0 0 10px 0;
+    overflow-x: auto;
+    scrollbar-width: thin;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  body.kw-ahk-native-host .kw-workspace-tab-bar {
+    display: none !important;
+  }
+  .kw-tab-chip {
+    font-family: inherit;
+    font-size: 12px;
+    font-weight: 500;
+    min-width: 32px;
+    height: 26px;
+    padding: 2px 10px;
+    border-radius: 4px;
+    border: 1px solid {section_border};
+    background: {input_bg};
+    color: {text_muted};
+    cursor: pointer;
+    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+  .kw-tab-chip:hover {
+    background: {toolbar_btn_hover};
+    color: {text_color};
+    border-color: {text_muted};
+  }
+  .kw-tab-chip.active {
+    background: {flipped_bg};
+    border-color: {flipped_border};
+    color: {flipped_text};
+    font-weight: 600;
+  }
+  body.theme-light .kw-tab-chip,
+  body.theme-white .kw-tab-chip {
+    background: #f6f8fa;
+    border-color: #d0d7de;
+    color: #57606a;
+  }
+  body.theme-light .kw-tab-chip:hover,
+  body.theme-white .kw-tab-chip:hover {
+    background: #eaeef2;
+    border-color: #afb8c1;
+    color: #24292f;
+  }
+  body.theme-light .kw-tab-chip.active,
+  body.theme-white .kw-tab-chip.active {
+    background: #0969da;
+    border-color: #0969da;
+    color: #ffffff;
+  }
   /* In-Page Toast Notifications */
   .kw-toast-container {
     position: fixed;
@@ -9298,201 +9459,146 @@ html, body {{
     pointer-events: auto;
     min-width: 200px;
     max-width: 480px;
-    word-break: break-word;
     padding: 10px 16px;
     border-radius: 6px;
     font-size: 13px;
     line-height: 1.4;
-    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.25);
+    font-weight: 500;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.2);
+    opacity: 0;
+    transform: translateY(10px);
+    transition: opacity 0.2s ease, transform 0.2s ease;
     display: flex;
     align-items: center;
     gap: 10px;
-    animation: kwToastIn 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-    transition: opacity 0.25s ease, transform 0.25s ease;
-    cursor: pointer;
+    border: 1px solid transparent;
   }
-  @keyframes kwToastIn {
-    from { opacity: 0; transform: translateY(10px) scale(0.95); }
-    to { opacity: 1; transform: translateY(0) scale(1); }
-  }
-  .kw-toast.kw-toast-hiding {
-    opacity: 0;
-    transform: translateY(10px) scale(0.95);
+  .kw-toast.visible {
+    opacity: 1;
+    transform: translateY(0);
   }
   .kw-toast-info {
-    background: #1f242c;
-    color: #e3e6eb;
-    border: 1px solid #388bfd;
+    background: {input_bg};
+    border-color: {section_border};
+    color: {text_color};
   }
   .kw-toast-success {
-    background: #1a2f23;
-    color: #56d364;
-    border: 1px solid #2ea043;
+    background: #1f3d2b;
+    border-color: #2ea043;
+    color: #3fb950;
   }
   .kw-toast-warning {
-    background: #332512;
+    background: #3d3118;
+    border-color: #d29922;
     color: #e3b341;
-    border: 1px solid #d29922;
   }
   .kw-toast-error {
-    background: #341a1c;
-    color: #f85149;
-    border: 1px solid #da3633;
+    background: #3d1d20;
+    border-color: #f85149;
+    color: #ff7b72;
   }
   body.theme-light .kw-toast-info,
   body.theme-white .kw-toast-info {
-    background: #ddf4ff;
-    color: #0969da;
-    border: 1px solid #54aeff;
+    background: #ffffff;
+    border-color: #d0d7de;
+    color: #24292f;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
   body.theme-light .kw-toast-success,
   body.theme-white .kw-toast-success {
     background: #dafbe1;
+    border-color: #4ac26b;
     color: #1a7f37;
-    border: 1px solid #4ac26b;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
   body.theme-light .kw-toast-warning,
   body.theme-white .kw-toast-warning {
     background: #fff8c5;
+    border-color: #d4a72c;
     color: #9a6700;
-    border: 1px solid #d4a72c;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
   body.theme-light .kw-toast-error,
   body.theme-white .kw-toast-error {
     background: #ffebe9;
+    border-color: #ff8182;
     color: #cf222e;
-    border: 1px solid #ff8182;
+    box-shadow: 0 4px 16px rgba(0, 0, 0, 0.1);
   }
-  /* Language Verification Modal */
+  /* In-Page Language Verification Modal */
   .kw-modal-backdrop {
     position: fixed;
     top: 0;
     left: 0;
     right: 0;
     bottom: 0;
-    background: rgba(0, 0, 0, 0.65);
+    background: rgba(0, 0, 0, 0.6);
+    z-index: 3000;
     display: flex;
     align-items: center;
     justify-content: center;
-    z-index: 3000;
-    backdrop-filter: blur(2px);
   }
-  .kw-modal-backdrop.hidden,
-  .kw-modal-backdrop[style*="display: none"] {
+  .kw-modal-backdrop.hidden {
     display: none !important;
   }
   .kw-modal-box {
     background: {modal_bg};
     border: 1px solid {modal_border};
     border-radius: 6px;
-    width: 90%;
-    max-width: 480px;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.45);
-    padding: 24px;
-    color: {text_color};
-    font-family: inherit;
-    box-sizing: border-box;
-    animation: kwModalIn 0.2s cubic-bezier(0.16, 1, 0.3, 1);
-  }
-  @keyframes kwModalIn {
-    from { opacity: 0; transform: scale(0.95) translateY(-8px); }
-    to { opacity: 1; transform: scale(1) translateY(0); }
+    padding: 24px 28px;
+    min-width: 320px;
+    max-width: 460px;
+    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4);
+    text-align: center;
   }
   .kw-modal-header {
     font-size: 16px;
     font-weight: 600;
-    margin-bottom: 14px;
+    margin-bottom: 12px;
     color: {text_color};
   }
   .kw-modal-body {
-    font-size: 13.5px;
-    line-height: 1.6;
-    margin-bottom: 22px;
-    color: {text_color};
+    font-size: 13px;
+    color: {text_muted};
+    line-height: 1.5;
+    margin-bottom: 20px;
     white-space: pre-wrap;
     word-break: break-word;
   }
   .kw-modal-actions {
     display: flex;
-    justify-content: flex-end;
-    gap: 8px;
+    justify-content: center;
+    gap: 10px;
   }
   .kw-modal-actions button {
     font-family: inherit;
     font-size: 13px;
     font-weight: 500;
-    min-width: 84px;
-    height: 28px;
+    min-width: 80px;
+    height: 30px;
     padding: 4px 14px;
     border-radius: 4px;
     border: 1px solid {section_border};
     background: {input_bg};
     color: {text_color};
     cursor: pointer;
-    transition: background-color 0.15s, border-color 0.15s;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    text-align: center;
+    transition: background-color 0.15s, border-color 0.15s, opacity 0.15s;
     user-select: none;
     -webkit-user-select: none;
   }
   .kw-modal-actions button:hover:not(:disabled) {
-    background: {row_hover};
+    background: {toolbar_btn_hover};
     border-color: {text_muted};
   }
   .kw-modal-actions button:disabled {
     opacity: 0.4;
     cursor: not-allowed;
   }
-  .kw-modal-actions button.btn-primary {
-    background: {input_bg};
-    border-color: {section_border};
-    color: {text_color};
-  }
-  .kw-modal-actions button.btn-primary:hover:not(:disabled) {
-    background: {row_hover};
-    border-color: {text_muted};
-  }
-  body.theme-light .kw-modal-box,
-  body.theme-white .kw-modal-box {
-    background: #ffffff;
-    border-color: #d0d7de;
-    color: #24292f;
-    box-shadow: 0 8px 32px rgba(0, 0, 0, 0.15);
-  }
-  body.theme-light .kw-modal-header,
-  body.theme-white .kw-modal-header,
-  body.theme-light .kw-modal-body,
-  body.theme-white .kw-modal-body {
-    color: #24292f;
-  }
-  body.theme-light .kw-modal-actions button,
-  body.theme-white .kw-modal-actions button {
-    background: #f6f8fa;
-    border-color: #d0d7de;
-    color: #24292f;
-  }
-  body.theme-light .kw-modal-actions button:hover:not(:disabled),
-  body.theme-white .kw-modal-actions button:hover:not(:disabled) {
-    background: #eaeef2;
-    border-color: #afb8c1;
-  }
-  body.theme-light .kw-modal-actions button.btn-primary,
-  body.theme-white .kw-modal-actions button.btn-primary {
-    background: #f6f8fa;
-    border-color: #d0d7de;
-    color: #24292f;
-  }
-  body.theme-light .kw-modal-actions button.btn-primary:hover:not(:disabled),
-  body.theme-white .kw-modal-actions button.btn-primary:hover:not(:disabled) {
-    background: #eaeef2;
-    border-color: #afb8c1;
-  }
 </style>
 </head>
 <body class="{theme_class}">
 <div class="container">
+  {workspace_tab_bar_html}
   <div class="section">
     <div class="source-text" id="source-container">{source_html}</div>
   </div>
@@ -9533,6 +9639,10 @@ html, body {{
   </div>
 </div>
 <div class="kw-toast-container" id="kw-toast-container"></div>
+<script id="sentence-cards" type="application/json">
+{sentence_cards_json}
+</script>
+<script id="web-tab-mode" type="text/plain">{web_tab_mode_js}</script>
 <script id="mismatch-info" type="application/json">
 {mismatch_info_json}
 </script>
@@ -13289,7 +13399,19 @@ html, body {{
             return results;
         }
 
+        function getWebTabMode() {
+            var el = document.getElementById('web-tab-mode');
+            if (el) {
+                var t = (el.textContent || el.innerText || '').trim();
+                if (t) return t.toLowerCase();
+            }
+            return 'container';
+        }
+
         function spawnChildTabs(children) {
+            if (getWebTabMode() === 'container') {
+                return;
+            }
             var childSessions = extractChildSessions(children);
             if (!childSessions || childSessions.length === 0) return;
             var tok = getApiToken();
@@ -13335,6 +13457,161 @@ html, body {{
                 fallbackOpen();
             }
         }
+
+        var WorkspaceTabs = (function() {
+            var cards = [];
+            var activeTabSeq = 1;
+            var activeSentenceIdx = 0;
+            var masterSourceHtml = "";
+            var masterTransHtml = "";
+
+            function init() {
+                var scriptEl = document.getElementById('sentence-cards');
+                if (scriptEl) {
+                    try {
+                        cards = JSON.parse(scriptEl.textContent || scriptEl.innerText || '[]');
+                    } catch(e) {
+                        cards = [];
+                    }
+                }
+                window._kwSentenceCards = cards;
+
+                var srcContainer = document.getElementById('source-container');
+                if (srcContainer) masterSourceHtml = srcContainer.innerHTML;
+                var transContainer = document.getElementById('translation-container');
+                if (transContainer) masterTransHtml = transContainer.innerHTML;
+
+                var tabButtons = document.querySelectorAll('.kw-tab-chip');
+                for (var i = 0; i < tabButtons.length; i++) {
+                    (function(btn) {
+                        addEvent(btn, 'click', function(e) {
+                            var seq = parseInt(btn.getAttribute('data-tab-seq'), 10);
+                            switchToTab(seq);
+                        });
+                    })(tabButtons[i]);
+                }
+            }
+
+            function getActiveTabSeq() {
+                return activeTabSeq;
+            }
+
+            function getCards() {
+                return cards;
+            }
+
+            function switchToTab(seqOrSentIdx) {
+                if (!cards || cards.length === 0) return;
+                var targetCard = null;
+                for (var i = 0; i < cards.length; i++) {
+                    if (cards[i].seq_num === seqOrSentIdx || cards[i].sentence_idx === seqOrSentIdx) {
+                        targetCard = cards[i];
+                        break;
+                    }
+                }
+                if (!targetCard) return;
+
+                activeTabSeq = targetCard.seq_num;
+                activeSentenceIdx = targetCard.sentence_idx;
+                window._kwActiveTabSeq = activeTabSeq;
+
+                var tabButtons = document.querySelectorAll('.kw-tab-chip');
+                for (var i = 0; i < tabButtons.length; i++) {
+                    var bSeq = parseInt(tabButtons[i].getAttribute('data-tab-seq'), 10);
+                    if (bSeq === activeTabSeq) {
+                        addClass(tabButtons[i], 'active');
+                    } else {
+                        removeClass(tabButtons[i], 'active');
+                    }
+                }
+
+                var srcContainer = document.getElementById('source-container');
+                var transContainer = document.getElementById('translation-container');
+
+                if (activeSentenceIdx === 0) {
+                    if (srcContainer) {
+                        var spans = srcContainer.querySelectorAll('[data-sentence-idx]');
+                        for (var s = 0; s < spans.length; s++) {
+                            spans[s].style.display = '';
+                        }
+                    }
+                    if (transContainer) {
+                        transContainer.innerHTML = masterTransHtml;
+                    }
+                    for (var r = 0; r < tableRows.length; r++) {
+                        tableRows[r].style.display = '';
+                    }
+                } else {
+                    if (srcContainer) {
+                        var spans = srcContainer.querySelectorAll('[data-sentence-idx]');
+                        var sentStr = String(activeSentenceIdx);
+                        for (var s = 0; s < spans.length; s++) {
+                            var spanSentIdx = spans[s].getAttribute('data-sentence-idx');
+                            if (spanSentIdx && spanSentIdx !== sentStr) {
+                                spans[s].style.display = 'none';
+                            } else {
+                                spans[s].style.display = '';
+                            }
+                        }
+                    }
+                    if (transContainer) {
+                        var tText = targetCard.translated_text || '';
+                        transContainer.innerHTML = '<div class="translation-text">' + escapeHtml(tText) + '</div>';
+                    }
+                    var sentStr = String(activeSentenceIdx);
+                    for (var r = 0; r < tableRows.length; r++) {
+                        var rowSentIdx = tableRows[r].getAttribute('data-sentence-idx');
+                        if (rowSentIdx && rowSentIdx === sentStr) {
+                            tableRows[r].style.display = '';
+                        } else {
+                            tableRows[r].style.display = 'none';
+                        }
+                    }
+                }
+
+                tokenizeTranslation();
+                buildLcIndex();
+                updateBidirectionalHighlights();
+                updateRowStyles();
+                if (window.forceRepaint) window.forceRepaint();
+            }
+
+            function nextTab() {
+                if (!cards || cards.length === 0) return;
+                var curIdx = 0;
+                for (var i = 0; i < cards.length; i++) {
+                    if (cards[i].seq_num === activeTabSeq) {
+                        curIdx = i;
+                        break;
+                    }
+                }
+                var nextIdx = (curIdx + 1) % cards.length;
+                switchToTab(cards[nextIdx].seq_num);
+            }
+
+            function prevTab() {
+                if (!cards || cards.length === 0) return;
+                var curIdx = 0;
+                for (var i = 0; i < cards.length; i++) {
+                    if (cards[i].seq_num === activeTabSeq) {
+                        curIdx = i;
+                        break;
+                    }
+                }
+                var prevIdx = (curIdx - 1 + cards.length) % cards.length;
+                switchToTab(cards[prevIdx].seq_num);
+            }
+
+            return {
+                init: init,
+                switchToTab: switchToTab,
+                nextTab: nextTab,
+                prevTab: prevTab,
+                getActiveTabSeq: getActiveTabSeq,
+                getCards: getCards
+            };
+        })();
+        window.WorkspaceTabs = WorkspaceTabs;
 
         window.onLangYes = function() {
             var yesBtn = document.getElementById('kw-btn-lang-yes');
@@ -13556,6 +13833,60 @@ html, body {{
                 return false;
             }
 
+            // Ctrl+1 through Ctrl+9 or Alt+1 through Alt+9: Switch workspace tab
+            if (!isInput && (e.ctrlKey || e.altKey || e.metaKey)) {
+                var digit = -1;
+                if (e.key >= '1' && e.key <= '9') {
+                    digit = parseInt(e.key, 10);
+                } else if (e.keyCode >= 49 && e.keyCode <= 57) {
+                    digit = e.keyCode - 48;
+                }
+                if (digit !== -1 && window.WorkspaceTabs) {
+                    var allCards = window.WorkspaceTabs.getCards();
+                    if (allCards && allCards.length >= digit) {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.WorkspaceTabs.switchToTab(digit);
+                        return false;
+                    }
+                }
+            }
+
+            // Ctrl+PageDown / Ctrl+] -> Next tab, Ctrl+PageUp / Ctrl+[ -> Prev tab
+            if (!isInput && (e.ctrlKey || e.metaKey)) {
+                if (e.key === 'PageDown' || e.keyCode === 34 || e.key === ']' || e.keyCode === 221) {
+                    if (window.WorkspaceTabs && window.WorkspaceTabs.getCards().length > 1) {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.WorkspaceTabs.nextTab();
+                        return false;
+                    }
+                }
+                if (e.key === 'PageUp' || e.keyCode === 33 || e.key === '[' || e.keyCode === 219) {
+                    if (window.WorkspaceTabs && window.WorkspaceTabs.getCards().length > 1) {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.WorkspaceTabs.prevTab();
+                        return false;
+                    }
+                }
+            }
+
+            // Non-input [ / ] quick tab cycling
+            if (!isInput && !e.ctrlKey && !e.altKey && !e.metaKey) {
+                if (e.key === ']' || e.keyCode === 221) {
+                    if (window.WorkspaceTabs && window.WorkspaceTabs.getCards().length > 1) {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.WorkspaceTabs.nextTab();
+                        return false;
+                    }
+                }
+                if (e.key === '[' || e.keyCode === 219) {
+                    if (window.WorkspaceTabs && window.WorkspaceTabs.getCards().length > 1) {
+                        if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                        window.WorkspaceTabs.prevTab();
+                        return false;
+                    }
+                }
+            }
+
             // Delete key -> Delete selected rows when not typing in input
             if ((e.key === 'Delete' || e.keyCode === 46) && !isInput) {
                 if (getSelectedRowsArray().length > 0) {
@@ -13593,6 +13924,12 @@ html, body {{
         }
 
         updateToolbarState();
+
+        if (window.WorkspaceTabs) {
+            try {
+                window.WorkspaceTabs.init();
+            } catch(e) {}
+        }
 
         if (window.rebindMVPBookmarks) {
             window.rebindMVPBookmarks();
@@ -13679,6 +14016,9 @@ setTimeout(function() {{
     html_page = html_page.replace("{inverse_zoom_width}", inverse_width)
     html_page = html_page.replace("{source_html}", source_html)
     html_page = html_page.replace("{sentence_html}", sentence_html)
+    html_page = html_page.replace("{workspace_tab_bar_html}", workspace_tab_bar_html)
+    html_page = html_page.replace("{sentence_cards_json}", json.dumps(sentence_cards, ensure_ascii=False))
+    html_page = html_page.replace("{web_tab_mode_js}", smc.web_tab_mode)
     html_page = html_page.replace("{table_header_html}", table_header_html)
     html_page = html_page.replace("{table_rows_html}", table_rows_html)
     html_page = html_page.replace("{token_manifest}", json.dumps(token_manifest))

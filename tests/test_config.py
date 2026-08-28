@@ -431,6 +431,7 @@ alignment_method = proportion
 min_sentences = 3
 spawn_order = reverse
 parent_mode = stub
+web_tab_mode = container
 """
         config_file = desk_dir / "config.ini"
         config_file.write_text(config_content)
@@ -447,3 +448,27 @@ parent_mode = stub
         assert config.getint(SEC_SENTENCES_MODE, 'min_sentences') == 3
         assert config.get(SEC_SENTENCES_MODE, 'spawn_order') == 'reverse'
         assert config.get(SEC_SENTENCES_MODE, 'parent_mode') == 'stub'
+        assert config.get(SEC_SENTENCES_MODE, 'web_tab_mode') == 'container'
+
+        smc = kardenwort_desk.SentencesModeConfig.from_config(config)
+        assert smc.web_tab_mode == 'container'
+
+
+def test_sentences_mode_web_tab_mode_default_and_fallback(tmp_path):
+    """Test web_tab_mode default value and invalid fallback to container."""
+    from kardenwort_desk import SentencesModeConfig, SEC_SENTENCES_MODE
+    import configparser
+
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_SENTENCES_MODE)
+    smc = SentencesModeConfig.from_config(cp)
+    assert smc.web_tab_mode == "container"
+
+    cp.set(SEC_SENTENCES_MODE, "web_tab_mode", "tabs")
+    smc_tabs = SentencesModeConfig.from_config(cp)
+    assert smc_tabs.web_tab_mode == "tabs"
+
+    cp.set(SEC_SENTENCES_MODE, "web_tab_mode", "invalid_mode")
+    smc_invalid = SentencesModeConfig.from_config(cp)
+    assert smc_invalid.web_tab_mode == "container"
+

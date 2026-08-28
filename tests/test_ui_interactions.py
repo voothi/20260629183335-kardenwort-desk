@@ -4543,6 +4543,166 @@ def test_retry_session_toast_triggers_batch_retry(page):
     assert calls[0]["body"]["session_zid"] == "20260828120000"
 
 
+def test_workspace_tabs_switching_and_filtering(page):
+    cards_data = [
+        {
+            "index": 0,
+            "seq_num": 1,
+            "sentence_idx": 0,
+            "label": "1: All",
+            "zid": "20260828111800",
+            "source_text": "Das Haus ist gross. Die Katze schlaeft.",
+            "translated_text": "The house is big. The cat sleeps."
+        },
+        {
+            "index": 1,
+            "seq_num": 2,
+            "sentence_idx": 1,
+            "label": "2",
+            "zid": "20260828111801",
+            "source_text": "Das Haus ist gross.",
+            "translated_text": "The house is big."
+        },
+        {
+            "index": 2,
+            "seq_num": 3,
+            "sentence_idx": 2,
+            "label": "3",
+            "zid": "20260828111802",
+            "source_text": "Die Katze schlaeft.",
+            "translated_text": "The cat sleeps."
+        }
+    ]
+    cards_json = json.dumps(cards_data)
+
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body class="theme-dark">
+<div class="container">
+  <div class="kw-workspace-tab-bar" id="kw-workspace-tab-bar">
+    <button type="button" class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0">1: All</button>
+    <button type="button" class="kw-tab-chip" data-tab-seq="2" data-sentence-idx="1">2</button>
+    <button type="button" class="kw-tab-chip" data-tab-seq="3" data-sentence-idx="2">3</button>
+  </div>
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word" data-word-idx="0" data-sentence-idx="1">Das</span>
+      <span class="sentence-delimiter" data-sentence-idx="1"> </span>
+      <span class="word" data-word-idx="1" data-sentence-idx="1">Haus</span>
+      <span class="sentence-delimiter" data-sentence-idx="1"> </span>
+      <span class="word" data-word-idx="2" data-sentence-idx="1">ist</span>
+      <span class="sentence-delimiter" data-sentence-idx="1"> </span>
+      <span class="word" data-word-idx="3" data-sentence-idx="1">gross</span>
+      <span class="sentence-delimiter" data-sentence-idx="1">. </span>
+      <span class="word" data-word-idx="4" data-sentence-idx="2">Die</span>
+      <span class="sentence-delimiter" data-sentence-idx="2"> </span>
+      <span class="word" data-word-idx="5" data-sentence-idx="2">Katze</span>
+      <span class="sentence-delimiter" data-sentence-idx="2"> </span>
+      <span class="word" data-word-idx="6" data-sentence-idx="2">schlaeft</span>
+      <span class="sentence-delimiter" data-sentence-idx="2">.</span>
+    </div>
+  </div>
+  <div class="section">
+    <div class="translation-text" id="translation-container">
+      <div class="translation-text">The house is big. The cat sleeps.</div>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <thead>
+        <tr><th class="col-checkbox" data-col="DeskSelected">#</th><th>Word</th><th>Translation</th></tr>
+      </thead>
+      <tbody>
+        <tr data-row-id="0" data-sentence-idx="1">
+          <td class="col-checkbox" data-col="DeskSelected"></td>
+          <td data-col="WordSource">Haus</td>
+          <td data-col="WordDestination">house</td>
+        </tr>
+        <tr data-row-id="1" data-sentence-idx="2">
+          <td class="col-checkbox" data-col="DeskSelected"></td>
+          <td data-col="WordSource">Katze</td>
+          <td data-col="WordDestination">cat</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="sentence-cards" type="application/json">
+{cards_json}
+</script>
+<script id="web-tab-mode" type="text/plain">container</script>
+<script id="token-map" type="application/json">[]</script>
+<script id="tsv-path" type="text/plain">test.tsv</script>
+<script id="session-zid" type="text/plain">20260828111800</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">en</script>
+<script id="display-mode" type="text/plain">monolithic</script>
+<script id="text-mode" type="text/plain">single</script>
+<script id="auto-inject-updates" type="text/plain">false</script>
+<script id="run-enrichment" type="text/plain">auto</script>
+<script id="worker-launched" type="text/plain">false</script>
+<script id="hl-mvp-script" type="text/plain" data-bookmarks="3" data-rainbow="0" data-enabled="0"></script>
+</body>
+</html>
+"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Verify initial tab 1 (All)
+    chip1 = page.locator(".kw-tab-chip[data-tab-seq='1']")
+    chip2 = page.locator(".kw-tab-chip[data-tab-seq='2']")
+    chip3 = page.locator(".kw-tab-chip[data-tab-seq='3']")
+    assert "active" in chip1.get_attribute("class")
+    assert "active" not in chip2.get_attribute("class")
+
+    # All rows visible initially
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+    assert row0.is_visible()
+    assert row1.is_visible()
+
+    # Click tab 2 (Sentence 1)
+    chip2.click()
+    assert "active" not in chip1.get_attribute("class")
+    assert "active" in chip2.get_attribute("class")
+
+    # Row 0 visible, Row 1 hidden
+    assert row0.is_visible()
+    assert not row1.is_visible()
+    assert page.locator("span[data-word-idx='1']").is_visible() # Haus
+    assert not page.locator("span[data-word-idx='5']").is_visible() # Katze
+
+    # Keyboard shortcut Ctrl+3 -> Switch to Sentence 2
+    page.keyboard.press("Control+3")
+    assert "active" in chip3.get_attribute("class")
+    assert not row0.is_visible()
+    assert row1.is_visible()
+    assert not page.locator("span[data-word-idx='1']").is_visible() # Haus
+    assert page.locator("span[data-word-idx='5']").is_visible() # Katze
+
+    # Keyboard shortcut [ -> Cycle to previous tab (Sentence 1)
+    page.keyboard.press("[")
+    assert "active" in chip2.get_attribute("class")
+    assert row0.is_visible()
+    assert not row1.is_visible()
+
+    # Keyboard shortcut ] -> Cycle to next tab (Sentence 2)
+    page.keyboard.press("]")
+    assert "active" in chip3.get_attribute("class")
+    assert not row0.is_visible()
+    assert row1.is_visible()
+
+    # Switch back to tab 1 (All)
+    chip1.click()
+    assert "active" in chip1.get_attribute("class")
+    assert row0.is_visible()
+    assert row1.is_visible()
+    assert page.locator("span[data-word-idx='1']").is_visible()
+    assert page.locator("span[data-word-idx='5']").is_visible()
+
+
+
 
 
 
