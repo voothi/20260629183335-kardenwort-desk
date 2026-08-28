@@ -85,6 +85,8 @@ def test_render_flow_multi_sentence_container_tabs(tmp_path):
     assert '<button type="button" class="kw-tab-chip" data-tab-seq="3" data-sentence-idx="2"' in html
     assert '<script id="delivery-mode" type="text/plain">container</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">container</script>' in html
+    assert '<span class="kw-sentence-chunk" data-sentence-idx="1">' in html
+    assert '<span class="kw-sentence-chunk" data-sentence-idx="2">' in html
     assert 'data-sentence-idx="1"' in html
     assert 'data-sentence-idx="2"' in html
 
@@ -111,3 +113,29 @@ def test_render_flow_multi_sentence_tabs_mode(tmp_path):
     assert 'id="kw-workspace-tab-bar" style="display:none;"' in html
     assert '<script id="delivery-mode" type="text/plain">multi_window</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">tabs</script>' in html
+
+def test_sentence_chunks_encapsulation_structure(tmp_path):
+    """Test that all tokens and delimiters of each sentence are wrapped in .kw-sentence-chunk."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    text = "Erste Zeile.\nZweite Zeile.\nDritte Zeile."
+    tsv_file = tmp_path / "20260828111800-test.de.tsv"
+    tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nZeile\tZeile\tстрока\t1\t\nZeile\tZeile\tстрока\t2\t\nZeile\tZeile\tстрока\t3\t\n", encoding="utf-8")
+    
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid="20260828111800",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+    
+    assert '<span class="kw-sentence-chunk" data-sentence-idx="1">' in html
+    assert '<span class="kw-sentence-chunk" data-sentence-idx="2">' in html
+    assert '<span class="kw-sentence-chunk" data-sentence-idx="3">' in html
+

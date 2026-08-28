@@ -8524,12 +8524,25 @@ html, body {{
         char_cursor += tok_len
 
     span_htmls = []
+    sentence_chunks = []
+    current_chunk_idx = None
+    current_chunk_elements = []
+    is_multi_sentence = (smc.enabled and len(source_sentences) >= 2)
+
     word_counter = 0
     current_a_idx = 0
     for token in source_tokens:
         tok_text = token["text"]
         text_escaped = tok_text.replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
         tok_sent_idx = token.get("sentence_idx", 1)
+
+        if is_multi_sentence:
+            if current_chunk_idx is None:
+                current_chunk_idx = tok_sent_idx
+            elif tok_sent_idx != current_chunk_idx:
+                sentence_chunks.append((current_chunk_idx, current_chunk_elements))
+                current_chunk_idx = tok_sent_idx
+                current_chunk_elements = []
         
         if token["is_word"]:
             lower_clean = token.get("lower_clean", "")
@@ -8569,24 +8582,40 @@ html, body {{
             classes_str = " ".join(classes)
             compound_id = token.get("compound_id")
             compound_attr = f' data-compound-id="{compound_id}"' if compound_id is not None else ""
-            sent_attr = f' data-sentence-idx="{tok_sent_idx}"' if (smc.enabled and len(source_sentences) >= 2) else ""
-            span_htmls.append(
+            sent_attr = f' data-sentence-idx="{tok_sent_idx}"' if is_multi_sentence else ""
+            word_span = (
                 f'<span class="{classes_str}" data-word-idx="{token["visual_idx"]}" '
                 f'data-line-idx="{current_a_idx}"{compound_attr} '
                 f'data-lower-clean="{lower_clean}"{sent_attr}>{text_escaped}</span>'
             )
+            if is_multi_sentence:
+                current_chunk_elements.append(word_span)
+            else:
+                span_htmls.append(word_span)
             word_counter += 1
         else:
             if tok_text in ("\\N", "\\n"):
-                span_htmls.append(f'<br data-sentence-idx="{tok_sent_idx}">')
+                delim_span = f'<br data-sentence-idx="{tok_sent_idx}">'
                 current_a_idx += 1
             elif "\n" in tok_text or "\r" in tok_text:
                 normalized = tok_text.replace("\r\n", "\n").replace("\r", "\n")
                 parts = normalized.split("\n")
                 current_a_idx += len(parts) - 1
-                span_htmls.append(f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">' + "<br>".join(parts) + '</span>')
+                delim_span = f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">' + "<br>".join(parts) + '</span>'
             else:
-                span_htmls.append(f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">{text_escaped}</span>' if len(source_sentences) >= 2 else text_escaped)
+                delim_span = f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">{text_escaped}</span>' if is_multi_sentence else text_escaped
+            
+            if is_multi_sentence:
+                current_chunk_elements.append(delim_span)
+            else:
+                span_htmls.append(delim_span)
+
+    if is_multi_sentence and current_chunk_idx is not None:
+        sentence_chunks.append((current_chunk_idx, current_chunk_elements))
+        span_htmls = [
+            f'<span class="kw-sentence-chunk" data-sentence-idx="{c_idx}">{"".join(c_els)}</span>'
+            for c_idx, c_els in sentence_chunks
+        ]
                 
     source_html = "" if is_mismatch else "".join(span_htmls)
     
@@ -9869,6 +9898,10 @@ html, body {{
             for (var i = 0; i < srcSpans.length; i++) {
                 var span = srcSpans[i];
                 if (span.classList && span.classList.contains('word')) {
+                    var chunk = span.closest ? span.closest('.kw-sentence-chunk') : span.parentElement;
+                    if (chunk && chunk.classList && chunk.classList.contains('kw-sentence-chunk') && chunk.style && chunk.style.display === 'none') {
+                        continue;
+                    }
                     span.setAttribute('data-mvp-idx', String(sourceSpansArray.length));
                     span.setAttribute('data-mvp-type', 'source');
                     sourceSpansArray.push(span);
@@ -13552,9 +13585,16 @@ html, body {{
 
                 if (activeSentenceIdx === 0) {
                     if (srcContainer) {
-                        var spans = srcContainer.querySelectorAll('[data-sentence-idx]');
-                        for (var s = 0; s < spans.length; s++) {
-                            spans[s].style.display = '';
+                        var chunks = srcContainer.querySelectorAll('.kw-sentence-chunk');
+                        if (chunks.length > 0) {
+                            for (var c = 0; c < chunks.length; c++) {
+                                chunks[c].style.display = '';
+                            }
+                        } else {
+                            var spans = srcContainer.querySelectorAll('[data-sentence-idx]');
+                            for (var s = 0; s < spans.length; s++) {
+                                spans[s].style.display = '';
+                            }
                         }
                     }
                     if (transContainer) {
@@ -13565,14 +13605,26 @@ html, body {{
                     }
                 } else {
                     if (srcContainer) {
-                        var spans = srcContainer.querySelectorAll('[data-sentence-idx]');
                         var sentStr = String(activeSentenceIdx);
-                        for (var s = 0; s < spans.length; s++) {
-                            var spanSentIdx = spans[s].getAttribute('data-sentence-idx');
-                            if (spanSentIdx && spanSentIdx !== sentStr) {
-                                spans[s].style.display = 'none';
-                            } else {
-                                spans[s].style.display = '';
+                        var chunks = srcContainer.querySelectorAll('.kw-sentence-chunk');
+                        if (chunks.length > 0) {
+                            for (var c = 0; c < chunks.length; c++) {
+                                var chunkSentIdx = chunks[c].getAttribute('data-sentence-idx');
+                                if (chunkSentIdx && chunkSentIdx !== sentStr) {
+                                    chunks[c].style.display = 'none';
+                                } else {
+                                    chunks[c].style.display = '';
+                                }
+                            }
+                        } else {
+                            var spans = srcContainer.querySelectorAll('[data-sentence-idx]');
+                            for (var s = 0; s < spans.length; s++) {
+                                var spanSentIdx = spans[s].getAttribute('data-sentence-idx');
+                                if (spanSentIdx && spanSentIdx !== sentStr) {
+                                    spans[s].style.display = 'none';
+                                } else {
+                                    spans[s].style.display = '';
+                                }
                             }
                         }
                     }
