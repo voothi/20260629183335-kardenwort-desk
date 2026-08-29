@@ -2704,17 +2704,23 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     if sent_trans_list:
                         sentence_translation = "\n".join(sent_trans_list)
 
-            if not sentence_translation and hasattr(storage_adapter, 'backend_name') and storage_adapter.backend_name == 'sqlite' and hasattr(storage_adapter, 'db'):
+            sentences_list = []
+            if hasattr(storage_adapter, 'backend_name') and storage_adapter.backend_name == 'sqlite' and hasattr(storage_adapter, 'db'):
                 try:
                     db_sents = storage_adapter.db.get_sentences_by_session(zid)
-                    clean_translations = []
                     if db_sents:
                         for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
                             s_dest = s.get("sentence_destination")
-                            if s_dest and str(s_dest).strip():
-                                clean_translations.append(str(s_dest).strip())
-                    if clean_translations:
-                        sentence_translation = "\n".join(clean_translations)
+                            s_src = s.get("sentence_source")
+                            sentences_list.append({
+                                "sentence_index": s.get("sentence_index", 1),
+                                "sentence_source": str(s_src).strip() if s_src else "",
+                                "sentence_destination": str(s_dest).strip() if s_dest else "",
+                            })
+                        if not sentence_translation:
+                            clean_translations = [s["sentence_destination"] for s in sentences_list if s["sentence_destination"]]
+                            if clean_translations:
+                                sentence_translation = "\n".join(clean_translations)
                 except Exception:
                     pass
 
@@ -2771,6 +2777,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 },
                 "rows": rows_dict,
                 "translatedText": translated_html,
+                "sentences": sentences_list,
             })
             return
 

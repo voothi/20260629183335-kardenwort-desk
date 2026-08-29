@@ -7574,8 +7574,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
         col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else -1
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+        col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
         
-        # Populate translations back into master TSV using the padded sentences
+        # Populate translations back into master TSV using the clean and padded sentences
         for row in data_rows:
             row_sent_idx = -1
             if col_index != -1 and len(row) > col_index:
@@ -7591,7 +7592,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 if col_sentence_dest != -1:
                     while len(row) <= col_sentence_dest:
                         row.append("")
-                    row[col_sentence_dest] = padded_translated_sentences[row_sent_idx]
+                    row[col_sentence_dest] = translated_sentences[row_sent_idx]
+                if col_sentence_dest2 != -1:
+                    while len(row) <= col_sentence_dest2:
+                        row.append("")
+                    row[col_sentence_dest2] = padded_translated_sentences[row_sent_idx]
                     
         col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
@@ -8936,13 +8941,13 @@ html, body {{
             seq = idx + 2
             sent_i = idx + 1
             s_trans = ""
-            if 'translated_sentences' in locals() and translated_sentences and idx < len(translated_sentences):
+            if 'translated_sentences' in locals() and translated_sentences and idx < len(translated_sentences) and translated_sentences[idx]:
                 s_trans = translated_sentences[idx]
-            elif 'padded_translated_sentences' in locals() and padded_translated_sentences and idx < len(padded_translated_sentences):
+            elif 'padded_translated_sentences' in locals() and padded_translated_sentences and idx < len(padded_translated_sentences) and padded_translated_sentences[idx]:
                 s_trans = padded_translated_sentences[idx]
-            elif extracted_translations and idx in extracted_translations:
+            elif extracted_translations and idx in extracted_translations and extracted_translations[idx]:
                 s_trans = extracted_translations[idx]
-            elif sentence_translations and idx in sentence_translations:
+            elif sentence_translations and idx in sentence_translations and sentence_translations[idx]:
                 s_trans = sentence_translations[idx]
 
             c_slug = generate_slug(s_src) if s_src else ""
@@ -10571,6 +10576,10 @@ html, body {{
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
                 } else if (document.getElementById('translation-container') && document.getElementById('translation-container').querySelector('[data-pending="true"]')) {
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
+                }
+
+                if (data.sentences && window.WorkspaceTabs && window.WorkspaceTabs.updateSentences) {
+                    window.WorkspaceTabs.updateSentences(data.sentences);
                 }
                 
                 var rowsData = null;
@@ -14102,13 +14111,47 @@ html, body {{
                 switchToTab(cards[prevIdx].seq_num);
             }
 
+            function updateSentences(sents) {
+                if (!sents || !cards || cards.length === 0) return;
+                var updatedAny = false;
+                for (var i = 0; i < sents.length; i++) {
+                    var s = sents[i];
+                    var sIdx = s.sentence_index;
+                    var sDst = s.sentence_destination || "";
+                    for (var c = 0; c < cards.length; c++) {
+                        if (cards[c].sentence_idx === sIdx) {
+                            if (cards[c].translated_text !== sDst) {
+                                cards[c].translated_text = sDst;
+                                updatedAny = true;
+                            }
+                        }
+                    }
+                }
+                if (updatedAny && activeSentenceIdx > 0) {
+                    var transContainer = document.getElementById('translation-container');
+                    for (var c = 0; c < cards.length; c++) {
+                        if (cards[c].seq_num === activeTabSeq) {
+                            var tText = cards[c].translated_text || '';
+                            if (transContainer && tText) {
+                                transContainer.innerHTML = '<div class="translation-text">' + escapeHtml(tText) + '</div>';
+                                if (window.tokenizeTranslation) tokenizeTranslation();
+                                if (window.buildLcIndex) buildLcIndex();
+                                if (window.updateBidirectionalHighlights) updateBidirectionalHighlights();
+                            }
+                            break;
+                        }
+                    }
+                }
+            }
+
             return {
                 init: init,
                 switchToTab: switchToTab,
                 nextTab: nextTab,
                 prevTab: prevTab,
                 getActiveTabSeq: getActiveTabSeq,
-                getCards: getCards
+                getCards: getCards,
+                updateSentences: updateSentences
             };
         })();
         window.WorkspaceTabs = WorkspaceTabs;

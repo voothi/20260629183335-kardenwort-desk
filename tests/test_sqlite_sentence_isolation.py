@@ -140,6 +140,9 @@ def test_render_flow_multi_sentence_sqlite_tab_isolation(tmp_path):
         zid=session_zid,
     )
 
+    tsv_path = tmp_path / f"{session_zid}-omarchy-install.en.tsv"
+    tsv_path.write_text("Quotation\tWordSource\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tWordDestination\n", encoding="utf-8")
+
     html = kardenwort_desk.run_render_flow(
         text="Omarchy is installed using an ISO. You can choose between full-disk or free-space.",
         language="en",
@@ -147,6 +150,7 @@ def test_render_flow_multi_sentence_sqlite_tab_isolation(tmp_path):
         text_mode="single",
         config=cfg,
         resolved_paths=resolved_paths,
+        tsv_path=str(tsv_path),
         spawn_children=False,
         return_children=False,
         seq_num=2,
@@ -167,4 +171,66 @@ def test_render_flow_multi_sentence_sqlite_tab_isolation(tmp_path):
     card_sent2 = [c for c in cards_match if c["sentence_idx"] == 2][0]
     assert "Omarchy" in card_sent1["translated_text"]
     assert "Вы можете выбрать" in card_sent2["translated_text"]
+
+def test_controller_session_status_returns_sentences_array(tmp_path):
+    import kardenwort_controller
+    import configparser
+    from kardenwort_desk import SqliteStorageAdapter
+
+    db_path = tmp_path / "kardenwort.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_path))
+    cfg.add_section("sentences_mode")
+    cfg.set("sentences_mode", "enabled", "true")
+    cfg.add_section("server")
+    cfg.set("server", "enabled", "true")
+
+    resolved_paths = {
+        "sqlite_db_path": str(db_path),
+        "kardenwort_workspace": str(tmp_path),
+        "anki_mapping_file": str(tmp_path / "anki-mapping.ini"),
+    }
+
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths)
+    session_zid = "20260829031821"
+
+    initial_sentences = [
+        {
+            "session_zid": session_zid,
+            "sentence_index": 1,
+            "sentence_source": "First sentence.",
+            "sentence_destination": "Первое предложение.",
+        },
+        {
+            "session_zid": session_zid,
+            "sentence_index": 2,
+            "sentence_source": "Second sentence.",
+            "sentence_destination": "Второе предложение.",
+        },
+    ]
+
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-streaming",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="First sentence. Second sentence.",
+        headers=["WordSource", "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "WordDestination"],
+        data_rows=[["first", "1", "First sentence.", "Первое предложение.", "первый"]],
+        sentences=initial_sentences,
+        zid=session_zid,
+    )
+
+    # Query status from database directly using adapter
+    sents = db.get_sentences_by_session(session_zid)
+    assert len(sents) == 2
+    assert sents[0]["sentence_destination"] == "Первое предложение."
+    assert sents[1]["sentence_destination"] == "Второе предложение."
+
 
