@@ -8901,10 +8901,50 @@ html, body {{
     sentence_cards = []
     if smc.enabled and len(source_sentences) >= 2:
         master_trans_full = ""
-        if 'translated_paragraph' in locals() and translated_paragraph:
-            master_trans_full = translated_paragraph
-        elif sentence_translations:
-            master_trans_full = "\n".join(sentence_translations.values())
+        if 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip():
+            master_trans_full = str(translated_paragraph).strip()
+        elif sentence_translations and any(str(v).strip() for v in sentence_translations.values()):
+            master_trans_full = " ".join(str(v).strip() for v in sentence_translations.values() if str(v).strip())
+        elif extracted_translations and any(str(v).strip() for v in extracted_translations.values()):
+            master_trans_full = " ".join(str(v).strip() for v in extracted_translations.values() if str(v).strip())
+
+        # Build clean per-sentence translation map for child cards
+        child_sentence_translations = {}
+        if 'translated_sentences' in locals() and translated_sentences and len(translated_sentences) == len(source_sentences):
+            for i, st in enumerate(translated_sentences):
+                if st and str(st).strip():
+                    child_sentence_translations[i] = str(st).strip()
+
+        if len(child_sentence_translations) < len(source_sentences) and db_sents:
+            for s in db_sents:
+                s_i = s.get("sentence_index", 1) - 1
+                s_d = str(s.get("sentence_destination", "")).strip()
+                if s_d and s_i not in child_sentence_translations:
+                    child_sentence_translations[s_i] = s_d
+
+        if len(child_sentence_translations) < len(source_sentences):
+            for i in range(len(source_sentences)):
+                if i in extracted_translations and extracted_translations[i] and str(extracted_translations[i]).strip():
+                    cand = str(extracted_translations[i]).strip()
+                    if cand != master_trans_full or len(source_sentences) == 1:
+                        child_sentence_translations.setdefault(i, cand)
+
+        if len(child_sentence_translations) < len(source_sentences) and master_trans_full:
+            splits = split_single_mode_text(
+                master_trans_full, wrap_max_chars, abbrevs=None,
+                terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks
+            )
+            if len(splits) == len(source_sentences):
+                for i, sp in enumerate(splits):
+                    child_sentence_translations.setdefault(i, sp.strip())
+            else:
+                lengths = [len(s) for s in source_sentences]
+                p_splits = split_by_proportion(master_trans_full, lengths)
+                for i, ps in enumerate(p_splits):
+                    child_sentence_translations.setdefault(i, ps.strip())
+
+        if not master_trans_full and child_sentence_translations:
+            master_trans_full = " ".join(child_sentence_translations[i] for i in range(len(source_sentences)) if i in child_sentence_translations)
         
         if not working_tsv_path:
             master_slug = tsv_slug or (generate_slug(text) if text else "")
@@ -8940,15 +8980,7 @@ html, body {{
         for idx, s_src in enumerate(source_sentences):
             seq = idx + 2
             sent_i = idx + 1
-            s_trans = ""
-            if 'translated_sentences' in locals() and translated_sentences and idx < len(translated_sentences) and translated_sentences[idx]:
-                s_trans = translated_sentences[idx]
-            elif 'padded_translated_sentences' in locals() and padded_translated_sentences and idx < len(padded_translated_sentences) and padded_translated_sentences[idx]:
-                s_trans = padded_translated_sentences[idx]
-            elif extracted_translations and idx in extracted_translations and extracted_translations[idx]:
-                s_trans = extracted_translations[idx]
-            elif sentence_translations and idx in sentence_translations and sentence_translations[idx]:
-                s_trans = sentence_translations[idx]
+            s_trans = child_sentence_translations.get(idx, "")
 
             c_slug = generate_slug(s_src) if s_src else ""
             c_zid = ""
@@ -13841,6 +13873,14 @@ html, body {{
                 if (srcContainer && !masterSourceHtml) masterSourceHtml = srcContainer.innerHTML;
                 var transContainer = document.getElementById('translation-container');
                 if (transContainer && !masterTransHtml) masterTransHtml = transContainer.innerHTML;
+                if (!masterTransHtml && cards && cards.length > 0) {
+                    for (var k = 0; k < cards.length; k++) {
+                        if (cards[k].sentence_idx === 0 && cards[k].translated_text) {
+                            masterTransHtml = '<div class="translation-text">' + escapeHtml(cards[k].translated_text) + '</div>';
+                            break;
+                        }
+                    }
+                }
 
                 var tabButtons = document.querySelectorAll('.kw-tab-chip');
                 for (var i = 0; i < tabButtons.length; i++) {
@@ -13996,7 +14036,11 @@ html, body {{
                         }
                     }
                     if (transContainer) {
-                        transContainer.innerHTML = masterTransHtml;
+                        var mHtml = masterTransHtml;
+                        if (!mHtml && targetCard && targetCard.translated_text) {
+                            mHtml = '<div class="translation-text">' + escapeHtml(targetCard.translated_text) + '</div>';
+                        }
+                        transContainer.innerHTML = mHtml || '';
                     }
                     for (var r = 0; r < tableRows.length; r++) {
                         tableRows[r].style.display = '';
