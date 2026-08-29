@@ -717,9 +717,13 @@ def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_p
     config.set("rendering", "display_mode", "progressive")
     config.set("pipeline", "progressive_text_translation", "true")
     config.set("triggers", "run_text_translation", "auto")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "cache_ttl_seconds", "0")
 
-    text = "First sentence.\nSecond sentence."
-    unique_zid = "20260829990001"
+    import time
+    text = f"First sentence {time.time_ns()}.\nSecond sentence {time.time_ns()}."
+    unique_zid = f"20260829{int(time.time() * 1000) % 1000000:06d}"
     kw_cfg = kardenwort_desk.load_kardenwort_config(resolved_paths['kardenwort_workspace'])
     res_dir = kardenwort_desk.resolve_results_dir(resolved_paths, kw_cfg)
     for stale in res_dir.glob(f"{unique_zid}*"):
