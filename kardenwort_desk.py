@@ -5668,7 +5668,7 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
 
 def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest,
                          sentence_translations_raw, tsv_path, comments, headers,
-                         *, col_text_dest=-1, persist=True, return_single=False,
+                         *, col_text_dest=-1, col_sentence_dest2=-1, persist=True, return_single=False,
                          adapter: Optional[StorageAdapter] = None, config=None, resolved_paths=None):
     eff_mode = _effective_text_mode(text, text_mode)
     act_adapter = adapter or (get_storage_adapter(config, resolved_paths) if (config or resolved_paths) else None) or _DEFAULT_TSV_ADAPTER
@@ -5681,6 +5681,7 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
                 content_to_absolute[c_idx] = a_idx
                 c_idx += 1
     
+    padded_raw = sentence_translations_raw.get('PADDED') if isinstance(sentence_translations_raw, dict) else None
     for row in data_rows:
         content_line_idx = 0
         if col_index != -1 and len(row) > col_index:
@@ -5695,6 +5696,12 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             while len(row) <= col_sentence_dest:
                 row.append("")
             row[col_sentence_dest] = sentence_translations_raw.get(abs_idx, "")
+
+        if col_sentence_dest2 != -1:
+            while len(row) <= col_sentence_dest2:
+                row.append("")
+            if padded_raw and isinstance(padded_raw, dict):
+                row[col_sentence_dest2] = padded_raw.get(abs_idx, "")
             
         if eff_mode == 'single' and col_text_dest != -1:
             while len(row) <= col_text_dest:
@@ -5815,10 +5822,11 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                         max_words=sbc.translated_max_words
                     )
 
-                    pseudo_translations = {i: padded_translated_array[i] for i in range(len(padded_translated_array))}
+                    padded_dict = {i: padded_translated_array[i] for i in range(len(padded_translated_array))}
+                    unpadded_translations['PADDED'] = padded_dict
                     if full_text_trans:
-                        pseudo_translations['FULL_TEXT'] = full_text_trans
-                    return pseudo_translations
+                        unpadded_translations['FULL_TEXT'] = full_text_trans
+                    return unpadded_translations
                     
                 elif apply_source_padding:
                     # Legacy fallback: source-based padding requires a second API call
@@ -5826,15 +5834,15 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     
                     # 1. Translate the padded sentences for the TSV (SentenceDestination)
                     # Pass chunk_callback=None so padded sentences do not leak into intermediate UI streaming callbacks
-                    pseudo_translations = translate_source_text(
+                    padded_trans = translate_source_text(
                         "\n".join(padded_lines), source_lang, target_lang, 'multi',
                         config, resolved_paths, provider, chunk_callback=None, zid=zid, trace_id=trace_id
                     )
-                    
+                    unpadded_translations['PADDED'] = padded_trans
                     if full_text_trans:
-                        pseudo_translations['FULL_TEXT'] = full_text_trans
+                        unpadded_translations['FULL_TEXT'] = full_text_trans
                         
-                    return pseudo_translations
+                    return unpadded_translations
                 else:
                     if full_text_trans:
                         unpadded_translations['FULL_TEXT'] = full_text_trans
@@ -9366,6 +9374,7 @@ html, body {{
     font-size: 16px;
     color: {text_color};
     line-height: 1.6;
+    min-height: 1.6em;
     word-break: break-word;
     white-space: {source_white_space};
     -moz-user-select: text;
@@ -10159,7 +10168,7 @@ html, body {{
     function tokenizeTranslation() {
         var tc = document.getElementById('translation-container');
         if (!tc) return;
-        if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader')) {
+        if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader') || tc.querySelector('.btn-retry-cell')) {
             return;
         }
         var divs = tc.getElementsByTagName('div');
@@ -10643,12 +10652,16 @@ html, body {{
                 }
                 if (window.AppState.isFinished) {
                     var tc = document.getElementById('translation-container');
-                    if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader'))) {
-                        tc.innerHTML = window.AppState.translatedText || "";
+                    if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader') || !tc.textContent.trim())) {
+                        tc.classList.remove('skeleton-loader');
+                        tc.removeAttribute('data-pending');
+                        tc.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                         updated = true;
                     }
                     var sc = document.getElementById('source-container');
                     if (sc && (sc.querySelector('.skeleton-loader') || sc.querySelector('[data-pending="true"]') || sc.classList.contains('skeleton-loader'))) {
+                        sc.classList.remove('skeleton-loader');
+                        sc.removeAttribute('data-pending');
                         sc.innerHTML = window.AppState.sourceText || "";
                         updated = true;
                     }
@@ -10656,12 +10669,23 @@ html, body {{
                     if (skels.length > 0) {
                         for (var i = 0; i < skels.length; i++) {
                             var skel = skels[i];
+                            skel.classList.remove('skeleton-loader');
+                            skel.removeAttribute('data-pending');
                             var p = skel.parentNode;
-                            if (p && p.classList.contains('scrollable-cell')) p.innerHTML = "";
-                            else if (p && p.tagName === 'TD') p.innerHTML = "";
-                            else if (p && p.id === 'translation-container') p.innerHTML = window.AppState.translatedText || "";
-                            else if (p && p.id === 'source-container') p.innerHTML = window.AppState.sourceText || "";
-                            else if (skel.parentNode) skel.parentNode.removeChild(skel);
+                            var tr = skel.closest ? skel.closest('tr') : (function(node) {
+                                while (node && node.nodeName !== 'TR') { node = node.parentNode; }
+                                return node;
+                            })(skel);
+                            var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
+                            if (rowId !== null && rowId !== undefined) {
+                                (p && p.classList.contains('scrollable-cell') ? p : skel).innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                            } else if (p && p.id === 'translation-container') {
+                                p.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                            } else if (p && p.id === 'source-container') {
+                                p.innerHTML = window.AppState.sourceText || "";
+                            } else if (skel.parentNode) {
+                                skel.parentNode.removeChild(skel);
+                            }
                         }
                         updated = true;
                     }
@@ -10720,18 +10744,32 @@ html, body {{
             renderTranslatedText: function(globalStage) {
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
-                var pendingNode = container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader');
+                var pendingNode = container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader') || container.classList.contains('skeleton-loader');
                 if (window.AppState.translatedText === null && !pendingNode) return false;
                 var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText || "";
                 var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
-                var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_text' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
-                if (newText || !pendingNode || forceUpdate) {
-                    if (pendingNode || currentText !== newText || forceUpdate) {
-                        container.innerHTML = window.AppState.translatedText || "";
-                        return true;
+                var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
+                var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
+
+                if (newText !== "") {
+                    container.classList.remove('skeleton-loader');
+                    container.removeAttribute('data-pending');
+                    container.innerHTML = window.AppState.translatedText || "";
+                    return true;
+                } else if (isTerm) {
+                    container.classList.remove('skeleton-loader');
+                    container.removeAttribute('data-pending');
+                    if (window.AppState.translatedText) {
+                        container.innerHTML = window.AppState.translatedText;
+                    } else if (pendingNode || !currentText) {
+                        container.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                     }
+                    return true;
+                } else if (!pendingNode && (forceUpdate || currentText !== newText)) {
+                    container.innerHTML = window.AppState.translatedText || "";
+                    return true;
                 }
                 return false;
             },
@@ -10976,6 +11014,8 @@ html, body {{
                         if (!currentText || currentText === '...' || currentText === 'Loading...' || currentText === 'Loading translation...') {
                             if (rowId !== null && rowId !== undefined) {
                                 el.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                            } else if (el.id === 'translation-container' || (el.closest && el.closest('#translation-container'))) {
+                                el.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                             }
                         }
                     }
@@ -13363,7 +13403,11 @@ html, body {{
                 var btn = retryButtons[i];
                 var parent = btn.parentNode;
                 if (parent) {
-                    parent.innerHTML = '<span class="skeleton-loader" style="width: 60px;" title="Retrying translation..."></span>';
+                    if (parent.id === 'translation-container') {
+                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-block;" title="Retrying translation..."></span>';
+                    } else {
+                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 60px; display: inline-block;" title="Retrying translation..."></span>';
+                    }
                 }
             }
 
@@ -13384,7 +13428,7 @@ html, body {{
             })
             .then(function(resObj) {
                 var data = (resObj && resObj.data) ? resObj.data : resObj;
-                if (data && data.rows && window.receiveUpdate) {
+                if (data && window.receiveUpdate) {
                     window.receiveUpdate(data);
                 }
                 if (typeof window.showToast === 'function') {
@@ -13405,13 +13449,9 @@ html, body {{
         document.addEventListener('click', function(e) {
             var target = e.target;
             if (target && (target.classList.contains('btn-retry-cell') || (target.closest && target.closest('.btn-retry-cell')))) {
-                var btn = target.classList.contains('btn-retry-cell') ? target : target.closest('.btn-retry-cell');
-                var rowId = btn.getAttribute('data-row-id');
-                if (rowId !== null && rowId !== undefined) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    retryRow(rowId, btn);
-                }
+                e.preventDefault();
+                e.stopPropagation();
+                retrySession();
             }
         });
 
@@ -14614,13 +14654,8 @@ html, body {{
         timeout_ms = progressive_timeout_seconds * 1000
         watchdog_js = f"""<script>
 setTimeout(function() {{
-    var pendings = document.querySelectorAll('[data-pending="true"]');
-    if (pendings.length > 0) {{
-        for (var i = 0; i < pendings.length; i++) {{
-            pendings[i].classList.remove("skeleton-loader");
-            pendings[i].innerHTML = "<span style='color: #ff5555; font-style: italic;'>[Timeout: Background Process Failed]</span>";
-            pendings[i].removeAttribute("data-pending");
-        }}
+    if (typeof window.cleanupOrphanSkeletons === 'function') {{
+        window.cleanupOrphanSkeletons();
     }}
 }}, {timeout_ms});
 </script>"""
@@ -17379,6 +17414,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+    col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
     
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
@@ -17408,11 +17444,12 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                 main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
                 col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 try:
-                    def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest):
+                    def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest, _col_sentence_dest2=col_sentence_dest2):
                         c, h, curr_rows = storage_adapter.load_tsv_rows(tsv_path)
                         resolve_translations(
                             _text, getattr(args, 'text_mode', 'single'), curr_rows, _col_index, _col_sentence_dest,
                             partial_translations, tsv_path, c, h,
+                            col_sentence_dest2=_col_sentence_dest2,
                             persist=(not is_sqlite), return_single=False
                         )
                         safe_write_update_js(tsv_path, curr_rows, h, role_fields, stage=None, zid=zid, trace_id=trace_id)
@@ -17422,18 +17459,29 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     
                     # Update sentences table directly in SQLite mode
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
+                        padded_dict = sentence_translations_raw.get('PADDED') or {}
                         for s_idx_raw, trans in sentence_translations_raw.items():
+                            if s_idx_raw in ('FULL_TEXT', 'PADDED'):
+                                continue
                             if trans and isinstance(trans, str):
                                 s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
                                 try:
-                                    storage_adapter.update_sentence_translation(zid, s_idx, trans, zid=zid)
+                                    storage_adapter.update_sentence_translation(zid, s_idx, trans, target_field="sentence_destination", zid=zid)
                                 except Exception:
                                     pass
+                                if padded_dict:
+                                    padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
+                                    if padded_trans and isinstance(padded_trans, str):
+                                        try:
+                                            storage_adapter.update_sentence_translation(zid, s_idx, padded_trans, target_field="sentence_destination2", zid=zid)
+                                        except Exception:
+                                            pass
 
                     c, h, data_rows = storage_adapter.load_tsv_rows(tsv_path)
                     resolve_translations(
                         text, getattr(args, 'text_mode', 'single'), data_rows, col_index, col_sentence_dest,
                         sentence_translations_raw, tsv_path, c, h,
+                        col_sentence_dest2=col_sentence_dest2,
                         persist=(not is_sqlite), return_single=False
                     )
                     if is_sqlite:

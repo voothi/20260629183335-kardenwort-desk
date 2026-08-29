@@ -2127,6 +2127,63 @@ class SessionArbiter:
 
             self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
 
+        translated_text_res = None
+        if row_ids is None or len(row_ids) == 0:
+            col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+            col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
+            col_sentence_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+
+            source_raw_text = ""
+            text_mode = 'single'
+            if is_sqlite:
+                restored = storage_adapter.restore_session(session_zid)
+                source_raw_text = restored.get("source_raw_text") or restored.get("source_text", "")
+                text_mode = restored.get("text_mode") or 'single'
+            else:
+                txt_cand = tsv_path.with_suffix('.txt') if tsv_path else None
+                if txt_cand and txt_cand.exists():
+                    source_raw_text = txt_cand.read_text(encoding='utf-8')
+
+            need_sentence_trans = False
+            if source_raw_text and col_sentence_dest != -1:
+                if not any(len(r) > col_sentence_dest and r[col_sentence_dest].strip() for r in data_rows):
+                    need_sentence_trans = True
+
+            if need_sentence_trans and source_raw_text:
+                text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
+                try:
+                    sentence_translations_raw = translate_source_text(
+                        source_raw_text, lang, target_l, text_mode, self.config, self.resolved_paths, text_provider, zid=req_zid, trace_id=eff_trace_id
+                    )
+                    if is_sqlite and isinstance(sentence_translations_raw, dict):
+                        padded_dict = sentence_translations_raw.get('PADDED') or {}
+                        for s_idx_raw, trans in sentence_translations_raw.items():
+                            if s_idx_raw in ('FULL_TEXT', 'PADDED'):
+                                continue
+                            if trans and isinstance(trans, str):
+                                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                                try:
+                                    storage_adapter.update_sentence_translation(session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid)
+                                except Exception:
+                                    pass
+                                if padded_dict:
+                                    padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
+                                    if padded_trans and isinstance(padded_trans, str):
+                                        try:
+                                            storage_adapter.update_sentence_translation(session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid)
+                                        except Exception:
+                                            pass
+
+                    resolve_translations(
+                        source_raw_text, text_mode, data_rows, col_sentence_index, col_sentence_dest,
+                        sentence_translations_raw, tsv_path, comments, headers,
+                        col_sentence_dest2=col_sentence_dest2,
+                        persist=(not is_sqlite), return_single=False
+                    )
+                    translated_text_res = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=source_raw_text, config=self.config)
+                except Exception as text_err:
+                    logger.warning(f"Sentence translation retry failed: {text_err}")
+
         new_fp = compute_content_fingerprint(data_rows)
         with self._lock:
             if session_zid in self.sessions:
@@ -2137,18 +2194,22 @@ class SessionArbiter:
         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
         structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
         if not is_sqlite and tsv_path:
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", zid=session_zid, trace_id=eff_trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, zid=session_zid, trace_id=eff_trace_id)
 
-        self.emit_event(session_zid, {
+        event_payload = {
             "type": "update",
             "stage": "translated",
             "status": "success",
             "fingerprint": new_fp,
             "rows": structured_rows,
             "retried_rows": target_indices,
-        })
+        }
+        if translated_text_res is not None:
+            event_payload["translated_text"] = translated_text_res
+            event_payload["translatedText"] = translated_text_res
+        self.emit_event(session_zid, event_payload)
 
-        return {
+        res_payload = {
             "status": "success",
             "session_zid": session_zid,
             "fingerprint": new_fp,
@@ -2156,6 +2217,10 @@ class SessionArbiter:
             "data_rows": data_rows,
             "rows": structured_rows,
         }
+        if translated_text_res is not None:
+            res_payload["translated_text"] = translated_text_res
+            res_payload["translatedText"] = translated_text_res
+        return res_payload
 
     def get_queue_status(self) -> Dict[str, Any]:
         return self.enrichment_queue.get_status()

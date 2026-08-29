@@ -328,6 +328,7 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
     def failing_translate(*args, **kwargs):
         raise RuntimeError("Translation error")
     monkeypatch.setattr(kardenwort_desk, 'translate_source_text', failing_translate)
+    monkeypatch.setattr(kardenwort_desk, 'translate_lemmas_fast_path', lambda *a, **kw: {"word1": "слово1"})
     
     # Enrichment succeeds
     monkeypatch.setattr(kardenwort_desk, 'run_headless_intellifiller', lambda *a, **kw: None)
@@ -345,12 +346,13 @@ def test_progressive_worker_failure_isolation(monkeypatch, tmp_path):
         
     kardenwort_desk.cmd_progressive_worker(Args())
     
-    # Even though base translation failed, enrichment and finished still ran!
-    assert len(write_calls) == 4
+    # Even though text translation failed non-fatally, lemma translation, enrichment, and finished still ran!
+    assert len(write_calls) == 6
     assert write_calls[0] == ('source', 'success')
-    assert write_calls[1] == ('translated', 'failed')
-    assert write_calls[2] == ('enrichment', 'success')
-    assert write_calls[3] == ('finished', 'success')
+    assert write_calls[1] == ('translated_text', 'success')
+    assert write_calls[3] == ('translated', 'success')
+    assert write_calls[4] == ('enrichment', 'success')
+    assert write_calls[5] == ('finished', 'success')
 
 def test_progressive_worker_d3_enrichment_only(monkeypatch, tmp_path):
     config, resolved_paths, goldendict, _wf = setup_test_env(tmp_path)
@@ -610,9 +612,11 @@ def test_translate_source_text_native_padding(monkeypatch, tmp_path):
     assert len(mock_calls) == 1
     assert "He walked into the dark room." in mock_calls[0]
     
-    # Assert padding was natively applied in the returned dictionary
+    # Assert padding was natively applied in the returned dictionary under 'PADDED' while integer keys stay clean
     assert "FULL_TEXT" in res
-    assert res[1] == "Он вошел в темную комнату. Он включил свет. Лампочка слегка мигнула."
+    assert res[1] == "Он включил свет."
+    assert "PADDED" in res
+    assert res["PADDED"][1] == "Он вошел в темную комнату. Он включил свет. Лампочка слегка мигнула."
 
 
 def test_cmd_reprocess_worker_handles_intellifiller_error(monkeypatch, tmp_path):

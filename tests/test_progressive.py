@@ -74,7 +74,7 @@ def test_progressive_bypassed(monkeypatch, tmp_path):
     # Should contain the skeleton loader
     assert "skeleton-loader" in html_out
     assert "data-pending=\"true\"" in html_out
-    assert "Timeout: Background Process Failed" in html_out # from the JS watchdog
+    assert "cleanupOrphanSkeletons" in html_out # from the JS watchdog
 
 
 # ---------------------------------------------------------------------------

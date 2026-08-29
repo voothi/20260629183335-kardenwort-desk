@@ -4456,7 +4456,6 @@ def test_retry_cell_click_dispatches_retry_endpoint_and_resolves_inplace(page):
     assert len(retry_calls) == 1
     assert retry_calls[0]["method"] == "POST"
     assert retry_calls[0]["body"]["session_zid"] == "20260828120000"
-    assert retry_calls[0]["body"]["row_ids"] == [0]
 
     # Verify cell resolved in-place to "House"
     cell_text = page.locator("tr[data-row-id='0'] td:nth-child(3)").inner_text()
@@ -4819,6 +4818,179 @@ def test_curly_braces_tokens_click_hover_and_flip(page, tmp_path, monkeypatch):
     status_span.click(button="right")
     assert "flipped" not in (status_span.get_attribute("class") or "")
     assert status_span.inner_text() == "status"
+
+
+def test_render_translated_text_preserves_skeleton_on_intermediate_lemmas_stage(page):
+    """
+    Verify that renderTranslatedText does not clear #translation-container skeleton loader
+    when an intermediate update (stage: 'translated_lemmas') arrives with empty translatedText.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260829100000">
+<div class="container">
+  <div id="session-zid">20260829100000</div>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true">Loading translation...</span>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true">...</span></div></td>
+        <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
+        <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    tc = page.locator("#translation-container")
+    assert tc.locator(".skeleton-loader").count() == 1
+
+    # Simulate intermediate stage update with translated_lemmas but empty translatedText
+    page.evaluate("""
+        window.receiveUpdate({
+            stage: "translated_lemmas",
+            rows: {
+                "0": { "lemma": "Haus", "trans": "House" }
+            },
+            translated_text: ""
+        });
+    """)
+
+    # Verify skeleton is NOT cleared
+    assert tc.locator(".skeleton-loader").count() == 1
+    assert "Loading translation..." in tc.inner_text()
+
+    # Now simulate terminal completion with final text
+    page.evaluate("""
+        window.receiveUpdate({
+            stage: "finished",
+            translated_text: "Das Haus ist gross."
+        });
+    """)
+    assert tc.locator(".skeleton-loader").count() == 0
+    assert "Das Haus ist gross." in tc.inner_text()
+
+
+def test_watchdog_timeout_converts_translation_container_to_retry_badge(page):
+    """
+    Verify that cleanupOrphanSkeletons converts pending translation container
+    into an interactive .btn-retry-cell retry badge.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260829100000">
+<div class="container">
+  <div id="session-zid">20260829100000</div>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true">Loading translation...</span>
+  </div>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    tc = page.locator("#translation-container")
+    assert tc.locator(".skeleton-loader").count() == 1
+
+    # Call cleanupOrphanSkeletons (simulating watchdog timeout)
+    page.evaluate("window.cleanupOrphanSkeletons()")
+
+    # Skeletons removed, retry button in container
+    assert tc.locator(".skeleton-loader").count() == 0
+    retry_btn = tc.locator(".btn-retry-cell")
+    assert retry_btn.count() == 1
+    assert "Retry" in retry_btn.inner_text()
+
+
+def test_unified_batch_retry_from_container_retry_badge(page):
+    """
+    Verify that clicking .btn-retry-cell in #translation-container switches
+    all retry badges on the page to skeletons and executes batch retry POST.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260829100000">
+<div class="container">
+  <div id="session-zid">20260829100000</div>
+  <div class="translation-text" id="translation-container">
+    <button class="btn-retry-cell" data-action="retry-text">Retry</button>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><button class="btn-retry-cell" data-row-id="0">Retry</button></div></td>
+        <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
+        <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.__retryCalls = [];
+        window.fetch = function(url, options) {
+            if (options && options.method === 'POST' && String(url).indexOf('/session/retry') !== -1) {
+                window.__retryCalls.push({
+                    url: String(url),
+                    method: options.method,
+                    body: options.body ? JSON.parse(options.body) : null
+                });
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: function() {
+                        return Promise.resolve({
+                            status: "success",
+                            session_zid: "20260829100000",
+                            translated_text: "Das Haus ist gross.",
+                            rows: { "0": { "trans": "House" } }
+                        });
+                    }
+                });
+            }
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() { return Promise.resolve({ status: "success", data: {} }); }
+            });
+        };
+    """)
+    page.evaluate(extract_desk_js())
+
+    container_retry_btn = page.locator("#translation-container .btn-retry-cell")
+    assert container_retry_btn.count() == 1
+    assert page.locator(".btn-retry-cell").count() == 2
+
+    # Click the container retry button
+    container_retry_btn.click()
+
+    page.wait_for_function("() => window.__retryCalls && window.__retryCalls.length > 0", timeout=3000)
+    calls = page.evaluate("window.__retryCalls")
+    assert len(calls) == 1
+    assert calls[0]["url"] == "/session/retry"
+    assert calls[0]["body"]["session_zid"] == "20260829100000"
+
+    # Verify both translation container and table cell are populated with results
+    assert "Das Haus ist gross." in page.locator("#translation-container").inner_text()
+    assert "House" in page.locator("tr[data-row-id='0'] td:nth-child(3)").inner_text()
+    assert page.locator(".btn-retry-cell").count() == 0
 
 
 
