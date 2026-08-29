@@ -10615,7 +10615,13 @@ html, body {{
                     if (window.AppView.renderSourceText(data.stage)) updated = true;
                 }
                 
-                var trans = (data.translatedText !== undefined && data.translatedText !== "") ? data.translatedText : ((data.translated_text !== undefined && data.translated_text !== "") ? data.translated_text : null);
+                var trans = (data.translatedText !== undefined && data.translatedText !== "") ? data.translatedText : ((data.translated_text !== undefined && data.translated_text !== "") ? data.translated_text : ((data.Translation !== undefined && data.Translation !== "") ? data.Translation : null));
+                if (trans === null && data.rows && data.rows["0"]) {
+                    var r0 = data.rows["0"];
+                    if (r0.Translation) trans = r0.Translation;
+                    else if (r0.SentenceDestination) trans = r0.SentenceDestination;
+                    else if (r0.sentence_destination) trans = r0.sentence_destination;
+                }
                 if (trans !== null) {
                     window.AppState.translatedText = trans;
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
@@ -10688,6 +10694,35 @@ html, body {{
                             }
                         }
                         updated = true;
+                    }
+
+                    // Comprehensive scan for any remaining blank/empty translation cells across all table rows:
+                    var allRows = document.querySelectorAll('tr[data-row-id]');
+                    for (var r = 0; r < allRows.length; r++) {
+                        var rowEl = allRows[r];
+                        var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
+                        var tdsEl = rowEl.getElementsByTagName('td');
+                        if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
+                            var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || tdsEl[2];
+                            var transDiv = transTd.querySelector('.scrollable-cell') || transTd;
+                            var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
+                            if (!transContent || transContent === '...' || transContent === 'Loading...' || transDiv.querySelector('.skeleton-loader')) {
+                                transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
+                                updated = true;
+                            }
+                        }
+                    }
+
+                    // Display warning toast if any retry badges exist upon terminal finish
+                    var retryCount = document.querySelectorAll('.btn-retry-cell').length;
+                    if (retryCount > 0 && !window._kwRetryToastShown && typeof window.showToast === 'function') {
+                        window._kwRetryToastShown = true;
+                        var curZidVal = (typeof getSessionZid === 'function') ? getSessionZid() : "";
+                        window.showToast("Some translations could not be retrieved. Click to retry.", "warning", 8000, function() {
+                            if (window.retrySession) {
+                                window.retrySession(curZidVal);
+                            }
+                        });
                     }
                 }
                 
@@ -10810,82 +10845,77 @@ html, body {{
                             }
                         }
                     }
-                    if (!tds[2].classList.contains('dirty') && rowData.hasOwnProperty('trans') && rowData.trans !== undefined) {
-                        var div = tds[2].querySelector('.scrollable-cell');
-                        var val = rowData.trans || "";
-                        var hasSkeleton = (div || tds[2]).querySelector('.skeleton-loader') !== null;
+                    var hasTransProp = rowData.hasOwnProperty('trans') || rowData.hasOwnProperty('WordDestination') || rowData.hasOwnProperty('word_translation');
+                    if (!tds[2].classList.contains('dirty') && hasTransProp) {
+                        var div = tds[2].querySelector('.scrollable-cell') || tds[2];
+                        var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
+                        var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
+                        var hasRetryBadge = div.querySelector('.btn-retry-cell') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
+                        } else if (hasRetryBadge && val === "" && !isTerm) {
+                            // Retry badges remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
-                            var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
+                            var oldVal = tds[2].classList.contains('editing') ? null : (div.textContent || div.innerText);
                             var targetVal = val;
                             if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1 && oldVal.indexOf('btn-retry-cell') === -1) {
                                 targetVal = oldVal;
                             }
                             if (targetVal === "" && isTerm) {
                                 var retryBadge = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
-                                if (div) div.innerHTML = retryBadge;
-                                else if (!tds[2].classList.contains('editing')) tds[2].innerHTML = retryBadge;
+                                if (!tds[2].classList.contains('editing')) div.innerHTML = retryBadge;
                             } else {
-                                if (div) setCellText(div, targetVal);
-                                else if (!tds[2].classList.contains('editing')) setCellText(tds[2], targetVal);
+                                if (!tds[2].classList.contains('editing')) setCellText(div, targetVal);
                             }
                             updated = true;
                         } else {
-                            var oldVal = div ? (div.textContent || div.innerText) : (tds[2].classList.contains('editing') ? null : (tds[2].textContent || tds[2].innerText));
+                            var oldVal = tds[2].classList.contains('editing') ? null : (div.textContent || div.innerText);
                             var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (val === "" && isTerm) {
                                     var retryBadge = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
-                                    if (div) div.innerHTML = retryBadge;
-                                    else if (!tds[2].classList.contains('editing')) tds[2].innerHTML = retryBadge;
-                                } else {
-                                    if (div) setCellText(div, val);
-                                    else if (!tds[2].classList.contains('editing')) setCellText(tds[2], val);
+                                    if (!tds[2].classList.contains('editing')) div.innerHTML = retryBadge;
+                                    updated = true;
+                                } else if (val !== "") {
+                                    if (!tds[2].classList.contains('editing')) setCellText(div, val);
+                                    updated = true;
                                 }
-                                updated = true;
                             }
                         }
                     }
                     if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
-                        var div = tds[3].querySelector('.scrollable-cell');
+                        var div = tds[3].querySelector('.scrollable-cell') || tds[3];
                         var val = rowData.ipa || "";
-                        var hasSkeleton = (div || tds[3]).querySelector('.skeleton-loader') !== null;
+                        var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
-                            if (div) setCellText(div, val);
-                            else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
+                            if (!tds[3].classList.contains('editing')) setCellText(div, val);
                             updated = true;
-                        } else {
-                            var oldVal = div ? (div.textContent || div.innerText) : (tds[3].classList.contains('editing') ? null : (tds[3].textContent || tds[3].innerText));
-                            var shouldUpdate = (oldVal !== val) || hasSkeleton;
-                            if (shouldUpdate) {
-                                if (div) setCellText(div, val);
-                                else if (!tds[3].classList.contains('editing')) setCellText(tds[3], val);
+                        } else if (val !== "") {
+                            var oldVal = tds[3].classList.contains('editing') ? null : (div.textContent || div.innerText);
+                            if (oldVal !== val || hasSkeleton) {
+                                if (!tds[3].classList.contains('editing')) setCellText(div, val);
                                 updated = true;
                             }
                         }
                     }
                     if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
-                        var div = tds[4].querySelector('.scrollable-cell');
+                        var div = tds[4].querySelector('.scrollable-cell') || tds[4];
                         var val = rowData.morph || "";
-                        var hasSkeleton = (div || tds[4]).querySelector('.skeleton-loader') !== null;
+                        var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
-                            if (div) div.innerHTML = val;
-                            else if (!tds[4].classList.contains('editing')) div.innerHTML = val;
+                            if (!tds[4].classList.contains('editing')) div.innerHTML = val;
                             updated = true;
-                        } else {
-                            var oldVal = div ? div.innerHTML : (tds[4].classList.contains('editing') ? null : tds[4].innerHTML);
-                            var shouldUpdate = (oldVal !== val) || hasSkeleton;
-                            if (shouldUpdate) {
-                                if (div) div.innerHTML = val;
-                                else if (!tds[4].classList.contains('editing')) div.innerHTML = val;
+                        } else if (val !== "") {
+                            var oldVal = tds[4].classList.contains('editing') ? null : div.innerHTML;
+                            if (oldVal !== val || hasSkeleton) {
+                                if (!tds[4].classList.contains('editing')) div.innerHTML = val;
                                 updated = true;
                             }
                         }
@@ -11010,15 +11040,38 @@ html, body {{
                             return node;
                         })(el);
                         var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
-                        var currentText = (el.textContent || el.innerText || "").trim();
+                        var targetDiv = el.classList.contains('scrollable-cell') ? el : ((el.parentNode && el.parentNode.classList.contains('scrollable-cell')) ? el.parentNode : el);
+                        var currentText = (targetDiv.textContent || targetDiv.innerText || "").trim();
                         if (!currentText || currentText === '...' || currentText === 'Loading...' || currentText === 'Loading translation...') {
                             if (rowId !== null && rowId !== undefined) {
-                                el.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
-                            } else if (el.id === 'translation-container' || (el.closest && el.closest('#translation-container'))) {
-                                el.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                                targetDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                            } else if (targetDiv.id === 'translation-container' || (targetDiv.closest && targetDiv.closest('#translation-container'))) {
+                                targetDiv.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                             }
                         }
                     }
+
+                    // Comprehensive scan across all table rows for unpopulated translation cells
+                    var allRows = document.querySelectorAll('tr[data-row-id]');
+                    for (var r = 0; r < allRows.length; r++) {
+                        var rowEl = allRows[r];
+                        var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
+                        var tdsEl = rowEl.getElementsByTagName('td');
+                        if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
+                            var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || tdsEl[2];
+                            var transDiv = transTd.querySelector('.scrollable-cell') || transTd;
+                            var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
+                            if (!transContent || transContent === '...' || transContent === 'Loading...' || transDiv.querySelector('.skeleton-loader')) {
+                                transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
+                            }
+                        }
+                    }
+
+                    var tc = document.getElementById('translation-container');
+                    if (tc && (!tc.textContent.trim() || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader'))) {
+                        tc.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                    }
+
                     if (typeof window.showToast === 'function') {
                         window.showToast("Background loading timed out. Restored table editing. Some translations timed out. Click to retry.", "warning", 8000, function() {
                             if (window.retrySession) {
@@ -13391,6 +13444,7 @@ html, body {{
         function retrySession(sessionZid) {
             var curZid = sessionZid || getSessionZid();
             if (!curZid) return;
+            window._kwRetryToastShown = false;
             var token = getApiToken ? getApiToken() : "";
             var headers = {
                 'Content-Type': 'application/json',

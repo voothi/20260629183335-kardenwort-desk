@@ -4993,6 +4993,94 @@ def test_unified_batch_retry_from_container_retry_badge(page):
     assert page.locator(".btn-retry-cell").count() == 0
 
 
+def test_render_row_preserves_retry_badge_on_empty_trans_update(page):
+    """Verifies that renderRow never overwrites an existing .btn-retry-cell with an empty string when empty deltas arrive."""
+    html = """
+    <div id="session-zid">20260829100000</div>
+    <div id="kw-toast-container"></div>
+    <div class="translation-text" id="translation-container"></div>
+    <table>
+      <tr data-row-id="0">
+        <td><div class="scrollable-cell">Haus</div></td>
+        <td><div class="scrollable-cell">Haus</div></td>
+        <td><div class="scrollable-cell"><button class="btn-retry-cell" data-row-id="0" title="Retry translation">Retry</button></div></td>
+        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"></div></td>
+      </tr>
+    </table>
+    """
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    assert page.locator("tr[data-row-id='0'] .btn-retry-cell").count() == 1
+
+    # Simulate intermediate delta update with empty trans
+    page.evaluate("""
+        window.receiveUpdate({
+            stage: "translated_text",
+            rows: { "0": { "trans": "", "lemma": "Haus" } }
+        });
+    """)
+
+    # Verify retry button was NOT erased to blank empty string
+    assert page.locator("tr[data-row-id='0'] .btn-retry-cell").count() == 1
+
+
+def test_is_finished_populates_all_blank_cells_with_retry_badges(page):
+    """Verifies that on isFinished, all blank/untranslated table cells and translation container receive retry badges."""
+    html = """
+    <div id="session-zid">20260829100000</div>
+    <div id="kw-toast-container"></div>
+    <div class="translation-text" id="translation-container"></div>
+    <table>
+      <tr data-row-id="0">
+        <td><div class="scrollable-cell">in</div></td>
+        <td><div class="scrollable-cell">in</div></td>
+        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"></div></td>
+      </tr>
+      <tr data-row-id="1">
+        <td><div class="scrollable-cell">pass</div></td>
+        <td><div class="scrollable-cell">pass</div></td>
+        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"></div></td>
+      </tr>
+    </table>
+    """
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Initially 0 retry buttons
+    assert page.locator(".btn-retry-cell").count() == 0
+
+    # Simulate terminal finish from worker where translations remained empty
+    page.evaluate("""
+        window.receiveUpdate({
+            stage: "finished",
+            status: "success",
+            sourceText: "in pass",
+            translatedText: "",
+            rows: {
+                "0": { "lemma": "in", "trans": "" },
+                "1": { "lemma": "pass", "trans": "" }
+            }
+        });
+    """)
+
+    # Verify both rows and translation container received retry badges
+    assert page.locator("#translation-container .btn-retry-cell").count() == 1
+    assert page.locator("tr[data-row-id='0'] .btn-retry-cell").count() == 1
+    assert page.locator("tr[data-row-id='1'] .btn-retry-cell").count() == 1
+    assert page.locator(".btn-retry-cell").count() == 3
+
+    # Verify warning toast is shown
+    toast = page.locator(".kw-toast-warning")
+    assert toast.is_visible()
+    assert "Some translations could not be retrieved" in toast.inner_text()
+
+
 
 
 
