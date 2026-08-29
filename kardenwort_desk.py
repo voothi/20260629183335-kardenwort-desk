@@ -8877,7 +8877,7 @@ html, body {{
             else:
                 master_tsv_name = w_name
         master_card_slug = master_slug if 'master_slug' in locals() else (tsv_slug or (generate_slug(text) if text else ""))
-        sentence_cards.append({
+        master_card = {
             "index": 0,
             "seq_num": 1,
             "sentence_idx": 0,
@@ -8887,8 +8887,9 @@ html, body {{
             "tsv_filename": master_tsv_name,
             "source_text": text,
             "translated_text": master_trans_full,
-        })
+        }
         
+        child_cards = []
         for idx, s_src in enumerate(source_sentences):
             seq = idx + 2
             sent_i = idx + 1
@@ -8925,7 +8926,7 @@ html, body {{
                     l_p = bare_c_match.group(2) or language
                     c_tsv_name = f"{z_p}-{c_slug}.{l_p}.tsv"
 
-            sentence_cards.append({
+            child_cards.append({
                 "index": idx + 1,
                 "seq_num": seq,
                 "sentence_idx": sent_i,
@@ -8937,25 +8938,25 @@ html, body {{
                 "translated_text": s_trans,
             })
 
+        if smc.spawn_order == "reverse":
+            sentence_cards = [master_card] + list(reversed(child_cards))
+        else:
+            sentence_cards = [master_card] + child_cards
+
     active_seq_num = 1
     if len(sentence_cards) > 1 and smc.delivery_mode == "container":
         if seq_num is not None and str(seq_num).strip():
             try:
                 active_seq_num = int(seq_num)
             except (ValueError, TypeError):
-                active_seq_num = 1
-        else:
-            if smc.spawn_order == "reverse":
                 active_seq_num = 2
-            elif smc.spawn_order == "normal":
-                active_seq_num = len(sentence_cards)
-            else:
-                active_seq_num = 1
+        else:
+            active_seq_num = 2
 
         if sentence_cards:
             valid_seqs = {c["seq_num"] for c in sentence_cards}
             if active_seq_num not in valid_seqs:
-                active_seq_num = 1
+                active_seq_num = 2 if 2 in valid_seqs else 1
 
     elif seq_num is not None and str(seq_num).strip():
         try:
@@ -13880,9 +13881,17 @@ html, body {{
                 if (!cards || cards.length === 0) return;
                 var targetCard = null;
                 for (var i = 0; i < cards.length; i++) {
-                    if (cards[i].seq_num === seqOrSentIdx || cards[i].sentence_idx === seqOrSentIdx) {
+                    if (cards[i].seq_num === seqOrSentIdx) {
                         targetCard = cards[i];
                         break;
+                    }
+                }
+                if (!targetCard) {
+                    for (var j = 0; j < cards.length; j++) {
+                        if (cards[j].sentence_idx === seqOrSentIdx) {
+                            targetCard = cards[j];
+                            break;
+                        }
                     }
                 }
                 if (!targetCard) return;

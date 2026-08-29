@@ -1463,4 +1463,104 @@ def test_get_session_zid_incremental_wordfill_hydration(running_controller, monk
     assert r_rows[0][morph_idx] == "Noun|Fem|Sing|Nom"
 
 
+def test_controller_session_restore_container_mode_initial_active_tab_2(running_controller):
+    """Verifies that GET /?session_zid=... in container mode defaults initial active tab to seq_num 2 (Sentence 1)."""
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+
+    sess_zid = kardenwort_desk.generate_unique_zid()
+    headers = ["SentenceSourceIndex", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "SentenceSource", "SentenceDestination"]
+    data_rows = [
+        ["1", "Haus", "дом", "", "", "Das Haus ist gross.", "Дом большой."],
+        ["2", "Katze", "кошка", "", "", "Die Katze schlaeft.", "Кошка спит."],
+    ]
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="test-container-tab2",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Das Haus ist gross. Die Katze schlaeft.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[
+            {
+                "session_zid": sess_zid,
+                "sentence_index": 1,
+                "sentence_source": "Das Haus ist gross.",
+                "sentence_destination": "Дом большой.",
+            },
+            {
+                "session_zid": f"{sess_zid}-02",
+                "sentence_index": 2,
+                "sentence_source": "Die Katze schlaeft.",
+                "sentence_destination": "Кошка спит.",
+            }
+        ],
+    )
+
+    if not server.config.has_section("sentences_mode"):
+        server.config.add_section("sentences_mode")
+    server.config.set("sentences_mode", "delivery_mode", "container")
+    server.config.set("sentences_mode", "enabled", "true")
+
+    # 1. Unset seq_num defaults to seq_num = 2 (Sentence 1 active)
+    req1 = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    with urllib.request.urlopen(req1, timeout=5.0) as resp1:
+        assert resp1.status == 200
+        content1 = resp1.read().decode('utf-8')
+        assert '<button type="button" class="kw-tab-chip active" data-tab-seq="2" data-sentence-idx="1"' in content1
+        assert '<button type="button" class="kw-tab-chip" data-tab-seq="1" data-sentence-idx="0"' in content1
+
+    # 2. Explicit seq_num=1 in container mode defaults to seq_num = 2
+    req2 = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}&seq_num=1")
+    with urllib.request.urlopen(req2, timeout=5.0) as resp2:
+        assert resp2.status == 200
+        content2 = resp2.read().decode('utf-8')
+        assert '<button type="button" class="kw-tab-chip active" data-tab-seq="2" data-sentence-idx="1"' in content2
+
+
+def test_controller_session_restore_untranslated_lemmas_skeleton_loader(running_controller):
+    """Verifies that restored sessions with untranslated lemmas render skeleton loaders and do not suppress progressive triggers."""
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+
+    sess_zid = kardenwort_desk.generate_unique_zid()
+    headers = ["SentenceSourceIndex", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "SentenceSource", "SentenceDestination"]
+    data_rows = [
+        ["1", "Baum", "", "", "", "Der Baum ist hoch.", "Дерево высокое."],
+    ]
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="test-skeleton-restore",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Der Baum ist hoch.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[
+            {
+                "session_zid": sess_zid,
+                "sentence_index": 1,
+                "sentence_source": "Der Baum ist hoch.",
+                "sentence_destination": "Дерево высокое.",
+            }
+        ],
+    )
+
+    if not server.config.has_section("triggers"):
+        server.config.add_section("triggers")
+    server.config.set("triggers", "run_lemma_base_translation", "auto")
+
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        content = resp.read().decode('utf-8')
+        assert '<span class="skeleton-loader"' in content
+
+
+
 

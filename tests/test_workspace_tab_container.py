@@ -197,6 +197,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
     
     # 5 sentences for scrolling verification
     text = "First sentence.\nSecond sentence.\nThird sentence.\nFourth sentence.\nFifth sentence."
@@ -380,6 +381,7 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
     
     text = "First sentence.\nSecond sentence."
     tsv_file = tmp_path / "20260828181000-first-sentence-second-sentence.en.tsv"
@@ -482,14 +484,13 @@ def test_distinct_per_sentence_card_slugs_and_restore_session(tmp_path):
     # Master card
     assert cards_data[0]["seq_num"] == 1
     assert cards_data[0]["slug"] == "it-works-by-restoring"
-    # Child card 1
-    assert cards_data[1]["seq_num"] == 2
-    assert cards_data[1]["slug"] == "it-works-by-restoring"
-    assert "20260828233845-it-works-by-restoring.en.tsv" in cards_data[1]["tsv_filename"]
-    # Child card 2 has distinct sentence slug!
-    assert cards_data[2]["seq_num"] == 3
-    assert cards_data[2]["slug"] == "and-on-a-drive"
-    assert "20260828233846-and-on-a-drive.en.tsv" in cards_data[2]["tsv_filename"]
+    # Child cards in reverse mode: [1] [3] [2]
+    assert cards_data[1]["seq_num"] == 3
+    assert cards_data[1]["slug"] == "and-on-a-drive"
+    assert "20260828233846-and-on-a-drive.en.tsv" in cards_data[1]["tsv_filename"]
+    assert cards_data[2]["seq_num"] == 2
+    assert cards_data[2]["slug"] == "it-works-by-restoring"
+    assert "20260828233845-it-works-by-restoring.en.tsv" in cards_data[2]["tsv_filename"]
 
     # Test restore_session top-level slug exposure
     adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
@@ -534,7 +535,7 @@ def test_action_toolbar_glassmorphism_css(tmp_path):
 
 
 def test_container_initial_active_tab_spawn_order_reverse(page, tmp_path):
-    """Test 3.1: Verify tab [2] is initial active tab and DOM filters reflect it when spawn_order = reverse."""
+    """Test 3.1: Verify tab [2] is initial active tab and tabs are ordered [1] [5] [4] [3] [2*] when spawn_order = reverse."""
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
@@ -563,9 +564,15 @@ def test_container_initial_active_tab_spawn_order_reverse(page, tmp_path):
         return_children=False
     )
 
-    # Server HTML check
+    # Server HTML check: [1] [5] [4] [3] [2*]
+    import re
+    chips_match = re.search(r'<div class="kw-tab-track" id="kw-tab-track">(.*?)</div>', html)
+    assert chips_match is not None
+    chips_html = chips_match.group(1)
+    chip_seqs = re.findall(r'data-tab-seq="(\d+)"', chips_html)
+    assert chip_seqs == ["1", "5", "4", "3", "2"]
+
     assert '<button type="button" class="kw-tab-chip active" data-tab-seq="2" data-sentence-idx="1"' in html
-    assert '<button type="button" class="kw-tab-chip" data-tab-seq="1" data-sentence-idx="0"' in html
     assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/2.ico">' in html
     assert "20260829011001-first-sentence.en.tsv" in html
 
@@ -584,7 +591,7 @@ def test_container_initial_active_tab_spawn_order_reverse(page, tmp_path):
 
 
 def test_container_initial_active_tab_spawn_order_normal(page, tmp_path):
-    """Test 3.2: Verify final tab [N] is initial active tab and DOM filters reflect it when spawn_order = normal."""
+    """Test 3.2: Verify tab [2] is initial active tab and tabs are ordered [1] [2*] [3] [4] [5] when spawn_order = normal."""
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
@@ -613,23 +620,30 @@ def test_container_initial_active_tab_spawn_order_normal(page, tmp_path):
         return_children=False
     )
 
-    # 4 sentences + 1 overview = 5 total cards; last tab is [5] (Sentence 4)
-    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="5" data-sentence-idx="4"' in html
+    # 4 sentences + 1 overview = 5 total cards; tabs are [1] [2*] [3] [4] [5]
+    import re
+    chips_match = re.search(r'<div class="kw-tab-track" id="kw-tab-track">(.*?)</div>', html)
+    assert chips_match is not None
+    chips_html = chips_match.group(1)
+    chip_seqs = re.findall(r'data-tab-seq="(\d+)"', chips_html)
+    assert chip_seqs == ["1", "2", "3", "4", "5"]
+
+    assert '<button type="button" class="kw-tab-chip active" data-tab-seq="2" data-sentence-idx="1"' in html
     assert '<button type="button" class="kw-tab-chip" data-tab-seq="1" data-sentence-idx="0"' in html
-    assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/5.ico">' in html
-    assert "20260829011004-fourth-sentence.en.tsv" in html
+    assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/2.ico">' in html
+    assert "20260829011001-first-sentence.en.tsv" in html
 
     page.set_content(html)
     page.wait_for_selector("#kw-workspace-tab-bar")
 
     active_chip = page.locator(".kw-tab-chip.active")
-    assert active_chip.inner_text() == "5"
-    assert "20260829011004-fourth-sentence.en.tsv" in page.title()
+    assert active_chip.inner_text() == "2"
+    assert "20260829011001-first-sentence.en.tsv" in page.title()
 
-    chunk4 = page.locator('#source-container > .kw-sentence-chunk[data-sentence-idx="4"]')
     chunk1 = page.locator('#source-container > .kw-sentence-chunk[data-sentence-idx="1"]')
-    assert chunk4.is_visible()
-    assert not chunk1.is_visible()
+    chunk4 = page.locator('#source-container > .kw-sentence-chunk[data-sentence-idx="4"]')
+    assert chunk1.is_visible()
+    assert not chunk4.is_visible()
 
 
 def test_container_initial_active_tab_explicit_seq_num_override(tmp_path):

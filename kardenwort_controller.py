@@ -3278,25 +3278,34 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     tsv_path = results_dir / f"{session_zid}{slug_suffix}.{sess_lang}.tsv"
                     seq_num = qs.get('seq_num', [None])[0] or qs.get('seq-num', [None])[0]
 
-                    restore_config = configparser.ConfigParser()
-                    if self.server.config:
-                        restore_config.read_dict(self.server.config)
-                    if not restore_config.has_section(SEC_TRIGGERS):
-                        restore_config.add_section(SEC_TRIGGERS)
-                    restore_config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'manual')
-                    restore_config.set(SEC_TRIGGERS, 'run_text_translation', 'manual')
-                    restore_config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+                    delivery_mode = "container"
+                    if hasattr(self.server, 'config') and self.server.config and self.server.config.has_section("sentences_mode"):
+                        raw_delivery = self.server.config.get("sentences_mode", "delivery_mode", fallback=None)
+                        if raw_delivery is not None:
+                            del_val = raw_delivery.strip().lower()
+                            delivery_mode = del_val if del_val in ("container", "multi_window") else "container"
+                        else:
+                            raw_wtm = self.server.config.get("sentences_mode", "web_tab_mode", fallback="container").strip().lower()
+                            delivery_mode = "multi_window" if raw_wtm == "tabs" else "container"
+
+                    if delivery_mode == "container" and (seq_num is None or str(seq_num).strip() in ("", "1")):
+                        resolved_seq_num = 2
+                    else:
+                        try:
+                            resolved_seq_num = int(seq_num) if seq_num else None
+                        except (ValueError, TypeError):
+                            resolved_seq_num = None
 
                     html = render_flow_fn(
                         text=source_text,
                         language=sess_lang,
                         zid=session_zid,
                         text_mode=text_mode,
-                        config=restore_config,
+                        config=self.server.config,
                         resolved_paths=self.server.resolved_paths,
                         theme=req_theme or 'dark',
                         tsv_path=tsv_path,
-                        seq_num=int(seq_num) if seq_num else None,
+                        seq_num=resolved_seq_num,
                     )
                 body = html.encode('utf-8')
                 self.send_response(200)
