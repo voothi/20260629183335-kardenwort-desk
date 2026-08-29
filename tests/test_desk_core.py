@@ -31,13 +31,16 @@ def test_write_update_js(tmp_path):
         "morphology": "POS"
     }
     
+    tsv_config = __import__('configparser').ConfigParser()
+    tsv_config.read_string("[storage]\nbackend=tsv\n")
     desk.write_update_js(
         tsv_path, 
         data_rows, 
         headers, 
         role_fields, 
         stage="translated", 
-        status="success"
+        status="success",
+        config=tsv_config
     )
     
     updates_dir = tmp_path / "data.updates"
@@ -1154,7 +1157,9 @@ def test_write_update_js_finished_stage(tmp_path):
     headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
     role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
     
-    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="Source Text", translated_text="Translated Text")
+    tsv_config = __import__('configparser').ConfigParser()
+    tsv_config.read_string("[storage]\nbackend=tsv\n")
+    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", source_text="Source Text", translated_text="Translated Text", config=tsv_config)
     
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     js_files = list(updates_dir.glob("*.js"))
@@ -1170,7 +1175,9 @@ def test_write_update_js_source_stage(tmp_path):
     headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
     role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
 
-    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="source", source_text="Das Haus")
+    tsv_config = __import__('configparser').ConfigParser()
+    tsv_config.read_string("[storage]\nbackend=tsv\n")
+    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="source", source_text="Das Haus", config=tsv_config)
 
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     js_files = list(updates_dir.glob("*.js"))
@@ -1186,7 +1193,9 @@ def test_write_update_js_empty_payload(tmp_path):
     headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
     role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
 
-    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True)
+    tsv_config = __import__('configparser').ConfigParser()
+    tsv_config.read_string("[storage]\nbackend=tsv\n")
+    desk.write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True, config=tsv_config)
 
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     js_files = list(updates_dir.glob("*.js"))
@@ -3107,6 +3116,8 @@ def test_write_update_js_error_envelope(tmp_path):
         "details": {"http_code": 456}
     }
     
+    tsv_config = __import__('configparser').ConfigParser()
+    tsv_config.read_string("[storage]\nbackend=tsv\n")
     desk.write_update_js(
         tsv_path,
         data_rows,
@@ -3116,7 +3127,8 @@ def test_write_update_js_error_envelope(tmp_path):
         status="failed",
         error=error_obj,
         zid="20260818223000",
-        trace_id="20260818223000:retext:worker"
+        trace_id="20260818223000:retext:worker",
+        config=tsv_config
     )
     
     updates_dir = tmp_path / "20260818223000-session.updates"

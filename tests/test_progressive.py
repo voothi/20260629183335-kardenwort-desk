@@ -931,6 +931,109 @@ def test_progressive_worker_sqlite_mode_exception_non_destructive(monkeypatch, t
     assert failed_events[0]["error"]["retryable"] is True
 
 
+def test_diskless_progressive_updates_sqlite_no_files_written(tmp_path):
+    """Verify that write_update_js bypasses disk writes when backend is sqlite."""
+    import configparser
+    sqlite_cfg = configparser.ConfigParser()
+    sqlite_cfg.read_string("[storage]\nbackend=sqlite\n")
+
+    tsv_file = tmp_path / "20260829020000-session.tsv"
+    tsv_file.write_text("WordSource\tWordDestination\nApfel\t\n", encoding="utf-8")
+    headers = ["WordSource", "WordDestination"]
+    data_rows = [["Apfel", ""]]
+    role_fields = {"lemma": "WordSource", "word_translation": "WordDestination"}
+
+    res = desk.write_update_js(
+        tsv_file,
+        data_rows,
+        headers,
+        role_fields,
+        stage="translated",
+        zid="20260829020000",
+        config=sqlite_cfg
+    )
+
+    assert res is None
+    updates_dir = tmp_path / f"{tsv_file.stem}.updates"
+    assert not updates_dir.exists(), ".updates directory must not be created when backend is sqlite"
+
+
+def test_prune_stale_results_artifacts(tmp_path):
+    """Verify safe removal of stale .updates directories, zero-byte logs, and .done markers."""
+    import os
+    now = time.time()
+    stale_time = now - 600 # 10 minutes ago
+    fresh_time = now
+
+    # 1. Stale .updates directory
+    stale_updates = tmp_path / "20260829010000-old.updates"
+    stale_updates.mkdir()
+    (stale_updates / "000001.js").write_text("update()", encoding="utf-8")
+    os.utime(stale_updates, (stale_time, stale_time))
+
+    # 2. Fresh .updates directory
+    fresh_updates = tmp_path / "20260829020000-new.updates"
+    fresh_updates.mkdir()
+    (fresh_updates / "000001.js").write_text("update()", encoding="utf-8")
+    os.utime(fresh_updates, (fresh_time, fresh_time))
+
+    # 3. Stale done markers
+    stale_base_done = tmp_path / "20260829010000-old.base_translation_done"
+    stale_base_done.touch()
+    os.utime(stale_base_done, (stale_time, stale_time))
+
+    stale_enrich_done = tmp_path / "20260829010000-old.enrichment_done"
+    stale_enrich_done.touch()
+    os.utime(stale_enrich_done, (stale_time, stale_time))
+
+    stale_cut_done = tmp_path / "20260829010000-old.the_cut_done"
+    stale_cut_done.touch()
+    os.utime(stale_cut_done, (stale_time, stale_time))
+
+    # 4. Fresh done marker
+    fresh_base_done = tmp_path / "20260829020000-new.base_translation_done"
+    fresh_base_done.touch()
+    os.utime(fresh_base_done, (fresh_time, fresh_time))
+
+    # 5. Stale 0-byte log
+    stale_zero_log = tmp_path / "20260829010000-old.log"
+    stale_zero_log.touch()
+    os.utime(stale_zero_log, (stale_time, stale_time))
+
+    # 6. Stale non-empty log (should be preserved)
+    stale_nonempty_log = tmp_path / "20260829010000-data.log"
+    stale_nonempty_log.write_text("Important session log\n", encoding="utf-8")
+    os.utime(stale_nonempty_log, (stale_time, stale_time))
+
+    # 7. Persistent TSV / TXT data files (should never be pruned)
+    data_tsv = tmp_path / "20260829010000-old.tsv"
+    data_tsv.write_text("a\tb\n", encoding="utf-8")
+    os.utime(data_tsv, (stale_time, stale_time))
+
+    data_txt = tmp_path / "20260829010000-old.txt"
+    data_txt.write_text("Source Text", encoding="utf-8")
+    os.utime(data_txt, (stale_time, stale_time))
+
+    # Execute pruning with 300s threshold
+    pruned_count = desk.prune_stale_results_artifacts(tmp_path, max_age_seconds=300)
+
+    # 5 items should have been pruned: stale_updates, 3 stale done markers, stale_zero_log
+    assert pruned_count == 5
+    assert not stale_updates.exists()
+    assert not stale_base_done.exists()
+    assert not stale_enrich_done.exists()
+    assert not stale_cut_done.exists()
+    assert not stale_zero_log.exists()
+
+    # Preserved items
+    assert fresh_updates.exists()
+    assert fresh_base_done.exists()
+    assert stale_nonempty_log.exists()
+    assert data_tsv.exists()
+    assert data_txt.exists()
+
+
+
 
 
 

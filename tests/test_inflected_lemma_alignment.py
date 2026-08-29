@@ -192,8 +192,11 @@ def test_write_update_js_serializes_token_order_and_inflected(tmp_path):
         "inflected": "WordSourceInflectedForm",
         "word_translation": "WordDestination",
     }
-    js_path = write_update_js(tsv_file, data_rows, headers, role_fields, stage="translated", zid="20260823005501")
-    assert js_path.exists()
+    import configparser
+    tsv_config = configparser.ConfigParser()
+    tsv_config.read_string("[storage]\nbackend=tsv\n")
+    js_path = write_update_js(tsv_file, data_rows, headers, role_fields, stage="translated", zid="20260823005501", config=tsv_config)
+    assert js_path is not None and js_path.exists()
     content = js_path.read_text(encoding="utf-8")
     assert "window.receiveUpdate" in content
     # Parse update payload

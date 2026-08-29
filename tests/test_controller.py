@@ -411,21 +411,20 @@ def test_controller_session_retext_writes_updates_js(running_controller):
         assert "translated_text" in retext_res["data"]
         assert len(retext_res["data"]["translated_text"]) > 0
 
-    # 3. Verify .updates/*.js written
+    # 3. Verify diskless progressive updates (no .updates/*.js directory on disk in SQLite mode)
     results_dir = kardenwort_desk.resolve_results_dir(server.resolved_paths, server.config)
     tsv_path = kardenwort_desk.find_working_tsv(results_dir, session_zid, "en")
     assert tsv_path is not None and tsv_path.exists()
 
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
-    assert updates_dir.exists()
-    js_files = sorted(updates_dir.glob("*.js"))
-    assert len(js_files) > 0
+    assert not updates_dir.exists(), ".updates directory must not be created on disk in SQLite mode"
 
-    latest_js = js_files[-1].read_text(encoding="utf-8")
-    assert "window.receiveUpdate(" in latest_js
-    assert '"stage": "finished"' in latest_js
-    assert '"status": "success"' in latest_js
-    assert '"translatedText":' in latest_js
+    # Verify session is updated in arbiter memory and SQLite database
+    adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    if hasattr(adapter, 'db'):
+        db_sents = adapter.db.get_sentences_by_session(session_zid)
+        assert len(db_sents) > 0
+        assert db_sents[0]["sentence_destination"] is not None
 
 
 def test_controller_session_retext_long_single_mode_text(running_controller):

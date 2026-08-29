@@ -35,6 +35,9 @@ def test_playwright_dom_validation(page, tmp_path):
     
     # Let's mock a payload and apply it
     role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
+    import configparser
+    dom_cfg = configparser.ConfigParser()
+    dom_cfg.read_string("[storage]\nbackend=tsv\n")
     kardenwort_desk.write_update_js(
         tsv_path,
         data_rows,
@@ -42,7 +45,8 @@ def test_playwright_dom_validation(page, tmp_path):
         role_fields,
         stage="finished",
         source_text='<span class="word highlight-purple" data-word-idx="0">Das</span> <span class="word highlight-orange" data-word-idx="1">Haus</span>',
-        translated_text="The house"
+        translated_text="The house",
+        config=dom_cfg
     )
     
     # 2.6 Verify pathlib usage (already doing it here via tsv_path.parent)

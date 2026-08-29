@@ -2030,6 +2030,54 @@ def resolve_results_dir(resolved_paths, kw_config):
         return (Path(resolved_paths['base_dir']) / 'results').resolve()
     return Path('results').resolve()
 
+def prune_stale_results_artifacts(results_dir, max_age_seconds=300):
+    """
+    Safely prunes stale temporary artifacts from results_dir older than max_age_seconds.
+    Removes:
+      - .updates/ directories (legacy progressive update js files)
+      - Stale .done markers (.base_translation_done, .enrichment_done, .the_cut_done)
+      - Zero-byte .log files (empty/orphaned session logs)
+    Returns the count of pruned items.
+    """
+    if not results_dir:
+        return 0
+    results_dir = Path(results_dir)
+    if not results_dir.exists() or not results_dir.is_dir():
+        return 0
+
+    import time
+    import shutil
+    now = time.time()
+    pruned_count = 0
+
+    try:
+        for entry in results_dir.iterdir():
+            try:
+                mtime = entry.stat().st_mtime
+                is_stale = (now - mtime) > max_age_seconds
+
+                if entry.is_dir() and entry.name.endswith(".updates"):
+                    if is_stale:
+                        shutil.rmtree(entry, ignore_errors=True)
+                        pruned_count += 1
+                elif entry.is_file():
+                    # Check done markers
+                    if any(entry.name.endswith(suffix) for suffix in ('.base_translation_done', '.enrichment_done', '.the_cut_done')):
+                        if is_stale:
+                            entry.unlink(missing_ok=True)
+                            pruned_count += 1
+                    # Check zero-byte logs
+                    elif entry.name.endswith(".log") and entry.stat().st_size == 0:
+                        if is_stale:
+                            entry.unlink(missing_ok=True)
+                            pruned_count += 1
+            except (OSError, PermissionError):
+                pass
+    except Exception:
+        pass
+
+    return pruned_count
+
 @functools.lru_cache(maxsize=32)
 def _load_anki_mapping_cached(mapping_str: str):
     mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)
@@ -6375,21 +6423,11 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     import time
     import re
     
+    # Universal cleanup of stale .updates, zero-byte logs, and done markers (> 5 minutes old) across all backends
+    prune_stale_results_artifacts(results_dir, max_age_seconds=300)
+
     if not is_sqlite:
         results_dir.mkdir(parents=True, exist_ok=True)
-        # Clean up stale .updates directories (> 5 minutes old) to prevent clutter
-        try:
-            import shutil
-            now = time.time()
-            for d in results_dir.rglob("*.updates"):
-                if d.is_dir() and (now - d.stat().st_mtime) > 300:
-                    try:
-                        shutil.rmtree(d)
-                    except OSError:
-                        pass
-        except Exception:
-            pass
-            
         if working_tsv_path.exists():
             if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
                 return working_tsv_path
@@ -7600,9 +7638,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         kardenwort_workspace = resolved_paths['kardenwort_workspace']
         kw_config = load_kardenwort_config(kardenwort_workspace)
         results_dir = resolve_results_dir(resolved_paths, kw_config)
-        if not is_sqlite:
-            results_dir.mkdir(parents=True, exist_ok=True)
-            
+        if results_dir.exists():
             # Cleanup old markers from previous runs with the same ZID to prevent race conditions
             for marker in results_dir.glob(f"{zid[:14]}*"):
                 if marker.suffix in ['.base_translation_done', '.enrichment_done', '.the_cut_done']:
@@ -7610,7 +7646,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         marker.unlink()
                     except Exception:
                         pass
-            
+
+        if not is_sqlite:
+            results_dir.mkdir(parents=True, exist_ok=True)
             # Write master translation file
             master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
             master_trans_path.write_text(translated_paragraph, encoding='utf-8')
@@ -17036,6 +17074,10 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             config = load_config()[0]
         except Exception:
             config = None
+
+    storage_adapter = get_storage_adapter(config)
+    if getattr(storage_adapter, 'backend_name', '') == 'sqlite':
+        return None
 
     if zid is None and tsv_path:
         m = re.match(r"^(\d{14})", tsv_path.name)

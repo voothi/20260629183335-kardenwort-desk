@@ -129,8 +129,8 @@ def test_write_update_js_resolves_clean_translation_from_sqlite(mock_clean_conte
         "word_translation": "WordDestination",
     }
     
-    # Progressive stage 'finished' with translated_text=None
-    desk.write_update_js(
+    # In diskless SQLite mode, write_update_js bypasses disk writes
+    res = desk.write_update_js(
         tsv_path=tsv_path,
         data_rows=data_rows,
         headers=headers,
@@ -139,21 +139,21 @@ def test_write_update_js_resolves_clean_translation_from_sqlite(mock_clean_conte
         config=config,
         zid=session_zid,
     )
-    
+    assert res is None
     updates_dir = env["results_dir"] / f"{tsv_path.stem}.updates"
-    update_files = sorted(updates_dir.glob("*.js"))
-    assert len(update_files) > 0
+    assert not updates_dir.exists(), "No .updates directory should be created on disk in SQLite mode"
+
+    # Verify clean translation resolution from DB
+    db_sents = adapter.db.get_sentences_by_session(session_zid)
+    assert len(db_sents) == 1
+    assert db_sents[0]["sentence_destination"] == "This is the house."
+    assert "Padded Before" not in db_sents[0]["sentence_destination"]
+    assert "Padded After" not in db_sents[0]["sentence_destination"]
     
-    latest_js = update_files[-1].read_text(encoding="utf-8")
-    assert "window.receiveUpdate(" in latest_js
-    
-    payload_str = latest_js[len("if (typeof window.receiveUpdate === 'function') { window.receiveUpdate("):-4]
-    payload = json.loads(payload_str)
-    
-    # The translatedText MUST be the clean sentence translation, NOT the padded string
-    assert "This is the house." in payload["translatedText"]
-    assert "Padded Before" not in payload["translatedText"]
-    assert "Padded After" not in payload["translatedText"]
+    clean_html = desk.format_translated_html({0: db_sents[0]["sentence_destination"]}, text_mode="single", text="Das Haus.", config=config)
+    assert "This is the house." in clean_html
+    assert "Padded Before" not in clean_html
+    assert "Padded After" not in clean_html
 
 
 def test_render_flow_uses_clean_translation(mock_clean_context_env):
@@ -337,8 +337,8 @@ def test_single_mode_multi_sentence_unified_div_and_matches_write_update_js(mock
     assert f'<div class="translation-text" id="translation-container">{expected_unified_html}</div>' in html
     assert "<div>First sentence.</div><div>Second sentence.</div>" not in html
 
-    # 2. write_update_js output
-    desk.write_update_js(
+    # 2. write_update_js in SQLite mode bypasses disk writes
+    res = desk.write_update_js(
         tsv_path=tsv_path,
         data_rows=data_rows,
         headers=headers,
@@ -347,17 +347,15 @@ def test_single_mode_multi_sentence_unified_div_and_matches_write_update_js(mock
         config=config,
         zid=session_zid,
     )
-
+    assert res is None
     updates_dir = env["results_dir"] / f"{tsv_path.stem}.updates"
-    update_files = sorted(updates_dir.glob("*.js"))
-    assert len(update_files) > 0
+    assert not updates_dir.exists(), "No .updates directory should be created on disk in SQLite mode"
 
-    latest_js = update_files[-1].read_text(encoding="utf-8")
-    payload_str = latest_js[len("if (typeof window.receiveUpdate === 'function') { window.receiveUpdate("):-4]
-    payload = json.loads(payload_str)
-
-    # write_update_js output MUST match the initial HTML unified paragraph exactly
-    assert payload["translatedText"] == expected_unified_html
+    # format_translated_html produces the unified paragraph matching initial HTML
+    db_sents = adapter.db.get_sentences_by_session(session_zid)
+    sent_dict = {i: s["sentence_destination"] for i, s in enumerate(sorted(db_sents, key=lambda x: x.get("sentence_index", 1)))}
+    formatted_html = desk.format_translated_html(sent_dict, text_mode="single", text="Erster Satz. Zweiter Satz.", config=config)
+    assert formatted_html == expected_unified_html
 
 
 def test_multi_mode_preserves_stacked_divs(mock_clean_context_env):
