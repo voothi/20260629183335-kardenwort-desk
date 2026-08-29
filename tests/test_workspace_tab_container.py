@@ -699,6 +699,104 @@ def test_container_initial_active_tab_explicit_seq_num_override(tmp_path):
     assert '<link rel="icon" type="image/x-icon" href="/assets/numbers/1.ico">' in html_seq1
 
 
+def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_path, monkeypatch):
+    """
+    Verify that:
+    1. Child tabs retain skeleton loaders while translation is pending (!AppState.isFinished).
+    2. Live translation updates via WorkspaceTabs.updateSentences dynamically render the active tab.
+    3. Switching back to Tab 1 after translation completes renders the dynamic master translation without stuck skeletons.
+    4. Switching to a failed tab when AppState.isFinished renders an interactive retry badge.
+    """
+    monkeypatch.setattr(kardenwort_desk, "translate_text", lambda *args, **kwargs: "")
+    monkeypatch.setattr(kardenwort_desk, "translate_source_text", lambda *args, **kwargs: {})
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    config.set("rendering", "display_mode", "progressive")
+    config.set("pipeline", "progressive_text_translation", "true")
+    config.set("triggers", "run_text_translation", "auto")
+
+    text = "First sentence.\nSecond sentence."
+    unique_zid = "20260829990001"
+    kw_cfg = kardenwort_desk.load_kardenwort_config(resolved_paths['kardenwort_workspace'])
+    res_dir = kardenwort_desk.resolve_results_dir(resolved_paths, kw_cfg)
+    for stale in res_dir.glob(f"{unique_zid}*"):
+        try:
+            if stale.is_file(): stale.unlink()
+            elif stale.is_dir():
+                import shutil
+                shutil.rmtree(stale)
+        except Exception:
+            pass
+
+    tsv_file = tmp_path / f"{unique_zid}-multi.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\t\n"
+        "Second\tSecond\tвторой\t2\t\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=unique_zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Initial state: Tab 1 active with skeleton loader in translation container
+    trans_container = page.locator("#translation-container")
+    assert trans_container.locator(".skeleton-loader").count() >= 1
+
+    # 1. Switch to Tab 2 (Sentence 1) while translation is pending
+    tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
+    tab2.click()
+    assert trans_container.locator(".skeleton-loader").count() >= 1
+    assert trans_container.locator('[data-pending="true"]').count() >= 1
+
+    # 2. Receive live sentence translation for Sentence 1
+    page.evaluate("""
+        window.WorkspaceTabs.updateSentences([
+            { sentence_index: 1, sentence_destination: "Первое предложение." }
+        ]);
+    """)
+    assert trans_container.locator(".skeleton-loader").count() == 0
+    assert "Первое предложение." in trans_container.inner_text()
+
+    # 3. Complete master translation in AppState
+    page.evaluate("""
+        window.AppState.translatedText = "Первое предложение. Второе предложение.";
+        window.AppState.isFinished = true;
+        window.AppView.renderTranslatedText("finished");
+    """)
+
+    # Switch back to Tab 1 (All) - should show dynamic full translation without stuck skeleton
+    tab1 = page.locator('.kw-tab-chip[data-tab-seq="1"]')
+    tab1.click()
+    assert trans_container.locator(".skeleton-loader").count() == 0
+    assert "Первое предложение. Второе предложение." in trans_container.inner_text()
+
+    # 4. Switch to Tab 3 (Sentence 2) which was not translated and is finished -> should show retry button
+    tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
+    tab3.click()
+    assert trans_container.locator(".skeleton-loader").count() == 0
+    retry_btn = trans_container.locator(".btn-retry-cell")
+    assert retry_btn.count() == 1
+    assert "Retry" in retry_btn.inner_text()
+
+
+
 
 
 

@@ -5260,6 +5260,8 @@ def _split_long_line(line, max_chars=90):
 
 def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:", punctuation_marks=".,;:!?()\"[]{}—–"):
     import re
+    if not text or not str(text).strip() or str(text).strip().lower() == 'none':
+        return []
     if abbrevs is None:
         abbrevs = {
             "ca", "z.b", "usw", "uzw", "bzw", "etc", "t.con", "d.h", "u.a", "vgl", "ggf",
@@ -8913,30 +8915,30 @@ html, body {{
     sentence_cards = []
     if smc.enabled and len(source_sentences) >= 2:
         master_trans_full = ""
-        if 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip():
+        if 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip() and str(translated_paragraph).strip().lower() != 'none':
             master_trans_full = str(translated_paragraph).strip()
-        elif sentence_translations and any(str(v).strip() for v in sentence_translations.values()):
-            master_trans_full = " ".join(str(v).strip() for v in sentence_translations.values() if str(v).strip())
-        elif extracted_translations and any(str(v).strip() for v in extracted_translations.values()):
-            master_trans_full = " ".join(str(v).strip() for v in extracted_translations.values() if str(v).strip())
+        elif sentence_translations and any(v is not None and str(v).strip() and str(v).strip().lower() != 'none' for v in sentence_translations.values()):
+            master_trans_full = " ".join(str(v).strip() for v in sentence_translations.values() if v is not None and str(v).strip() and str(v).strip().lower() != 'none')
+        elif extracted_translations and any(v is not None and str(v).strip() and str(v).strip().lower() != 'none' for v in extracted_translations.values()):
+            master_trans_full = " ".join(str(v).strip() for v in extracted_translations.values() if v is not None and str(v).strip() and str(v).strip().lower() != 'none')
 
         # Build clean per-sentence translation map for child cards
         child_sentence_translations = {}
         if 'translated_sentences' in locals() and translated_sentences and len(translated_sentences) == len(source_sentences):
             for i, st in enumerate(translated_sentences):
-                if st and str(st).strip():
+                if st and str(st).strip() and str(st).strip().lower() != 'none':
                     child_sentence_translations[i] = str(st).strip()
 
         if len(child_sentence_translations) < len(source_sentences) and db_sents:
             for s in db_sents:
                 s_i = s.get("sentence_index", 1) - 1
                 s_d = str(s.get("sentence_destination", "")).strip()
-                if s_d and s_i not in child_sentence_translations:
+                if s_d and s_d.lower() != 'none' and s_i not in child_sentence_translations:
                     child_sentence_translations[s_i] = s_d
 
         if len(child_sentence_translations) < len(source_sentences):
             for i in range(len(source_sentences)):
-                if i in extracted_translations and extracted_translations[i] and str(extracted_translations[i]).strip():
+                if i in extracted_translations and extracted_translations[i] is not None and str(extracted_translations[i]).strip() and str(extracted_translations[i]).strip().lower() != 'none':
                     cand = str(extracted_translations[i]).strip()
                     if cand != master_trans_full or len(source_sentences) == 1:
                         child_sentence_translations.setdefault(i, cand)
@@ -8956,7 +8958,7 @@ html, body {{
                     child_sentence_translations.setdefault(i, ps.strip())
 
         if not master_trans_full and child_sentence_translations:
-            master_trans_full = " ".join(child_sentence_translations[i] for i in range(len(source_sentences)) if i in child_sentence_translations)
+            master_trans_full = " ".join(child_sentence_translations[i] for i in range(len(source_sentences)) if i in child_sentence_translations and child_sentence_translations[i] and str(child_sentence_translations[i]).strip().lower() != 'none')
         
         if not working_tsv_path:
             master_slug = tsv_slug or (generate_slug(text) if text else "")
@@ -10779,12 +10781,32 @@ html, body {{
             renderTranslatedText: function(globalStage) {
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
+
+                if (window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
+                    var cards = window.WorkspaceTabs.getCards();
+                    if (cards && cards.length > 0) {
+                        for (var i = 0; i < cards.length; i++) {
+                            if (cards[i].sentence_idx === 0) {
+                                cards[i].translated_text = window.AppState.translatedText || "";
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if (window.WorkspaceTabs && window.WorkspaceTabs.getActiveSentenceIdx && window.WorkspaceTabs.getActiveSentenceIdx() > 0) {
+                    if (window.WorkspaceTabs.updateActiveTabTranslation) {
+                        window.WorkspaceTabs.updateActiveTabTranslation();
+                    }
+                    return false;
+                }
+
                 var pendingNode = container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader') || container.classList.contains('skeleton-loader');
                 if (window.AppState.translatedText === null && !pendingNode) return false;
-                var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
+                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText || "";
-                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
+                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
                 var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                 var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
 
@@ -13968,7 +13990,26 @@ html, body {{
             var activeTabSeq = 1;
             var activeSentenceIdx = 0;
             var masterSourceHtml = "";
-            var masterTransHtml = "";
+
+            function escapeHtml(str) {
+                if (!str) return '';
+                return String(str)
+                    .replace(/&/g, '&amp;')
+                    .replace(/</g, '&lt;')
+                    .replace(/>/g, '&gt;')
+                    .replace(/"/g, '&quot;')
+                    .replace(/'/g, '&#039;');
+            }
+
+            function getTranslationHtml(tText) {
+                if (tText && tText.trim()) {
+                    return '<div class="translation-text">' + escapeHtml(tText) + '</div>';
+                }
+                if (window.AppState && window.AppState.isFinished) {
+                    return '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                }
+                return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-block;" title="Loading translation..."></span>';
+            }
 
             function init() {
                 var scriptEl = document.getElementById('sentence-cards');
@@ -13983,16 +14024,6 @@ html, body {{
 
                 var srcContainer = document.getElementById('source-container');
                 if (srcContainer && !masterSourceHtml) masterSourceHtml = srcContainer.innerHTML;
-                var transContainer = document.getElementById('translation-container');
-                if (transContainer && !masterTransHtml) masterTransHtml = transContainer.innerHTML;
-                if (!masterTransHtml && cards && cards.length > 0) {
-                    for (var k = 0; k < cards.length; k++) {
-                        if (cards[k].sentence_idx === 0 && cards[k].translated_text) {
-                            masterTransHtml = '<div class="translation-text">' + escapeHtml(cards[k].translated_text) + '</div>';
-                            break;
-                        }
-                    }
-                }
 
                 var tabButtons = document.querySelectorAll('.kw-tab-chip');
                 for (var i = 0; i < tabButtons.length; i++) {
@@ -14080,6 +14111,23 @@ html, body {{
                 return cards;
             }
 
+            function updateActiveTabTranslation() {
+                var transContainer = document.getElementById('translation-container');
+                if (!transContainer || !cards || cards.length === 0) return;
+                for (var c = 0; c < cards.length; c++) {
+                    if (cards[c].seq_num === activeTabSeq) {
+                        var tText = cards[c].translated_text || (activeSentenceIdx === 0 && window.AppState ? window.AppState.translatedText : '');
+                        transContainer.innerHTML = getTranslationHtml(tText);
+                        if (tText && tText.trim()) {
+                            if (window.tokenizeTranslation) tokenizeTranslation();
+                            if (window.buildLcIndex) buildLcIndex();
+                            if (window.updateBidirectionalHighlights) updateBidirectionalHighlights();
+                        }
+                        break;
+                    }
+                }
+            }
+
             function switchToTab(seqOrSentIdx, isImmediate) {
                 if (!cards || cards.length === 0) return;
                 var targetCard = null;
@@ -14148,11 +14196,8 @@ html, body {{
                         }
                     }
                     if (transContainer) {
-                        var mHtml = masterTransHtml;
-                        if (!mHtml && targetCard && targetCard.translated_text) {
-                            mHtml = '<div class="translation-text">' + escapeHtml(targetCard.translated_text) + '</div>';
-                        }
-                        transContainer.innerHTML = mHtml || '';
+                        var tText = targetCard.translated_text || (window.AppState ? window.AppState.translatedText : '');
+                        transContainer.innerHTML = getTranslationHtml(tText);
                     }
                     for (var r = 0; r < tableRows.length; r++) {
                         tableRows[r].style.display = '';
@@ -14184,7 +14229,7 @@ html, body {{
                     }
                     if (transContainer) {
                         var tText = targetCard.translated_text || '';
-                        transContainer.innerHTML = '<div class="translation-text">' + escapeHtml(tText) + '</div>';
+                        transContainer.innerHTML = getTranslationHtml(tText);
                     }
                     var sentStr = String(activeSentenceIdx);
                     for (var r = 0; r < tableRows.length; r++) {
@@ -14283,21 +14328,15 @@ html, body {{
                         }
                     }
                 }
-                if (updatedAny && activeSentenceIdx > 0) {
-                    var transContainer = document.getElementById('translation-container');
+                if (window.AppState && window.AppState.translatedText) {
                     for (var c = 0; c < cards.length; c++) {
-                        if (cards[c].seq_num === activeTabSeq) {
-                            var tText = cards[c].translated_text || '';
-                            if (transContainer && tText) {
-                                transContainer.innerHTML = '<div class="translation-text">' + escapeHtml(tText) + '</div>';
-                                if (window.tokenizeTranslation) tokenizeTranslation();
-                                if (window.buildLcIndex) buildLcIndex();
-                                if (window.updateBidirectionalHighlights) updateBidirectionalHighlights();
-                            }
+                        if (cards[c].sentence_idx === 0) {
+                            cards[c].translated_text = window.AppState.translatedText;
                             break;
                         }
                     }
                 }
+                updateActiveTabTranslation();
             }
 
             return {
@@ -14306,7 +14345,10 @@ html, body {{
                 nextTab: nextTab,
                 prevTab: prevTab,
                 getActiveTabSeq: getActiveTabSeq,
+                getActiveSentenceIdx: function() { return activeSentenceIdx; },
                 getCards: getCards,
+                getTranslationHtml: getTranslationHtml,
+                updateActiveTabTranslation: updateActiveTabTranslation,
                 updateSentences: updateSentences
             };
         })();

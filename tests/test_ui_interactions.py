@@ -5081,6 +5081,77 @@ def test_is_finished_populates_all_blank_cells_with_retry_badges(page):
     assert "Some translations could not be retrieved" in toast.inner_text()
 
 
+def test_workspace_tabs_dynamic_translation_and_render_translated_text(page):
+    """
+    Verify that WorkspaceTabs dynamically renders translation containers,
+    preserves skeletons across tab switches, and AppView.renderTranslatedText
+    synchronizes overview card translation while leaving active child tab intact.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260829100000">
+<div class="container">
+  <div id="session-zid">20260829100000</div>
+  <div id="kw-workspace-tab-bar">
+    <div id="kw-tab-track">
+      <button class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0">1</button>
+      <button class="kw-tab-chip" data-tab-seq="2" data-sentence-idx="1">2</button>
+    </div>
+  </div>
+  <div class="source-text" id="source-container">
+    <span class="kw-sentence-chunk" data-sentence-idx="1">First sentence.</span>
+    <span class="kw-sentence-chunk" data-sentence-idx="2">Second sentence.</span>
+  </div>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true">Loading translation...</span>
+  </div>
+  <table id="lemma-table"><tbody></tbody></table>
+</div>
+<script id="sentence-cards" type="application/json">
+[
+  {"index": 0, "seq_num": 1, "sentence_idx": 0, "label": "1", "source_text": "First sentence. Second sentence.", "translated_text": ""},
+  {"index": 1, "seq_num": 2, "sentence_idx": 1, "label": "2", "source_text": "First sentence.", "translated_text": ""}
+]
+</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    tc = page.locator("#translation-container")
+    assert tc.locator(".skeleton-loader").count() >= 1
+
+    # Switch to child tab (sentence 1)
+    page.evaluate("window.WorkspaceTabs.switchToTab(2)")
+    assert tc.locator(".skeleton-loader").count() >= 1
+    assert tc.locator('[data-pending="true"]').count() >= 1
+
+    # Receive update for sentence 1
+    page.evaluate("""
+        window.WorkspaceTabs.updateSentences([
+            { sentence_index: 1, sentence_destination: "Первое предложение." }
+        ]);
+    """)
+    assert tc.locator(".skeleton-loader").count() == 0
+    assert "Первое предложение." in tc.inner_text()
+
+    # Receive master translation update while still on child tab
+    page.evaluate("""
+        window.AppState.translatedText = "Первое предложение. Второе предложение.";
+        window.AppView.renderTranslatedText("translated_text");
+    """)
+    # Active child tab must still show child translation, NOT overwritten by master
+    assert "Первое предложение." in tc.inner_text()
+    assert "Второе предложение." not in tc.inner_text()
+
+    # Switch back to Tab 1 - should show full master translation dynamically without stuck skeleton
+    page.evaluate("window.WorkspaceTabs.switchToTab(1)")
+    assert tc.locator(".skeleton-loader").count() == 0
+    assert "Первое предложение. Второе предложение." in tc.inner_text()
+
+
+
 
 
 
