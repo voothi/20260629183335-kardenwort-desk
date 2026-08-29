@@ -2788,6 +2788,9 @@ class SqliteStorageAdapter(StorageAdapter):
                 existing_sents_by_idx = {}
 
             sent_map: Dict[int, Dict[str, Any]] = {}
+            if len(existing_sents_by_idx) > 1:
+                sent_map = {k: dict(v) for k, v in existing_sents_by_idx.items()}
+
             word_list: List[Dict[str, Any]] = []
 
             for row_idx, row in enumerate(data_rows):
@@ -2817,17 +2820,18 @@ class SqliteStorageAdapter(StorageAdapter):
                 if not src_val and source_raw_text:
                     src_val = source_raw_text
 
-                if src_val or dst_val or s_idx in existing_sents_by_idx:
-                    if s_idx not in sent_map:
-                        sent_map[s_idx] = {
-                            "session_zid": session_zid,
-                            "sentence_index": s_idx,
-                            "sentence_source": src_val or "",
-                            "sentence_destination": dst_val,
-                            "sentence_destination2": dst2_val,
-                            "sentence_source_ipa": ipa_val,
-                            "sentence_source_audio": aud_val,
-                        }
+                if len(existing_sents_by_idx) <= 1:
+                    if src_val or dst_val or s_idx in existing_sents_by_idx:
+                        if s_idx not in sent_map:
+                            sent_map[s_idx] = {
+                                "session_zid": session_zid,
+                                "sentence_index": s_idx,
+                                "sentence_source": src_val or "",
+                                "sentence_destination": dst_val,
+                                "sentence_destination2": dst2_val,
+                                "sentence_source_ipa": ipa_val,
+                                "sentence_source_audio": aud_val,
+                            }
 
                 # Extract word fields
                 quotation = get_col_val(row, "quotation") or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, "wordsource") or ""
@@ -7955,7 +7959,7 @@ html, body {{
 
     if is_sqlite and (not text or not text.strip()):
         try:
-            target_zid_to_read = extract_zid(working_tsv_path)
+            target_zid_to_read = zid if (zid and str(zid).strip() and zid != "00000000000000") else extract_zid(working_tsv_path)
             if target_zid_to_read != "00000000000000":
                 restored_meta = storage_adapter.restore_session(target_zid_to_read)
                 if restored_meta and restored_meta.get("source_text"):
@@ -8221,7 +8225,7 @@ html, body {{
     db_sents = None
     if is_sqlite:
         try:
-            target_zid_to_read = extract_zid(working_tsv_path)
+            target_zid_to_read = zid if (zid and str(zid).strip() and zid != "00000000000000") else extract_zid(working_tsv_path)
             if target_zid_to_read != "00000000000000":
                 db_sents = storage_adapter.db.get_sentences_by_session(target_zid_to_read)
                 for s in db_sents:
