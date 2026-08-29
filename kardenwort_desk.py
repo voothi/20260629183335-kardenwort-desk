@@ -5738,6 +5738,7 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
     else:
         raw_lines = [str(sentence_translations)]
 
+    raw_lines = [re.sub(r'</?[a-zA-Z][^>]*>', '', str(s)) for s in raw_lines]
     norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
     lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in raw_lines]
 
@@ -5753,6 +5754,7 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
         return f"<div>{' '.join(valid_lines)}</div>" if valid_lines else ""
     else:
         return "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+
 
 
 def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None, zid=None, trace_id=None):
@@ -8977,6 +8979,12 @@ html, body {{
                     master_tsv_name = w_name
             else:
                 master_tsv_name = w_name
+        def _strip_html(val):
+            if not val:
+                return ""
+            return re.sub(r'</?[a-zA-Z][^>]*>', '', str(val)).strip()
+
+        master_trans_full = _strip_html(master_trans_full)
         master_card_slug = master_slug if 'master_slug' in locals() else (tsv_slug or (generate_slug(text) if text else ""))
         master_card = {
             "index": 0,
@@ -8994,7 +9002,7 @@ html, body {{
         for idx, s_src in enumerate(source_sentences):
             seq = idx + 2
             sent_i = idx + 1
-            s_trans = child_sentence_translations.get(idx, "")
+            s_trans = _strip_html(child_sentence_translations.get(idx, ""))
 
             c_slug = generate_slug(s_src) if s_src else ""
             c_zid = ""
@@ -10813,19 +10821,49 @@ html, body {{
                 if (newText !== "") {
                     container.classList.remove('skeleton-loader');
                     container.removeAttribute('data-pending');
-                    container.innerHTML = window.AppState.translatedText || "";
+                    if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) {
+                        container.innerHTML = window.WorkspaceTabs.getTranslationHtml(window.AppState.translatedText);
+                    } else {
+                        var clean = (window.AppState.translatedText || "").trim();
+                        if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
+                            var tmp = document.createElement('div');
+                            tmp.innerHTML = clean;
+                            clean = (tmp.textContent || tmp.innerText || '').trim();
+                        }
+                        container.innerHTML = escapeHtml(clean);
+                    }
                     return true;
                 } else if (isTerm) {
                     container.classList.remove('skeleton-loader');
                     container.removeAttribute('data-pending');
                     if (window.AppState.translatedText) {
-                        container.innerHTML = window.AppState.translatedText;
+                        if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) {
+                            container.innerHTML = window.WorkspaceTabs.getTranslationHtml(window.AppState.translatedText);
+                        } else {
+                            var clean = (window.AppState.translatedText || "").trim();
+                            if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
+                                var tmp = document.createElement('div');
+                                tmp.innerHTML = clean;
+                                clean = (tmp.textContent || tmp.innerText || '').trim();
+                            }
+                            container.innerHTML = escapeHtml(clean);
+                        }
                     } else if (pendingNode || !currentText) {
                         container.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                     }
                     return true;
                 } else if (!pendingNode && (forceUpdate || currentText !== newText)) {
-                    container.innerHTML = window.AppState.translatedText || "";
+                    if (window.WorkspaceTabs && window.WorkspaceTabs.getTranslationHtml) {
+                        container.innerHTML = window.WorkspaceTabs.getTranslationHtml(window.AppState.translatedText);
+                    } else {
+                        var clean = (window.AppState.translatedText || "").trim();
+                        if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
+                            var tmp = document.createElement('div');
+                            tmp.innerHTML = clean;
+                            clean = (tmp.textContent || tmp.innerText || '').trim();
+                        }
+                        container.innerHTML = escapeHtml(clean);
+                    }
                     return true;
                 }
                 return false;
@@ -14003,7 +14041,19 @@ html, body {{
 
             function getTranslationHtml(tText) {
                 if (tText && tText.trim()) {
-                    return '<div class="translation-text">' + escapeHtml(tText) + '</div>';
+                    var clean = tText.trim();
+                    if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
+                        var tmp = document.createElement('div');
+                        tmp.innerHTML = clean;
+                        clean = (tmp.textContent || tmp.innerText || '').trim();
+                    }
+                    var lines = clean.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
+                    if (lines.length > 1) {
+                        return lines.map(function(line) {
+                            return '<div>' + (line ? escapeHtml(line) : '&nbsp;') + '</div>';
+                        }).join('');
+                    }
+                    return escapeHtml(clean);
                 }
                 if (window.AppState && window.AppState.isFinished) {
                     return '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
@@ -17365,7 +17415,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                     clean_translations.append(str(s_dest).strip())
                         if clean_translations:
                             norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
-                            lines = [html.escape(normalize_bracket_spacing(line) if norm_brackets else line) for line in clean_translations]
+                            lines = [re.sub(r'</?[a-zA-Z][^>]*>', '', (normalize_bracket_spacing(line) if norm_brackets else line)).strip() for line in clean_translations]
                             is_single = True
                             if source_text:
                                 stripped_src = source_text.strip()
@@ -17384,9 +17434,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                     except Exception:
                                         pass
                             if is_single:
-                                translated_text = f"<div>{' '.join(lines)}</div>"
+                                translated_text = ' '.join(lines)
                             else:
-                                translated_text = "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+                                translated_text = '\n'.join(lines)
                 except Exception as e:
                     logger.debug(f"Failed to read clean translation from SQLite in write_update_js: {e}")
 
@@ -17401,7 +17451,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                 txt_content = f.read_text(encoding='utf-8').strip()
                                 if txt_content:
                                     norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
-                                    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in txt_content.splitlines()]
+                                    lines = [re.sub(r'</?[a-zA-Z][^>]*>', '', (normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip())).strip() for line in txt_content.splitlines()]
                                     is_single = True
                                     source_txt_path = tsv_path.with_suffix('.txt')
                                     if source_txt_path.exists():
@@ -17412,9 +17462,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                         except Exception:
                                             pass
                                     if is_single:
-                                        translated_text = f"<div>{' '.join(lines)}</div>"
+                                        translated_text = ' '.join(lines)
                                     else:
-                                        translated_text = "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
+                                        translated_text = '\n'.join(lines)
                                     break
                     except Exception as e:
                         logger.error(f"Failed to read clean translation text file in write_update_js: {e}")
@@ -17439,7 +17489,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                     
                     sorted_keys = sorted(idx_to_sentence.keys())
                     norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
-                    sentences = [html.escape(normalize_bracket_spacing(idx_to_sentence[k]) if norm_brackets else idx_to_sentence[k]) for k in sorted_keys]
+                    sentences = [re.sub(r'</?[a-zA-Z][^>]*>', '', (normalize_bracket_spacing(idx_to_sentence[k]) if norm_brackets else idx_to_sentence[k])).strip() for k in sorted_keys]
                     
                     is_single = True
                     if source_text:
@@ -17461,9 +17511,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                         non_empty = [s for s in sentences if s]
                         if non_empty and all(s == non_empty[0] for s in non_empty):
                             sentences = [non_empty[0]]
-                        translated_text = f"<div>{' '.join(sentences)}</div>"
+                        translated_text = ' '.join(sentences)
                     else:
-                        translated_text = "".join(f"<div>{s}</div>" for s in sentences)
+                        translated_text = '\n'.join(sentences)
                     
             update_data = {
                 "stage": stage,
@@ -17473,7 +17523,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             if source_text:
                 update_data["sourceText"] = source_text
             if translated_text:
-                update_data["translatedText"] = translated_text
+                update_data["translatedText"] = re.sub(r'</?[a-zA-Z][^>]*>', '', str(translated_text)).strip()
+
             if error is not None:
                 update_data["error"] = error
             if zid is not None:

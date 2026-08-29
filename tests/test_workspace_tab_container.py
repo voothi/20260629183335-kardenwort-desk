@@ -800,6 +800,79 @@ def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_p
     assert "Retry" in retry_btn.inner_text()
 
 
+def test_tab_switching_renders_clean_plaintext_without_div_tokens(page, tmp_path):
+    """Verify that switching between tab 1 and child tabs renders clean plain text without literal <div> or < div > word tokens."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "Super is the center of everything #\nAll the muscle memory you've built around Cmd transfers to one key: Super."
+    tsv_file = tmp_path / "20260829193000-super-is-the-center.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "Super\tSuper\tСупер\t1\t\n"
+        "All\tAll\tВся\t2\t\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260829193000",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Update with translations containing full paragraph and sentences
+    page.evaluate("""
+        window.WorkspaceTabs.updateSentences([
+            { sentence_index: 1, sentence_destination: "Супер — это центр всего #" },
+            { sentence_index: 2, sentence_destination: "Вся мышечная память переносится на одну клавишу: Super." }
+        ]);
+        window.AppState.translatedText = "Супер — это центр всего #\\nВся мышечная память переносится на одну клавишу: Super.";
+        window.AppView.renderTranslatedText("finished");
+    """)
+
+    trans_container = page.locator("#translation-container")
+
+    # 1. On Tab 1 (Overview)
+    tab1 = page.locator('.kw-tab-chip[data-tab-seq="1"]')
+    tab1.click()
+    tab1_text = trans_container.inner_text()
+    assert "<div>" not in tab1_text
+    assert "< div >" not in tab1_text
+    assert "Супер — это центр всего #" in tab1_text
+    assert page.locator('#translation-container span.word:has-text("div")').count() == 0
+
+    # 2. On Tab 2 (Sentence 1)
+    tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
+    tab2.click()
+    tab2_text = trans_container.inner_text()
+    assert "<div>" not in tab2_text
+    assert "< div >" not in tab2_text
+    assert tab2_text.strip() == "Супер — это центр всего #"
+    assert page.locator('#translation-container span.word:has-text("div")').count() == 0
+
+    # 3. On Tab 3 (Sentence 2)
+    tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
+    tab3.click()
+    tab3_text = trans_container.inner_text()
+    assert "<div>" not in tab3_text
+    assert "< div >" not in tab3_text
+    assert tab3_text.strip() == "Вся мышечная память переносится на одну клавишу: Super."
+    assert page.locator('#translation-container span.word:has-text("div")').count() == 0
+
+
+
 
 
 

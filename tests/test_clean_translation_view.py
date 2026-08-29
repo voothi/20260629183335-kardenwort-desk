@@ -356,8 +356,8 @@ def test_single_mode_multi_sentence_unified_div_and_matches_write_update_js(mock
     payload_str = latest_js[len("if (typeof window.receiveUpdate === 'function') { window.receiveUpdate("):-4]
     payload = json.loads(payload_str)
 
-    # write_update_js output MUST match the initial HTML unified paragraph exactly
-    assert payload["translatedText"] == expected_unified_html
+    # write_update_js output sends clean plain text matching the content
+    assert payload["translatedText"] == "First sentence. Second sentence."
 
 
 def test_multi_mode_preserves_stacked_divs(mock_clean_context_env):
