@@ -931,9 +931,10 @@ def test_progressive_worker_sqlite_mode_exception_non_destructive(monkeypatch, t
     assert failed_events[0]["error"]["retryable"] is True
 
 
-def test_diskless_progressive_updates_sqlite_no_files_written(tmp_path):
-    """Verify that write_update_js bypasses disk writes when backend is sqlite."""
+def test_ephemeral_progressive_updates_sqlite_emits_ipc_files(tmp_path):
+    """Verify that write_update_js emits ephemeral .updates/*.js files when backend is sqlite for desktop IPC."""
     import configparser
+    import json
     sqlite_cfg = configparser.ConfigParser()
     sqlite_cfg.read_string("[storage]\nbackend=sqlite\n")
 
@@ -953,9 +954,13 @@ def test_diskless_progressive_updates_sqlite_no_files_written(tmp_path):
         config=sqlite_cfg
     )
 
-    assert res is None
+    assert res is not None and res.exists()
     updates_dir = tmp_path / f"{tsv_file.stem}.updates"
-    assert not updates_dir.exists(), ".updates directory must not be created when backend is sqlite"
+    assert updates_dir.exists(), ".updates directory must be created for desktop IPC"
+    js_files = list(updates_dir.glob("*.js"))
+    assert len(js_files) == 1
+    content = js_files[0].read_text(encoding="utf-8")
+    assert "window.receiveUpdate" in content
 
 
 def test_prune_stale_results_artifacts(tmp_path):

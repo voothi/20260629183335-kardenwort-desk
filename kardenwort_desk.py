@@ -17075,10 +17075,6 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         except Exception:
             config = None
 
-    storage_adapter = get_storage_adapter(config)
-    if getattr(storage_adapter, 'backend_name', '') == 'sqlite':
-        return None
-
     if zid is None and tsv_path:
         m = re.match(r"^(\d{14})", tsv_path.name)
         if m:
