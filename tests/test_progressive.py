@@ -1038,6 +1038,97 @@ def test_prune_stale_results_artifacts(tmp_path):
     assert data_txt.exists()
 
 
+def test_progressive_worker_text_translation_failure_continues_to_lemmas(monkeypatch, tmp_path):
+    """
+    Verifies that when sentence text translation fails with an exception,
+    the progressive worker catches the error, emits empty translated_text stage,
+    and successfully continues with lemma translation.
+    """
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(
+        "[settings]\ndefault_language=en\ndefault_target_language=ru\nanki_mapping_file=./mapping.ini\n"
+        "[pipeline]\nlemma_base_provider=google\ntext_base_provider=deepl\n"
+        "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=auto\nrun_lemma_enrichment=manual\n"
+        "[fields]\n",
+        encoding="utf-8",
+    )
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\n"
+        "[fields_mapping.sentence]\nSentenceDestination=sentence_destination\nSentenceSourceIndex=sentence_index\n",
+        encoding="utf-8",
+    )
+
+    tsv_path = tmp_path / "20260829093000-resilience.en.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordDestination\tSentenceDestination\tSentenceSourceIndex\n"
+        "Hund\t\t\t1\n",
+        encoding="utf-8",
+    )
+    txt_path = tmp_path / "20260829093000-resilience.en.txt"
+    txt_path.write_text("Der Hund bellt.", encoding="utf-8")
+
+    args = types.SimpleNamespace(
+        tsv=str(tsv_path),
+        config=str(config_path),
+        language="de",
+        target_lang="ru",
+        prompt_name="",
+        lemmas_provider="google",
+        word_translations_empty=True,
+        skip_intellifiller=True,
+        text_mode="single",
+        zid="20260829093000",
+        trace_id="test:trace:resilience",
+    )
+
+    def mock_failing_text_translate(*args, **kwargs):
+        raise RuntimeError("DeepL 429 Too Many Requests: Rate limit reached")
+
+    lemma_translated = []
+    def mock_translate_lemmas(lemmas, *args, **kwargs):
+        lemma_translated.extend(lemmas)
+        return {l: f"{l}_RU" for l in lemmas}
+
+    written_stages = []
+    def mock_safe_write_update(path, r_rows, h_headers, r_fields, stage=None, status=None, error=None, translated_text=None, **kw):
+        written_stages.append((stage, status, translated_text))
+
+    monkeypatch.setattr(desk, "translate_source_text", mock_failing_text_translate)
+    monkeypatch.setattr(desk, "translate_lemmas_fast_path", mock_translate_lemmas)
+    monkeypatch.setattr(desk, "safe_write_update_js", mock_safe_write_update)
+
+    desk.cmd_progressive_worker(args)
+
+    assert "Hund" in lemma_translated, "Lemma translation must execute even if text translation failed"
+    stages = [s[0] for s in written_stages]
+    assert "translated_text" in stages, "translated_text stage must be emitted to clear loader"
+    assert "translated" in stages, "translated lemma stage must be emitted"
+    assert (tmp_path / "20260829093000-resilience.en.base_translation_done").exists()
+
+
+def test_translate_text_deepl_failover_to_google(monkeypatch, tmp_path):
+    """
+    Verifies that translate_text fails over to Google if DeepL raises an error.
+    """
+    config = configparser.ConfigParser()
+    config.read_string("[settings]\n[pipeline]\nauto_offline_fallback=false\n")
+    resolved_paths = {}
+
+    def mock_failing_deepl(*args, **kwargs):
+        raise ConnectionError("DeepL API timeout")
+
+    def mock_google(text, *args, **kwargs):
+        return f"Google({text})"
+
+    monkeypatch.setattr(desk, "run_deepl_translation", mock_failing_deepl)
+    monkeypatch.setattr(desk, "run_google_translation", mock_google)
+
+    result = desk.translate_text("Hello world", "en", "ru", config, resolved_paths, "deepl")
+    assert result == "Google(Hello world)"
+
+
+
 
 
 

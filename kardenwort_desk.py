@@ -5130,7 +5130,11 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider,
         if provider == 'google':
             return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif provider == 'deepl':
-            return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            try:
+                return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            except Exception as e:
+                logger.warning(f"DeepL translation failed: {e}. Trying Google failover...")
+                return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif provider == 'argos':
             return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif provider == 'mock':
@@ -10638,12 +10642,26 @@ html, body {{
                     }
                 }
                 if (window.AppState.isFinished) {
-                    var skels = document.querySelectorAll('td .skeleton-loader');
+                    var tc = document.getElementById('translation-container');
+                    if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader'))) {
+                        tc.innerHTML = window.AppState.translatedText || "";
+                        updated = true;
+                    }
+                    var sc = document.getElementById('source-container');
+                    if (sc && (sc.querySelector('.skeleton-loader') || sc.querySelector('[data-pending="true"]') || sc.classList.contains('skeleton-loader'))) {
+                        sc.innerHTML = window.AppState.sourceText || "";
+                        updated = true;
+                    }
+                    var skels = document.querySelectorAll('td .skeleton-loader, #translation-container .skeleton-loader, #source-container .skeleton-loader, .skeleton-loader[data-pending="true"], [data-pending="true"]');
                     if (skels.length > 0) {
                         for (var i = 0; i < skels.length; i++) {
-                            var p = skels[i].parentNode;
+                            var skel = skels[i];
+                            var p = skel.parentNode;
                             if (p && p.classList.contains('scrollable-cell')) p.innerHTML = "";
                             else if (p && p.tagName === 'TD') p.innerHTML = "";
+                            else if (p && p.id === 'translation-container') p.innerHTML = window.AppState.translatedText || "";
+                            else if (p && p.id === 'source-container') p.innerHTML = window.AppState.sourceText || "";
+                            else if (skel.parentNode) skel.parentNode.removeChild(skel);
                         }
                         updated = true;
                     }
@@ -10702,13 +10720,13 @@ html, body {{
             renderTranslatedText: function(globalStage) {
                 var container = document.getElementById('translation-container');
                 if (!container) return false;
-                var pendingNode = container.querySelector('[data-pending="true"]');
+                var pendingNode = container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader');
                 if (window.AppState.translatedText === null && !pendingNode) return false;
                 var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText || "";
                 var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
-                var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
+                var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_text' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
                 if (newText || !pendingNode || forceUpdate) {
                     if (pendingNode || currentText !== newText || forceUpdate) {
                         container.innerHTML = window.AppState.translatedText || "";
@@ -17438,8 +17456,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id)
                 except Exception as e:
-                    logger.error(f"Failed in text translation: {e}")
-                    raise
+                    logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
+                    sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id)
                     
         if run_base == 'auto' and col_lemma != -1:
             lang = getattr(args, 'language', 'en')
