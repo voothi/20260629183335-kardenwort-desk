@@ -22,6 +22,7 @@ import traceback
 import urllib.request
 import urllib.error
 import urllib.parse
+import http.client
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
@@ -550,6 +551,35 @@ def query_spacy_server(
     return None
 
 
+_TRANSLATION_CONN_POOL: Dict[str, http.client.HTTPConnection] = {}
+_TRANSLATION_CONN_LOCK = threading.Lock()
+
+
+def _get_translation_http_conn(host: str, port: int, timeout: float) -> http.client.HTTPConnection:
+    """Retrieve or create a thread-local persistent HTTPConnection for translation microservice."""
+    key = f"{host}:{port}:{threading.get_ident()}"
+    with _TRANSLATION_CONN_LOCK:
+        conn = _TRANSLATION_CONN_POOL.get(key)
+        if conn is None:
+            conn = http.client.HTTPConnection(host, port, timeout=timeout)
+            _TRANSLATION_CONN_POOL[key] = conn
+        else:
+            conn.timeout = timeout
+        return conn
+
+
+def _close_translation_http_conn(host: str, port: int):
+    """Close and evict the thread-local persistent HTTPConnection on error or teardown."""
+    key = f"{host}:{port}:{threading.get_ident()}"
+    with _TRANSLATION_CONN_LOCK:
+        conn = _TRANSLATION_CONN_POOL.pop(key, None)
+        if conn:
+            try:
+                conn.close()
+            except Exception:
+                pass
+
+
 def query_translation_server(
     text: str,
     source: str,
@@ -563,7 +593,7 @@ def query_translation_server(
     connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
 ) -> Optional[dict]:
     """
-    Queries the persistent translation HTTP microservice.
+    Queries the persistent translation HTTP microservice with HTTP keep-alive connection reuse.
     Returns parsed JSON dictionary on success or structured error response, or None on connection refusal/offline.
     """
     if not server_url or not is_endpoint_available(server_url):
@@ -572,7 +602,12 @@ def query_translation_server(
         record_endpoint_failure(server_url)
         logger.debug(f"Translation HTTP microservice connection probe failed at {server_url}")
         return None
-    url = f"{server_url.rstrip('/')}/translate"
+
+    parsed = urllib.parse.urlparse(server_url)
+    host = parsed.hostname or "127.0.0.1"
+    port = parsed.port or 8082
+    path = f"{(parsed.path or '').rstrip('/')}/translate"
+
     payload = {
         "text": text,
         "source": source,
@@ -583,35 +618,45 @@ def query_translation_server(
     }
     if deepl_api_key:
         payload["deepl_api_key"] = deepl_api_key
+
+    data = json.dumps(payload).encode('utf-8')
+    headers = {
+        "Content-Type": "application/json",
+        "Content-Length": str(len(data)),
+        "X-ZID": str(zid or ""),
+        "X-Trace-ID": str(trace_id or ""),
+        "Connection": "keep-alive"
+    }
+
     try:
-        data = json.dumps(payload).encode('utf-8')
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Content-Type": "application/json",
-                "X-ZID": str(zid or ""),
-                "X-Trace-ID": str(trace_id or "")
-            }
-        )
-        with urllib.request.urlopen(req, timeout=timeout) as resp:
-            if resp.status == 200:
-                body = resp.read().decode('utf-8')
-                result = json.loads(body)
-                if result.get("status") == "success":
-                    record_endpoint_success(server_url)
-                    return result
-    except urllib.error.HTTPError as he:
+        conn = _get_translation_http_conn(host, port, timeout)
         try:
-            body = he.read().decode('utf-8')
-            err_result = json.loads(body)
-            if isinstance(err_result, dict) and (err_result.get("status") == "error" or "code" in err_result):
+            conn.request("POST", path, body=data, headers=headers)
+            resp = conn.getresponse()
+        except (http.client.CannotSendRequest, http.client.BadStatusLine, ConnectionResetError, BrokenPipeError, socket.error):
+            # Stale socket / server closed connection, reset and retry once
+            _close_translation_http_conn(host, port)
+            conn = _get_translation_http_conn(host, port, timeout)
+            conn.request("POST", path, body=data, headers=headers)
+            resp = conn.getresponse()
+
+        body = resp.read().decode('utf-8')
+        if resp.status == 200:
+            result = json.loads(body)
+            if result.get("status") == "success":
                 record_endpoint_success(server_url)
-                return err_result
-        except Exception:
-            pass
-        logger.debug(f"Translation HTTP microservice HTTPError {he.code} at {server_url}")
+                return result
+        else:
+            try:
+                err_result = json.loads(body)
+                if isinstance(err_result, dict) and (err_result.get("status") == "error" or "code" in err_result):
+                    record_endpoint_success(server_url)
+                    return err_result
+            except Exception:
+                pass
+            logger.debug(f"Translation HTTP microservice returned status {resp.status} at {server_url}")
     except Exception as e:
+        _close_translation_http_conn(host, port)
         record_endpoint_failure(server_url)
         logger.debug(f"Translation HTTP microservice unavailable at {server_url}: {e}")
     return None

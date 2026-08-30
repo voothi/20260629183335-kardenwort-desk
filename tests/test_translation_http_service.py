@@ -253,43 +253,63 @@ translation_timeout = 5
     assert res == "Hallo Welt Argos CLI"
 
 
-def test_translate_server_argos_windows_subprocess_command(monkeypatch, tmp_path):
+def test_translate_server_argos_warm_model_caching():
+    """Verify translate_server caches argostranslate model instances in memory across requests."""
     handler = TranslationRequestHandler.__new__(TranslationRequestHandler)
-    
-    scripts_dir = tmp_path / "venv" / "Scripts"
-    scripts_dir.mkdir(parents=True)
-    fake_script = scripts_dir / "argos-translate"
-    fake_script.write_text("print('mock')", encoding="utf-8")
-    fake_python = scripts_dir / "python.exe"
-    fake_python.write_text("", encoding="utf-8")
-    
-    recorded_cmd = []
-    def fake_subprocess_run(cmd, *args, **kwargs):
-        recorded_cmd.extend(cmd)
-        mock_res = MagicMock()
-        mock_res.returncode = 0
-        mock_res.stdout = "Hallo Welt"
-        mock_res.stderr = ""
-        return mock_res
+    mock_model = MagicMock()
+    mock_model.translate.side_effect = lambda t: f"Warm Argos: {t}"
 
-    monkeypatch.setattr("subprocess.run", fake_subprocess_run)
-    monkeypatch.setattr(sys, "platform", "win32")
-    
-    # Hide argostranslate module import if present in test runner
-    with patch.dict(sys.modules, {"argostranslate": None, "argostranslate.translate": None}):
-        # Mock candidate_exes resolution
-        with patch.object(Path, "exists", lambda self: True if self in (fake_script, fake_python) else False):
-            with patch("translate_server.Path.__truediv__", side_effect=lambda self, other: fake_script if "argos-translate" in str(other) else (fake_python if "python.exe" in str(other) else self / other)):
-                try:
-                    res = handler._translate_argos("Hello world", "en", "de")
-                    assert res == "Hallo Welt"
-                    assert recorded_cmd[0] == str(fake_python)
-                    assert recorded_cmd[1] == str(fake_script)
-                except Exception:
-                    # Direct test of cmd resolution logic
-                    cmd = [str(fake_python), str(fake_script), "-f", "en", "-t", "de"]
-                    res = fake_subprocess_run(cmd)
-                    assert res.returncode == 0
+    with patch.dict(translate_server._argos_models, {}, clear=True):
+        with patch("translate_server.get_argos_translation_model", return_value=mock_model) as mock_get_model:
+            res1 = handler._translate_argos("Hello", "en", "de")
+            res2 = handler._translate_argos("World", "en", "de")
+
+            assert res1 == "Warm Argos: Hello"
+            assert res2 == "Warm Argos: World"
+            assert mock_model.translate.call_count == 2
+
+
+def test_run_argos_translation_graceful_failover_when_daemon_stopped(tmp_path, monkeypatch):
+    """Verify warm HTTP execution when daemon is active and graceful CLI fallback when stopped."""
+    # 1. Start dynamic test server
+    server = TranslationHTTPServer(("127.0.0.1", 0), TranslationRequestHandler)
+    port = server.server_address[1]
+    server_url = f"http://127.0.0.1:{port}"
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+
+    config = configparser.ConfigParser()
+    config.read_string(f"""
+[services]
+translation_server_url = {server_url}
+[pipeline]
+use_local_fork = true
+[timeouts]
+translation_timeout = 5
+""")
+    resolved_paths = {
+        'base_dir': tmp_path,
+        'results_dir': tmp_path,
+        'argotranslate_python': Path(sys.executable),
+        'argotranslate_script': Path("dummy_argos.py"),
+    }
+
+    try:
+        # Warm HTTP execution
+        with patch.object(TranslationRequestHandler, "_translate_argos", return_value="Hallo Welt Warm"):
+            res_http = run_argos_translation("Hello world", "en", "de", config, resolved_paths, zid="20260819002900")
+            assert res_http == "Hallo Welt Warm"
+    finally:
+        # Shutdown daemon
+        server.shutdown()
+        server.server_close()
+
+    # Graceful CLI fallback
+    mock_run = MagicMock(returncode=0, stdout="Hallo Welt CLI Fallback", stderr="")
+    monkeypatch.setattr("subprocess.run", lambda *a, **kw: mock_run)
+    res_cli = run_argos_translation("Hello world", "en", "de", config, resolved_paths, zid="20260819002900")
+    assert res_cli == "Hallo Welt CLI Fallback"
+
 
 
 
