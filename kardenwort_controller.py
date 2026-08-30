@@ -2100,6 +2100,7 @@ class SessionArbiter:
                     lemmas_to_retry.append(l_val)
 
         translated_map = {}
+        fast_prov = None
         if lemmas_to_retry:
             provider = self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google'
             try:
@@ -2111,6 +2112,7 @@ class SessionArbiter:
                     self.resolved_paths,
                     provider,
                 )
+                fast_prov = getattr(translated_map, 'provenance', None) or f"live:{provider}"
             except Exception as e:
                 logger.error(f"Retry translation failed: {e}")
                 raise StructuredError(ErrorCode.DESK_FAILED, f"Retry translation failed: {e}") from e
@@ -2148,6 +2150,8 @@ class SessionArbiter:
             self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
 
         translated_text_res = None
+        need_sentence_trans = False
+        text_provider = None
         if row_ids is None or len(row_ids) == 0:
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
             col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
@@ -2204,17 +2208,36 @@ class SessionArbiter:
                 except Exception as text_err:
                     logger.warning(f"Sentence translation retry failed: {text_err}")
 
+        retried_row_provenances = {}
+        if fast_prov:
+            for row_idx in target_indices:
+                if 0 <= row_idx < len(data_rows):
+                    row = data_rows[row_idx]
+                    retried_row_provenances[row_idx] = fast_prov
+                    retried_row_provenances[str(row_idx)] = fast_prov
+                    if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
+                        t_ord_str = str(row[col_token_order]).strip()
+                        retried_row_provenances[t_ord_str] = fast_prov
+                        if t_ord_str.isdigit():
+                            retried_row_provenances[int(t_ord_str)] = fast_prov
+
         new_fp = compute_content_fingerprint(data_rows)
         with self._lock:
             if session_zid in self.sessions:
                 self.sessions[session_zid]["data_rows"] = data_rows
                 self.sessions[session_zid]["headers"] = headers
                 self.sessions[session_zid]["fingerprint"] = new_fp
+                if retried_row_provenances:
+                    if "row_provenances" not in self.sessions[session_zid]:
+                        self.sessions[session_zid]["row_provenances"] = {}
+                    self.sessions[session_zid]["row_provenances"].update(retried_row_provenances)
 
         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
-        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=retried_row_provenances)
+        effective_text_prov = f"live:{text_provider}" if (need_sentence_trans and translated_text_res) else None
+
         if not is_sqlite and tsv_path:
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, zid=session_zid, trace_id=eff_trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances)
 
         event_payload = {
             "type": "update",
@@ -2223,10 +2246,15 @@ class SessionArbiter:
             "fingerprint": new_fp,
             "rows": structured_rows,
             "retried_rows": target_indices,
+            "row_provenances": retried_row_provenances,
+            "rowProvenances": retried_row_provenances,
         }
         if translated_text_res is not None:
             event_payload["translated_text"] = translated_text_res
             event_payload["translatedText"] = translated_text_res
+        if effective_text_prov:
+            event_payload["text_provenance"] = effective_text_prov
+            event_payload["textProvenance"] = effective_text_prov
         self.emit_event(session_zid, event_payload)
 
         res_payload = {
@@ -2236,10 +2264,15 @@ class SessionArbiter:
             "retried_rows": target_indices,
             "data_rows": data_rows,
             "rows": structured_rows,
+            "row_provenances": retried_row_provenances,
+            "rowProvenances": retried_row_provenances,
         }
         if translated_text_res is not None:
             res_payload["translated_text"] = translated_text_res
             res_payload["translatedText"] = translated_text_res
+        if effective_text_prov:
+            res_payload["text_provenance"] = effective_text_prov
+            res_payload["textProvenance"] = effective_text_prov
         return res_payload
 
     def get_queue_status(self) -> Dict[str, Any]:
@@ -2696,7 +2729,11 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     data_rows = sort_rows_by_frequency(
                         data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
                     )
-                safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields)
+                sess_row_provs = safe_sess.get("row_provenances")
+                safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sess_row_provs)
+                if sess_row_provs:
+                    safe_sess["row_provenances"] = sess_row_provs
+                    safe_sess["rowProvenances"] = sess_row_provs
                 if "translatedText" not in safe_sess or not safe_sess["translatedText"]:
                     st = safe_sess.get("sentence_translation")
                     if st:

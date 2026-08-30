@@ -10508,42 +10508,44 @@ html, body {{
                 }
                 tc.innerHTML = html;
             }
-            return;
-        }
-        for (var i = 0; i < divs.length; i++) {
-            var div = divs[i];
-            var firstChild = div.firstChild;
-            if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
-                if (firstChild.classList.contains('hl-mvp')) continue;
-                var childSpans = div.getElementsByTagName('span');
-                for (var j = 0; j < childSpans.length; j++) {
-                    var span = childSpans[j];
-                    if (span.classList && span.classList.contains('word')) {
-                        addClass(span, 'hl-mvp');
-                        span.setAttribute('data-line-idx', String(i));
+        } else {
+            for (var i = 0; i < divs.length; i++) {
+                var div = divs[i];
+                var firstChild = div.firstChild;
+                if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
+                    if (firstChild.classList.contains('hl-mvp')) continue;
+                    var childSpans = div.getElementsByTagName('span');
+                    for (var j = 0; j < childSpans.length; j++) {
+                        var span = childSpans[j];
+                        if (span.classList && span.classList.contains('word')) {
+                            addClass(span, 'hl-mvp');
+                            span.setAttribute('data-line-idx', String(i));
+                        }
                     }
-                }
-            } else {
-                var text = div.textContent || div.innerText || '';
-                var parts = tokenizeText(text);
-                var html = '';
-                for (var k = 0; k < parts.length; k++) {
-                    var part = parts[k];
-                    if (!part) continue;
-                    if (k % 2 === 1) {
-                        var lc = part.toLowerCase();
-                        html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + i + '">' + escapeHtml(part) + '</span>';
-                    } else {
-                        html += escapeHtml(part);
+                } else {
+                    var text = div.textContent || div.innerText || '';
+                    var parts = tokenizeText(text);
+                    var html = '';
+                    for (var k = 0; k < parts.length; k++) {
+                        var part = parts[k];
+                        if (!part) continue;
+                        if (k % 2 === 1) {
+                            var lc = part.toLowerCase();
+                            html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + i + '">' + escapeHtml(part) + '</span>';
+                        } else {
+                            html += escapeHtml(part);
+                        }
                     }
+                    div.innerHTML = html;
                 }
-                div.innerHTML = html;
             }
         }
         var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || tc.getAttribute('data-provenance');
         if (effProv) {
             var pTitle = formatProvenanceTooltip(effProv);
             if (pTitle) {
+                tc.setAttribute('data-provenance', effProv);
+                tc.setAttribute('title', pTitle);
                 var spans = tc.getElementsByTagName('span');
                 for (var sIdx = 0; sIdx < spans.length; sIdx++) {
                     if (spans[sIdx].classList && spans[sIdx].classList.contains('word')) {
@@ -18071,6 +18073,8 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 update_data["textTranslationFailed"] = text_translation_failed
                 update_data["text_translation_failed"] = text_translation_failed
             effective_text_prov = text_provenance or provenance
+            if effective_text_prov is None and translated_text:
+                effective_text_prov = "cached:sqlite"
             if effective_text_prov is not None:
                 update_data["textProvenance"] = effective_text_prov
                 update_data["text_provenance"] = effective_text_prov
@@ -18131,6 +18135,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                 sentence_translated = True
                 
+        active_text_prov = "cached:sqlite" if sentence_translated else None
         translated_text_emitted = False
         if not sentence_translated and run_text == 'auto':
             source_txt_path = tsv_path.with_suffix('.txt')
@@ -18203,7 +18208,8 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=f"live:{main_text_provider}")
+                    active_text_prov = f"live:{main_text_provider}"
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov)
                 except Exception as e:
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
@@ -18354,14 +18360,14 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances)
                         
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov)
             else:
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov)
         else:
             lang = getattr(args, 'language', 'en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov)
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
         failed_lemmas = chunk if 'chunk' in locals() else (lemmas_to_translate if 'lemmas_to_translate' in locals() else [])

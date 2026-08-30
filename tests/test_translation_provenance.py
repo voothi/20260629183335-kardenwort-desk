@@ -195,6 +195,44 @@ class TestTranslationProvenance(unittest.TestCase):
             self.assertIn('"row_provenances": {"0": "live:argos"}', content)
             self.assertIn('"stage": "finished"', content)
 
+    @patch("kardenwort_controller.translate_lemmas_fast_path")
+    def test_retry_session_rows_returns_and_attaches_provenance(self, mock_fast_path):
+        from kardenwort_controller import SessionArbiter
+        mock_fast_path.return_value = ProvenanceDict({"apple": "яблоко"}, provenance="live:argos")
+        
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tmp_p = Path(tmpdir)
+            mapping_path = tmp_p / "mapping.ini"
+            mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\n", encoding="utf-8")
+            
+            tsv_path = tmp_p / "20260830195500.en.tsv"
+            tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\n0\tapple\t\n", encoding="utf-8")
+            
+            config = configparser.ConfigParser()
+            config.add_section("pipeline")
+            config.set("pipeline", "lemma_base_provider", "argos")
+            config.add_section("settings")
+            config.set("settings", "default_language", "en")
+            config.set("settings", "default_target_language", "ru")
+            config.add_section("paths")
+            config.set("paths", "results_dir", str(tmp_p))
+            
+            resolved_paths = {
+                "anki_mapping_file": mapping_path,
+                "results_dir": tmp_p,
+            }
+            
+            arbiter = SessionArbiter(config, resolved_paths)
+            res = arbiter.retry_session_rows(
+                session_zid="20260830195500",
+                row_ids=[0]
+            )
+            
+            self.assertEqual(res["status"], "success")
+            self.assertIn("row_provenances", res)
+            self.assertEqual(res["row_provenances"].get(0) or res["row_provenances"].get("0"), "live:argos")
+            self.assertEqual(res["rows"][0]["provenance"], "live:argos")
+
 def test_progressive_and_terminal_provenance_playwright(page, tmp_path):
     tsv_path = tmp_path / "20260830180000-hello.en.tsv"
     tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\thello\tпривет\t1\n", encoding="utf-8")
@@ -326,6 +364,72 @@ def test_translation_container_word_spans_and_skeleton_proportions(page, tmp_pat
         for span in word_spans:
             assert span.get_attribute("data-provenance") == "live:argos"
             assert span.get_attribute("title") == "Translated via Argos (offline)"
+
+def test_single_sentence_tokenization_and_retry_tooltips(page, tmp_path):
+    tsv_path = tmp_path / "20260830180002-sample.en.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\thello\tпривет\t1\n", encoding="utf-8")
+    
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\n", encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "argos")
+    config.set("pipeline", "lemma_base_provider", "argos")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+    }
+
+    with patch("kardenwort_desk.translate_source_text", return_value={0: "Привет мир"}), patch("kardenwort_desk.run_progressive_worker_async"):
+        html = _run_render_flow_impl(
+            text="Hello world",
+            language="en",
+            zid="20260830180002",
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    page.set_content(html)
+    
+    # Send retry-like update with retried lemma provenance and single-sentence translation
+    page.evaluate("""() => {
+        window.receiveUpdate({
+            stage: 'translated',
+            status: 'success',
+            translatedText: 'Привет мир',
+            textProvenance: 'live:argos',
+            rows: {
+                '0': { trans: 'яблоко', provenance: 'live:argos', token_order: '0' }
+            },
+            row_provenances: {
+                '0': 'live:argos'
+            }
+        });
+    }""")
+
+    # Check that retried table cell receives live:argos tooltip
+    cell = page.locator("td.col-translation")
+    assert cell.get_attribute("data-provenance") == "live:argos"
+    assert cell.get_attribute("title") == "Translated via Argos (offline)"
+
+    # Check that single-sentence span.word elements receive tooltip
+    tc = page.locator("#translation-container")
+    assert tc.get_attribute("data-provenance") == "live:argos"
+    assert tc.get_attribute("title") == "Translated via Argos (offline)"
+    spans = tc.locator("span.word").all()
+    assert len(spans) > 0
+    for s in spans:
+        assert s.get_attribute("data-provenance") == "live:argos"
+        assert s.get_attribute("title") == "Translated via Argos (offline)"
 
 if __name__ == "__main__":
     unittest.main()
