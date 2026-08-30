@@ -10811,10 +10811,10 @@ html, body {{
 
                 var pendingNode = container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader') || container.classList.contains('skeleton-loader');
                 if (window.AppState.translatedText === null && !pendingNode) return false;
-                var currentText = (container.textContent || container.innerText || "").trim().replace(/\s+/g, ' ');
+                var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText || "";
-                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
+                var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
                 var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                 var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
 
