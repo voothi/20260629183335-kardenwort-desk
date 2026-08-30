@@ -2046,7 +2046,7 @@ def load_config(config_path=None):
     if SEC_STORAGE in config:
         st = config[SEC_STORAGE]
         backend = st.get('backend', 'tsv').strip().lower()
-        db_p = st.get('sqlite_db_path', 'data/kardenwort.db').strip()
+        db_p = st.get('sqlite_db_path', st.get('sqlite_path', 'data/kardenwort.db')).strip()
         if not Path(db_p).is_absolute():
             resolved_paths['sqlite_db_path'] = (base_dir / db_p).resolve()
         else:
@@ -2402,6 +2402,7 @@ class StorageAdapter:
         data_rows: Optional[List[List[str]]] = None,
         working_tsv_path: Optional[Path] = None,
         zid: Optional[str] = None,
+        row_provenances: Optional[Dict[Any, str]] = None,
         **kwargs,
     ) -> Any:
         raise NotImplementedError
@@ -2549,6 +2550,7 @@ class TsvStorageAdapter(StorageAdapter):
         data_rows: Optional[List[List[str]]] = None,
         working_tsv_path: Optional[Path] = None,
         zid: Optional[str] = None,
+        row_provenances: Optional[Dict[Any, str]] = None,
         **kwargs,
     ) -> Any:
         if working_tsv_path and headers is not None and data_rows is not None:
@@ -2776,6 +2778,7 @@ class SqliteStorageAdapter(StorageAdapter):
         data_rows: Optional[List[List[str]]] = None,
         working_tsv_path: Optional[Path] = None,
         zid: Optional[str] = None,
+        row_provenances: Optional[Dict[Any, str]] = None,
         **kwargs,
     ) -> Any:
         if not session_zid or str(session_zid).strip() in ("", "00000000000000"):
@@ -2813,7 +2816,20 @@ class SqliteStorageAdapter(StorageAdapter):
 
         # If sentences and words are provided directly
         norm_sentences = [{**dict(s), "session_zid": session_zid} for s in sentences] if sentences is not None else []
-        norm_words = list(words) if words is not None else []
+        norm_words = []
+        if words is not None:
+            for w_idx, w in enumerate(words):
+                w_dict = dict(w)
+                if row_provenances and not w_dict.get("word_provenance"):
+                    t_ord = w_dict.get("token_order", w_idx)
+                    prov_from_arg = (
+                        row_provenances.get(t_ord)
+                        or row_provenances.get(str(t_ord))
+                        or row_provenances.get(w_idx)
+                    )
+                    if prov_from_arg:
+                        w_dict["word_provenance"] = prov_from_arg
+                norm_words.append(w_dict)
 
         # If headers and data_rows are provided, normalize into sentences and words
         if headers is not None and data_rows is not None and not (sentences and words):
@@ -2933,6 +2949,14 @@ class SqliteStorageAdapter(StorageAdapter):
                 t_ord_raw = get_col_val(row, "tokenorder")
                 token_order = int(t_ord_raw) if (t_ord_raw is not None and str(t_ord_raw).strip().isdigit()) else row_idx
 
+                prov_from_arg = None
+                if row_provenances:
+                    prov_from_arg = (
+                        row_provenances.get(token_order)
+                        or row_provenances.get(str(token_order))
+                        or row_provenances.get(row_idx)
+                    )
+
                 word_entry = {
                     "session_zid": session_zid,
                     "sentence_index": s_idx,
@@ -2951,7 +2975,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     "deck": deck,
                     "classification_oxford": oxford,
                     "classification_goethe": goethe,
-                    "word_provenance": existing_words_by_ord.get(token_order, {}).get("word_provenance"),
+                    "word_provenance": prov_from_arg or existing_words_by_ord.get(token_order, {}).get("word_provenance"),
                     "extra_fields": extra if extra else None,
                 }
                 word_list.append(word_entry)
@@ -5282,7 +5306,8 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
         if not is_network_online_multi(hosts=check_ips):
             logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online providers and going straight to Argos.")
             try:
-                return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+                res = run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+                return ProvenanceString(res, provenance="live:argos") if res is not None else res
             except Exception as ex2:
                 logger.error(f"Argos offline fallback failed: {ex2}")
                 raise ex2
@@ -5291,7 +5316,10 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
     for idx, current_provider in enumerate(providers_to_try):
         is_last = (idx == len(providers_to_try) - 1)
         try:
-            return dispatch_single_provider(current_provider, text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            res = dispatch_single_provider(current_provider, text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            if res is not None:
+                return ProvenanceString(res, provenance=f"live:{current_provider}")
+            return res
         except Exception as e:
             last_exception = e
             if strategy == 'strict':
@@ -5319,6 +5347,26 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
     if last_exception:
         raise last_exception
     return ""
+
+class ProvenanceString(str):
+    """String subclass that carries provenance metadata transparently."""
+    def __new__(cls, content, provenance=None):
+        obj = super().__new__(cls, content)
+        obj.provenance = provenance
+        obj._provenance = provenance
+        return obj
+
+    def strip(self, *args, **kwargs):
+        res = super().strip(*args, **kwargs)
+        return ProvenanceString(res, provenance=getattr(self, 'provenance', None))
+
+    def lstrip(self, *args, **kwargs):
+        res = super().lstrip(*args, **kwargs)
+        return ProvenanceString(res, provenance=getattr(self, 'provenance', None))
+
+    def rstrip(self, *args, **kwargs):
+        res = super().rstrip(*args, **kwargs)
+        return ProvenanceString(res, provenance=getattr(self, 'provenance', None))
 
 class ProvenanceDict(dict):
     def __init__(self, *args, provenance=None, **kwargs):
@@ -5402,18 +5450,22 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     if len(lemmas) > batch_size:
         translations = {}
         chunks = [lemmas[i:i + batch_size] for i in range(0, len(lemmas), batch_size)]
+        chunk_prov = prov_tag
         for chunk in chunks:
             chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, provider)
+            if hasattr(chunk_result, 'provenance') and chunk_result.provenance:
+                chunk_prov = chunk_result.provenance
             translations.update(chunk_result)
-        return ProvenanceDict(translations, provenance=prov_tag)
+        return ProvenanceDict(translations, provenance=chunk_prov)
 
     def _translate_single(lemma):
         try:
             val = translate_text(lemma, source, target, config, resolved_paths, provider)
-            return lemma, val.strip() if val else ""
+            p = getattr(val, 'provenance', prov_tag)
+            return lemma, val.strip() if val else "", p
         except Exception as exc:
             logger.warning(f"Individual lemma translate failed for '{lemma}': {exc}")
-            return lemma, ""
+            return lemma, "", prov_tag
 
     n = len(lemmas)
     translations = {}
@@ -5435,9 +5487,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             for i, lemma in enumerate(lemmas):
                 val = sc_parts[i]
                 if not val:
-                    _, val = _translate_single(lemma)
+                    _, val, _ = _translate_single(lemma)
                 translations[lemma] = val
-            return ProvenanceDict(translations, provenance=prov_tag)
+            eff_prov = getattr(translated_sc, 'provenance', prov_tag)
+            return ProvenanceDict(translations, provenance=eff_prov)
         else:
             logger.debug(f"Fast-path semicolon alignment failed ({n} lemmas), trying numbered prefix.")
     except Exception as e:
@@ -5456,9 +5509,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                 for i, lemma in enumerate(lemmas):
                     val = parsed[i]
                     if not val:
-                        _, val = _translate_single(lemma)
+                        _, val, _ = _translate_single(lemma)
                     translations[lemma] = val
-                return ProvenanceDict(translations, provenance=prov_tag)
+                eff_prov = getattr(translated_numbered, 'provenance', prov_tag)
+                return ProvenanceDict(translations, provenance=eff_prov)
             else:
                 logger.debug(f"Fast-path numbered tier produced echo response ({n} lemmas), trying newline join.")
         else:
@@ -5479,9 +5533,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                 for i, lemma in enumerate(lemmas):
                     val = parts[i]
                     if not val:
-                        _, val = _translate_single(lemma)
+                        _, val, _ = _translate_single(lemma)
                     translations[lemma] = val
-                return ProvenanceDict(translations, provenance=prov_tag)
+                eff_prov = getattr(translated_newline, 'provenance', prov_tag)
+                return ProvenanceDict(translations, provenance=eff_prov)
             else:
                 logger.debug(f"Fast-path newline tier produced echo response ({n} lemmas), falling back to concurrent individual calls.")
         else:
@@ -5492,13 +5547,16 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     # --- Tier 3: Concurrent individual calls (bounded pool, max 4 workers) ---
     logger.warning(f"Fast-path alignment failed for all batch strategies ({n} lemmas). Using concurrent individual calls.")
     max_workers = min(4, n)
+    tier3_prov = prov_tag
     with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
         futures = {pool.submit(_translate_single, lemma): lemma for lemma in lemmas}
         for future in concurrent.futures.as_completed(futures):
-            lemma, val = future.result()
+            lemma, val, p = future.result()
             translations[lemma] = val
+            if p:
+                tier3_prov = p
 
-    return ProvenanceDict(translations, provenance=prov_tag)
+    return ProvenanceDict(translations, provenance=tier3_prov)
 
 
 
@@ -6061,12 +6119,14 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     if eff_mode == 'single':
         if len(text) <= wrap_max_chars and '\n' not in text.strip():
             try:
-                return {0: translate_text(text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id).strip()}
+                res = translate_text(text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
+                prov = getattr(res, 'provenance', f"live:{provider}" if provider else None)
+                return ProvenanceDict({0: res.strip()}, provenance=prov)
             except Exception as e:
                 logger.error(f"Failed to translate main text: {e}")
                 if isinstance(e, TranslationException):
                     raise e
-                return {0: f"[Translation Error: {e}]"}
+                return ProvenanceDict({0: f"[Translation Error: {e}]"}, provenance=f"live:{provider}" if provider else None)
         else:
             sbc = SentenceBoundaryConfig.from_config(config)
             pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
@@ -6152,7 +6212,8 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     else:
         lines = raw_lines
         
-    translations = {idx: "" for idx in range(len(lines))}
+    initial_prov = f"live:{provider}" if provider else None
+    translations = ProvenanceDict({idx: "" for idx in range(len(lines))}, provenance=initial_prov)
     
     if split_mode == 'line_by_line':
         first_failure = None
@@ -6166,6 +6227,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     trans_line = translate_text(line, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     _validate_translated_line(line, trans_line, idx, config)
                     translations[idx] = trans_line.strip()
+                    p = getattr(trans_line, 'provenance', None)
+                    if p:
+                        translations.provenance = p
+                        translations._provenance = p
                     success = True
                     break
                 except Exception as e:
@@ -6238,6 +6303,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     
                 for list_idx, target_idx in enumerate(indices):
                     translations[target_idx] = translated_chunk_lines[list_idx].strip()
+                p = getattr(translated_joined, 'provenance', None)
+                if p:
+                    translations.provenance = p
+                    translations._provenance = p
                 success = True
                 break
             except Exception as e:
@@ -6253,6 +6322,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     rescued_line = translate_text(original_line, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     _validate_translated_line(original_line, rescued_line, target_idx, config)
                     translations[target_idx] = rescued_line.strip()
+                    p = getattr(rescued_line, 'provenance', None)
+                    if p:
+                        translations.provenance = p
+                        translations._provenance = p
                 except Exception as rescue_err:
                     translations[target_idx] = ""
                     if first_rescue_failure is None:
@@ -8385,6 +8458,7 @@ html, body {{
                         headers=headers,
                         data_rows=_sanitize_rows(data_rows),
                         working_tsv_path=None,
+                        row_provenances=row_provenances,
                         zid=zid,
                     )
                 else:
@@ -8474,6 +8548,7 @@ html, body {{
                         headers=headers,
                         data_rows=data_rows,
                         working_tsv_path=None,
+                        row_provenances=row_provenances,
                         zid=zid,
                     )
                 if not is_sqlite:
@@ -8503,6 +8578,7 @@ html, body {{
                     headers=headers,
                     data_rows=data_rows,
                     working_tsv_path=None,
+                    row_provenances=row_provenances,
                     zid=zid,
                 )
             if not is_sqlite:
@@ -8594,9 +8670,9 @@ html, body {{
     sentence_provenance = None
     if not sentence_translated and 'sentence_translations_raw' in locals():
         sentence_translations = sentence_translations_raw
-        sentence_provenance = f"live:{main_text_provider}"
+        sentence_provenance = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
     elif 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip() and not translation_fast_failed:
-        sentence_provenance = f"live:{main_text_provider}"
+        sentence_provenance = getattr(translated_paragraph, 'provenance', f"live:{main_text_provider}")
         if translation_text_path.exists():
             translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
             if eff_mode == 'single':
@@ -11490,9 +11566,6 @@ html, body {{
                     }
                     function applyCellProvenance(effectiveVal) {
                         var effProv = rowProv;
-                        if (!effProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
-                            effProv = 'cached:sqlite';
-                        }
                         if (effProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
                             tds[2].setAttribute('data-provenance', effProv);
                             var pTitle = formatProvenanceTooltip(effProv);
@@ -11501,6 +11574,14 @@ html, body {{
                             if (scrollDiv) {
                                 scrollDiv.setAttribute('data-provenance', effProv);
                                 if (pTitle) scrollDiv.setAttribute('title', pTitle);
+                            }
+                        } else {
+                            tds[2].removeAttribute('data-provenance');
+                            tds[2].removeAttribute('title');
+                            var scrollDiv = tds[2].querySelector('.scrollable-cell');
+                            if (scrollDiv) {
+                                scrollDiv.removeAttribute('data-provenance');
+                                scrollDiv.removeAttribute('title');
                             }
                         }
                     }
@@ -18091,13 +18172,18 @@ def cmd_reprocess_worker(args):
         try:
             status_val = "failed" if worker_error else "success"
             reprocess_provenances = {}
-            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-            if col_word_dest != -1:
-                for r_i, r in enumerate(data_rows):
-                    if len(r) > col_word_dest and r[col_word_dest].strip():
-                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                        reprocess_provenances[t_ord] = "cached:sqlite"
+            if is_sqlite:
+                try:
+                    db_words = storage_adapter.db.get_words_by_session(zid)
+                    for w in db_words:
+                        w_prov = w.get("word_provenance")
+                        if w_prov:
+                            t_ord = str(w.get("token_order", ""))
+                            reprocess_provenances[t_ord] = w_prov
+                            if t_ord.isdigit():
+                                reprocess_provenances[int(t_ord)] = w_prov
+                except Exception:
+                    pass
             sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=reprocess_provenances)
             if sess_logger:
@@ -18450,7 +18536,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
 
                     sentence_translations_raw = translate_source_text(
                         text, getattr(args, 'language', 'en'), args.target_lang, getattr(args, 'text_mode', 'single'), config, resolved_paths, main_text_provider, zid=zid, trace_id=trace_id, chunk_callback=on_chunk_done)
-                    active_text_prov = f"live:{main_text_provider}"
+                    active_text_prov = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
                     
                     # Update sentences table directly in SQLite mode
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
@@ -18497,7 +18583,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    active_text_prov = f"live:{main_text_provider}"
+                    active_text_prov = getattr(sentence_translations_raw, 'provenance', active_text_prov or f"live:{main_text_provider}")
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov)
                 except Exception as e:
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
@@ -18993,13 +19079,18 @@ def cmd_retext_worker(args):
             # sending it would cause receiveUpdate to wipe the span DOM.
             status_val = "failed" if worker_error else "success"
             retext_provenances = {}
-            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-            if col_word_dest != -1:
-                for r_i, r in enumerate(data_rows):
-                    if len(r) > col_word_dest and r[col_word_dest].strip():
-                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                        retext_provenances[t_ord] = "cached:sqlite"
+            if is_sqlite:
+                try:
+                    db_words = storage_adapter.db.get_words_by_session(zid)
+                    for w in db_words:
+                        w_prov = w.get("word_provenance")
+                        if w_prov:
+                            t_ord = str(w.get("token_order", ""))
+                            retext_provenances[t_ord] = w_prov
+                            if t_ord.isdigit():
+                                retext_provenances[int(t_ord)] = w_prov
+                except Exception:
+                    pass
             text_prov = f"live:{text_reprocess_provider}" if 'text_reprocess_provider' in locals() and text_reprocess_provider else None
             safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id, config=config, row_provenances=retext_provenances, text_provenance=text_prov)
         except Exception as fe:

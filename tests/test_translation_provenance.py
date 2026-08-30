@@ -5,8 +5,11 @@ import tempfile
 import configparser
 
 from kardenwort_desk import (
+    ProvenanceString,
     ProvenanceDict,
     format_provenance_tooltip,
+    translate_text,
+    translate_source_text,
     translate_lemmas_fast_path,
     find_wordfill_match,
     format_update_rows_dict,
@@ -27,19 +30,72 @@ class TestTranslationProvenance(unittest.TestCase):
         self.assertEqual(format_provenance_tooltip(""), "")
         self.assertEqual(format_provenance_tooltip(None), "")
 
+    def test_provenance_string_metadata(self):
+        s = ProvenanceString("дерево", provenance="live:google")
+        self.assertEqual(s, "дерево")
+        self.assertEqual(s.provenance, "live:google")
+        self.assertEqual(s._provenance, "live:google")
+        stripped = s.strip()
+        self.assertEqual(stripped.provenance, "live:google")
+
     def test_provenance_dict_metadata(self):
         d = ProvenanceDict({"apple": "яблоко"}, provenance="live:argos")
         self.assertEqual(d["apple"], "яблоко")
         self.assertEqual(d.provenance, "live:argos")
 
+    @patch("kardenwort_desk.dispatch_single_provider")
+    def test_translate_text_failover_provenance(self, mock_dispatch):
+        def side_effect(provider, text, source, target, config, resolved_paths, zid=None, trace_id=None):
+            if provider == "argos":
+                raise RuntimeError("Argos offline model not found")
+            if provider == "google":
+                return "яблоко"
+            raise ValueError(f"Unknown {provider}")
+
+        mock_dispatch.side_effect = side_effect
+
+        config = configparser.ConfigParser()
+        config.add_section("pipeline")
+        config.set("pipeline", "text_base_provider", "argos, google")
+        config.set("pipeline", "translation_strategy", "chain")
+        resolved_paths = {}
+
+        res = translate_text("apple", "en", "ru", config, resolved_paths, provider="argos, google")
+        self.assertEqual(res, "яблоко")
+        self.assertEqual(getattr(res, "provenance", None), "live:google")
+
+    @patch("kardenwort_desk.translate_text")
+    def test_translate_source_text_failover_provenance(self, mock_trans):
+        mock_trans.return_value = ProvenanceString("яблоко", provenance="live:google")
+        config = configparser.ConfigParser()
+        config.add_section("pipeline")
+        config.set("pipeline", "text_base_provider", "argos, google")
+        resolved_paths = {}
+
+        res = translate_source_text("apple", "en", "ru", "single", config, resolved_paths, provider="argos, google")
+        self.assertIsInstance(res, ProvenanceDict)
+        self.assertEqual(getattr(res, "provenance", None), "live:google")
+
     @patch("kardenwort_desk.translate_text")
     def test_translate_lemmas_fast_path_provenance(self, mock_trans):
-        mock_trans.return_value = "дом"
+        mock_trans.return_value = ProvenanceString("дом", provenance="live:argos")
         config = MagicMock()
         resolved_paths = {}
         res = translate_lemmas_fast_path(["haus"], "de", "ru", config, resolved_paths, provider="argos")
         self.assertEqual(res["haus"], "дом")
         self.assertEqual(getattr(res, "provenance", None), "live:argos")
+
+    @patch("kardenwort_desk.translate_text")
+    def test_translate_lemmas_fast_path_failover_provenance(self, mock_trans):
+        mock_trans.return_value = ProvenanceString("дом", provenance="live:google")
+        config = configparser.ConfigParser()
+        config.add_section("translation")
+        config.set("translation", "lemma_batch_size", "15")
+        resolved_paths = {}
+
+        res = translate_lemmas_fast_path(["haus"], "de", "ru", config, resolved_paths, provider="argos")
+        self.assertEqual(res["haus"], "дом")
+        self.assertEqual(getattr(res, "provenance", None), "live:google")
 
     def test_find_wordfill_match_provenance_tagging(self):
         wordfill_cfg = {
@@ -823,6 +879,247 @@ def test_progressive_worker_wordfill_stores_and_reloads_corpus_provenance(tmp_pa
     assert words[0]["word_destination"] == "дерево"
     assert words[0]["word_provenance"] == "corpus:wordfill:20260712134500"
 
+
+def test_render_session_wordfill_persists_provenance_to_sqlite(tmp_path):
+    """Test 6.3: render_session initial WordFill step persists corpus:wordfill:<zid> into SQLite words table."""
+    from kardenwort_db import KardenwortDB
+    from kardenwort_desk import _run_render_flow_impl
+
+    db_path = tmp_path / "desk_wf_render.db"
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    sess_zid = "20260830235901"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "render-wf-test",
+        "source_language": "en",
+        "source_raw_text": "tree",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "tree",
+    })
+    db.insert_words([
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "tree",
+            "lemma": "tree",
+            "word_destination": "",
+        }
+    ])
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\nSentenceDestination=\n", encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "google")
+    config.set("pipeline", "lemma_base_provider", "google")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "progressive")
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_path", str(db_path))
+    config.add_section("settings")
+    config.set("settings", "default_language", "en")
+    config.set("settings", "anki_mapping_file", mapping_path.as_posix())
+    config.add_section("languages")
+    config.set("languages", "en_prompt", "standard")
+    config.add_section("triggers")
+    config.set("triggers", "run_text_translation", "manual")
+    config.set("triggers", "run_lemma_base_translation", "manual")
+    config.add_section("wordfill")
+    config.set("wordfill", "enabled", "true")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+        "sqlite_db_path": db_path,
+        "storage_backend": "sqlite",
+    }
+    tsv_path = tmp_path / f"{sess_zid}-render-wf-test.en.tsv"
+    headers = ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceDestination"]
+    tsv_path.write_text("\t".join(headers) + "\n0\ttree\t\t1\t\n", encoding="utf-8")
+
+    match_result = {
+        "WordDestination": "дерево",
+        "_provenance": "corpus:wordfill:20260715120000",
+    }
+
+    with patch("kardenwort_desk.find_wordfill_match", return_value=match_result), \
+         patch("kardenwort_desk.run_progressive_worker_async"):
+        _run_render_flow_impl(
+            text="tree",
+            language="en",
+            zid=sess_zid,
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    words = db.get_words_by_session(sess_zid)
+    assert len(words) >= 1
+    target_w = next(w for w in words if w.get("lemma") == "tree")
+    assert target_w["word_destination"] == "дерево"
+    assert target_w["word_provenance"] == "corpus:wordfill:20260715120000"
+
+
+def test_cmd_reprocess_preserves_stored_provenance(tmp_path):
+    """Test 6.4: cmd_reprocess_worker preserves existing stored word_provenance from SQLite."""
+    from kardenwort_db import KardenwortDB
+    from kardenwort_desk import cmd_reprocess_worker
+
+    db_path = tmp_path / "desk_reproc.db"
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    sess_zid = "20260830235902"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "reproc-test",
+        "source_language": "en",
+        "source_raw_text": "apple",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "apple",
+    })
+    db.insert_words([
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "apple",
+            "lemma": "apple",
+            "word_destination": "яблоко",
+            "word_provenance": "corpus:wordfill:20260101111111",
+        }
+    ])
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    db_str = db_path.as_posix()
+    mapping_str = mapping_path.as_posix()
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+lemma_base_provider=google
+lemma_reprocess_provider=google
+run_lemmatizer=false
+[storage]
+backend=sqlite
+sqlite_path={db_str}
+[settings]
+default_language=en
+default_target_language=ru
+anki_mapping_file={mapping_str}
+[triggers]
+run_lemma_enrichment=manual
+[classification]
+enabled=false
+""", encoding="utf-8")
+
+    tsv_path = tmp_path / f"{sess_zid}-reproc-test.en.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\tapple\tяблоко\t1\n", encoding="utf-8")
+
+    args = MagicMock()
+    args.config = config_path
+    args.tsv = str(tsv_path)
+    args.rows = "0"
+    args.zid = sess_zid
+    args.trace_id = f"{sess_zid}:reproc"
+
+    with patch("kardenwort_desk.safe_write_update_js") as mock_safe_write:
+        cmd_reprocess_worker(args)
+        assert mock_safe_write.called
+        kwargs = mock_safe_write.call_args[1]
+        row_provs = kwargs.get("row_provenances", {})
+        assert row_provs.get("0") == "corpus:wordfill:20260101111111"
+        assert row_provs.get(0) == "corpus:wordfill:20260101111111"
+        assert "cached:sqlite" not in row_provs.values()
+
+
+def test_cmd_retext_preserves_stored_provenance(tmp_path):
+    """Test 6.5: cmd_retext_worker preserves existing stored word_provenance from SQLite."""
+    from kardenwort_db import KardenwortDB
+    from kardenwort_desk import cmd_retext_worker
+
+    db_path = tmp_path / "desk_retext.db"
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    sess_zid = "20260830235903"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "retext-test",
+        "source_language": "en",
+        "source_raw_text": "apple",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "apple",
+    })
+    db.insert_words([
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "apple",
+            "lemma": "apple",
+            "word_destination": "яблоко",
+            "word_provenance": "corpus:wordfill:20260101111111",
+        }
+    ])
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    db_str = db_path.as_posix()
+    mapping_str = mapping_path.as_posix()
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+text_reprocess_provider=google
+[storage]
+backend=sqlite
+sqlite_path={db_str}
+[settings]
+default_language=en
+default_target_language=ru
+anki_mapping_file={mapping_str}
+""", encoding="utf-8")
+
+    tsv_path = tmp_path / f"{sess_zid}-retext-test.en.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\tapple\tяблоко\t1\n", encoding="utf-8")
+
+    args = MagicMock()
+    args.config = config_path
+    args.tsv = str(tsv_path)
+    args.language = "en"
+    args.text_mode = "single"
+    args.zid = sess_zid
+    args.trace_id = f"{sess_zid}:retext"
+
+    with patch("kardenwort_desk.translate_source_text", return_value={0: "яблоко"}), \
+         patch("kardenwort_desk.safe_write_update_js") as mock_safe_write:
+        cmd_retext_worker(args)
+        assert mock_safe_write.called
+        kwargs = mock_safe_write.call_args[1]
+        row_provs = kwargs.get("row_provenances", {})
+        assert row_provs.get("0") == "corpus:wordfill:20260101111111"
+        assert "cached:sqlite" not in row_provs.values()
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
