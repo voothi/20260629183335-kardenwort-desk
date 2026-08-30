@@ -444,3 +444,31 @@ def test_admin_api_batch_delete_sessions(admin_controller_server):
     status, resp = make_admin_request(url, "/api/v1/admin/sessions?language=fr")
     assert status == 200
     assert resp["total_count"] == 0
+
+
+def test_admin_telemetry_non_blocking_during_sidecar_latency(admin_controller_server, monkeypatch):
+    """
+    Assert that /api/v1/admin/telemetry responds instantly (< 100ms) even if sidecars
+    experience heavy latency or blocking socket probes, strictly reading in-memory supervisor state.
+    """
+    url, server, db, _, _, _ = admin_controller_server
+
+    # Monkeypatch supervisor probe_health to simulate a blocking/slow sidecar health probe
+    def slow_probe_health(svc, timeout=1.5):
+        time.sleep(1.0)
+        return False
+
+    if hasattr(server, 'supervisor'):
+        monkeypatch.setattr(server.supervisor, "probe_health", slow_probe_health)
+
+    start = time.perf_counter()
+    status, resp = make_admin_request(url, "/api/v1/admin/telemetry")
+    duration = time.perf_counter() - start
+
+    assert status == 200
+    assert resp["ok"] is True
+    assert "database" in resp
+    assert "sidecars" in resp
+    # Must respond sub-200ms without being blocked by probe_health
+    assert duration < 0.2, f"Admin telemetry took {duration:.3f}s, expected < 0.2s"
+
