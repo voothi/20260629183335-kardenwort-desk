@@ -2228,7 +2228,7 @@ class SessionLogger:
     def debug(self, message, trace_id=None):
         self._write_entry("DEBUG", message, trace_id)
 
-def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, **extra_kwargs):
+def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, **extra_kwargs):
     if not tsv_path:
         return None
     import inspect
@@ -2245,6 +2245,9 @@ def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, 
         "trace_id": trace_id,
         "text_translation_status": text_translation_status,
         "text_translation_failed": text_translation_failed,
+        "text_provenance": text_provenance,
+        "row_provenances": row_provenances,
+        "provenance": provenance,
     }
     kwargs.update(extra_kwargs)
     try:
@@ -5276,9 +5279,45 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
         raise last_exception
     return ""
 
+class ProvenanceDict(dict):
+    def __init__(self, *args, provenance=None, **kwargs):
+        super().__init__(*args, **kwargs)
+        self.provenance = provenance
+        self._provenance = provenance
+
+def format_provenance_tooltip(prov, zid=None):
+    if not prov:
+        return ""
+    prov_str = str(prov).strip()
+    if prov_str.startswith("live:"):
+        p = prov_str[5:].strip()
+        if p.lower() == "argos":
+            return "Translated via Argos (offline)"
+        if p.lower() == "google":
+            return "Translated via Google"
+        if p.lower() == "deepl":
+            return "Translated via DeepL"
+        if p.lower() == "lingva":
+            return "Translated via Lingva"
+        return f"Translated via {p.capitalize()}"
+    if prov_str in ("corpus:wordfill", "wordfill:corpus"):
+        if zid:
+            return f"Pre-filled from Corpus (ZID: {zid})"
+        return "Pre-filled from Corpus (WordFill)"
+    if prov_str.startswith("corpus:wordfill:"):
+        z = prov_str[len("corpus:wordfill:"):].strip()
+        return f"Pre-filled from Corpus (ZID: {z})"
+    if prov_str == "cached:sqlite":
+        return "Loaded from session cache (SQLite)"
+    if prov_str.startswith("fallback:"):
+        p = prov_str[9:].strip()
+        return f"Translated via fallback ({p})"
+    return prov_str
+
 def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider):
+    prov_tag = f"live:{provider}" if provider else "live:unknown"
     if not lemmas:
-        return {}
+        return ProvenanceDict({}, provenance=prov_tag)
         
     compact_line = "; ".join(lemmas)
     translations = {}
@@ -5305,7 +5344,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     except Exception:
                         val = ""
                 translations[lemma] = val.strip() if val else ""
-            return translations
+            return ProvenanceDict(translations, provenance=prov_tag)
         else:
             logger.warning(f"Fast-path alignment failure: expected {len(lemmas)} parts, got {len(parts)}. Falling back to individual calls.")
     except Exception as e:
@@ -5318,7 +5357,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         except Exception as e:
             logger.warning(f"Failed to translate lemma '{lemma}': {e}")
             translations[lemma] = ""
-    return translations
+    return ProvenanceDict(translations, provenance=prov_tag)
 
 EXIT_PARTIAL_TRANSLATION_PERSISTED = 2
 
@@ -8148,6 +8187,11 @@ html, body {{
     col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
     col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
     
+    row_provenances = {}
+    for r_i, r in enumerate(data_rows):
+        if col_word_dest != -1 and len(r) > col_word_dest and r[col_word_dest].strip():
+            row_provenances[r_i] = "cached:sqlite"
+    
     # --- Word-fill early pre-fill step ---
     if not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
         try:
@@ -8164,6 +8208,10 @@ html, body {{
                     if match:
                         lemma_rows = [data_rows[i] for i in row_indices]
                         apply_wordfill_to_rows(lemma_rows, headers, match)
+                        wf_prov = match.get('_provenance', 'corpus:wordfill')
+                        for r_idx in row_indices:
+                            if col_word_dest != -1 and len(data_rows[r_idx]) > col_word_dest and data_rows[r_idx][col_word_dest].strip():
+                                row_provenances[r_idx] = wf_prov
                         logger.info(
                             f"wordfill (desk): pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
                             f"from corpus."
@@ -8340,15 +8388,19 @@ html, body {{
                 lemmas_to_translate = list(set(lemmas_to_translate))
                 
                 lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
+                fast_prov = getattr(lemma_translations, 'provenance', f"live:{base_provider}")
                 
-                for row in data_rows:
+                for row_id, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma:
                         lemma_val = row[col_lemma]
                         if col_word_dest != -1:
                             while len(row) <= col_word_dest:
                                 row.append("")
                             if not row[col_word_dest].strip():
-                                row[col_word_dest] = lemma_translations.get(lemma_val, "")
+                                trans_val = lemma_translations.get(lemma_val, "")
+                                if trans_val:
+                                    row[col_word_dest] = trans_val
+                                    row_provenances[row_id] = fast_prov
                 with file_lock(working_tsv_path):
                     save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
                 
@@ -8382,9 +8434,32 @@ html, body {{
             pass
             
     sentence_translations = {}
+    sentence_provenance = None
     if not sentence_translated and 'sentence_translations_raw' in locals():
         sentence_translations = sentence_translations_raw
+        sentence_provenance = f"live:{main_text_provider}"
+    elif 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip() and not translation_fast_failed:
+        sentence_provenance = f"live:{main_text_provider}"
+        if translation_text_path.exists():
+            translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
+            if eff_mode == 'single':
+                sentence_translations[0] = " ".join(translation_lines)
+            else:
+                clean_translations = [ln.strip() for ln in translation_lines if ln.strip()]
+                c_idx = 0
+                for a_idx, ln in enumerate(text.splitlines()):
+                    if ln.strip():
+                        if c_idx < len(clean_translations):
+                            sentence_translations[a_idx] = clean_translations[c_idx]
+                        elif ln.strip().startswith("#"):
+                            sentence_translations[a_idx] = ln.strip()
+                        else:
+                            sentence_translations[a_idx] = ""
+                        c_idx += 1
+                    else:
+                        sentence_translations[a_idx] = ""
     elif translation_text_path.exists():
+        sentence_provenance = "cached:sqlite" if is_sqlite else "cached:sqlite"
         translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
         if eff_mode == 'single':
             sentence_translations[0] = " ".join(translation_lines)
@@ -8403,6 +8478,8 @@ html, body {{
                 else:
                     sentence_translations[a_idx] = ""
     else:
+        if db_sents or extracted_translations:
+            sentence_provenance = "cached:sqlite"
         if eff_mode == 'single':
             if is_sqlite and db_sents:
                 clean_lines = [str(s.get("sentence_destination")).strip() for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)) if s.get("sentence_destination") and str(s.get("sentence_destination")).strip()]
@@ -8844,6 +8921,14 @@ html, body {{
             sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;" title="{text_provider_label}">{text_provider_label}</div>'
         else:
             sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
+
+    container_prov_attr = ""
+    has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
+    if has_real_text and not is_mismatch and sentence_provenance:
+        p_title = format_provenance_tooltip(sentence_provenance)
+        container_prov_attr = f' data-provenance="{sentence_provenance}"'
+        if p_title:
+            container_prov_attr += f' title="{p_title}"'
     
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
@@ -8954,11 +9039,19 @@ html, body {{
                 inner_html = display_val
             dynamic_tds += f'<td class="col-classification" data-col="{role}"><div class="scrollable-cell">{inner_html}</div></td>'
 
+        prov_val = row_provenances.get(row_id)
+        prov_attr = ""
+        if prov_val and trans_val and "skeleton-loader" not in trans_val and "btn-retry-cell" not in trans_val:
+            prov_title = format_provenance_tooltip(prov_val)
+            prov_attr = f' data-provenance="{prov_val}"'
+            if prov_title:
+                prov_attr += f' title="{prov_title}"'
+
         table_rows.append(
             f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{lemma_val}</div></td>'
-            f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"><div class="scrollable-cell">{trans_val}</div></td>'
+            f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
             f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ipa_val}</div></td>'
             f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{morph_val}</div></td>'
             f'{dynamic_tds}'
@@ -10197,6 +10290,7 @@ html, body {{
 <script id="worker-launched" type="text/plain">{worker_launched_js}</script>
 <script id="text-base-provider" type="text/plain">{text_base_provider_js}</script>
 <script id="lemma-base-provider" type="text/plain">{lemma_base_provider_js}</script>
+<script id="sentence-provenance" type="text/plain">{sentence_provenance_js}</script>
 <script id="hl-mvp-script" type="text/plain" data-bookmarks="{hover_highlight_bookmarks}" data-rainbow="{hover_highlight_rainbow}" data-enabled="{hover_highlight_enabled}"></script>
 
 
@@ -10269,6 +10363,33 @@ html, body {{
         };
         if (map[name]) return map[name];
         return name.charAt(0).toUpperCase() + name.slice(1) + '...';
+    }
+
+    function formatProvenanceTooltip(prov) {
+        if (!prov) return "";
+        prov = String(prov);
+        if (prov.indexOf('live:') === 0) {
+            var p = prov.substring(5);
+            if (p === 'argos') return 'Translated via Argos (offline)';
+            if (p === 'google') return 'Translated via Google';
+            if (p === 'deepl') return 'Translated via DeepL';
+            if (p === 'lingva') return 'Translated via Lingva';
+            return 'Translated via ' + p.charAt(0).toUpperCase() + p.slice(1);
+        }
+        if (prov === 'corpus:wordfill' || prov === 'wordfill:corpus') {
+            return 'Pre-filled from Corpus (WordFill)';
+        }
+        if (prov.indexOf('corpus:wordfill:') === 0) {
+            return 'Pre-filled from Corpus (ZID: ' + prov.substring(16) + ')';
+        }
+        if (prov === 'cached:sqlite') {
+            return 'Loaded from session cache (SQLite)';
+        }
+        if (prov.indexOf('fallback:') === 0) {
+            var p = prov.substring(9);
+            return 'Translated via fallback (' + p + ')';
+        }
+        return prov;
     }
 
     function getTextBaseProvider() {
@@ -10763,6 +10884,7 @@ html, body {{
             translatedText: null,
             textTranslationStatus: null,
             textTranslationFailed: false,
+            textProvenance: null,
             stage: null,
             isFinished: false,
             applyDeltas: function(data) {
@@ -10793,6 +10915,14 @@ html, body {{
                     window.AppState.textTranslationFailed = Boolean(data.text_translation_failed);
                 } else if (window.AppState.textTranslationStatus === 'failed') {
                     window.AppState.textTranslationFailed = true;
+                }
+                
+                if (data.textProvenance !== undefined) {
+                    window.AppState.textProvenance = data.textProvenance;
+                } else if (data.text_provenance !== undefined) {
+                    window.AppState.textProvenance = data.text_provenance;
+                } else if (data.provenance !== undefined) {
+                    window.AppState.textProvenance = data.provenance;
                 }
                 
                 var updated = false;
@@ -10999,6 +11129,15 @@ html, body {{
                 var isTerm = (globalStage === 'finished' || window.AppState.isFinished || isFailed);
                 var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
 
+                function applyTextProvenance() {
+                    var effProv = window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance;
+                    if (effProv) {
+                        container.setAttribute('data-provenance', effProv);
+                        var pTitle = formatProvenanceTooltip(effProv);
+                        if (pTitle) container.setAttribute('title', pTitle);
+                    }
+                }
+
                 if (newText !== "") {
                     container.classList.remove('skeleton-loader');
                     container.removeAttribute('data-pending');
@@ -11013,6 +11152,7 @@ html, body {{
                         }
                         container.innerHTML = escapeHtml(clean);
                     }
+                    applyTextProvenance();
                     return true;
                 } else if (isTerm) {
                     container.classList.remove('skeleton-loader');
@@ -11029,6 +11169,7 @@ html, body {{
                             }
                             container.innerHTML = escapeHtml(clean);
                         }
+                        applyTextProvenance();
                     } else if (pendingNode || !currentText || isFailed) {
                         container.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                     }
@@ -11045,6 +11186,7 @@ html, body {{
                         }
                         container.innerHTML = escapeHtml(clean);
                     }
+                    applyTextProvenance();
                     return true;
                 }
                 return false;
@@ -11093,6 +11235,18 @@ html, body {{
                         var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var hasRetryBadge = div.querySelector('.btn-retry-cell') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
+                        var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
+                        function applyCellProvenance(effectiveVal) {
+                            if (rowProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
+                                tds[2].setAttribute('data-provenance', rowProv);
+                                var pTitle = formatProvenanceTooltip(rowProv);
+                                if (pTitle) tds[2].setAttribute('title', pTitle);
+                                if (div && div !== tds[2]) {
+                                    div.setAttribute('data-provenance', rowProv);
+                                    if (pTitle) div.setAttribute('title', pTitle);
+                                }
+                            }
+                        }
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (hasRetryBadge && val === "" && !isTerm) {
@@ -11108,6 +11262,7 @@ html, body {{
                                 if (!tds[2].classList.contains('editing')) div.innerHTML = retryBadge;
                             } else {
                                 if (!tds[2].classList.contains('editing')) setCellText(div, targetVal);
+                                applyCellProvenance(targetVal);
                             }
                             updated = true;
                         } else {
@@ -11120,6 +11275,7 @@ html, body {{
                                     updated = true;
                                 } else if (val !== "") {
                                     if (!tds[2].classList.contains('editing')) setCellText(div, val);
+                                    applyCellProvenance(val);
                                     updated = true;
                                 }
                             }
@@ -11197,6 +11353,20 @@ html, body {{
         window.receiveUpdate = function(data) {
             window.AppState.applyDeltas(data);
         };
+
+        try {
+            var spEl = document.getElementById('sentence-provenance');
+            var initialSentenceProv = spEl ? (spEl.textContent || spEl.innerText || "").trim() : "";
+            if (initialSentenceProv) {
+                window.AppState.textProvenance = initialSentenceProv;
+                var tcInit = document.getElementById('translation-container');
+                if (tcInit) {
+                    tcInit.setAttribute('data-provenance', initialSentenceProv);
+                    var initProvTitle = formatProvenanceTooltip(initialSentenceProv);
+                    if (initProvTitle) tcInit.setAttribute('title', initProvTitle);
+                }
+            }
+        } catch(e) {}
 
         // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling + 30s Safety Timeout)
         function initWatchdog() {
@@ -15124,6 +15294,8 @@ setTimeout(function() {{
 
     # Stage 2: User content injection (isolated dedicated pass preventing collisions)
     html_page = html_page.replace("{source_html}", source_html)
+    eff_prov = sentence_provenance if (has_real_text and not is_mismatch and sentence_provenance) else ""
+    html_page = html_page.replace("{sentence_provenance_js}", html.escape(eff_prov))
     html_page = html_page.replace("{sentence_html}", sentence_html)
     html_page = html_page.replace("{table_rows_html}", table_rows_html)
 
@@ -16274,6 +16446,9 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                             match_dict[k] = str(v).strip()
 
                 if match_dict:
+                    match_dict['_provenance'] = 'corpus:wordfill'
+                    if cand.get('session_zid'):
+                        match_dict['_source_zid'] = str(cand['session_zid'])
                     has_ipa = bool(match_dict.get('WordSourceIPA', '').strip())
                     has_morph = bool(match_dict.get('WordSourceMorphologyAI', '').strip())
                     tier = 2 if (has_ipa and has_morph) else (1 if (has_ipa or has_morph) else 0)
@@ -16343,6 +16518,12 @@ def find_wordfill_match(word, language, wordfill_cfg, exclude_path=None):
                             val = row[col_idx].strip()
                             if val and 'skeleton-loader' not in val:
                                 match_dict[col] = val
+
+                if match_dict:
+                    match_dict['_provenance'] = 'corpus:wordfill'
+                    cand_zid = extract_zid(tsv_path)
+                    if cand_zid:
+                        match_dict['_source_zid'] = str(cand_zid)
 
                 # Maximize quality within this file
                 if file_best_match is None or tier > file_best_score:
@@ -17505,7 +17686,7 @@ def cmd_reprocess_worker(args):
 
 _update_seq_counter = 0
 
-def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None):
+def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, row_provenances=None):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     col_inflected2 = headers.index("WordSourceInflectedForm2") if "WordSourceInflectedForm2" in headers else -1
@@ -17525,7 +17706,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None):
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
         token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
         sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
-        rows_data[row_id] = {
+        row_obj = {
             "lemma": lemma_val,
             "inflected": inflected_val,
             "trans": trans_val,
@@ -17534,6 +17715,12 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None):
             "token_order": token_order_val,
             "sentence_idx": sent_idx_val
         }
+        if row_provenances:
+            if row_id in row_provenances:
+                row_obj["provenance"] = row_provenances[row_id]
+            elif str(token_order_val) in row_provenances:
+                row_obj["provenance"] = row_provenances[str(token_order_val)]
+        rows_data[row_id] = row_obj
         if class_cols:
             class_vals = {}
             for name, col_idx in class_cols:
@@ -17542,7 +17729,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None):
             rows_data[row_id]["classifications"] = class_vals
     return rows_data
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, **extra_kwargs):
     import time
     global _update_seq_counter
     _update_seq_counter += 1
@@ -17579,6 +17766,11 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         if text_translation_failed is not None:
             update_data["textTranslationFailed"] = text_translation_failed
             update_data["text_translation_failed"] = text_translation_failed
+        effective_text_prov = text_provenance or provenance
+        if effective_text_prov is not None:
+            update_data["textProvenance"] = effective_text_prov
+            update_data["text_provenance"] = effective_text_prov
+            update_data["provenance"] = effective_text_prov
         if error is not None:
             update_data["error"] = error
         if zid is not None:
@@ -17586,7 +17778,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         if trace_id is not None:
             update_data["trace_id"] = trace_id
     else:
-        rows_data = format_update_rows_dict(data_rows, headers, role_fields, class_cols=class_cols)
+        rows_data = format_update_rows_dict(data_rows, headers, role_fields, class_cols=class_cols, row_provenances=row_provenances)
         if stage is None:
             # Inline snapshot — only emit rows that have at least one non-empty field
             update_data = {
@@ -17724,6 +17916,11 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             if text_translation_failed is not None:
                 update_data["textTranslationFailed"] = text_translation_failed
                 update_data["text_translation_failed"] = text_translation_failed
+            effective_text_prov = text_provenance or provenance
+            if effective_text_prov is not None:
+                update_data["textProvenance"] = effective_text_prov
+                update_data["text_provenance"] = effective_text_prov
+                update_data["provenance"] = effective_text_prov
 
             if error is not None:
                 update_data["error"] = error
@@ -17849,7 +18046,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=f"live:{main_text_provider}")
                 except Exception as e:
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
@@ -17857,6 +18054,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     
         if run_base == 'auto' and col_lemma != -1:
             lang = getattr(args, 'language', 'en')
+            row_provenances = {}
             wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
             if wordfill_cfg and wordfill_cfg.get('enabled', False):
                 try:
@@ -17870,6 +18068,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 if match:
                                     apply_wordfill_to_rows([row], headers, match)
                                     wf_applied = True
+                                    row_provenances[i] = match.get('_provenance', 'corpus:wordfill')
                                     logger.info(
                                         f"wordfill (progressive): pre-filled {len(match)} field(s) for lemma '{lemma_val}' from corpus."
                                     )
@@ -17929,7 +18128,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     else:
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
                 else:
                     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
                     if chunk_size == 0:
@@ -17942,6 +18141,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     target_l = getattr(args, 'target_lang', None) or config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
                     for chunk in chunks:
                         lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), target_l, config, resolved_paths, provider)
+                        fast_prov = getattr(lemma_translations, 'provenance', f"live:{provider}")
                         
                         if is_sqlite:
                             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
@@ -17954,6 +18154,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                         while len(row) <= col_word_dest:
                                             row.append("")
                                         row[col_word_dest] = trans_val
+                                        row_provenances[row_idx] = fast_prov
                                         t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
                                         updates.append({
                                             "token_order": t_ord,
@@ -17965,7 +18166,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         else:
                             with file_lock(tsv_path):
                                 comments, headers, current_rows = load_tsv_rows(tsv_path)
-                                for row in current_rows:
+                                for r_idx, row in enumerate(current_rows):
                                     if col_lemma != -1 and len(row) > col_lemma:
                                         lemma_val = row[col_lemma]
                                         if col_word_dest != -1:
@@ -17973,17 +18174,18 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                                 row.append("")
                                             if lemma_val in lemma_translations:
                                                 row[col_word_dest] = lemma_translations[lemma_val]
+                                                row_provenances[r_idx] = fast_prov
                                 save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                                 data_rows = current_rows
                         
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances)
                         
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
             else:
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
         else:
             lang = getattr(args, 'language', 'en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
