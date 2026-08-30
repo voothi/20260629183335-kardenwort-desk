@@ -1091,12 +1091,14 @@ class EnrichmentQueue:
                 if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                     sentence_translated = True
 
+            active_text_prov = "cached:sqlite" if sentence_translated else None
             if not sentence_translated and run_text == 'auto' and text:
                 main_text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
                 try:
                     sentence_translations_raw = translate_source_text(
                         text, sess_lang, sess_target, text_mode, self.config, self.resolved_paths, main_text_provider, zid=req_zid, trace_id=eff_trace_id
                     )
+                    active_text_prov = f"live:{main_text_provider}"
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
                         for s_idx_raw, trans in sentence_translations_raw.items():
                             if trans and isinstance(trans, str):
@@ -1118,11 +1120,13 @@ class EnrichmentQueue:
                             arbiter.sessions[session_zid]["data_rows"] = data_rows
                             arbiter.sessions[session_zid]["fingerprint"] = new_fp
                             arbiter.sessions[session_zid]["sentence_translation"] = sentence_translations_raw
+                            arbiter.sessions[session_zid]["text_provenance"] = active_text_prov
+                            arbiter.sessions[session_zid]["textProvenance"] = active_text_prov
 
                     translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
@@ -1135,9 +1139,12 @@ class EnrichmentQueue:
                         "rows": structured_rows,
                         "translated_text": translated_html,
                         "translatedText": translated_html,
+                        "text_provenance": active_text_prov,
+                        "textProvenance": active_text_prov,
                     })
                 except Exception as text_err:
                     logger.warning(f"Sentence translation error in progressive queue for {session_zid}: {text_err}")
+                    active_text_prov = None
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True)
@@ -1293,16 +1300,20 @@ class EnrichmentQueue:
             structured_rows = format_update_rows_dict(data_rows, headers, role_fields) if (data_rows and headers and role_fields) else {}
             if tsv_path and data_rows and headers:
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov)
 
-            arbiter.emit_event(session_zid, {
+            finished_event = {
                 "type": "update",
                 "stage": "finished",
                 "status": status_val,
                 "error": worker_error,
                 "fingerprint": new_fp,
                 "rows": structured_rows,
-            })
+            }
+            if active_text_prov:
+                finished_event["text_provenance"] = active_text_prov
+                finished_event["textProvenance"] = active_text_prov
+            arbiter.emit_event(session_zid, finished_event)
 
     def get_status(self) -> Dict[str, Any]:
         with self._lock:
@@ -1424,6 +1435,11 @@ class SessionArbiter:
                         if t_ord.isdigit():
                             init_row_provenances[int(t_ord)] = "cached:sqlite"
 
+        init_text_prov = res.get("text_provenance") or res.get("textProvenance")
+        if not init_text_prov and res.get("sentence_translation"):
+            main_text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
+            init_text_prov = f"live:{main_text_provider}"
+
         with self._lock:
             self.sessions[session_zid] = {
                 "session_zid": session_zid,
@@ -1435,6 +1451,8 @@ class SessionArbiter:
                 "headers": res["headers"],
                 "data_rows": res["data_rows"],
                 "sentence_translation": res["sentence_translation"],
+                "text_provenance": init_text_prov,
+                "textProvenance": init_text_prov,
                 "row_provenances": init_row_provenances,
                 "fingerprint": res["fingerprint"],
                 "lock": threading.Lock(),
@@ -1443,6 +1461,9 @@ class SessionArbiter:
 
         res["row_provenances"] = init_row_provenances
         res["rowProvenances"] = init_row_provenances
+        if init_text_prov:
+            res["text_provenance"] = init_text_prov
+            res["textProvenance"] = init_text_prov
 
         # Emit initial source stage event
         self.emit_event(session_zid, {
@@ -2774,9 +2795,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sess_row_provs)
                 safe_sess["row_provenances"] = sess_row_provs
                 safe_sess["rowProvenances"] = sess_row_provs
-                if "text_provenance" not in safe_sess and "textProvenance" not in safe_sess:
-                    safe_sess["text_provenance"] = "cached:sqlite" if (safe_sess.get("translatedText") or safe_sess.get("sentence_translation")) else None
+                if safe_sess.get("text_provenance"):
                     safe_sess["textProvenance"] = safe_sess["text_provenance"]
+                elif safe_sess.get("textProvenance"):
+                    safe_sess["text_provenance"] = safe_sess["textProvenance"]
+                else:
+                    safe_sess["text_provenance"] = None
+                    safe_sess["textProvenance"] = None
                 if "translatedText" not in safe_sess or not safe_sess["translatedText"]:
                     st = safe_sess.get("sentence_translation")
                     if st:

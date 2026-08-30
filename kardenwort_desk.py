@@ -9415,12 +9415,17 @@ html, body {{
     user-select: text;
   }
   .source-text span.word,
-  #source-container span.word,
-  #translation-container span.word {
+  #source-container span.word {
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     border-radius: 3px;
     padding: 0 2px;
+  }
+  #translation-container span.word {
+    cursor: pointer;
+    transition: background-color 0.2s, color 0.2s;
+    border-radius: 2px;
+    padding: 0;
   }
   .source-text span.word.flipped {
     background-color: {flipped_bg};
@@ -9736,8 +9741,8 @@ html, body {{
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 1.4em;
-    height: 1.4em;
+    min-height: 1.6em;
+    height: 1.6em;
     width: 100%;
     background: linear-gradient(-90deg, {table_border} 0%, {table_th_border} 50%, {table_border} 100%);
     background-size: 400% 400%;
@@ -10555,7 +10560,9 @@ html, body {{
                 }
             }
         }
+        window.tokenizeTranslation = tokenizeTranslation;
     }
+    window.tokenizeTranslation = tokenizeTranslation;
 
     function buildLcIndex() {
         sourceSpansArray = [];
@@ -10946,12 +10953,13 @@ html, body {{
                     window.AppState.textTranslationFailed = true;
                 }
                 
-                if (data.textProvenance !== undefined) {
-                    window.AppState.textProvenance = data.textProvenance;
-                } else if (data.text_provenance !== undefined) {
-                    window.AppState.textProvenance = data.text_provenance;
-                } else if (data.provenance !== undefined) {
-                    window.AppState.textProvenance = data.provenance;
+                var incomingTextProv = data.textProvenance !== undefined ? data.textProvenance : (data.text_provenance !== undefined ? data.text_provenance : (data.provenance !== undefined ? data.provenance : undefined));
+                if (incomingTextProv !== undefined && incomingTextProv !== null) {
+                    var currentTextProv = window.AppState.textProvenance;
+                    var isCurrentLive = currentTextProv && typeof currentTextProv === 'string' && currentTextProv.indexOf('live:') === 0;
+                    if (!(isCurrentLive && incomingTextProv === 'cached:sqlite')) {
+                        window.AppState.textProvenance = incomingTextProv;
+                    }
                 }
                 
                 var updated = false;
@@ -14672,9 +14680,21 @@ html, body {{
                             }
                         }
                         if (tText && tText.trim()) {
-                            if (window.tokenizeTranslation) tokenizeTranslation();
-                            if (window.buildLcIndex) buildLcIndex();
-                            if (window.updateBidirectionalHighlights) updateBidirectionalHighlights();
+                            if (typeof window.tokenizeTranslation === 'function') {
+                                window.tokenizeTranslation();
+                            } else if (typeof tokenizeTranslation === 'function') {
+                                tokenizeTranslation();
+                            }
+                            if (typeof window.buildLcIndex === 'function') {
+                                window.buildLcIndex();
+                            } else if (typeof buildLcIndex === 'function') {
+                                buildLcIndex();
+                            }
+                            if (typeof window.updateBidirectionalHighlights === 'function') {
+                                window.updateBidirectionalHighlights();
+                            } else if (typeof updateBidirectionalHighlights === 'function') {
+                                updateBidirectionalHighlights();
+                            }
                         }
                         break;
                     }
@@ -16728,6 +16748,7 @@ def core_lookup(
     bypass_lang_check=False, storage=None, sentence_match_strategy=None,
     allow_checksum_fallback=None, no_checksum_lookup=False
 ):
+    import re
     if zid is None:
         zid = generate_unique_zid()
 
@@ -16844,6 +16865,15 @@ def core_lookup(
     else:
         out = render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation)
 
+    text_provenance = None
+    if current_fmt == 'html' and out:
+        sp_m = re.search(r'<script id="sentence-provenance"[^>]*>([^<]*)</script>', out)
+        if sp_m and sp_m.group(1).strip():
+            text_provenance = sp_m.group(1).strip()
+    if not text_provenance and sentence_translation:
+        main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if config else 'google'
+        text_provenance = f"live:{main_text_provider}"
+
     return {
         "html": out,
         "session_zid": session_zid,
@@ -16853,6 +16883,8 @@ def core_lookup(
         "headers": headers,
         "data_rows": data_rows,
         "sentence_translation": sentence_translation,
+        "text_provenance": text_provenance,
+        "textProvenance": text_provenance,
         "fingerprint": fingerprint
     }
 
@@ -18081,8 +18113,6 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 update_data["textTranslationFailed"] = text_translation_failed
                 update_data["text_translation_failed"] = text_translation_failed
             effective_text_prov = text_provenance or provenance
-            if effective_text_prov is None and translated_text:
-                effective_text_prov = "cached:sqlite"
             if effective_text_prov is not None:
                 update_data["textProvenance"] = effective_text_prov
                 update_data["text_provenance"] = effective_text_prov
@@ -18116,6 +18146,13 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         logger.error(f"Failed to atomically move update js file after 10 retries: {update_js_path}")
     return update_js_path
 
+class StageTranslationResult(list):
+    """List subclass holding stage rows along with active text translation provenance."""
+    def __init__(self, rows=None, active_text_prov=None):
+        super().__init__(rows or [])
+        self.active_text_prov = active_text_prov
+        self.text_provenance = active_text_prov
+
 def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, row_provenances=None):
     m = re.match(r'^(\d{14})', tsv_path.name)
     zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
@@ -18135,6 +18172,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
     run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
+    active_text_prov = None
     
     try:
         # check if sentence needs translation
@@ -18393,7 +18431,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"Translation stage failed: [{err_obj.get('code')}] {err_obj.get('message')}")
         safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="translated", status="failed", error=err_obj, zid=zid, trace_id=trace_id)
-    return data_rows
+    return StageTranslationResult(data_rows, active_text_prov)
 
 def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="enrichment", selected_rows=None):
     m = re.match(r'^(\d{14})', tsv_path.name)
@@ -19060,12 +19098,20 @@ def cmd_progressive_worker(args):
                 run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
                 enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
 
+                active_text_prov = None
                 # 1. Base Translation Stage
                 if run_base == 'auto' or run_text == 'auto':
                     try:
-                        data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, row_provenances=worker_row_provenances)
+                        res = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, row_provenances=worker_row_provenances)
                     except TypeError:
-                        data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                        res = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                    if isinstance(res, tuple) and len(res) == 2:
+                        data_rows, active_text_prov = res
+                    elif hasattr(res, 'active_text_prov'):
+                        data_rows = res
+                        active_text_prov = res.active_text_prov
+                    else:
+                        data_rows = res
                     
                 if not is_sqlite:
                     try:
@@ -19128,7 +19174,7 @@ def cmd_progressive_worker(args):
                                 if r_i not in worker_row_provenances and t_ord not in worker_row_provenances:
                                     worker_row_provenances[t_ord] = "cached:sqlite"
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances, text_provenance=active_text_prov)
                     if tsv_path.exists():
                         import os
                         os.utime(tsv_path, None)

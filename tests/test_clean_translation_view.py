@@ -8,6 +8,7 @@ unpadded 1:1 sentence translations across initial render and progressive worker 
 
 import configparser
 import json
+import re
 import pytest
 from pathlib import Path
 from unittest.mock import patch
@@ -66,6 +67,10 @@ SentenceSourceIndex = sentence_index
     config.set("triggers", "run_text_translation", "auto")
     config.set("triggers", "run_lemma_base_translation", "auto")
     config.set("triggers", "run_lemma_enrichment", "auto")
+    
+    config.add_section("languages")
+    config.set("languages", "de_prompt", "german")
+    config.set("languages", "en_prompt", "english")
     
     resolved_paths = {
         "anki_mapping_file": str(mapping_path),
@@ -397,5 +402,175 @@ def test_write_update_js_emits_text_translation_failure_signals(tmp_path):
     assert payload["stage"] == "translated_text"
     assert payload["textTranslationStatus"] == "failed"
     assert payload["textTranslationFailed"] is True
+
+
+def test_write_update_js_omits_text_provenance_when_not_provided(tmp_path):
+    """Task 1.2: write_update_js must omit textProvenance unless explicitly passed, avoiding cached:sqlite clobbering."""
+    tsv_path = tmp_path / "20260830205231-test.en.tsv"
+    tsv_path.write_text("Quotation\tWordSource\tWordDestination\tSentenceDestination\n", encoding="utf-8")
+
+    js_path = desk.write_update_js(
+        tsv_path=tsv_path,
+        data_rows=[["", "apple", "яблоко", "The apple."]],
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceDestination"],
+        role_fields={"lemma": "WordSource", "word_translation": "WordDestination", "sentence_destination": "SentenceDestination"},
+        stage="finished",
+        translated_text="The apple.",
+        zid="20260830205231"
+    )
+    content = js_path.read_text(encoding="utf-8")
+    payload_str = content[len("if (typeof window.receiveUpdate === 'function') { window.receiveUpdate("):-4]
+    payload = json.loads(payload_str)
+
+    assert "textProvenance" not in payload
+    assert "text_provenance" not in payload
+
+
+def test_progressive_worker_finished_preserves_live_text_provenance(mock_clean_context_env, monkeypatch):
+    """Task 1.1: cmd_progressive_worker passes active_text_prov to safe_write_update_js at stage='finished'."""
+    env = mock_clean_context_env
+    config = env["config"]
+    resolved_paths = env["resolved_paths"]
+    session_zid = "20260830205231"
+    tsv_path = env["results_dir"] / f"{session_zid}-test.de.tsv"
+    headers = ["WordSource", "WordDestination", "SentenceSourceIndex", "SentenceDestination"]
+    data_rows = [["Katze", "", "1", ""]]
+
+    with open(tsv_path, 'w', encoding='utf-8', newline='') as f:
+        f.write("\t".join(headers) + "\n")
+        f.write("\t".join(data_rows[0]) + "\n")
+
+    txt_path = tsv_path.with_suffix('.txt')
+    txt_path.write_text("Die Katze schläft.", encoding='utf-8')
+
+    captured_updates = []
+    def mock_safe_write_update_js(t_path, rows, h, rf, **kw):
+        captured_updates.append(kw)
+
+    monkeypatch.setattr(desk, "load_config", lambda *a, **kw: (config, resolved_paths, {}, {}))
+    monkeypatch.setattr(desk, "safe_write_update_js", mock_safe_write_update_js)
+    monkeypatch.setattr(desk, "translate_source_text", lambda *a, **kw: {0: "The cat sleeps", "FULL_TEXT": "The cat sleeps"})
+    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda *a, **kw: {"Katze": "cat"})
+
+    class MockArgs:
+        zid = session_zid
+        tsv = str(tsv_path)
+        config = None
+        language = "de"
+        target_lang = "en"
+        text_mode = "single"
+        skip_intellifiller = True
+
+    desk.cmd_progressive_worker(MockArgs())
+
+    # Verify stage="finished" captured live text provenance
+    expected_prov = f"live:{config.get('pipeline', 'text_base_provider', fallback='google')}"
+    finished_updates = [u for u in captured_updates if u.get("stage") == "finished"]
+    assert len(finished_updates) > 0
+    assert finished_updates[-1].get("text_provenance") == expected_prov
+
+
+def test_translation_container_word_span_zero_padding_and_window_tokenization(mock_clean_context_env):
+    """Task 2.1 & 2.2: CSS #translation-container span.word must use padding: 0 and window.tokenizeTranslation is exposed."""
+    env = mock_clean_context_env
+    config = env["config"]
+    resolved_paths = env["resolved_paths"]
+    session_zid = "20260830205231"
+    tsv_path = env["results_dir"] / f"{session_zid}-test.de.tsv"
+
+    adapter = desk.get_storage_adapter(config, resolved_paths)
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text="Schuhcenter.de.",
+        sentences=[{
+            "session_zid": session_zid,
+            "sentence_index": 1,
+            "sentence_source": "Schuhcenter.de.",
+            "sentence_destination": "Schuhcenter.de.",
+        }],
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceDestination", "SentenceSourceIndex"],
+        data_rows=[["", "Schuhcenter", "Schuhcenter", "Schuhcenter.de.", "1"]],
+        comments=[],
+        working_tsv_path=tsv_path,
+        zid=session_zid,
+    )
+
+    with patch.object(desk, "run_progressive_worker_async"):
+        html = desk._run_render_flow_impl(
+            text="Schuhcenter.de.",
+            language="de",
+            zid=session_zid,
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    # 1. Verify CSS rule #translation-container span.word uses padding: 0
+    assert "#translation-container span.word" in html
+    css_match = re.search(r'#translation-container\s+span\.word\s*\{([^}]+)\}', html)
+    assert css_match is not None
+    css_block = css_match.group(1)
+    assert "padding: 0;" in css_block or "padding:0;" in css_block
+
+    # 2. Verify window.tokenizeTranslation is exposed in client scripts
+    assert "window.tokenizeTranslation = tokenizeTranslation" in html
+
+
+def test_skeleton_loader_proportions_unified(mock_clean_context_env):
+    """Task 3.1 & 3.2: Base .skeleton-loader and #translation-container .skeleton-loader share unified 1.6em height."""
+    env = mock_clean_context_env
+    config = env["config"]
+    resolved_paths = env["resolved_paths"]
+    session_zid = "20260830205231"
+    tsv_path = env["results_dir"] / f"{session_zid}-test.de.tsv"
+
+    adapter = desk.get_storage_adapter(config, resolved_paths)
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-skel",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text="Katze",
+        sentences=[],
+        headers=["Quotation", "WordSource", "WordDestination"],
+        data_rows=[["", "Katze", ""]],
+        comments=[],
+        working_tsv_path=tsv_path,
+        zid=session_zid,
+    )
+
+    with patch.object(desk, "run_progressive_worker_async"):
+        html = desk._run_render_flow_impl(
+            text="Katze",
+            language="de",
+            zid=session_zid,
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    # 1. Base .skeleton-loader rule has min-height: 1.6em; height: 1.6em;
+    base_match = re.search(r'\.skeleton-loader\s*\{([^}]+)\}', html)
+    assert base_match is not None
+    base_css = base_match.group(1)
+    assert "min-height: 1.6em;" in base_css
+    assert "height: 1.6em;" in base_css
+
+    # 2. Translation container .skeleton-loader rule has min-height: 1.6em; height: 1.6em;
+    tc_match = re.search(r'#translation-container\s+\.skeleton-loader\s*\{([^}]+)\}', html)
+    assert tc_match is not None
+    tc_css = tc_match.group(1)
+    assert "min-height: 1.6em;" in tc_css
+    assert "height: 1.6em;" in tc_css
+
+
+
 
 
