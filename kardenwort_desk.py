@@ -11574,9 +11574,12 @@ html, body {{
                 var updated = false;
                 var rowData = window.AppState.rows[rowId];
                 if (!rowData) return false;
-                var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
-                if (!tr && rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
+                var tr = null;
+                if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
                     tr = document.querySelector('tr[data-token-order="' + rowData.token_order + '"]');
+                }
+                if (!tr) {
+                    tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
                 }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
@@ -11650,7 +11653,7 @@ html, body {{
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (hasRetryBadge && val === "" && !isTerm) {
                             // Retry badges remain active until real translations arrive or terminal stage
-                        } else if (globalStage === 'translated_words' || isTerm) {
+                        } else if (val !== "" || globalStage === 'translated' || globalStage === 'translated_words' || globalStage === 'translated_lemmas' || isTerm) {
                             var oldVal = tds[2].classList.contains('editing') ? null : (div.textContent || div.innerText);
                             var targetVal = val;
                             if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1 && oldVal.indexOf('btn-retry-cell') === -1) {
@@ -12314,8 +12317,14 @@ html, body {{
                     var tds = tr.getElementsByTagName('td');
                     for (var m = 0; m < tds.length; m++) {
                         if (tds[m].getAttribute('data-col') === 'WordDestination') {
+                            if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader') || tds[m].querySelector('.btn-retry-cell')) {
+                                continue;
+                            }
                             var trans = tds[m].textContent || tds[m].innerText || "";
                             trans = trans.trim();
+                            if (trans.endsWith('...') && !tds[m].hasAttribute('data-provenance')) {
+                                continue;
+                            }
                             if (trans && translations.indexOf(trans) === -1) {
                                 translations.push(trans);
                             }
@@ -12387,7 +12396,16 @@ html, body {{
                     if (col === '{lemma_col_name}') {
                         lemma = (tds[m].textContent || tds[m].innerText || "").trim();
                     } else if (col === 'WordDestination') {
-                        trans = (tds[m].textContent || tds[m].innerText || "").trim();
+                        if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader') || tds[m].querySelector('.btn-retry-cell')) {
+                            trans = "";
+                        } else {
+                            var tStr = (tds[m].textContent || tds[m].innerText || "").trim();
+                            if (tStr.endsWith('...') && !tds[m].hasAttribute('data-provenance')) {
+                                trans = "";
+                            } else {
+                                trans = tStr;
+                            }
+                        }
                     }
                 }
 
@@ -12517,7 +12535,7 @@ html, body {{
                 if (toTranslation) {
                     if (!isFlipped) {
                         var trans = getSpanSpecificTranslation(s, group);
-                        if (trans !== undefined && trans !== null && trans.trim().length > 0) {
+                        if (trans !== undefined && trans !== null && trans.trim().length > 0 && !trans.trim().endsWith('...')) {
                             s.classList.add('flipped');
                             s.textContent = trans;
                         } else {

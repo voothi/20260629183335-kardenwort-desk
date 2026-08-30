@@ -75,8 +75,6 @@ def test_playwright_dom_validation(page, tmp_path):
 def test_handle_sent_text_rendered_html_scripts_load_without_syntax_errors(page, tmp_path):
     errors = []
     page.on("pageerror", lambda exc: errors.append(str(exc)))
-    page.add_init_script("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
-    
     import copy
     raw_config, raw_paths, goldendict, wordfill = kardenwort_desk.load_config()
     config = copy.deepcopy(raw_config)
@@ -830,6 +828,110 @@ def test_progressive_lemma_update_replaces_skeleton_and_sets_provenance(page, tm
     word_span = page.locator("#translation-container span.word").first
     assert word_span.is_visible()
     assert word_span.get_attribute("title") == "Translated via Argos (offline)"
+
+
+def test_rmb_flip_during_progressive_loading_does_not_flip_to_skeleton_text(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "All artifacts complete."
+    tsv_content = (
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
+        "0\tall\t\t1\n"
+        "1\tartifact\t\t1\n"
+        "2\tcomplete\t\t1\n"
+    )
+    tsv_file = tmp_path / "20260831005500-skeleton-flip.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260831005500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+
+    page.set_content(html)
+
+    # Initial stage has skeleton loaders in table cells
+    span_complete = page.locator("span.word[data-lower-clean='complete']").first
+    assert span_complete.is_visible()
+
+    # Trigger RMB click on 'complete' while translation cell still has skeleton 'Argos...'
+    span_complete.click(button="right")
+
+    # Word span must NOT be flipped to 'Argos...' and must NOT have .flipped class
+    assert span_complete.inner_text() == "complete"
+    assert "flipped" not in (span_complete.get_attribute("class") or "")
+    assert "Argos" not in (page.locator("#source-container").inner_text())
+
+
+def test_multisentence_container_tabs_progressive_lemma_sync(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "All artifacts complete. All tasks complete. All test suites verified."
+    tsv_content = (
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
+        "0\tall\t\t1\n"
+        "1\tartifact\t\t1\n"
+        "2\tcomplete\t\t1\n"
+        "3\tall\t\t2\n"
+        "4\ttask\t\t2\n"
+        "5\tcomplete\t\t2\n"
+        "6\tall\t\t3\n"
+        "7\ttest\t\t3\n"
+        "8\tsuite\t\t3\n"
+        "9\tverify\t\t3\n"
+    )
+    tsv_file = tmp_path / "20260831005501-multisync.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260831005501",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        seq_num=2,
+    )
+
+    page.set_content(html)
+
+    # Initial render shows tab chips
+    tab_chips = page.locator(".kw-tab-chip")
+    assert tab_chips.count() >= 3
+
+    # Send stage="translated" progressive update with resolved lemmas
+    page.evaluate("""() => {
+        if (window.receiveUpdate) {
+            window.receiveUpdate({
+                stage: 'translated',
+                status: 'success',
+                rows: {
+                    '0': { lemma: 'all', trans: 'все', token_order: '0', provenance: 'live:argos' },
+                    '1': { lemma: 'artifact', trans: 'артефакты', token_order: '1', provenance: 'live:argos' },
+                    '2': { lemma: 'complete', trans: 'завершены', token_order: '2', provenance: 'live:argos' },
+                    '3': { lemma: 'all', trans: 'все', token_order: '3', provenance: 'live:argos' },
+                    '4': { lemma: 'task', trans: 'задания', token_order: '4', provenance: 'live:argos' },
+                    '5': { lemma: 'complete', trans: 'выполнены', token_order: '5', provenance: 'live:argos' },
+                    '6': { lemma: 'all', trans: 'все', token_order: '6', provenance: 'live:argos' },
+                    '7': { lemma: 'test', trans: 'тесты', token_order: '7', provenance: 'live:argos' },
+                    '8': { lemma: 'suite', trans: 'наборы', token_order: '8', provenance: 'live:argos' },
+                    '9': { lemma: 'verify', trans: 'проверены', token_order: '9', provenance: 'live:argos' }
+                }
+            });
+        }
+    }""")
+
+    # Verify table row 2 (complete) now has 'завершены' and no skeleton loader
+    td_complete = page.locator("tr[data-token-order='2'] td").nth(2)
+    assert "завершены" in td_complete.inner_text()
+    assert td_complete.locator(".skeleton-loader").count() == 0
+
 
 
 
