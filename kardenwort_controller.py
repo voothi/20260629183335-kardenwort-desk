@@ -2763,6 +2763,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, res)
             return
 
+        worker_status_match = re.match(r"^/(?:api/v1/)?session(?:s)?/([0-9a-zA-Z_\-]+)/worker_status$", path)
+        if worker_status_match:
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            self._authenticate_token(query_params=qs)
+            target_zid = worker_status_match.group(1)
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+            status_dict = db.get_worker_status(target_zid)
+            self._send_json(200, status_dict)
+            return
+
         if path == '/session/status':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")

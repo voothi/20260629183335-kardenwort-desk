@@ -417,8 +417,31 @@ SEC_SERVICES = "services"
 SEC_LANGUAGE_CHECK = "language_check"
 SEC_STORAGE = "storage"
 SEC_LOOKUP = "lookup"
+SEC_PROGRESSIVE = "progressive"
 SINGLE_WORD_DELIMITERS = ('-', '.', '_')
 
+_LAST_WORKER_HEARTBEATS: Dict[str, float] = {}
+_WORKER_HB_LOCK = threading.Lock()
+
+def record_worker_heartbeat(zid: str, db: Any, min_interval_seconds: float = 3.0) -> bool:
+    """
+    Updates worker heartbeat in SQLite if at least min_interval_seconds elapsed since last record.
+    Returns True if heartbeat was written, False if throttled.
+    """
+    if not zid or not db or not hasattr(db, 'update_worker_heartbeat'):
+        return False
+    now = time.time()
+    with _WORKER_HB_LOCK:
+        last_t = _LAST_WORKER_HEARTBEATS.get(zid, 0.0)
+        if now - last_t < min_interval_seconds:
+            return False
+        _LAST_WORKER_HEARTBEATS[zid] = now
+    try:
+        db.update_worker_heartbeat(zid)
+        return True
+    except Exception as e:
+        logger.debug(f"Failed to record worker heartbeat for [{zid}]: {e}")
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -11712,7 +11735,9 @@ html, body {{
                     }
                 };
 
-                var cleanupOrphanSkeletons = function() {
+                var WORKER_STALE_THRESHOLD_SECONDS = 10;
+
+                var executeRenderRetryButtons = function() {
                     if (resolved) return;
                     var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
                     if (pendings.length === 0) {
@@ -11777,6 +11802,82 @@ html, body {{
                                 }
                             })
                             .catch(function() {});
+                    }
+                };
+
+                var cleanupOrphanSkeletons = function() {
+                    if (resolved) return;
+                    if (isWebMode && curZid && typeof fetch !== 'undefined') {
+                        var token = (typeof window.getApiToken === 'function') ? window.getApiToken() : '';
+                        var workerStatusUrl = "/session/" + encodeURIComponent(curZid) + "/worker_status" + (token ? ("?token=" + encodeURIComponent(token)) : "");
+                        fetch(workerStatusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                            .then(function(res) {
+                                if (res.ok) return res.json();
+                                throw new Error("worker_status fetch failed");
+                            })
+                            .then(function(resObj) {
+                                if (resolved) return;
+                                var resData = (resObj && resObj.data) ? resObj.data : resObj;
+                                var workerStatus = resData ? resData.worker_status : null;
+                                var heartbeatAt = resData ? resData.worker_heartbeat_at : null;
+
+                                var isFresh = false;
+                                if (heartbeatAt) {
+                                    var hbMs = new Date(heartbeatAt).getTime();
+                                    var ageSec = (Date.now() - hbMs) / 1000.0;
+                                    if (!isNaN(ageSec) && ageSec >= 0 && ageSec <= WORKER_STALE_THRESHOLD_SECONDS) {
+                                        isFresh = true;
+                                    }
+                                }
+
+                                if (workerStatus === 'running' && isFresh) {
+                                    // Worker is still live: suppress Retry, extend budget, and retry status check in 5s
+                                    maxBudgetMs += 5000;
+                                    if (window._kwWatchdogMaxTimer) {
+                                        clearTimeout(window._kwWatchdogMaxTimer);
+                                    }
+                                    window._kwWatchdogMaxTimer = setTimeout(function() {
+                                        if (!resolved) {
+                                            cleanupOrphanSkeletons();
+                                        }
+                                    }, 5000);
+                                    return;
+                                }
+
+                                if (workerStatus === 'finished') {
+                                    // Worker already finished: suppress Retry, trigger automatic reload/re-render
+                                    resolved = true;
+                                    closeEvtSource();
+                                    stopPolling();
+                                    if (window._kwWatchdogMaxTimer) {
+                                        clearTimeout(window._kwWatchdogMaxTimer);
+                                        window._kwWatchdogMaxTimer = null;
+                                    }
+                                    if (window.onSessionReload) {
+                                        window.onSessionReload();
+                                    } else {
+                                        var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                                        fetch(statusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                                            .then(function(sRes) { if (sRes.ok) return sRes.json(); })
+                                            .then(function(sObj) {
+                                                var sData = (sObj && sObj.data) ? sObj.data : sObj;
+                                                if (sData && sData.rows && window.receiveUpdate) {
+                                                    window.receiveUpdate(sData);
+                                                }
+                                            })
+                                            .catch(function() {});
+                                    }
+                                    return;
+                                }
+
+                                // workerStatus === 'failed', heartbeat is stale, or workerStatus is null -> Genuine failure
+                                executeRenderRetryButtons();
+                            })
+                            .catch(function() {
+                                executeRenderRetryButtons();
+                            });
+                    } else {
+                        executeRenderRetryButtons();
                     }
                 };
                 window.cleanupOrphanSkeletons = cleanupOrphanSkeletons;
@@ -18334,8 +18435,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if text:
                 main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
                 col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+                hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
                 try:
                     def on_chunk_done(partial_translations, _text=text, _col_index=col_index, _col_sentence_dest=col_sentence_dest, _col_sentence_dest2=col_sentence_dest2):
+                        record_worker_heartbeat(zid, getattr(storage_adapter, 'db', None), min_interval_seconds=hb_interval)
                         c, h, curr_rows = storage_adapter.load_tsv_rows(tsv_path)
                         resolve_translations(
                             _text, getattr(args, 'text_mode', 'single'), curr_rows, _col_index, _col_sentence_dest,
@@ -18511,7 +18614,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         chunks = [lemmas_to_translate]
                         
                     target_l = getattr(args, 'target_lang', None) or config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
+                    hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
                     for chunk in chunks:
+                        record_worker_heartbeat(zid, getattr(storage_adapter, 'db', None), min_interval_seconds=hb_interval)
                         lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), target_l, config, resolved_paths, provider)
                         fast_prov = getattr(lemma_translations, 'provenance', f"live:{provider}")
                         
@@ -18637,6 +18742,8 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
         lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
+        record_worker_heartbeat(zid, getattr(storage_adapter, 'db', None), min_interval_seconds=hb_interval)
 
         if is_sqlite:
             storage_adapter.enrich_session_intellifiller(
@@ -19206,6 +19313,15 @@ def cmd_progressive_worker(args):
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
             if sess_logger:
                 sess_logger.info("Progressive worker started")
+            if is_sqlite and hasattr(storage_adapter, 'db'):
+                try:
+                    now_iso = datetime.now(timezone.utc).isoformat()
+                    storage_adapter.db.set_worker_status(zid, "running", started_at=now_iso)
+                    storage_adapter.db.update_worker_heartbeat(zid, heartbeat_at=now_iso)
+                    with _WORKER_HB_LOCK:
+                        _LAST_WORKER_HEARTBEATS[zid] = time.time()
+                except Exception as db_err:
+                    logger.warning(f"[{zid}] Failed to initialize worker status in SQLite: {db_err}")
             import os
             os.environ["KARDEN_ACTIVE_TEXT_MODE"] = getattr(args, 'text_mode', 'single')
             
@@ -19297,6 +19413,12 @@ def cmd_progressive_worker(args):
                     "retryable": True,
                     "details": {}
                 }
+                if is_sqlite and hasattr(storage_adapter, 'db'):
+                    try:
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        storage_adapter.db.set_worker_status(zid, "failed", finished_at=now_iso)
+                    except Exception as db_err:
+                        logger.warning(f"[{zid}] Failed to record worker failure in SQLite: {db_err}")
                 if sess_logger:
                     sess_logger.error(f"Progressive worker unhandled exception: {e}")
                 import traceback
@@ -19339,6 +19461,13 @@ def cmd_progressive_worker(args):
                             pass
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances, text_provenance=active_text_prov)
+                    if is_sqlite and hasattr(storage_adapter, 'db'):
+                        try:
+                            now_iso = datetime.now(timezone.utc).isoformat()
+                            final_worker_status = "failed" if worker_error else "finished"
+                            storage_adapter.db.set_worker_status(zid, final_worker_status, finished_at=now_iso)
+                        except Exception as db_err:
+                            logger.warning(f"[{zid}] Failed to record worker finished status in SQLite: {db_err}")
                     if tsv_path.exists():
                         import os
                         os.utime(tsv_path, None)

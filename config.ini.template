@@ -70,6 +70,10 @@ lemma_reprocess_provider = intellifiller
 ; Whether to run the lemmatizer to automatically resolve/update the lemma (WordSource) field during reprocess
 run_lemmatizer = true
 
+[progressive]
+; Worker liveness heartbeat interval in seconds. Controls how frequently the background worker writes its timestamp to SQLite.
+worker_heartbeat_interval_seconds = 3
+
 [triggers]
 ; Trigger for text sentence translation. Options: auto (on load), manual (user must trigger)
 run_text_translation = auto

@@ -606,3 +606,114 @@ def test_pre_migration_simulation_returns_none_provenance(temp_db):
     assert sents[0].get("text_provenance") is None
     assert words[0].get("word_provenance") is None
 
+
+def test_worker_status_round_trip(temp_db):
+    """Verify set_worker_status -> get_worker_status round-trip for all lifecycle statuses."""
+    temp_db.run_migrations()
+    sess_zid = "20260830230001"
+    temp_db.insert_session({
+        "zid": sess_zid,
+        "slug": "worker-status-test",
+        "source_language": "en",
+        "source_raw_text": "Liveness test text.",
+    })
+
+    # Initially null status
+    initial_st = temp_db.get_worker_status(sess_zid)
+    assert initial_st == {
+        "worker_status": None,
+        "worker_started_at": None,
+        "worker_heartbeat_at": None,
+        "worker_finished_at": None,
+    }
+
+    # Running
+    t_start = "2026-08-30T22:48:10.000000+00:00"
+    temp_db.set_worker_status(sess_zid, "running", started_at=t_start)
+    st = temp_db.get_worker_status(sess_zid)
+    assert st["worker_status"] == "running"
+    assert st["worker_started_at"] == t_start
+    assert st["worker_finished_at"] is None
+
+    # Finished
+    t_fin = "2026-08-30T22:48:15.000000+00:00"
+    temp_db.set_worker_status(sess_zid, "finished", finished_at=t_fin)
+    st = temp_db.get_worker_status(sess_zid)
+    assert st["worker_status"] == "finished"
+    assert st["worker_started_at"] == t_start
+    assert st["worker_finished_at"] == t_fin
+
+    # Failed
+    t_fail = "2026-08-30T22:48:20.000000+00:00"
+    temp_db.set_worker_status(sess_zid, "failed", finished_at=t_fail)
+    st = temp_db.get_worker_status(sess_zid)
+    assert st["worker_status"] == "failed"
+    assert st["worker_finished_at"] == t_fail
+
+
+def test_update_worker_heartbeat_isolated(temp_db):
+    """Verify update_worker_heartbeat updates worker_heartbeat_at without modifying other columns."""
+    temp_db.run_migrations()
+    sess_zid = "20260830230002"
+    temp_db.insert_session({
+        "zid": sess_zid,
+        "slug": "worker-hb-test",
+        "source_language": "en",
+        "source_raw_text": "Heartbeat isolation test.",
+    })
+
+    t_start = "2026-08-30T22:48:10.000000+00:00"
+    temp_db.set_worker_status(sess_zid, "running", started_at=t_start)
+
+    t_hb = "2026-08-30T22:48:12.500000+00:00"
+    temp_db.update_worker_heartbeat(sess_zid, heartbeat_at=t_hb)
+
+    st = temp_db.get_worker_status(sess_zid)
+    assert st["worker_status"] == "running"
+    assert st["worker_started_at"] == t_start
+    assert st["worker_heartbeat_at"] == t_hb
+    assert st["worker_finished_at"] is None
+
+
+def test_get_worker_status_pre_migration_simulation(tmp_path):
+    """Verify get_worker_status returns all-None dict for pre-migration schema (missing worker columns)."""
+    import sqlite3
+    db_file = tmp_path / "legacy.db"
+    # Create baseline sessions table without worker status columns
+    conn = sqlite3.connect(db_file)
+    conn.execute("""
+        CREATE TABLE sessions (
+            zid TEXT PRIMARY KEY,
+            slug TEXT NOT NULL,
+            source_language TEXT NOT NULL,
+            target_language TEXT NOT NULL DEFAULT '',
+            text_mode TEXT NOT NULL DEFAULT 'single',
+            source_raw_text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TIMESTAMP DEFAULT NULL
+        );
+    """)
+    conn.execute("INSERT INTO sessions (zid, slug, source_language, source_raw_text) VALUES ('legacy_001', 'legacy-slug', 'en', 'Legacy text');")
+    conn.commit()
+    conn.close()
+
+    legacy_db = KardenwortDB(db_path=db_file)
+    res = legacy_db.get_worker_status("legacy_001")
+    assert res == {
+        "worker_status": None,
+        "worker_started_at": None,
+        "worker_heartbeat_at": None,
+        "worker_finished_at": None,
+    }
+
+    # Missing session also returns all-None dict
+    missing_res = legacy_db.get_worker_status("non_existent_zid")
+    assert missing_res == {
+        "worker_status": None,
+        "worker_started_at": None,
+        "worker_heartbeat_at": None,
+        "worker_finished_at": None,
+    }
+
+

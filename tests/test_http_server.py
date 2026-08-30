@@ -247,6 +247,63 @@ class TestHTTPServerRunning(unittest.TestCase):
             self.assertIn("html_b64", res["data"])
             self.assertTrue(len(res["data"]["html_b64"]) > 0)
 
+    def test_07e_worker_status_endpoint(self):
+        # 1. Non-existent session returns 200 with all-None status
+        url_none = f"http://127.0.0.1:{TEST_PORT}/session/non_existent_zid_9999/worker_status?token={TEST_TOKEN}"
+        req_none = urllib.request.Request(url_none)
+        with urllib.request.urlopen(req_none) as resp:
+            self.assertEqual(resp.status, 200)
+            res = json.loads(resp.read().decode('utf-8'))
+            self.assertEqual(res["status"], "success")
+            self.assertIsNone(res["data"]["worker_status"])
+            self.assertIsNone(res["data"]["worker_started_at"])
+
+        # 2. Unauthorized without token returns 403
+        url_unauth = f"http://127.0.0.1:{TEST_PORT}/session/non_existent_zid_9999/worker_status"
+        try:
+            with urllib.request.urlopen(url_unauth):
+                self.fail("Expected HTTP 403 Forbidden without token")
+        except urllib.error.HTTPError as e:
+            self.assertEqual(e.code, 403)
+
+        # 3. Create a session, update worker lifecycle, and assert status transitions via endpoint
+        from kardenwort_db import KardenwortDB
+        test_db_p = Path(self.test_dir.name) / "test_kardenwort.db"
+        db = KardenwortDB(db_path=test_db_p)
+        db.run_migrations()
+        sess_zid = "20260830235901"
+        db.insert_session({
+            "zid": sess_zid,
+            "slug": "http-worker-status-test",
+            "source_language": "en",
+            "source_raw_text": "HTTP worker status lifecycle test",
+        })
+
+        # Set running
+        t_start = "2026-08-30T23:00:00.000000+00:00"
+        db.set_worker_status(sess_zid, "running", started_at=t_start)
+        db.update_worker_heartbeat(sess_zid, heartbeat_at=t_start)
+
+        url_running = f"http://127.0.0.1:{TEST_PORT}/session/{sess_zid}/worker_status"
+        req_running = urllib.request.Request(url_running, headers={"X-API-Token": TEST_TOKEN})
+        with urllib.request.urlopen(req_running) as resp:
+            self.assertEqual(resp.status, 200)
+            res = json.loads(resp.read().decode('utf-8'))
+            self.assertEqual(res["status"], "success")
+            self.assertEqual(res["data"]["worker_status"], "running")
+            self.assertEqual(res["data"]["worker_started_at"], t_start)
+            self.assertEqual(res["data"]["worker_heartbeat_at"], t_start)
+
+        # Set finished
+        t_fin = "2026-08-30T23:00:05.000000+00:00"
+        db.set_worker_status(sess_zid, "finished", finished_at=t_fin)
+        with urllib.request.urlopen(req_running) as resp:
+            self.assertEqual(resp.status, 200)
+            res = json.loads(resp.read().decode('utf-8'))
+            self.assertEqual(res["status"], "success")
+            self.assertEqual(res["data"]["worker_status"], "finished")
+            self.assertEqual(res["data"]["worker_finished_at"], t_fin)
+
     def test_08_shutdown_endpoint(self):
         url = f"http://127.0.0.1:{TEST_PORT}/api/v1/shutdown"
         req = urllib.request.Request(url, data=b"{}", headers={

@@ -751,6 +751,101 @@ class KardenwortDB:
             cursor.execute(sql, values)
             return cursor.rowcount > 0
 
+    def set_worker_status(
+        self,
+        session_zid: str,
+        status: str,
+        started_at: Optional[Union[str, datetime]] = None,
+        finished_at: Optional[Union[str, datetime]] = None,
+        zid: Optional[str] = None,
+    ) -> bool:
+        """
+        Updates worker lifecycle status and timestamps on a session record.
+        """
+        target_zid = session_zid or zid
+        if not target_zid:
+            return False
+
+        updates: Dict[str, Any] = {"worker_status": status}
+        if started_at is not None:
+            updates["worker_started_at"] = started_at.isoformat() if isinstance(started_at, datetime) else str(started_at)
+        if finished_at is not None:
+            updates["worker_finished_at"] = finished_at.isoformat() if isinstance(finished_at, datetime) else str(finished_at)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        updates["updated_at"] = now_iso
+
+        set_clauses = [f"{col} = ?" for col in updates.keys()]
+        values = list(updates.values())
+        values.append(target_zid)
+
+        sql = f"UPDATE sessions SET {', '.join(set_clauses)} WHERE zid = ?;"
+        with self.get_connection(zid=zid or target_zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, values)
+            return cursor.rowcount > 0
+
+    def update_worker_heartbeat(
+        self,
+        session_zid: str,
+        heartbeat_at: Optional[Union[str, datetime]] = None,
+        zid: Optional[str] = None,
+    ) -> bool:
+        """
+        Updates worker_heartbeat_at timestamp for a session without touching other columns.
+        """
+        target_zid = session_zid or zid
+        if not target_zid:
+            return False
+
+        if heartbeat_at is None:
+            now_iso = datetime.now(timezone.utc).isoformat()
+        else:
+            now_iso = heartbeat_at.isoformat() if isinstance(heartbeat_at, datetime) else str(heartbeat_at)
+
+        sql = "UPDATE sessions SET worker_heartbeat_at = ? WHERE zid = ?;"
+        with self.get_connection(zid=zid or target_zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(sql, (now_iso, target_zid))
+            return cursor.rowcount > 0
+
+    def get_worker_status(
+        self,
+        session_zid: str,
+        zid: Optional[str] = None,
+    ) -> Dict[str, Optional[str]]:
+        """
+        Fetches worker lifecycle status and timestamps for a session.
+        Returns a dict with keys: worker_status, worker_started_at, worker_heartbeat_at, worker_finished_at.
+        Returns all-None dict if session is not found or if worker columns do not exist.
+        """
+        target_zid = session_zid or zid
+        default_res: Dict[str, Optional[str]] = {
+            "worker_status": None,
+            "worker_started_at": None,
+            "worker_heartbeat_at": None,
+            "worker_finished_at": None,
+        }
+        if not target_zid:
+            return default_res
+
+        sql = "SELECT worker_status, worker_started_at, worker_heartbeat_at, worker_finished_at FROM sessions WHERE zid = ?;"
+        try:
+            with self.get_connection(read_only=True, zid=zid or target_zid) as conn:
+                cursor = conn.cursor()
+                cursor.execute(sql, (target_zid,))
+                row = cursor.fetchone()
+                if row:
+                    return {
+                        "worker_status": row[0],
+                        "worker_started_at": row[1],
+                        "worker_heartbeat_at": row[2],
+                        "worker_finished_at": row[3],
+                    }
+                return default_res
+        except sqlite3.OperationalError:
+            return default_res
+
     def list_sessions_with_counts(
         self, limit: Optional[int] = None, offset: int = 0, include_deleted: bool = False, zid: Optional[str] = None
     ) -> List[Dict[str, Any]]:

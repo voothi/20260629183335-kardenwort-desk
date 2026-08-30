@@ -1128,6 +1128,212 @@ def test_translate_text_deepl_failover_to_google(monkeypatch, tmp_path):
     assert result == "Google(Hello world)"
 
 
+def test_progressive_worker_lifecycle_db_status_finished(monkeypatch, tmp_path):
+    """
+    Verifies that cmd_progressive_worker records worker_status = 'finished' in SQLite upon successful completion.
+    """
+    from kardenwort_db import KardenwortDB
+    db_file = tmp_path / "kardenwort.db"
+    db = KardenwortDB(db_path=db_file)
+    db.run_migrations()
+
+    sess_zid = "20260830234001"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "worker-finish-test",
+        "source_language": "en",
+        "source_raw_text": "Sample text for worker test.",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "Sample text for worker test.",
+    })
+    db.insert_words([{
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "Sample",
+        "lemma": "sample",
+    }])
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
+        encoding="utf-8",
+    )
+
+    def mock_load_config(cfg_path):
+        config = configparser.ConfigParser()
+        config.read_string(
+            f"[storage]\nbackend=sqlite\nsqlite_db_path={db_file.as_posix()}\n"
+            "[settings]\ndefault_language=en\n"
+            "[pipeline]\nlemma_base_provider=google\n"
+            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+        )
+        resolved = {
+            "results_dir": tmp_path,
+            "anki_mapping_file": mapping_path,
+            "kardenwort_workspace": tmp_path,
+            "settings_file": tmp_path / "settings.ini",
+            "sqlite_db_path": db_file,
+        }
+        return config, resolved, None, None
+
+    tsv_path = tmp_path / f"{sess_zid}-test.en.tsv"
+    _write_worker_tsv(tsv_path)
+
+    monkeypatch.setattr(desk, "load_config", mock_load_config)
+    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "safe_write_update_js", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "translate_lemmas_fast_path", lambda lemmas, *a, **kw: {l: f"{l}_TRANS" for l in lemmas})
+    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "word_ipa": "WordSourceIPA",
+    })
+
+    args = types.SimpleNamespace(
+        tsv=str(tsv_path),
+        config=str(tmp_path / "config.ini"),
+        text_mode="single",
+        skip_intellifiller=True,
+        zid=sess_zid,
+        trace_id=f"{sess_zid}:test",
+        language="en",
+        target_lang="ru",
+    )
+
+    desk.cmd_progressive_worker(args)
+
+    st = db.get_worker_status(sess_zid)
+    assert st["worker_status"] == "finished"
+    assert st["worker_started_at"] is not None
+    assert st["worker_finished_at"] is not None
+
+
+def test_progressive_worker_lifecycle_db_status_failed(monkeypatch, tmp_path):
+    """
+    Verifies that cmd_progressive_worker records worker_status = 'failed' in SQLite when an unhandled exception occurs.
+    """
+    from kardenwort_db import KardenwortDB
+    db_file = tmp_path / "kardenwort.db"
+    db = KardenwortDB(db_path=db_file)
+    db.run_migrations()
+
+    sess_zid = "20260830234002"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "worker-fail-test",
+        "source_language": "en",
+        "source_raw_text": "Sample text for failure test.",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "Sample text for failure test.",
+    })
+    db.insert_words([{
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "Sample",
+        "lemma": "sample",
+    }])
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[fields_mapping.word]\nWordSource=lemma\nWordDestination=word_translation\nWordSourceIPA=word_ipa\n",
+        encoding="utf-8",
+    )
+
+    def mock_load_config(cfg_path):
+        config = configparser.ConfigParser()
+        config.read_string(
+            f"[storage]\nbackend=sqlite\nsqlite_db_path={db_file.as_posix()}\n"
+            "[settings]\ndefault_language=en\n"
+            "[pipeline]\nlemma_base_provider=google\n"
+            "[triggers]\nrun_lemma_base_translation=auto\nrun_text_translation=manual\nrun_lemma_enrichment=manual\n"
+        )
+        resolved = {
+            "results_dir": tmp_path,
+            "anki_mapping_file": mapping_path,
+            "kardenwort_workspace": tmp_path,
+            "settings_file": tmp_path / "settings.ini",
+            "sqlite_db_path": db_file,
+        }
+        return config, resolved, None, None
+
+    tsv_path = tmp_path / f"{sess_zid}-test.en.tsv"
+    _write_worker_tsv(tsv_path)
+
+    def mock_crashing_stage(*args, **kwargs):
+        raise RuntimeError("Simulated unhandled worker crash")
+
+    monkeypatch.setattr(desk, "load_config", mock_load_config)
+    monkeypatch.setattr(desk, "_progressive_worker_stage_translation", mock_crashing_stage)
+    monkeypatch.setattr(desk, "write_update_js", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "safe_write_update_js", lambda *a, **kw: None)
+    monkeypatch.setattr(desk, "load_anki_mapping", lambda p: configparser.ConfigParser())
+    monkeypatch.setattr(desk, "get_role_fields", lambda m, h: {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "word_ipa": "WordSourceIPA",
+    })
+
+    args = types.SimpleNamespace(
+        tsv=str(tsv_path),
+        config=str(tmp_path / "config.ini"),
+        text_mode="single",
+        skip_intellifiller=True,
+        zid=sess_zid,
+        trace_id=f"{sess_zid}:test",
+        language="en",
+        target_lang="ru",
+    )
+
+    desk.cmd_progressive_worker(args)
+
+    st = db.get_worker_status(sess_zid)
+    assert st["worker_status"] == "failed"
+    assert st["worker_started_at"] is not None
+    assert st["worker_finished_at"] is not None
+
+
+def test_record_worker_heartbeat_throttle_verification(tmp_path):
+    """
+    Verifies that record_worker_heartbeat does not write to DB more than once per interval in a fast loop.
+    """
+    from kardenwort_db import KardenwortDB
+    db_file = tmp_path / "kardenwort.db"
+    db = KardenwortDB(db_path=db_file)
+    db.run_migrations()
+
+    sess_zid = "20260830234003"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "throttle-test",
+        "source_language": "en",
+        "source_raw_text": "Throttle test.",
+    })
+    db.set_worker_status(sess_zid, "running")
+
+    # Clear memory cache for this ZID
+    with desk._WORKER_HB_LOCK:
+        desk._LAST_WORKER_HEARTBEATS.pop(sess_zid, None)
+
+    # First call must succeed (write to DB)
+    res1 = desk.record_worker_heartbeat(sess_zid, db, min_interval_seconds=3.0)
+    assert res1 is True
+
+    # Immediate subsequent calls within 3s must be throttled (return False)
+    for _ in range(50):
+        res_fast = desk.record_worker_heartbeat(sess_zid, db, min_interval_seconds=3.0)
+        assert res_fast is False
+
+
+
 
 
 
