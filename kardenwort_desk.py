@@ -11966,44 +11966,29 @@ html, body {{
                 var cleanupOrphanSkeletons = function() {
                     if (resolved) return;
                     if (isWebMode && curZid && typeof fetch !== 'undefined') {
-                        var token = (typeof window.getApiToken === 'function') ? window.getApiToken() : '';
-                        var workerStatusUrl = "/session/" + encodeURIComponent(curZid) + "/worker_status" + (token ? ("?token=" + encodeURIComponent(token)) : "");
-                        fetch(workerStatusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                        var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                        fetch(statusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
                             .then(function(res) {
                                 if (res.ok) return res.json();
-                                throw new Error("worker_status fetch failed");
+                                throw new Error("status fetch failed");
                             })
                             .then(function(resObj) {
                                 if (resolved) return;
-                                var resData = (resObj && resObj.data) ? resObj.data : resObj;
-                                var workerStatus = resData ? resData.worker_status : null;
-                                var heartbeatAt = resData ? resData.worker_heartbeat_at : null;
-
-                                var isFresh = false;
-                                if (heartbeatAt) {
-                                    var hbMs = new Date(heartbeatAt).getTime();
-                                    var ageSec = (Date.now() - hbMs) / 1000.0;
-                                    if (!isNaN(ageSec) && ageSec >= 0 && ageSec <= WORKER_STALE_THRESHOLD_SECONDS) {
-                                        isFresh = true;
-                                    }
-                                }
-
-                                if (workerStatus === 'running' && isFresh) {
-                                    // Worker is still live: suppress Retry, extend budget, and retry status check in 5s
-                                    maxBudgetMs += 5000;
-                                    if (window._kwWatchdogMaxTimer) {
-                                        clearTimeout(window._kwWatchdogMaxTimer);
-                                    }
-                                    window._kwWatchdogMaxTimer = setTimeout(function() {
-                                        if (!resolved) {
-                                            cleanupOrphanSkeletons();
-                                        }
-                                    }, 5000);
+                                var sData = (resObj && resObj.data) ? resObj.data : resObj;
+                                var isBusy = sData ? (sData.is_finished === false || sData.stage === 'translating' || (sData.status && (sData.status.is_finished === false || sData.status.stage === 'translating'))) : false;
+                                if (isBusy) {
+                                    // Backend is actively translating (e.g. Argos ML translation in progress):
+                                    // Suppress Retry, reset watchdog budget, and continue polling.
+                                    activeElapsedMs = 0;
+                                    lastVisibleTime = Date.now();
+                                    maxBudgetMs += 15000;
+                                    resumeWatchdogTimer();
+                                    startWatchdogPolling();
                                     return;
                                 }
 
-                                if (workerStatus === 'finished') {
-                                    // Worker already finished: suppress Retry, trigger automatic reload/re-render
+                                var isDone = sData ? (sData.is_finished === true || sData.stage === 'finished' || (sData.status && (sData.status.is_finished === true || sData.status === 'finished'))) : false;
+                                if (isDone) {
                                     resolved = true;
                                     closeEvtSource();
                                     stopPolling();
@@ -12011,24 +11996,15 @@ html, body {{
                                         clearTimeout(window._kwWatchdogMaxTimer);
                                         window._kwWatchdogMaxTimer = null;
                                     }
+                                    if (sData.rows && window.receiveUpdate) {
+                                        window.receiveUpdate(sData);
+                                    }
                                     if (window.onSessionReload) {
                                         window.onSessionReload();
-                                    } else {
-                                        var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                                        fetch(statusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
-                                            .then(function(sRes) { if (sRes.ok) return sRes.json(); })
-                                            .then(function(sObj) {
-                                                var sData = (sObj && sObj.data) ? sObj.data : sObj;
-                                                if (sData && sData.rows && window.receiveUpdate) {
-                                                    window.receiveUpdate(sData);
-                                                }
-                                            })
-                                            .catch(function() {});
                                     }
                                     return;
                                 }
 
-                                // workerStatus === 'failed', heartbeat is stale, or workerStatus is null -> Genuine failure
                                 executeRenderRetryButtons();
                             })
                             .catch(function() {
@@ -12083,6 +12059,13 @@ html, body {{
                         .then(function(resObj) {
                             isPolling = false;
                             var data = (resObj && resObj.data) ? resObj.data : resObj;
+                            if (data) {
+                                var isBusy = (data.is_finished === false || data.stage === 'translating' || (data.status && (data.status.is_finished === false || data.status.stage === 'translating')));
+                                if (isBusy) {
+                                    activeElapsedMs = 0;
+                                    lastVisibleTime = Date.now();
+                                }
+                            }
                             if (data && (data.rows || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
                                 if (data.rows && window.receiveUpdate) {
                                     window.receiveUpdate(data);
