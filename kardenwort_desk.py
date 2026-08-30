@@ -2195,7 +2195,7 @@ class SessionLogger:
     def debug(self, message, trace_id=None):
         self._write_entry("DEBUG", message, trace_id)
 
-def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None):
+def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, **extra_kwargs):
     if not tsv_path:
         return None
     import inspect
@@ -2210,7 +2210,10 @@ def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, 
         "error": error,
         "zid": zid,
         "trace_id": trace_id,
+        "text_translation_status": text_translation_status,
+        "text_translation_failed": text_translation_failed,
     }
+    kwargs.update(extra_kwargs)
     try:
         sig = inspect.signature(write_update_js)
         has_varkw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values())
@@ -10599,6 +10602,8 @@ html, body {{
             rows: {},
             sourceText: null,
             translatedText: null,
+            textTranslationStatus: null,
+            textTranslationFailed: false,
             stage: null,
             isFinished: false,
             applyDeltas: function(data) {
@@ -10613,6 +10618,22 @@ html, body {{
                         }
                     } catch (e) {
                     }
+                }
+                
+                if (data.stage) {
+                    window.AppState.stage = data.stage;
+                }
+                if (data.textTranslationStatus !== undefined) {
+                    window.AppState.textTranslationStatus = data.textTranslationStatus;
+                } else if (data.text_translation_status !== undefined) {
+                    window.AppState.textTranslationStatus = data.text_translation_status;
+                }
+                if (data.textTranslationFailed !== undefined) {
+                    window.AppState.textTranslationFailed = Boolean(data.textTranslationFailed);
+                } else if (data.text_translation_failed !== undefined) {
+                    window.AppState.textTranslationFailed = Boolean(data.text_translation_failed);
+                } else if (window.AppState.textTranslationStatus === 'failed') {
+                    window.AppState.textTranslationFailed = true;
                 }
                 
                 var updated = false;
@@ -10635,7 +10656,7 @@ html, body {{
                 if (trans !== null) {
                     window.AppState.translatedText = trans;
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
-                } else if (document.getElementById('translation-container') && document.getElementById('translation-container').querySelector('[data-pending="true"]')) {
+                } else if (document.getElementById('translation-container') && (document.getElementById('translation-container').querySelector('[data-pending="true"]') || window.AppState.textTranslationFailed || data.stage === 'translated_text')) {
                     if (window.AppView.renderTranslatedText(data.stage)) updated = true;
                 }
 
@@ -10810,12 +10831,13 @@ html, body {{
                 }
 
                 var pendingNode = container.querySelector('[data-pending="true"]') || container.querySelector('.skeleton-loader') || container.classList.contains('skeleton-loader');
-                if (window.AppState.translatedText === null && !pendingNode) return false;
+                var isFailed = (window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
+                if (window.AppState.translatedText === null && !pendingNode && !isFailed) return false;
                 var currentText = (container.textContent || container.innerText || "").trim().replace(/\\s+/g, ' ');
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.translatedText || "";
                 var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\\s+/g, ' ');
-                var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
+                var isTerm = (globalStage === 'finished' || window.AppState.isFinished || isFailed);
                 var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
 
                 if (newText !== "") {
@@ -10848,7 +10870,7 @@ html, body {{
                             }
                             container.innerHTML = escapeHtml(clean);
                         }
-                    } else if (pendingNode || !currentText) {
+                    } else if (pendingNode || !currentText || isFailed) {
                         container.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                     }
                     return true;
@@ -14055,7 +14077,8 @@ html, body {{
                     }
                     return escapeHtml(clean);
                 }
-                if (window.AppState && window.AppState.isFinished) {
+                var isFailed = (window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
+                if (window.AppState && (window.AppState.isFinished || isFailed)) {
                     return '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                 }
                 return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-block;" title="Loading translation..."></span>';
@@ -14167,6 +14190,8 @@ html, body {{
                 for (var c = 0; c < cards.length; c++) {
                     if (cards[c].seq_num === activeTabSeq) {
                         var tText = cards[c].translated_text || (activeSentenceIdx === 0 && window.AppState ? window.AppState.translatedText : '');
+                        transContainer.classList.remove('skeleton-loader');
+                        transContainer.removeAttribute('data-pending');
                         transContainer.innerHTML = getTranslationHtml(tText);
                         if (tText && tText.trim()) {
                             if (window.tokenizeTranslation) tokenizeTranslation();
@@ -17354,7 +17379,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None):
             rows_data[row_id]["classifications"] = class_vals
     return rows_data
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None):
     import time
     global _update_seq_counter
     _update_seq_counter += 1
@@ -17385,6 +17410,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             "status": status,
             "rows": {}
         }
+        if text_translation_status is not None:
+            update_data["textTranslationStatus"] = text_translation_status
+            update_data["text_translation_status"] = text_translation_status
+        if text_translation_failed is not None:
+            update_data["textTranslationFailed"] = text_translation_failed
+            update_data["text_translation_failed"] = text_translation_failed
         if error is not None:
             update_data["error"] = error
         if zid is not None:
@@ -17524,6 +17555,12 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 update_data["sourceText"] = source_text
             if translated_text:
                 update_data["translatedText"] = re.sub(r'</?[a-zA-Z][^>]*>', '', str(translated_text)).strip()
+            if text_translation_status is not None:
+                update_data["textTranslationStatus"] = text_translation_status
+                update_data["text_translation_status"] = text_translation_status
+            if text_translation_failed is not None:
+                update_data["textTranslationFailed"] = text_translation_failed
+                update_data["text_translation_failed"] = text_translation_failed
 
             if error is not None:
                 update_data["error"] = error
@@ -17649,11 +17686,11 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         )
                     
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False)
                 except Exception as e:
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id, text_translation_status="failed", text_translation_failed=True)
                     
         if run_base == 'auto' and col_lemma != -1:
             lang = getattr(args, 'language', 'en')

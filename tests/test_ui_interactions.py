@@ -4880,6 +4880,71 @@ def test_render_translated_text_preserves_skeleton_on_intermediate_lemmas_stage(
     assert "Das Haus ist gross." in tc.inner_text()
 
 
+def test_immediate_translation_retry_rendering_on_text_stage_failure(page):
+    """
+    Verify that when text translation fails during progressive execution (stage="translated_text",
+    textTranslationStatus="failed" or textTranslationFailed=true), #translation-container immediately
+    renders the interactive Retry button (.btn-retry-cell) while lemma translation is still pending (isFinished=false).
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260830143412">
+<div class="container">
+  <div id="session-zid">20260830143412</div>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true">Loading translation...</span>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true">...</span></div></td>
+        <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
+        <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    tc = page.locator("#translation-container")
+    assert tc.locator(".skeleton-loader").count() == 1
+
+    # Simulate stage "translated_text" update with failed text translation signal
+    # while global worker is NOT finished (isFinished is false, lemmas still pending)
+    page.evaluate("""
+        window.receiveUpdate({
+            stage: "translated_text",
+            status: "success",
+            textTranslationStatus: "failed",
+            textTranslationFailed: true,
+            translatedText: "",
+            rows: {}
+        });
+    """)
+
+    # Verify that AppState received the decoupled failure signals
+    is_finished = page.evaluate("window.AppState.isFinished")
+    text_failed = page.evaluate("window.AppState.textTranslationFailed")
+    assert is_finished is False
+    assert text_failed is True
+
+    # Verify that #translation-container immediately renders the Retry button without waiting for isFinished
+    assert tc.locator(".skeleton-loader").count() == 0
+    retry_btn = tc.locator(".btn-retry-cell")
+    assert retry_btn.count() == 1
+    assert "Retry" in retry_btn.inner_text()
+    assert retry_btn.get_attribute("data-action") == "retry-text"
+
+    # Lemma cell should still have its skeleton loader since lemmas are still pending
+    assert page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] .skeleton-loader").count() == 1
+
+
 def test_watchdog_timeout_converts_translation_container_to_retry_badge(page):
     """
     Verify that cleanupOrphanSkeletons converts pending translation container

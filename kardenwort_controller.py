@@ -1122,11 +1122,15 @@ class EnrichmentQueue:
                     translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
                         "status": "success",
+                        "text_translation_status": "success",
+                        "textTranslationStatus": "success",
+                        "text_translation_failed": False,
+                        "textTranslationFailed": False,
                         "fingerprint": new_fp,
                         "rows": structured_rows,
                         "translated_text": translated_html,
@@ -1134,6 +1138,22 @@ class EnrichmentQueue:
                     })
                 except Exception as text_err:
                     logger.warning(f"Sentence translation error in progressive queue for {session_zid}: {text_err}")
+                    sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                    structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True)
+                    arbiter.emit_event(session_zid, {
+                        "type": "update",
+                        "stage": "translated_text",
+                        "status": "success",
+                        "text_translation_status": "failed",
+                        "textTranslationStatus": "failed",
+                        "text_translation_failed": True,
+                        "textTranslationFailed": True,
+                        "fingerprint": compute_content_fingerprint(data_rows),
+                        "rows": structured_rows,
+                        "translated_text": "",
+                        "translatedText": "",
+                    })
 
             # Stage 2: Lemma Base Translation
             run_base = self.config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto') if self.config else 'auto'

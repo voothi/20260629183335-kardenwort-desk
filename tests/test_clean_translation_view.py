@@ -372,3 +372,30 @@ def test_multi_mode_preserves_stacked_divs(mock_clean_context_env):
     html_multi = desk.format_translated_html(sentence_trans, text_mode="multi", text="First line.\nSecond line.")
     assert html_multi == "<div>First line.</div><div>Second line.</div>"
 
+
+def test_write_update_js_emits_text_translation_failure_signals(tmp_path):
+    """Verifies that write_update_js serializes textTranslationStatus and textTranslationFailed."""
+    tsv_path = tmp_path / "20260830143412-test.en.tsv"
+    tsv_path.write_text("Quotation\tWordSource\tWordDestination\n", encoding="utf-8")
+    
+    js_path = desk.write_update_js(
+        tsv_path=tsv_path,
+        data_rows=[],
+        headers=["Quotation", "WordSource", "WordDestination"],
+        role_fields={"lemma": "WordSource", "word_translation": "WordDestination"},
+        stage="translated_text",
+        translated_text="",
+        text_translation_status="failed",
+        text_translation_failed=True,
+        zid="20260830143412"
+    )
+    assert js_path.exists()
+    content = js_path.read_text(encoding="utf-8")
+    payload_str = content[len("if (typeof window.receiveUpdate === 'function') { window.receiveUpdate("):-4]
+    payload = json.loads(payload_str)
+    
+    assert payload["stage"] == "translated_text"
+    assert payload["textTranslationStatus"] == "failed"
+    assert payload["textTranslationFailed"] is True
+
+
