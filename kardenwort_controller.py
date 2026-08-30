@@ -1247,6 +1247,7 @@ class EnrichmentQueue:
 
                     if translated_map:
                         updates = []
+                        lemma_prov_tag = f"live:{lemma_provider}"
                         for row_idx, row in enumerate(data_rows):
                             if col_lemma != -1 and len(row) > col_lemma:
                                 l_val = row[col_lemma].strip()
@@ -1257,6 +1258,7 @@ class EnrichmentQueue:
                                     row[col_word_dest] = t_val
                                     t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
                                     updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+                                    updates.append({"token_order": t_ord, "field": "word_provenance", "value": lemma_prov_tag})
 
                         if is_sqlite:
                             if updates:
@@ -1269,21 +1271,43 @@ class EnrichmentQueue:
                         arbiter.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=sess_lang)
 
                 new_fp = compute_content_fingerprint(data_rows)
+                sess_row_provs = {}
                 with arbiter._lock:
                     if session_zid in arbiter.sessions:
                         arbiter.sessions[session_zid]["data_rows"] = data_rows
                         arbiter.sessions[session_zid]["fingerprint"] = new_fp
+                        if active_text_prov:
+                            arbiter.sessions[session_zid]["text_provenance"] = active_text_prov
+                            arbiter.sessions[session_zid]["textProvenance"] = active_text_prov
+                        sess_row_provs = arbiter.sessions[session_zid].get("row_provenances", {})
+
+                if translated_map:
+                    lemma_prov_tag = f"live:{lemma_provider}"
+                    for row_idx, row in enumerate(data_rows):
+                        if col_lemma != -1 and len(row) > col_lemma:
+                            l_val = row[col_lemma].strip()
+                            if l_val in translated_map:
+                                t_ord = str(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
+                                sess_row_provs[t_ord] = lemma_prov_tag
+                                if t_ord.isdigit():
+                                    sess_row_provs[int(t_ord)] = lemma_prov_tag
 
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id)
-                arbiter.emit_event(session_zid, {
+                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=sess_row_provs)
+                trans_event = {
                     "type": "update",
                     "stage": "translated",
                     "status": "success",
                     "fingerprint": new_fp,
                     "rows": structured_rows,
-                })
+                    "row_provenances": sess_row_provs,
+                    "rowProvenances": sess_row_provs,
+                }
+                if active_text_prov:
+                    trans_event["text_provenance"] = active_text_prov
+                    trans_event["textProvenance"] = active_text_prov
+                arbiter.emit_event(session_zid, trans_event)
 
             # Stage 3: Enrichment (IntelliFiller)
             run_enrich = self.config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='manual') if self.config else 'manual'

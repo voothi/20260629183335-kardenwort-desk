@@ -10632,30 +10632,36 @@ html, body {{
 
     function formatProvenanceTooltip(prov) {
         if (!prov) return "";
-        prov = String(prov);
-        if (prov.indexOf('live:') === 0) {
-            var p = prov.substring(5);
-            if (p === 'argos') return 'Translated via Argos (offline)';
-            if (p === 'google') return 'Translated via Google';
-            if (p === 'deepl') return 'Translated via DeepL';
-            if (p === 'lingva') return 'Translated via Lingva';
-            return 'Translated via ' + p.charAt(0).toUpperCase() + p.slice(1);
+        prov = String(prov).trim();
+        var p = prov;
+        if (p.indexOf('live:') === 0) {
+            p = p.substring(5);
+        } else if (p.indexOf('provider:') === 0) {
+            p = p.substring(9);
         }
-        if (prov === 'corpus:wordfill' || prov === 'wordfill:corpus') {
+        var pLower = p.toLowerCase();
+        if (pLower === 'argos') return 'Translated via Argos (offline)';
+        if (pLower === 'google') return 'Translated via Google';
+        if (pLower === 'deepl') return 'Translated via DeepL';
+        if (pLower === 'lingva') return 'Translated via Lingva';
+        if (pLower === 'corpus:wordfill' || pLower === 'wordfill:corpus') {
             return 'Pre-filled from Corpus (WordFill)';
         }
-        if (prov.indexOf('corpus:wordfill:') === 0) {
+        if (pLower.indexOf('corpus:wordfill:') === 0) {
             return 'Pre-filled from Corpus (ZID: ' + prov.substring(16) + ')';
         }
-        if (prov === 'cached:sqlite') {
+        if (pLower === 'cached:sqlite') {
             return 'Loaded from session cache (SQLite)';
         }
-        if (prov === 'cached:file') {
+        if (pLower === 'cached:file') {
             return 'Loaded from translation file cache';
         }
-        if (prov.indexOf('fallback:') === 0) {
-            var p = prov.substring(9);
-            return 'Translated via fallback (' + p + ')';
+        if (pLower.indexOf('fallback:') === 0) {
+            var pFb = prov.substring(9);
+            return 'Translated via fallback (' + pFb + ')';
+        }
+        if (prov.indexOf('live:') === 0 || prov.indexOf('provider:') === 0) {
+            return 'Translated via ' + p.charAt(0).toUpperCase() + p.slice(1);
         }
         return prov;
     }
@@ -10795,6 +10801,18 @@ html, body {{
             }
         }
         var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || tc.getAttribute('data-provenance');
+        if (!effProv) {
+            var provScript = document.getElementById('sentence-provenance');
+            if (provScript) {
+                var sProv = (provScript.textContent || provScript.innerText || '').trim();
+                if (sProv) effProv = sProv;
+            }
+        }
+        if (!effProv && window.AppState && window.AppState.translatedText && !window.AppState.textTranslationFailed) {
+            var provEl = document.getElementById('text-base-provider');
+            var baseProv = provEl ? (provEl.textContent || provEl.innerText || '').trim() : 'google';
+            effProv = 'live:' + (baseProv || 'google');
+        }
         if (effProv) {
             var pTitle = formatProvenanceTooltip(effProv);
             if (pTitle) {
@@ -11463,7 +11481,19 @@ html, body {{
                 var forceUpdate = (isTerm || globalStage === 'translated' || globalStage === 'translated_text');
 
                 function applyTextProvenance() {
-                    var effProv = window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance;
+                    var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || container.getAttribute('data-provenance');
+                    if (!effProv) {
+                        var provScript = document.getElementById('sentence-provenance');
+                        if (provScript) {
+                            var sProv = (provScript.textContent || provScript.innerText || '').trim();
+                            if (sProv) effProv = sProv;
+                        }
+                    }
+                    if (!effProv && window.AppState && window.AppState.translatedText && !window.AppState.textTranslationFailed) {
+                        var provEl = document.getElementById('text-base-provider');
+                        var baseProv = provEl ? (provEl.textContent || provEl.innerText || '').trim() : 'google';
+                        effProv = 'live:' + (baseProv || 'google');
+                    }
                     if (effProv) {
                         container.setAttribute('data-provenance', effProv);
                         var pTitle = formatProvenanceTooltip(effProv);
@@ -18262,12 +18292,16 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             elif str(row_id) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(row_id)]
         rows_data[row_id] = row_obj
+        if str(token_order_val) != str(row_id):
+            rows_data[str(token_order_val)] = row_obj
         if class_cols:
             class_vals = {}
             for name, col_idx in class_cols:
                 val = row[col_idx] if len(row) > col_idx else ""
                 class_vals[name] = val
             rows_data[row_id]["classifications"] = class_vals
+            if str(token_order_val) != str(row_id):
+                rows_data[str(token_order_val)]["classifications"] = class_vals
     return rows_data
 
 def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, **extra_kwargs):

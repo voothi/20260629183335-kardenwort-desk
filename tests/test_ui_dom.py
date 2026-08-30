@@ -77,7 +77,10 @@ def test_handle_sent_text_rendered_html_scripts_load_without_syntax_errors(page,
     page.on("pageerror", lambda exc: errors.append(str(exc)))
     page.add_init_script("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     
-    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    import copy
+    raw_config, raw_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    config = copy.deepcopy(raw_config)
+    resolved_paths = copy.deepcopy(raw_paths)
     if not config.has_section("audio"):
         config.add_section("audio")
     config.set("audio", "lmb_play", "True")
@@ -767,6 +770,67 @@ def test_translation_token_hover_highlights_source_token(page, tmp_path):
         return true;
     }""")
     assert no_hover is True, "Mouseout on translation span must remove hl-mvp-hover from source span"
+
+
+def test_progressive_lemma_update_replaces_skeleton_and_sets_provenance(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "apple"
+    tsv_content = (
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
+        "0\tapple\t\t1\n"
+    )
+    tsv_file = tmp_path / "20260831004000-prog-test.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260831004000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+
+    page.set_content(html)
+
+    # Initial render in progressive mode has skeleton-loader in word_dest cell
+    td_trans = page.locator("tr[data-row-id='0'] td").nth(2)
+    assert td_trans.is_visible()
+
+    # Apply progressive delta with translated text and translated lemma
+    page.evaluate("""() => {
+        if (window.receiveUpdate) {
+            window.receiveUpdate({
+                stage: 'translated',
+                status: 'success',
+                textProvenance: 'live:argos',
+                translatedText: 'яблоко',
+                rows: {
+                    '0': {
+                        lemma: 'apple',
+                        trans: 'яблоко',
+                        token_order: '0',
+                        provenance: 'live:argos'
+                    }
+                }
+            });
+        }
+    }""")
+
+    # Verify skeleton is cleared and translated text is displayed in td
+    assert "яблоко" in td_trans.inner_text()
+    assert td_trans.locator(".skeleton-loader").count() == 0
+    assert td_trans.get_attribute("title") == "Translated via Argos (offline)"
+
+    # Verify translation-container has provenance tooltip and child spans retain it
+    tc = page.locator("#translation-container")
+    assert tc.get_attribute("title") == "Translated via Argos (offline)"
+    word_span = page.locator("#translation-container span.word").first
+    assert word_span.is_visible()
+    assert word_span.get_attribute("title") == "Translated via Argos (offline)"
+
 
 
 
