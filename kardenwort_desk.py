@@ -2403,6 +2403,7 @@ class StorageAdapter:
         working_tsv_path: Optional[Path] = None,
         zid: Optional[str] = None,
         row_provenances: Optional[Dict[Any, str]] = None,
+        text_provenance: Optional[str] = None,
         **kwargs,
     ) -> Any:
         raise NotImplementedError
@@ -2551,6 +2552,7 @@ class TsvStorageAdapter(StorageAdapter):
         working_tsv_path: Optional[Path] = None,
         zid: Optional[str] = None,
         row_provenances: Optional[Dict[Any, str]] = None,
+        text_provenance: Optional[str] = None,
         **kwargs,
     ) -> Any:
         if working_tsv_path and headers is not None and data_rows is not None:
@@ -2779,6 +2781,7 @@ class SqliteStorageAdapter(StorageAdapter):
         working_tsv_path: Optional[Path] = None,
         zid: Optional[str] = None,
         row_provenances: Optional[Dict[Any, str]] = None,
+        text_provenance: Optional[str] = None,
         **kwargs,
     ) -> Any:
         if not session_zid or str(session_zid).strip() in ("", "00000000000000"):
@@ -2815,7 +2818,13 @@ class SqliteStorageAdapter(StorageAdapter):
         }
 
         # If sentences and words are provided directly
-        norm_sentences = [{**dict(s), "session_zid": session_zid} for s in sentences] if sentences is not None else []
+        norm_sentences = []
+        if sentences is not None:
+            for s in sentences:
+                s_dict = {**dict(s), "session_zid": session_zid}
+                if text_provenance and not s_dict.get("text_provenance"):
+                    s_dict["text_provenance"] = text_provenance
+                norm_sentences.append(s_dict)
         norm_words = []
         if words is not None:
             for w_idx, w in enumerate(words):
@@ -2869,6 +2878,10 @@ class SqliteStorageAdapter(StorageAdapter):
             sent_map: Dict[int, Dict[str, Any]] = {}
             if len(existing_sents_by_idx) > 1:
                 sent_map = {k: dict(v) for k, v in existing_sents_by_idx.items()}
+                if text_provenance:
+                    for k in sent_map:
+                        if not sent_map[k].get("text_provenance"):
+                            sent_map[k]["text_provenance"] = text_provenance
 
             word_list: List[Dict[str, Any]] = []
 
@@ -2910,8 +2923,10 @@ class SqliteStorageAdapter(StorageAdapter):
                                 "sentence_destination2": dst2_val,
                                 "sentence_source_ipa": ipa_val,
                                 "sentence_source_audio": aud_val,
-                                "text_provenance": existing_sent.get("text_provenance"),
+                                "text_provenance": text_provenance or existing_sent.get("text_provenance"),
                             }
+                        elif text_provenance and not sent_map[s_idx].get("text_provenance"):
+                            sent_map[s_idx]["text_provenance"] = text_provenance
 
                 # Extract word fields
                 quotation = get_col_val(row, "quotation") or get_col_val(row, "wordsourceinflectedform") or get_col_val(row, "wordsource") or ""
@@ -8537,6 +8552,7 @@ html, body {{
                     persist=(not is_sqlite), return_single=False
                 )
                 if is_sqlite:
+                    sync_text_prov = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
                     storage_adapter.save_session(
                         session_zid=zid,
                         slug=tsv_slug,
@@ -8549,6 +8565,7 @@ html, body {{
                         data_rows=data_rows,
                         working_tsv_path=None,
                         row_provenances=row_provenances,
+                        text_provenance=sync_text_prov,
                         zid=zid,
                     )
                 if not is_sqlite:
@@ -10792,9 +10809,17 @@ html, body {{
                 }
             }
         }
+        buildLcIndex();
+        if (typeof wireMvpEvents === 'function') {
+            wireMvpEvents();
+        }
         window.tokenizeTranslation = tokenizeTranslation;
+        window.buildLcIndex = buildLcIndex;
+        window.wireMvpEvents = wireMvpEvents;
     }
     window.tokenizeTranslation = tokenizeTranslation;
+    window.buildLcIndex = buildLcIndex;
+    window.wireMvpEvents = wireMvpEvents;
 
     function buildLcIndex() {
         sourceSpansArray = [];
@@ -15004,6 +15029,11 @@ html, body {{
                                 window.buildLcIndex();
                             } else if (typeof buildLcIndex === 'function') {
                                 buildLcIndex();
+                            }
+                            if (typeof window.wireMvpEvents === 'function') {
+                                window.wireMvpEvents();
+                            } else if (typeof wireMvpEvents === 'function') {
+                                wireMvpEvents();
                             }
                             if (typeof window.updateBidirectionalHighlights === 'function') {
                                 window.updateBidirectionalHighlights();

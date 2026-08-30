@@ -706,3 +706,67 @@ def test_literal_template_placeholders_rendered_verbatim(page, tmp_path):
     assert status_span.count() >= 1
 
 
+def test_translation_token_hover_highlights_source_token(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Specs synced to openspec."
+    tsv_file = tmp_path / "20260831002500-hover-test.en.tsv"
+    tsv_file.write_text("# comment\nWordSource\tWordDestination\nsynced\tсинхронизированы\n", encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260831002500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # Dynamic update of translation text
+    page.evaluate("""() => {
+        window.AppState.applyDeltas({
+            stage: "translated_text",
+            status: "success",
+            translatedText: "Спецификации синхронизированы с openspec."
+        });
+    }""")
+
+    # Hover translation span "синхронизированы"
+    has_hover = page.evaluate("""() => {
+        var transSpans = document.querySelectorAll('#translation-container span.word.hl-mvp');
+        if (transSpans.length < 2) return false;
+        var targetTrans = transSpans[1]; // "синхронизированы"
+        var evt = new MouseEvent('mouseover', { bubbles: true });
+        targetTrans.dispatchEvent(evt);
+        
+        var srcSpans = document.querySelectorAll('#source-container span.word');
+        for (var i = 0; i < srcSpans.length; i++) {
+            if (srcSpans[i].classList.contains('hl-mvp-hover')) {
+                return true;
+            }
+        }
+        return false;
+    }""")
+    assert has_hover is True, "Hovering translation span must apply hl-mvp-hover to aligned source span"
+
+    # Mouse out removes highlight
+    no_hover = page.evaluate("""() => {
+        var transSpans = document.querySelectorAll('#translation-container span.word.hl-mvp');
+        var targetTrans = transSpans[1];
+        var evt = new MouseEvent('mouseout', { bubbles: true });
+        targetTrans.dispatchEvent(evt);
+        
+        var srcSpans = document.querySelectorAll('#source-container span.word');
+        for (var i = 0; i < srcSpans.length; i++) {
+            if (srcSpans[i].classList.contains('hl-mvp-hover')) {
+                return false;
+            }
+        }
+        return true;
+    }""")
+    assert no_hover is True, "Mouseout on translation span must remove hl-mvp-hover from source span"
+
+
+

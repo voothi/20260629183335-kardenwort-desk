@@ -1119,7 +1119,90 @@ anki_mapping_file={mapping_str}
         assert "cached:sqlite" not in row_provs.values()
 
 
+def test_controller_session_creation_and_status_provenance(tmp_path):
+    import kardenwort_desk
+    from kardenwort_controller import SessionArbiter
+    from kardenwort_db import KardenwortDB
+
+    db_path = tmp_path / "kardenwort_ctrl_test.db"
+    db = KardenwortDB(db_path)
+    db.run_migrations()
+
+    sess_zid = "20260831003000"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "ctrl-test",
+        "source_language": "en",
+        "target_language": "ru",
+        "text_mode": "single",
+        "source_raw_text": "apple",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "apple",
+        "sentence_destination": "яблоко",
+        "text_provenance": "live:google",
+    })
+    db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "apple",
+        "lemma": "apple",
+        "word_source": "apple",
+        "word_destination": "яблоко",
+        "word_provenance": "live:google",
+    })
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    db_str = db_path.as_posix()
+    mapping_str = mapping_path.as_posix()
+    config_path = tmp_path / "config.ini"
+    ws_str = tmp_path.as_posix()
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+text_reprocess_provider=google
+[storage]
+backend=sqlite
+sqlite_path={db_str}
+[settings]
+default_language=en
+default_target_language=ru
+anki_mapping_file={mapping_str}
+[environment]
+kardenwort_workspace={ws_str}
+[languages]
+en_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+
+    tsv_path = tmp_path / f"{sess_zid}-ctrl-test.en.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\tapple\tяблоко\t1\n", encoding="utf-8")
+
+    res = arbiter.create_session(
+        text="apple",
+        language="en",
+        target_lang="ru",
+        text_mode="single",
+        sections="all",
+        theme="dark",
+        zid=sess_zid,
+        bypass_lang_check=True,
+    )
+
+    assert res.get("text_provenance") == "live:google"
+    row_provs = res.get("row_provenances", {})
+    assert row_provs.get("0") == "live:google"
+    assert "cached:sqlite" not in row_provs.values()
+
+
 if __name__ == "__main__":
     unittest.main()
+
 
 

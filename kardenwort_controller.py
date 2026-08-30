@@ -1108,22 +1108,33 @@ class EnrichmentQueue:
                 if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                     sentence_translated = True
 
-            active_text_prov = "cached:sqlite" if sentence_translated else None
+            active_text_prov = session_data.get("text_provenance") or session_data.get("textProvenance")
+            if not active_text_prov and is_sqlite:
+                try:
+                    db_sents = storage_adapter.db.get_sentences_by_session(session_zid)
+                    if db_sents:
+                        active_text_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
+                except Exception:
+                    pass
+
             if not sentence_translated and run_text == 'auto' and text:
                 main_text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
                 try:
                     sentence_translations_raw = translate_source_text(
                         text, sess_lang, sess_target, text_mode, self.config, self.resolved_paths, main_text_provider, zid=req_zid, trace_id=eff_trace_id
                     )
-                    active_text_prov = f"live:{main_text_provider}"
+                    active_text_prov = getattr(sentence_translations_raw, "provenance", f"live:{main_text_provider}")
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
                         for s_idx_raw, trans in sentence_translations_raw.items():
                             if trans and isinstance(trans, str):
                                 s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
                                 try:
-                                    storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid)
+                                    storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid, provenance=active_text_prov)
                                 except Exception:
-                                    pass
+                                    try:
+                                        storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid)
+                                    except Exception:
+                                        pass
 
                     resolve_translations(
                         text, text_mode, data_rows, col_sentence_idx, col_sentence_dest,
@@ -1440,19 +1451,36 @@ class SessionArbiter:
         role_fields = get_role_fields(mapping, headers) if mapping else {}
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-        if col_word_dest != -1:
-            for r_i, r in enumerate(data_rows):
-                if len(r) > col_word_dest and r[col_word_dest].strip():
-                    dest_v = r[col_word_dest].strip()
-                    if "skeleton-loader" not in dest_v and "btn-retry-cell" not in dest_v:
-                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                        init_row_provenances[r_i] = "cached:sqlite"
-                        init_row_provenances[str(r_i)] = "cached:sqlite"
-                        init_row_provenances[t_ord] = "cached:sqlite"
-                        if t_ord.isdigit():
-                            init_row_provenances[int(t_ord)] = "cached:sqlite"
+
+        is_sqlite = (self.resolved_paths.get('storage_backend') == 'sqlite') if self.resolved_paths else False
+        storage_adapter = get_storage_adapter(self.config, self.resolved_paths) if is_sqlite else None
+
+        stored_provs = res.get("row_provenances") or res.get("rowProvenances") or {}
+        if not stored_provs and is_sqlite:
+            try:
+                db_words = storage_adapter.db.get_words_by_session(session_zid)
+                for w in db_words:
+                    w_prov = w.get("word_provenance")
+                    if w_prov:
+                        t_ord = str(w.get("token_order", ""))
+                        if t_ord:
+                            stored_provs[t_ord] = w_prov
+                            if t_ord.isdigit():
+                                stored_provs[int(t_ord)] = w_prov
+            except Exception:
+                pass
+
+        if stored_provs:
+            init_row_provenances.update(stored_provs)
 
         init_text_prov = res.get("text_provenance") or res.get("textProvenance")
+        if not init_text_prov and is_sqlite:
+            try:
+                db_sents = storage_adapter.db.get_sentences_by_session(session_zid)
+                if db_sents:
+                    init_text_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
+            except Exception:
+                pass
         if not init_text_prov and res.get("sentence_translation"):
             main_text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
             init_text_prov = f"live:{main_text_provider}"
@@ -2807,20 +2835,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 sess_row_provs = safe_sess.get("row_provenances")
                 if sess_row_provs is None:
                     sess_row_provs = {}
-                col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-                col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-                if col_word_dest != -1:
-                    for r_i, r in enumerate(data_rows):
-                        if len(r) > col_word_dest and r[col_word_dest].strip():
-                            dest_v = r[col_word_dest].strip()
-                            if "skeleton-loader" not in dest_v and "btn-retry-cell" not in dest_v:
-                                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                                if r_i not in sess_row_provs and str(r_i) not in sess_row_provs and t_ord not in sess_row_provs:
-                                    sess_row_provs[r_i] = "cached:sqlite"
-                                    sess_row_provs[str(r_i)] = "cached:sqlite"
-                                    sess_row_provs[t_ord] = "cached:sqlite"
-                                    if t_ord.isdigit():
-                                        sess_row_provs[int(t_ord)] = "cached:sqlite"
                 safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sess_row_provs)
                 safe_sess["row_provenances"] = sess_row_provs
                 safe_sess["rowProvenances"] = sess_row_provs
@@ -2977,19 +2991,19 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 )
 
             fallback_row_provs = {}
-            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-            if col_word_dest != -1:
-                for r_i, r in enumerate(data_rows):
-                    if len(r) > col_word_dest and r[col_word_dest].strip():
-                        dest_v = r[col_word_dest].strip()
-                        if "skeleton-loader" not in dest_v and "btn-retry-cell" not in dest_v:
-                            t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                            fallback_row_provs[r_i] = "cached:sqlite"
-                            fallback_row_provs[str(r_i)] = "cached:sqlite"
-                            fallback_row_provs[t_ord] = "cached:sqlite"
-                            if t_ord.isdigit():
-                                fallback_row_provs[int(t_ord)] = "cached:sqlite"
+            if is_sqlite:
+                try:
+                    db_words = storage_adapter.db.get_words_by_session(zid)
+                    for w in db_words:
+                        w_prov = w.get("word_provenance")
+                        if w_prov:
+                            t_ord = str(w.get("token_order", ""))
+                            if t_ord:
+                                fallback_row_provs[t_ord] = w_prov
+                                if t_ord.isdigit():
+                                    fallback_row_provs[int(t_ord)] = w_prov
+                except Exception:
+                    pass
 
             rows_dict = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fallback_row_provs)
             translated_html = format_translated_html(
@@ -2998,7 +3012,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 text=source_text,
                 config=self.server.config
             ) if sentence_translation else ""
-            eff_text_prov = "cached:sqlite" if (sentence_translation or translated_html) else None
+            
+            eff_text_prov = None
+            if is_sqlite:
+                try:
+                    db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                    if db_sents:
+                        eff_text_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
+                except Exception:
+                    pass
 
             self._send_json(200, {
                 "ok": True,
