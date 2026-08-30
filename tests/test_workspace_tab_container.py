@@ -872,6 +872,88 @@ def test_tab_switching_renders_clean_plaintext_without_div_tokens(page, tmp_path
     assert page.locator('#translation-container span.word:has-text("div")').count() == 0
 
 
+def test_skeleton_provider_state_indicators(page, tmp_path, monkeypatch):
+    """
+    Verifies that pending skeleton loaders display concise provider state indicators
+    (e.g., Argos..., DeepL..., IntelliFiller...) in translation container and lemma table
+    without text clipping or layout shifting.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    config.set("rendering", "display_mode", "progressive")
+    config.set("pipeline", "text_base_provider", "argos")
+    config.set("pipeline", "lemma_base_provider", "argos")
+    config.set("pipeline", "lemma_reprocess_provider", "intellifiller")
+    config.set("pipeline", "progressive_text_translation", "true")
+    config.set("triggers", "run_text_translation", "auto")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "auto")
+    config.set("wordfill", "enabled", "false")
+    if not config.has_section("languages"):
+        config.add_section("languages")
+    config.set("languages", "de_prompt", "dummy")
+
+    import time
+    unique_zid = f"20260830{int(time.time() * 1000) % 1000000:06d}"
+    tsv_file = tmp_path / f"{unique_zid}-test.de.tsv"
+    tsv_content = (
+        "# Source: Das ist der erste Satz. Das ist der zweite Satz.\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\tSentenceDestination\n"
+        "UnbekanntesWort1\tUnbekanntesWort1\t\t\t\t1\t\n"
+        "UnbekanntesWort2\tUnbekanntesWort2\t\t\t\t2\t\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    monkeypatch.setattr(kardenwort_desk, "prepare_lookup_tsv", lambda *args, **kwargs: tsv_file)
+    monkeypatch.setattr(kardenwort_desk, "translate_text", lambda *a, **k: "")
+    monkeypatch.setattr(kardenwort_desk, "translate_source_text", lambda *a, **k: {})
+    monkeypatch.setattr(kardenwort_desk, "run_progressive_worker_async", lambda *a, **k: None)
+    monkeypatch.setattr(kardenwort_desk, "write_update_js", lambda *a, **k: None)
+
+    html = kardenwort_desk._run_render_flow_impl(
+        text="Das ist der erste Satz. Das ist der zweite Satz.",
+        language="de",
+        zid=unique_zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        wordfill_cfg={"enabled": False},
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Verify translation skeleton displays Argos...
+    trans_container = page.locator("#translation-container")
+    assert trans_container.locator(".skeleton-loader").count() >= 1
+    assert trans_container.locator(".skeleton-loader").inner_text().strip() == "Argos..."
+    assert trans_container.locator('.skeleton-loader[title="Argos..."]').count() >= 1
+
+    # Verify lemma table cells display Argos... and IntelliFiller...
+    lemma_cells = page.locator("#lemma-table td[data-col='WordDestination'] .skeleton-loader")
+    assert lemma_cells.count() >= 1
+    assert lemma_cells.first.inner_text().strip() == "Argos..."
+    assert lemma_cells.first.get_attribute("title") == "Argos..."
+
+    ipa_cells = page.locator("#lemma-table td[data-col='WordSourceIPA'] .skeleton-loader")
+    assert ipa_cells.count() >= 1
+    assert ipa_cells.first.inner_text().strip() == "IntelliFiller..."
+    assert ipa_cells.first.get_attribute("title") == "IntelliFiller..."
+
+    # Verify switching tab renders dynamic provider skeleton for child tab
+    tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
+    tab2.click()
+    assert trans_container.locator(".skeleton-loader").count() >= 1
+    assert trans_container.locator(".skeleton-loader").inner_text().strip() == "Argos..."
+
+
+
 
 
 

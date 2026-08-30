@@ -806,8 +806,8 @@ def test_skeleton_stage_tooltips_rendered(tmp_path, monkeypatch):
 
     html_out = kardenwort_desk.run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
 
-    assert 'title="Translating sentence..."' in html_out
-    assert 'title="Translating..."' in html_out
+    assert 'title="Google..."' in html_out
+    assert '>Google...<' in html_out
 
 
 def test_orphan_skeleton_watchdog_cleanup_after_timeout(page, tmp_path):

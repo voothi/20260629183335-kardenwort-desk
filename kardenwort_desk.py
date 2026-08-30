@@ -7341,6 +7341,21 @@ document.addEventListener('keydown', function(e) {{
 """
 
 
+def format_provider_skeleton_label(provider_name: str) -> str:
+    if not provider_name:
+        return "Loading..."
+    name = str(provider_name).strip().lower()
+    mapping = {
+        "argos": "Argos...",
+        "google": "Google...",
+        "deepl": "DeepL...",
+        "intellifiller": "IntelliFiller...",
+    }
+    if name in mapping:
+        return mapping[name]
+    return f"{provider_name.capitalize()}..."
+
+
 def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
     with _ACTIVE_ZIDS_LOCK:
         if zid in _ACTIVE_ZIDS:
@@ -8725,8 +8740,9 @@ html, body {{
         sentence_html = ""
     else:
         has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
+        text_provider_label = format_provider_skeleton_label(main_text_provider)
         if is_progressive and run_text == 'auto' and not has_real_text:
-            sentence_html = '<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;" title="Translating sentence..."></div>'
+            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;" title="{text_provider_label}">{text_provider_label}</div>'
         else:
             sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
     
@@ -8785,6 +8801,9 @@ html, body {{
     trans_class = "editable" if trans_col_name in editable_cols else ""
     inflected_class = "editable" if inflected_col_name in editable_cols else ""
 
+    lemma_provider_label = format_provider_skeleton_label(base_provider)
+    enrich_provider_label = format_provider_skeleton_label(enrich_provider)
+
     table_rows = []
     for row_id, row in enumerate(data_rows):
         if col_lemma != -1 and len(row) > col_lemma and re.match(r'^\d{14}-', row[col_lemma]):
@@ -8801,11 +8820,11 @@ html, body {{
         
         # Skeleton loaders for cells pending when a configured provider is expected to fill them:
         if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
-            trans_val = '<span class="skeleton-loader" style="width: 60px;" title="Translating..."></span>'
+            trans_val = f'<span class="skeleton-loader" style="width: 60px;" title="{lemma_provider_label}">{lemma_provider_label}</span>'
         if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
-            ipa_val = '<span class="skeleton-loader" style="width: 50px;" title="Enriching..."></span>'
+            ipa_val = f'<span class="skeleton-loader" style="width: 50px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
         if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
-            morph_val = '<span class="skeleton-loader" style="width: 80px;" title="Enriching..."></span>'
+            morph_val = f'<span class="skeleton-loader" style="width: 80px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
         
         row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
         
@@ -9516,7 +9535,9 @@ html, body {{
     border-left: 3px solid #ff7b72;
   }
   .skeleton-loader {
-    display: inline-block;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
     height: 1.2em;
     width: 100%;
     background: linear-gradient(-90deg, {table_border} 0%, {table_th_border} 50%, {table_border} 100%);
@@ -9524,6 +9545,16 @@ html, body {{
     animation: pulse-skeleton 1.5s ease infinite;
     border-radius: 4px;
     vertical-align: middle;
+    font-size: 11px;
+    font-weight: 500;
+    color: {text_muted};
+    letter-spacing: 0.05em;
+    user-select: none;
+    -webkit-user-select: none;
+    box-sizing: border-box;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
   }
   @keyframes pulse-skeleton {
     0% { background-position: 0% 50% }
@@ -10065,6 +10096,8 @@ html, body {{
 <script id="auto-inject-updates" type="text/plain">{auto_inject_updates_js}</script>
 <script id="run-enrichment" type="text/plain">{run_enrichment_js}</script>
 <script id="worker-launched" type="text/plain">{worker_launched_js}</script>
+<script id="text-base-provider" type="text/plain">{text_base_provider_js}</script>
+<script id="lemma-base-provider" type="text/plain">{lemma_base_provider_js}</script>
 <script id="hl-mvp-script" type="text/plain" data-bookmarks="{hover_highlight_bookmarks}" data-rainbow="{hover_highlight_rainbow}" data-enabled="{hover_highlight_enabled}"></script>
 
 
@@ -10124,6 +10157,28 @@ html, body {{
             .replace(/>/g, '&gt;')
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#039;');
+    }
+
+    function formatProviderSkeletonLabel(providerName) {
+        if (!providerName) return "Loading...";
+        var name = String(providerName).trim().toLowerCase();
+        var map = {
+            'argos': 'Argos...',
+            'google': 'Google...',
+            'deepl': 'DeepL...',
+            'intellifiller': 'IntelliFiller...'
+        };
+        if (map[name]) return map[name];
+        return name.charAt(0).toUpperCase() + name.slice(1) + '...';
+    }
+
+    function getTextBaseProvider() {
+        var el = document.getElementById('text-base-provider');
+        if (el) {
+            var val = (el.textContent || el.innerText || '').trim();
+            if (val) return val;
+        }
+        return 'google';
     }
 
     var mvpBookmarks = [];
@@ -11129,7 +11184,7 @@ html, body {{
                         var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
                         var targetDiv = el.classList.contains('scrollable-cell') ? el : ((el.parentNode && el.parentNode.classList.contains('scrollable-cell')) ? el.parentNode : el);
                         var currentText = (targetDiv.textContent || targetDiv.innerText || "").trim();
-                        if (!currentText || currentText === '...' || currentText === 'Loading...' || currentText === 'Loading translation...') {
+                        if (!currentText || currentText.indexOf('...') !== -1 || currentText === 'Loading' || currentText === 'Loading translation' || currentText === 'Processed') {
                             if (rowId !== null && rowId !== undefined) {
                                 targetDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
                             } else if (targetDiv.id === 'translation-container' || (targetDiv.closest && targetDiv.closest('#translation-container'))) {
@@ -11148,7 +11203,7 @@ html, body {{
                             var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || tdsEl[2];
                             var transDiv = transTd.querySelector('.scrollable-cell') || transTd;
                             var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
-                            if (!transContent || transContent === '...' || transContent === 'Loading...' || transDiv.querySelector('.skeleton-loader')) {
+                            if (!transContent || transContent.indexOf('...') !== -1 || transDiv.querySelector('.skeleton-loader')) {
                                 transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
                             }
                         }
@@ -13480,7 +13535,7 @@ html, body {{
                 btnElement.disabled = true;
             }
             if (cellDiv) {
-                cellDiv.innerHTML = '<span class="skeleton-loader" style="width: 60px;" title="Retrying translation..."></span>';
+                cellDiv.innerHTML = '<span class="skeleton-loader" style="width: 60px;" title="Retrying...">Retrying...</span>';
             }
 
             var token = getApiToken ? getApiToken() : "";
@@ -13545,9 +13600,10 @@ html, body {{
                 var parent = btn.parentNode;
                 if (parent) {
                     if (parent.id === 'translation-container') {
-                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-block;" title="Retrying translation..."></span>';
+                        var pLabel = formatProviderSkeletonLabel(getTextBaseProvider());
+                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
                     } else {
-                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 60px; display: inline-block;" title="Retrying translation..."></span>';
+                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 60px; display: inline-flex;" title="Retrying...">Retrying...</span>';
                     }
                 }
             }
@@ -14086,7 +14142,8 @@ html, body {{
                 if (window.AppState && (window.AppState.isFinished || isFailed)) {
                     return '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                 }
-                return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-block;" title="Loading translation..."></span>';
+                var pLabel = formatProviderSkeletonLabel(getTextBaseProvider());
+                return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
             }
 
             function init() {
@@ -14867,6 +14924,8 @@ setTimeout(function() {{
     html_page = html_page.replace("{auto_inject_updates_js}", "true" if auto_inject_updates else "false")
     html_page = html_page.replace("{run_enrichment_js}", run_enrich)
     html_page = html_page.replace("{worker_launched_js}", "true" if worker_launched else "false")
+    html_page = html_page.replace("{text_base_provider_js}", main_text_provider)
+    html_page = html_page.replace("{lemma_base_provider_js}", base_provider)
     html_page = html_page.replace("{hover_highlight_bookmarks}", str(hover_highlight_bookmarks))
     html_page = html_page.replace("{hover_highlight_rainbow}", "1" if hover_highlight_rainbow else "0")
     html_page = html_page.replace("{hover_highlight_enabled}", "1" if hover_highlight_enabled else "0")
