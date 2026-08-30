@@ -3590,11 +3590,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             raw_wtm = self.server.config.get("sentences_mode", "web_tab_mode", fallback="container").strip().lower()
                             delivery_mode = "multi_window" if raw_wtm == "tabs" else "container"
 
-                    if delivery_mode == "container" and (seq_num is None or str(seq_num).strip() in ("", "1")):
+                    has_multi_sentences = len(restored.get("sentences") or []) > 1
+                    if not has_multi_sentences and source_text:
+                        sents_split = [s for s in re.split(r'[\r\n]+', source_text.strip()) if s.strip()]
+                        if len(sents_split) > 1:
+                            has_multi_sentences = True
+
+                    if delivery_mode == "container" and has_multi_sentences and (seq_num is None or str(seq_num).strip() in ("", "1")):
                         resolved_seq_num = 2
                     else:
                         try:
-                            resolved_seq_num = int(seq_num) if seq_num else None
+                            resolved_seq_num = int(seq_num) if (seq_num is not None and str(seq_num).strip()) else None
                         except (ValueError, TypeError):
                             resolved_seq_num = None
 
