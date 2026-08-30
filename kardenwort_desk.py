@@ -9516,25 +9516,16 @@ html, body {{
             sentence_cards = [master_card] + child_cards
 
     active_seq_num = 1
-    if len(sentence_cards) > 1 and smc.delivery_mode == "container":
-        if seq_num is not None and str(seq_num).strip():
-            try:
-                active_seq_num = int(seq_num)
-            except (ValueError, TypeError):
-                active_seq_num = 2
-        else:
-            active_seq_num = 2
-
-        if sentence_cards:
-            valid_seqs = {c["seq_num"] for c in sentence_cards}
-            if active_seq_num not in valid_seqs:
-                active_seq_num = 2 if 2 in valid_seqs else 1
-
-    elif seq_num is not None and str(seq_num).strip():
+    if seq_num is not None and str(seq_num).strip():
         try:
             active_seq_num = int(seq_num)
         except (ValueError, TypeError):
             active_seq_num = 1
+    elif len(sentence_cards) > 1 and smc.delivery_mode == "container":
+        active_seq_num = 2
+        valid_seqs = {c["seq_num"] for c in sentence_cards}
+        if active_seq_num not in valid_seqs:
+            active_seq_num = 2 if 2 in valid_seqs else 1
 
     dock_body_class = ""
     if len(sentence_cards) > 1 and smc.delivery_mode == "container":
