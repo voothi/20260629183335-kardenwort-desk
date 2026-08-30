@@ -263,5 +263,70 @@ def test_progressive_and_terminal_provenance_playwright(page, tmp_path):
     assert page.locator("td.col-translation").get_attribute("data-provenance") == "live:argos"
     assert page.locator("td.col-translation").get_attribute("title") == "Translated via Argos (offline)"
 
+def test_translation_container_word_spans_and_skeleton_proportions(page, tmp_path):
+    tsv_path = tmp_path / "20260830180001-sample.en.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\thello\tпривет\t1\n", encoding="utf-8")
+    
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\n", encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "argos")
+    config.set("pipeline", "lemma_base_provider", "argos")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "progressive")
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+    }
+
+    # 1. Test skeleton loader proportions in progressive pending state
+    with patch("kardenwort_desk.run_progressive_worker_async"):
+        html = _run_render_flow_impl(
+            text="Hello world",
+            language="en",
+            zid="20260830180001",
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    assert "#translation-container .skeleton-loader" in html
+    assert "min-height: 1.6em" in html
+
+    page.set_content(html)
+    skel = page.locator("#translation-container .skeleton-loader")
+    assert skel.count() == 1
+    assert "Argos..." in skel.text_content()
+
+    # 2. Receive text translation update with provenance
+    page.evaluate("""() => {
+        window.receiveUpdate({
+            stage: 'translated_text',
+            status: 'success',
+            translatedText: 'Привет мир',
+            textProvenance: 'live:argos',
+            rows: {}
+        });
+    }""")
+
+    tc = page.locator("#translation-container")
+    assert tc.get_attribute("data-provenance") == "live:argos"
+    assert tc.get_attribute("title") == "Translated via Argos (offline)"
+
+    # Child word spans must also receive the provenance and title attributes
+    word_spans = tc.locator("span.word").all()
+    if word_spans:
+        for span in word_spans:
+            assert span.get_attribute("data-provenance") == "live:argos"
+            assert span.get_attribute("title") == "Translated via Argos (offline)"
+
 if __name__ == "__main__":
     unittest.main()
+

@@ -8923,7 +8923,7 @@ html, body {{
         has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
         text_provider_label = format_provider_skeleton_label(main_text_provider)
         if is_progressive and run_text == 'auto' and not has_real_text:
-            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;" title="{text_provider_label}">{text_provider_label}</div>'
+            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; min-height: 1.6em; height: 1.6em;" title="{text_provider_label}">{text_provider_label}</div>'
         else:
             sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
 
@@ -8934,6 +8934,7 @@ html, body {{
         container_prov_attr = f' data-provenance="{sentence_provenance}"'
         if p_title:
             container_prov_attr += f' title="{p_title}"'
+            sentence_html = sentence_html.replace("<div", f'<div data-provenance="{sentence_provenance}" title="{p_title}"', 1)
     
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
@@ -9735,7 +9736,8 @@ html, body {{
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    height: 1.2em;
+    min-height: 1.4em;
+    height: 1.4em;
     width: 100%;
     background: linear-gradient(-90deg, {table_border} 0%, {table_th_border} 50%, {table_border} 100%);
     background-size: 400% 400%;
@@ -9752,6 +9754,13 @@ html, body {{
     overflow: hidden;
     white-space: nowrap;
     text-overflow: ellipsis;
+  }
+  #translation-container .skeleton-loader {
+    min-height: 1.6em;
+    height: 1.6em;
+    font-size: 13px;
+    width: 100%;
+    max-width: 500px;
   }
   @keyframes pulse-skeleton {
     0% { background-position: 0% 50% }
@@ -10531,6 +10540,19 @@ html, body {{
                 div.innerHTML = html;
             }
         }
+        var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || tc.getAttribute('data-provenance');
+        if (effProv) {
+            var pTitle = formatProvenanceTooltip(effProv);
+            if (pTitle) {
+                var spans = tc.getElementsByTagName('span');
+                for (var sIdx = 0; sIdx < spans.length; sIdx++) {
+                    if (spans[sIdx].classList && spans[sIdx].classList.contains('word')) {
+                        spans[sIdx].setAttribute('data-provenance', effProv);
+                        spans[sIdx].setAttribute('title', pTitle);
+                    }
+                }
+            }
+        }
     }
 
     function buildLcIndex() {
@@ -11178,7 +11200,14 @@ html, body {{
                     if (effProv) {
                         container.setAttribute('data-provenance', effProv);
                         var pTitle = formatProvenanceTooltip(effProv);
-                        if (pTitle) container.setAttribute('title', pTitle);
+                        if (pTitle) {
+                            container.setAttribute('title', pTitle);
+                            var words = container.querySelectorAll('span.word, div');
+                            for (var i = 0; i < words.length; i++) {
+                                words[i].setAttribute('data-provenance', effProv);
+                                words[i].setAttribute('title', pTitle);
+                            }
+                        }
                     }
                 }
 
@@ -11196,6 +11225,9 @@ html, body {{
                         }
                         container.innerHTML = escapeHtml(clean);
                     }
+                    if (typeof tokenizeTranslation === 'function') tokenizeTranslation();
+                    if (typeof buildLcIndex === 'function') buildLcIndex();
+                    if (typeof updateBidirectionalHighlights === 'function') updateBidirectionalHighlights();
                     applyTextProvenance();
                     return true;
                 } else if (isTerm) {
@@ -11213,6 +11245,9 @@ html, body {{
                             }
                             container.innerHTML = escapeHtml(clean);
                         }
+                        if (typeof tokenizeTranslation === 'function') tokenizeTranslation();
+                        if (typeof buildLcIndex === 'function') buildLcIndex();
+                        if (typeof updateBidirectionalHighlights === 'function') updateBidirectionalHighlights();
                         applyTextProvenance();
                     } else if (pendingNode || !currentText || isFailed) {
                         container.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
@@ -11230,6 +11265,9 @@ html, body {{
                         }
                         container.innerHTML = escapeHtml(clean);
                     }
+                    if (typeof tokenizeTranslation === 'function') tokenizeTranslation();
+                    if (typeof buildLcIndex === 'function') buildLcIndex();
+                    if (typeof updateBidirectionalHighlights === 'function') updateBidirectionalHighlights();
                     applyTextProvenance();
                     return true;
                 }
@@ -11426,7 +11464,14 @@ html, body {{
                 if (tcInit) {
                     tcInit.setAttribute('data-provenance', initialSentenceProv);
                     var initProvTitle = formatProvenanceTooltip(initialSentenceProv);
-                    if (initProvTitle) tcInit.setAttribute('title', initProvTitle);
+                    if (initProvTitle) {
+                        tcInit.setAttribute('title', initProvTitle);
+                        var words = tcInit.querySelectorAll('span.word, div');
+                        for (var i = 0; i < words.length; i++) {
+                            words[i].setAttribute('data-provenance', initialSentenceProv);
+                            words[i].setAttribute('title', initProvTitle);
+                        }
+                    }
                 }
             }
         } catch(e) {}
@@ -14608,6 +14653,18 @@ html, body {{
                         transContainer.classList.remove('skeleton-loader');
                         transContainer.removeAttribute('data-pending');
                         transContainer.innerHTML = getTranslationHtml(tText);
+                        var tabProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || transContainer.getAttribute('data-provenance');
+                        if (tabProv) {
+                            var tabTitle = formatProvenanceTooltip(tabProv);
+                            if (tabTitle) {
+                                transContainer.setAttribute('title', tabTitle);
+                                var tabWords = transContainer.querySelectorAll('span.word, div');
+                                for (var tw = 0; tw < tabWords.length; tw++) {
+                                    tabWords[tw].setAttribute('data-provenance', tabProv);
+                                    tabWords[tw].setAttribute('title', tabTitle);
+                                }
+                            }
+                        }
                         if (tText && tText.trim()) {
                             if (window.tokenizeTranslation) tokenizeTranslation();
                             if (window.buildLcIndex) buildLcIndex();
