@@ -8187,10 +8187,13 @@ html, body {{
     col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
     col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
     
+    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     row_provenances = {}
     for r_i, r in enumerate(data_rows):
         if col_word_dest != -1 and len(r) > col_word_dest and r[col_word_dest].strip():
             row_provenances[r_i] = "cached:sqlite"
+            if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip():
+                row_provenances[str(r[col_token_order]).strip()] = "cached:sqlite"
     
     # --- Word-fill early pre-fill step ---
     if not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
@@ -8212,6 +8215,8 @@ html, body {{
                         for r_idx in row_indices:
                             if col_word_dest != -1 and len(data_rows[r_idx]) > col_word_dest and data_rows[r_idx][col_word_dest].strip():
                                 row_provenances[r_idx] = wf_prov
+                                if col_token_order != -1 and len(data_rows[r_idx]) > col_token_order and str(data_rows[r_idx][col_token_order]).strip():
+                                    row_provenances[str(data_rows[r_idx][col_token_order]).strip()] = wf_prov
                         logger.info(
                             f"wordfill (desk): pre-filled {len(match)} field(s) for lemma '{lemma_val}' "
                             f"from corpus."
@@ -8552,7 +8557,7 @@ html, body {{
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
                 
     if is_progressive and not worker_launched:
-        write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True)
+        write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True, row_provenances=row_provenances)
         # Only flag WordDestination as [FAILED] if the base provider was expected to fill it but didn't.
         # IPA, Morphology, etc. are exclusively intellifiller fields — they must NOT be flagged here
         # because intellifiller was never scheduled to run in this code path.
@@ -9039,7 +9044,7 @@ html, body {{
                 inner_html = display_val
             dynamic_tds += f'<td class="col-classification" data-col="{role}"><div class="scrollable-cell">{inner_html}</div></td>'
 
-        prov_val = row_provenances.get(row_id)
+        prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
         prov_attr = ""
         if prov_val and trans_val and "skeleton-loader" not in trans_val and "btn-retry-cell" not in trans_val:
             prov_title = format_provenance_tooltip(prov_val)
@@ -10953,6 +10958,23 @@ html, body {{
                     window.WorkspaceTabs.updateSentences(data.sentences);
                 }
                 
+                var incomingRowProv = data.row_provenances || data.rowProvenances;
+                if (incomingRowProv) {
+                    for (var rKey in incomingRowProv) {
+                        if (incomingRowProv.hasOwnProperty(rKey)) {
+                            var pVal = incomingRowProv[rKey];
+                            if (!window.AppState.rows[rKey]) window.AppState.rows[rKey] = {};
+                            window.AppState.rows[rKey].provenance = pVal;
+                            for (var existingId in window.AppState.rows) {
+                                var exRow = window.AppState.rows[existingId];
+                                if (exRow && (String(exRow.token_order) === String(rKey) || String(existingId) === String(rKey))) {
+                                    exRow.provenance = pVal;
+                                }
+                            }
+                        }
+                    }
+                }
+                
                 var rowsData = null;
                 if (data.rows) {
                     rowsData = data.rows;
@@ -10969,6 +10991,13 @@ html, body {{
                             var delta = rowsData[rowId];
                             for (var key in delta) {
                                 window.AppState.rows[rowId][key] = delta[key];
+                            }
+                            if (delta.provenance) {
+                                window.AppState.rows[rowId].provenance = delta.provenance;
+                            } else if (delta._provenance) {
+                                window.AppState.rows[rowId].provenance = delta._provenance;
+                            } else if (delta.transProvenance) {
+                                window.AppState.rows[rowId].provenance = delta.transProvenance;
                             }
                             if (window.AppView.renderRow(rowId, data.stage)) {
                                 updated = true;
@@ -11021,6 +11050,7 @@ html, body {{
                     for (var r = 0; r < allRows.length; r++) {
                         var rowEl = allRows[r];
                         var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
+                        var tOrd = rowEl.getAttribute('data-token-order');
                         var tdsEl = rowEl.getElementsByTagName('td');
                         if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
                             var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || tdsEl[2];
@@ -11029,6 +11059,20 @@ html, body {{
                             if (!transContent || transContent === '...' || transContent === 'Loading...' || transDiv.querySelector('.skeleton-loader')) {
                                 transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
                                 updated = true;
+                            } else {
+                                var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
+                                var rProv = rState ? (rState.provenance || rState._provenance || rState.transProvenance) : null;
+                                if (rProv && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
+                                    if (!transDiv.querySelector('.btn-retry-cell') && !transDiv.querySelector('.skeleton-loader')) {
+                                        transTd.setAttribute('data-provenance', rProv);
+                                        var pTitle = formatProvenanceTooltip(rProv);
+                                        if (pTitle) transTd.setAttribute('title', pTitle);
+                                        if (transDiv !== transTd) {
+                                            transDiv.setAttribute('data-provenance', rProv);
+                                            if (pTitle) transDiv.setAttribute('title', pTitle);
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
@@ -11229,24 +11273,35 @@ html, body {{
                         }
                     }
                     var hasTransProp = rowData.hasOwnProperty('trans') || rowData.hasOwnProperty('WordDestination') || rowData.hasOwnProperty('word_translation');
+                    var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
+                    if (!rowProv && rowData.token_order !== undefined && rowData.token_order !== null) {
+                        for (var rk in window.AppState.rows) {
+                            if (window.AppState.rows[rk] && String(window.AppState.rows[rk].token_order) === String(rowData.token_order)) {
+                                if (window.AppState.rows[rk].provenance) {
+                                    rowProv = window.AppState.rows[rk].provenance;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    function applyCellProvenance(effectiveVal) {
+                        if (rowProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
+                            tds[2].setAttribute('data-provenance', rowProv);
+                            var pTitle = formatProvenanceTooltip(rowProv);
+                            if (pTitle) tds[2].setAttribute('title', pTitle);
+                            var scrollDiv = tds[2].querySelector('.scrollable-cell');
+                            if (scrollDiv) {
+                                scrollDiv.setAttribute('data-provenance', rowProv);
+                                if (pTitle) scrollDiv.setAttribute('title', pTitle);
+                            }
+                        }
+                    }
                     if (!tds[2].classList.contains('dirty') && hasTransProp) {
                         var div = tds[2].querySelector('.scrollable-cell') || tds[2];
                         var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
                         var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var hasRetryBadge = div.querySelector('.btn-retry-cell') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
-                        var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
-                        function applyCellProvenance(effectiveVal) {
-                            if (rowProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
-                                tds[2].setAttribute('data-provenance', rowProv);
-                                var pTitle = formatProvenanceTooltip(rowProv);
-                                if (pTitle) tds[2].setAttribute('title', pTitle);
-                                if (div && div !== tds[2]) {
-                                    div.setAttribute('data-provenance', rowProv);
-                                    if (pTitle) div.setAttribute('title', pTitle);
-                                }
-                            }
-                        }
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (hasRetryBadge && val === "" && !isTerm) {
@@ -11278,7 +11333,15 @@ html, body {{
                                     applyCellProvenance(val);
                                     updated = true;
                                 }
+                            } else if (val !== "" && !tds[2].classList.contains('editing')) {
+                                applyCellProvenance(val);
                             }
+                        }
+                    } else if (!tds[2].classList.contains('dirty') && !tds[2].classList.contains('editing') && rowProv) {
+                        var div = tds[2].querySelector('.scrollable-cell') || tds[2];
+                        var curText = (div.textContent || div.innerText || '').trim();
+                        if (curText && curText !== '...' && curText !== 'Loading...' && !div.querySelector('.skeleton-loader') && !div.querySelector('.btn-retry-cell')) {
+                            applyCellProvenance(curText);
                         }
                     }
                     if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
@@ -11364,6 +11427,27 @@ html, body {{
                     tcInit.setAttribute('data-provenance', initialSentenceProv);
                     var initProvTitle = formatProvenanceTooltip(initialSentenceProv);
                     if (initProvTitle) tcInit.setAttribute('title', initProvTitle);
+                }
+            }
+        } catch(e) {}
+
+        try {
+            var initRows = document.querySelectorAll('tr[data-row-id]');
+            for (var ir = 0; ir < initRows.length; ir++) {
+                var rEl = initRows[ir];
+                var rId = rEl.getAttribute('data-row-id');
+                var tOrd = rEl.getAttribute('data-token-order');
+                var transTd = rEl.querySelector('td.col-translation, td[data-col="WordDestination"]');
+                var rProv = transTd ? transTd.getAttribute('data-provenance') : null;
+                if (rProv) {
+                    if (rId) {
+                        if (!window.AppState.rows[rId]) window.AppState.rows[rId] = {};
+                        window.AppState.rows[rId].provenance = rProv;
+                    }
+                    if (tOrd && tOrd !== rId) {
+                        if (!window.AppState.rows[tOrd]) window.AppState.rows[tOrd] = {};
+                        window.AppState.rows[tOrd].provenance = rProv;
+                    }
                 }
             }
         } catch(e) {}
@@ -17677,8 +17761,16 @@ def cmd_reprocess_worker(args):
     finally:
         try:
             status_val = "failed" if worker_error else "success"
+            reprocess_provenances = {}
+            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+            if col_word_dest != -1:
+                for r_i, r in enumerate(data_rows):
+                    if len(r) > col_word_dest and r[col_word_dest].strip():
+                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                        reprocess_provenances[t_ord] = "cached:sqlite"
             sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=reprocess_provenances)
             if sess_logger:
                 sess_logger.info("Reprocess finished event emitted")
         except Exception as e:
@@ -17716,10 +17808,12 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             "sentence_idx": sent_idx_val
         }
         if row_provenances:
-            if row_id in row_provenances:
-                row_obj["provenance"] = row_provenances[row_id]
-            elif str(token_order_val) in row_provenances:
+            if str(token_order_val) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(token_order_val)]
+            elif token_order_val in row_provenances:
+                row_obj["provenance"] = row_provenances[token_order_val]
+            elif row_id in row_provenances:
+                row_obj["provenance"] = row_provenances[row_id]
         rows_data[row_id] = row_obj
         if class_cols:
             class_vals = {}
@@ -17771,6 +17865,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             update_data["textProvenance"] = effective_text_prov
             update_data["text_provenance"] = effective_text_prov
             update_data["provenance"] = effective_text_prov
+        if row_provenances is not None:
+            update_data["row_provenances"] = row_provenances
+            update_data["rowProvenances"] = row_provenances
         if error is not None:
             update_data["error"] = error
         if zid is not None:
@@ -17921,6 +18018,9 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 update_data["textProvenance"] = effective_text_prov
                 update_data["text_provenance"] = effective_text_prov
                 update_data["provenance"] = effective_text_prov
+            if row_provenances is not None:
+                update_data["row_provenances"] = row_provenances
+                update_data["rowProvenances"] = row_provenances
 
             if error is not None:
                 update_data["error"] = error
@@ -17947,14 +18047,14 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         logger.error(f"Failed to atomically move update js file after 10 retries: {update_js_path}")
     return update_js_path
 
-def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields):
+def _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, row_provenances=None):
     m = re.match(r'^(\d{14})', tsv_path.name)
     zid = getattr(args, 'zid', None) or (m.group(1) if m else "unknown")
     trace_id = getattr(args, 'trace_id', None) or f"{zid}:progressive:translation"
     with TraceTimer("background_text_translation", zid, config, resolved_paths):
-        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, trace_id=trace_id)
+        return _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, trace_id=trace_id, row_provenances=row_provenances)
 
-def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, trace_id=None):
+def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, zid, trace_id=None, row_provenances=None):
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -18054,7 +18154,15 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     
         if run_base == 'auto' and col_lemma != -1:
             lang = getattr(args, 'language', 'en')
-            row_provenances = {}
+            if row_provenances is None:
+                row_provenances = {}
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+            for r_i, r in enumerate(data_rows):
+                if col_word_dest != -1 and len(r) > col_word_dest and r[col_word_dest].strip():
+                    t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                    if r_i not in row_provenances and t_ord not in row_provenances:
+                        row_provenances[r_i] = "cached:sqlite"
+                        row_provenances[t_ord] = "cached:sqlite"
             wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
             if wordfill_cfg and wordfill_cfg.get('enabled', False):
                 try:
@@ -18068,7 +18176,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 if match:
                                     apply_wordfill_to_rows([row], headers, match)
                                     wf_applied = True
-                                    row_provenances[i] = match.get('_provenance', 'corpus:wordfill')
+                                    wf_prov = match.get('_provenance', 'corpus:wordfill')
+                                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(i)
+                                    row_provenances[i] = wf_prov
+                                    row_provenances[t_ord] = wf_prov
                                     logger.info(
                                         f"wordfill (progressive): pre-filled {len(match)} field(s) for lemma '{lemma_val}' from corpus."
                                     )
@@ -18154,16 +18265,18 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                         while len(row) <= col_word_dest:
                                             row.append("")
                                         row[col_word_dest] = trans_val
+                                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
                                         row_provenances[row_idx] = fast_prov
-                                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                                        row_provenances[t_ord] = fast_prov
                                         updates.append({
-                                            "token_order": t_ord,
+                                            "token_order": int(t_ord) if t_ord.isdigit() else row_idx,
                                             "field": "word_destination",
                                             "value": trans_val,
                                         })
                             if updates:
                                 storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
                         else:
+                            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
                             with file_lock(tsv_path):
                                 comments, headers, current_rows = load_tsv_rows(tsv_path)
                                 for r_idx, row in enumerate(current_rows):
@@ -18174,7 +18287,9 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                                 row.append("")
                                             if lemma_val in lemma_translations:
                                                 row[col_word_dest] = lemma_translations[lemma_val]
+                                                t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(r_idx)
                                                 row_provenances[r_idx] = fast_prov
+                                                row_provenances[t_ord] = fast_prov
                                 save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                                 data_rows = current_rows
                         
@@ -18189,7 +18304,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
         else:
             lang = getattr(args, 'language', 'en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances)
     except Exception as e:
         logger.error(f"Failing in translated stage: {e}")
         failed_lemmas = chunk if 'chunk' in locals() else (lemmas_to_translate if 'lemmas_to_translate' in locals() else [])
@@ -18507,7 +18622,16 @@ def cmd_retext_worker(args):
             # source_text="" because retext never changes the source text;
             # sending it would cause receiveUpdate to wipe the span DOM.
             status_val = "failed" if worker_error else "success"
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id, config=config)
+            retext_provenances = {}
+            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+            if col_word_dest != -1:
+                for r_i, r in enumerate(data_rows):
+                    if len(r) > col_word_dest and r[col_word_dest].strip():
+                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                        retext_provenances[t_ord] = "cached:sqlite"
+            text_prov = f"live:{text_reprocess_provider}" if 'text_reprocess_provider' in locals() and text_reprocess_provider else None
+            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id, config=config, row_provenances=retext_provenances, text_provenance=text_prov)
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
 def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
@@ -18846,6 +18970,7 @@ def cmd_progressive_worker(args):
                 wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
                 data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
                 
+            worker_row_provenances = {}
             try:
                 run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
                 run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
@@ -18854,7 +18979,10 @@ def cmd_progressive_worker(args):
 
                 # 1. Base Translation Stage
                 if run_base == 'auto' or run_text == 'auto':
-                    data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
+                    try:
+                        data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, row_provenances=worker_row_provenances)
+                    except TypeError:
+                        data_rows = _progressive_worker_stage_translation(tsv_path, args, config, resolved_paths, data_rows, headers, role_fields)
                     
                 if not is_sqlite:
                     try:
@@ -18908,8 +19036,16 @@ def cmd_progressive_worker(args):
                         pass
                 try:
                     status_val = "failed" if worker_error else "success"
+                    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+                    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+                    if col_word_dest != -1:
+                        for r_i, r in enumerate(data_rows):
+                            if len(r) > col_word_dest and r[col_word_dest].strip():
+                                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                                if r_i not in worker_row_provenances and t_ord not in worker_row_provenances:
+                                    worker_row_provenances[t_ord] = "cached:sqlite"
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances)
                     if tsv_path.exists():
                         import os
                         os.utime(tsv_path, None)

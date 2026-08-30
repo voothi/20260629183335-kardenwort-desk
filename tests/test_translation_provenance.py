@@ -142,6 +142,126 @@ class TestTranslationProvenance(unittest.TestCase):
             # Check that container or table cells have data-provenance
             self.assertIn('id="translation-container"', html)
             self.assertIn('data-provenance="', html)
+            self.assertIn('data-provenance="cached:sqlite"', html)
+            self.assertIn('title="Loaded from session cache (SQLite)"', html)
+
+    def test_format_update_rows_dict_token_order_priority(self):
+        headers = ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"]
+        role_fields = {
+            "lemma": "WordSource",
+            "word_translation": "WordDestination",
+            "inflected": "WordSource",
+            "morphology": "WordSourceMorphology",
+            "ipa": "WordSourceIPA",
+            "sentence_index": "SentenceSourceIndex"
+        }
+        # Simulate reordered rows (e.g. sorted by frequency where row 0 is token 5 and row 1 is token 2)
+        data_rows = [
+            ["5", "tree", "дерево", "1"],
+            ["2", "apple", "яблоко", "1"]
+        ]
+        row_provenances = {
+            "5": "live:argos",
+            "2": "corpus:wordfill",
+            0: "wrong:index"
+        }
+        res = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=row_provenances)
+        # TokenOrder matching takes priority over raw row index
+        self.assertEqual(res[0]["provenance"], "live:argos")
+        self.assertEqual(res[1]["provenance"], "corpus:wordfill")
+
+    def test_terminal_finished_payload_forwards_row_provenance(self):
+        with tempfile.TemporaryDirectory() as tmpdir:
+            tsv_path = Path(tmpdir) / "20260830180000-sample.en.tsv"
+            tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\n0\ttree\tдерево\n", encoding="utf-8")
+            headers = ["TokenOrder", "WordSource", "WordDestination"]
+            role_fields = {
+                "lemma": "WordSource",
+                "word_translation": "WordDestination",
+                "inflected": "WordSource",
+                "sentence_index": "SentenceSourceIndex"
+            }
+            data_rows = [["0", "tree", "дерево"]]
+            row_prov = {"0": "live:argos"}
+            res_path = safe_write_update_js(
+                tsv_path, data_rows, headers, role_fields,
+                stage="finished",
+                status="success",
+                row_provenances=row_prov,
+                zid="20260830180000"
+            )
+            self.assertIsNotNone(res_path)
+            content = Path(res_path).read_text(encoding="utf-8")
+            self.assertIn('"row_provenances": {"0": "live:argos"}', content)
+            self.assertIn('"stage": "finished"', content)
+
+def test_progressive_and_terminal_provenance_playwright(page, tmp_path):
+    tsv_path = tmp_path / "20260830180000-hello.en.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\thello\tпривет\t1\n", encoding="utf-8")
+    
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\n", encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "argos")
+    config.set("pipeline", "lemma_base_provider", "argos")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+    }
+
+    with patch("kardenwort_desk.translate_source_text", return_value={0: "Привет мир"}), patch("kardenwort_desk.run_progressive_worker_async"):
+        html = _run_render_flow_impl(
+            text="Hello world",
+            language="en",
+            zid="20260830180000",
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    page.set_content(html)
+
+    # 1. Initial cached provenance attributes
+    assert page.locator("td.col-translation").get_attribute("data-provenance") == "cached:sqlite"
+    assert page.locator("td.col-translation").get_attribute("title") == "Loaded from session cache (SQLite)"
+    assert page.locator("td.col-translation .scrollable-cell").get_attribute("data-provenance") == "cached:sqlite"
+
+    # 2. Progressive translation update arrives with live:argos
+    page.evaluate("""() => {
+        window.AppState.applyDeltas({
+            stage: 'translated',
+            rows: {
+                '0': { trans: 'новое_слово', token_order: '0' }
+            },
+            row_provenances: {
+                '0': 'live:argos'
+            }
+        });
+    }""")
+
+    assert page.locator("td.col-translation").get_attribute("data-provenance") == "live:argos"
+    assert page.locator("td.col-translation").get_attribute("title") == "Translated via Argos (offline)"
+    assert page.locator("td.col-translation .scrollable-cell").text_content() == "новое_слово"
+
+    # 3. Terminal finished event preserves provenance and tooltip
+    page.evaluate("""() => {
+        window.AppState.applyDeltas({
+            stage: 'finished',
+            status: 'success'
+        });
+    }""")
+
+    assert page.locator("td.col-translation").get_attribute("data-provenance") == "live:argos"
+    assert page.locator("td.col-translation").get_attribute("title") == "Translated via Argos (offline)"
 
 if __name__ == "__main__":
     unittest.main()
