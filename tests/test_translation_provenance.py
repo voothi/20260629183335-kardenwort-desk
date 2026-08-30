@@ -112,7 +112,7 @@ class TestTranslationProvenance(unittest.TestCase):
             tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\thello\tпривет\t1\n", encoding="utf-8")
             
             mapping_path = tmp_path / "mapping.ini"
-            mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\n", encoding="utf-8")
+            mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\nSentenceDestination=\n", encoding="utf-8")
 
             config = configparser.ConfigParser()
             config.add_section("pipeline")
@@ -122,11 +122,46 @@ class TestTranslationProvenance(unittest.TestCase):
             config.set("rendering", "display_mode", "monolithic")
             config.add_section("settings")
             config.set("settings", "default_target_language", "ru")
+            config.add_section("languages")
+            config.set("languages", "en_prompt", "standard")
+            config.add_section("storage")
+            config.set("storage", "backend", "sqlite")
+            config.set("storage", "sqlite_path", str(tmp_path / "test.db"))
+
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(db_path=tmp_path / "test.db")
+            db.run_migrations()
+            db.insert_session({
+                "zid": "20260830180000",
+                "slug": "hello",
+                "source_language": "en",
+                "source_raw_text": "Hello world",
+            })
+            db.insert_sentence({
+                "session_zid": "20260830180000",
+                "sentence_index": 1,
+                "sentence_source": "Hello world",
+                "sentence_destination": "Привет мир",
+                "text_provenance": "live:argos",
+            })
+            db.insert_words([
+                {
+                    "session_zid": "20260830180000",
+                    "sentence_index": 1,
+                    "token_order": 0,
+                    "quotation": "hello",
+                    "lemma": "hello",
+                    "word_destination": "привет",
+                    "word_provenance": "live:argos",
+                }
+            ])
 
             resolved_paths = {
                 "kardenwort_workspace": tmp_path,
                 "results_dir": tmp_path,
                 "anki_mapping_file": mapping_path,
+                "sqlite_db_path": tmp_path / "test.db",
+                "storage_backend": "sqlite",
             }
 
             html = _run_render_flow_impl(
@@ -142,8 +177,8 @@ class TestTranslationProvenance(unittest.TestCase):
             # Check that container or table cells have data-provenance
             self.assertIn('id="translation-container"', html)
             self.assertIn('data-provenance="', html)
-            self.assertIn('data-provenance="cached:sqlite"', html)
-            self.assertIn('title="Loaded from session cache (SQLite)"', html)
+            self.assertIn('data-provenance="live:argos"', html)
+            self.assertIn('title="Translated via Argos (offline)"', html)
 
     def test_format_update_rows_dict_token_order_priority(self):
         headers = ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"]
@@ -233,7 +268,7 @@ class TestTranslationProvenance(unittest.TestCase):
             self.assertEqual(res["row_provenances"].get(0) or res["row_provenances"].get("0"), "live:argos")
             self.assertEqual(res["rows"][0]["provenance"], "live:argos")
 
-    def test_format_update_rows_dict_defaults_unassigned_translations_to_cached_sqlite(self):
+    def test_format_update_rows_dict_pre_migration_unassigned_does_not_emit_cached_sqlite(self):
         from kardenwort_desk import format_update_rows_dict
         headers = ["TokenOrder", "WordSource", "WordDestination"]
         role_fields = {"lemma": "WordSource", "word_translation": "WordDestination"}
@@ -243,9 +278,9 @@ class TestTranslationProvenance(unittest.TestCase):
             ["2", "jump", '<span class="skeleton-loader">Argos...</span>'],
             ["3", "fly", '<button class="btn-retry-cell">Retry</button>'],
         ]
-        # Without any row_provenances passed
+        # Without any row_provenances passed (pre-migration / unassigned)
         rows_dict = format_update_rows_dict(data_rows, headers, role_fields)
-        self.assertEqual(rows_dict[0].get("provenance"), "cached:sqlite")
+        self.assertIsNone(rows_dict[0].get("provenance"))
         self.assertIsNone(rows_dict[1].get("provenance"))
         self.assertIsNone(rows_dict[2].get("provenance"))
         self.assertIsNone(rows_dict[3].get("provenance"))
@@ -314,10 +349,8 @@ def test_progressive_and_terminal_provenance_playwright(page, tmp_path):
 
     page.set_content(html)
 
-    # 1. Initial cached provenance attributes
-    assert page.locator("td.col-translation").get_attribute("data-provenance") == "cached:sqlite"
-    assert page.locator("td.col-translation").get_attribute("title") == "Loaded from session cache (SQLite)"
-    assert page.locator("td.col-translation .scrollable-cell").get_attribute("data-provenance") == "cached:sqlite"
+    # 1. Initial pre-migration/empty provenance has no data-provenance attribute
+    assert page.locator("td.col-translation").get_attribute("data-provenance") is None
 
     # 2. Progressive translation update arrives with live:argos
     page.evaluate("""() => {
@@ -495,10 +528,52 @@ def test_sqlite_cached_lemma_provenance_tooltips(page, tmp_path):
     config.add_section("languages")
     config.set("languages", "en_prompt", "standard")
 
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_path", str(tmp_path / "test.db"))
+
+    from kardenwort_db import KardenwortDB
+    db = KardenwortDB(db_path=tmp_path / "test.db")
+    db.run_migrations()
+    db.insert_session({
+        "zid": "20260830201500",
+        "slug": "sample",
+        "source_language": "en",
+        "source_raw_text": "run you",
+    })
+    db.insert_sentence({
+        "session_zid": "20260830201500",
+        "sentence_index": 1,
+        "sentence_source": "run you",
+        "sentence_destination": "Текст",
+        "text_provenance": "live:argos",
+    })
+    db.insert_words([
+        {
+            "session_zid": "20260830201500",
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "run",
+            "lemma": "run",
+            "word_destination": "бег",
+            "word_provenance": "live:argos",
+        },
+        {
+            "session_zid": "20260830201500",
+            "sentence_index": 1,
+            "token_order": 1,
+            "quotation": "you",
+            "lemma": "you",
+            "word_destination": "",
+        },
+    ])
+
     resolved_paths = {
         "kardenwort_workspace": tmp_path,
         "results_dir": tmp_path,
         "anki_mapping_file": mapping_path,
+        "sqlite_db_path": tmp_path / "test.db",
+        "storage_backend": "sqlite",
     }
 
     with patch("kardenwort_desk.translate_source_text", return_value={0: "Текст"}), patch("kardenwort_desk.run_progressive_worker_async"):
@@ -514,27 +589,239 @@ def test_sqlite_cached_lemma_provenance_tooltips(page, tmp_path):
 
     page.set_content(html)
 
-    # Initial render should attribute pre-existing translation "бег" to cached:sqlite
+    # Initial render should attribute stored translation "бег" to live:argos
     cells = page.locator("td.col-translation").all()
     assert len(cells) == 2
-    assert cells[0].get_attribute("data-provenance") == "cached:sqlite"
-    assert cells[0].get_attribute("title") == "Loaded from session cache (SQLite)"
+    assert cells[0].get_attribute("data-provenance") == "live:argos"
+    assert cells[0].get_attribute("title") == "Translated via Argos (offline)"
 
-    # Even after stage="source" progressive delta arrives without explicit provenance,
-    # the client JS should preserve or default to cached:sqlite for the translated cell
+    # When progressive delta arrives with explicit live:argos
     page.evaluate("""() => {
         window.receiveUpdate({
             stage: 'source',
             status: 'success',
             rows: {
-                '0': { lemma: 'run', trans: 'бег', token_order: '0' },
+                '0': { lemma: 'run', trans: 'бег', token_order: '0', provenance: 'live:argos' },
                 '1': { lemma: 'you', trans: '', token_order: '1' }
+            },
+            row_provenances: {
+                '0': 'live:argos'
             }
         });
     }""")
 
-    assert cells[0].get_attribute("data-provenance") == "cached:sqlite"
-    assert cells[0].get_attribute("title") == "Loaded from session cache (SQLite)"
+    assert cells[0].get_attribute("data-provenance") == "live:argos"
+    assert cells[0].get_attribute("title") == "Translated via Argos (offline)"
+
+
+def test_progressive_worker_stores_and_reloads_live_provenance(tmp_path):
+    """Test 6.1: progressive worker stores live:argos provenance and it is returned unchanged on session reload."""
+    from kardenwort_db import KardenwortDB
+    from kardenwort_desk import _progressive_worker_stage_translation_impl, get_storage_adapter
+
+    db_path = tmp_path / "desk.db"
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    sess_zid = "20260830225801"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "live-prov-test",
+        "source_language": "en",
+        "source_raw_text": "apple tree",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "apple tree",
+    })
+    db.insert_words([
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "apple",
+            "lemma": "apple",
+        },
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 1,
+            "quotation": "tree",
+            "lemma": "tree",
+        },
+    ])
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\nSentenceDestination=\n", encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "argos")
+    config.set("pipeline", "lemma_base_provider", "argos")
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_path", str(db_path))
+    config.add_section("settings")
+    config.set("settings", "default_language", "en")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("languages")
+    config.set("languages", "en_prompt", "standard")
+    config.add_section("triggers")
+    config.set("triggers", "run_text_translation", "auto")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+
+    resolved_paths = {
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+        "sqlite_db_path": db_path,
+        "storage_backend": "sqlite",
+    }
+    tsv_path = tmp_path / f"{sess_zid}-live-prov-test.en.tsv"
+    headers = ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceDestination"]
+    tsv_path.write_text("\t".join(headers) + "\n0\tapple\t\t1\t\n1\ttree\t\t1\t\n", encoding="utf-8")
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "sentence_index": "SentenceSourceIndex",
+        "sentence_destination": "SentenceDestination",
+    }
+    data_rows = [
+        ["0", "apple", "", "1", ""],
+        ["1", "tree", "", "1", ""],
+    ]
+
+    args = MagicMock()
+    args.language = "en"
+    args.target_lang = "ru"
+    args.text_mode = "single"
+    args.zid = sess_zid
+    args.trace_id = f"{sess_zid}:test"
+
+    with patch("kardenwort_desk.translate_source_text", return_value={0: "яблоня"}), \
+         patch("kardenwort_desk.translate_lemmas_fast_path", return_value=ProvenanceDict({"apple": "яблоко", "tree": "дерево"}, provenance="live:argos")):
+        _progressive_worker_stage_translation_impl(
+            tsv_path=tsv_path,
+            args=args,
+            config=config,
+            resolved_paths=resolved_paths,
+            data_rows=data_rows,
+            headers=headers,
+            role_fields=role_fields,
+            zid=sess_zid,
+            trace_id=f"{sess_zid}:test",
+            row_provenances={},
+        )
+
+    # Verify DB persistence of provenance
+    sents = db.get_sentences_by_session(sess_zid)
+    words = db.get_words_by_session(sess_zid)
+
+    assert len(sents) == 1
+    assert sents[0]["text_provenance"] == "live:argos"
+    assert len(words) == 2
+    assert words[0]["word_provenance"] == "live:argos"
+    assert words[1]["word_provenance"] == "live:argos"
+
+
+def test_progressive_worker_wordfill_stores_and_reloads_corpus_provenance(tmp_path):
+    """Test 6.2: session translated via corpus wordfill stores and retrieves corpus:wordfill:<zid> correctly."""
+    from kardenwort_db import KardenwortDB
+    from kardenwort_desk import _progressive_worker_stage_translation_impl
+
+    db_path = tmp_path / "desk_wf.db"
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    sess_zid = "20260830225802"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "wf-prov-test",
+        "source_language": "en",
+        "source_raw_text": "tree",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "tree",
+    })
+    db.insert_words([
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "tree",
+            "lemma": "tree",
+        }
+    ])
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "google")
+    config.set("pipeline", "lemma_base_provider", "google")
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_path", str(db_path))
+    config.add_section("settings")
+    config.set("settings", "default_language", "en")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("languages")
+    config.set("languages", "en_prompt", "standard")
+    config.add_section("triggers")
+    config.set("triggers", "run_text_translation", "manual")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.add_section("wordfill")
+    config.set("wordfill", "enabled", "true")
+
+    resolved_paths = {
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+        "sqlite_db_path": db_path,
+        "storage_backend": "sqlite",
+    }
+    tsv_path = tmp_path / f"{sess_zid}-wf-prov-test.en.tsv"
+    headers = ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"]
+    tsv_path.write_text("\t".join(headers) + "\n0\ttree\t\t1\n", encoding="utf-8")
+    role_fields = {
+        "lemma": "WordSource",
+        "word_translation": "WordDestination",
+        "sentence_index": "SentenceSourceIndex",
+    }
+    data_rows = [["0", "tree", "", "1"]]
+
+    args = MagicMock()
+    args.language = "en"
+    args.target_lang = "ru"
+    args.text_mode = "single"
+    args.zid = sess_zid
+    args.trace_id = f"{sess_zid}:test"
+
+    match_result = {
+        "WordDestination": "дерево",
+        "_provenance": "corpus:wordfill:20260712134500",
+    }
+
+    with patch("kardenwort_desk.find_wordfill_match", return_value=match_result):
+        _progressive_worker_stage_translation_impl(
+            tsv_path=tsv_path,
+            args=args,
+            config=config,
+            resolved_paths=resolved_paths,
+            data_rows=data_rows,
+            headers=headers,
+            role_fields=role_fields,
+            zid=sess_zid,
+            trace_id=f"{sess_zid}:test",
+            row_provenances={},
+        )
+
+    words = db.get_words_by_session(sess_zid)
+    assert len(words) == 1
+    assert words[0]["word_destination"] == "дерево"
+    assert words[0]["word_provenance"] == "corpus:wordfill:20260712134500"
 
 if __name__ == "__main__":
     unittest.main()

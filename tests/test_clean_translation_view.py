@@ -305,6 +305,7 @@ def test_single_mode_multi_sentence_unified_div_and_matches_write_update_js(mock
                 "sentence_source": "Erster Satz.",
                 "sentence_destination": "First sentence.",
                 "sentence_destination2": "Padded First sentence.",
+                "text_provenance": "cached:sqlite",
             },
             {
                 "session_zid": session_zid,
@@ -312,6 +313,7 @@ def test_single_mode_multi_sentence_unified_div_and_matches_write_update_js(mock
                 "sentence_source": "Zweiter Satz.",
                 "sentence_destination": "Second sentence.",
                 "sentence_destination2": "Padded Second sentence.",
+                "text_provenance": "cached:sqlite",
             }
         ],
         zid=session_zid,

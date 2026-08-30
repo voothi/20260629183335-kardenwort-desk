@@ -1608,14 +1608,16 @@ class KardenwortDB:
         sql = """
             INSERT INTO sentences (
                 session_zid, sentence_index, sentence_source, sentence_destination,
-                sentence_destination2, sentence_source_ipa, sentence_source_audio
-            ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                sentence_destination2, sentence_source_ipa, sentence_source_audio,
+                text_provenance
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
             ON CONFLICT(session_zid, sentence_index) DO UPDATE SET
                 sentence_source = excluded.sentence_source,
                 sentence_destination = excluded.sentence_destination,
                 sentence_destination2 = excluded.sentence_destination2,
                 sentence_source_ipa = excluded.sentence_source_ipa,
-                sentence_source_audio = excluded.sentence_source_audio;
+                sentence_source_audio = excluded.sentence_source_audio,
+                text_provenance = COALESCE(excluded.text_provenance, sentences.text_provenance);
         """
         records = [
             (
@@ -1626,6 +1628,7 @@ class KardenwortDB:
                 s.get("sentence_destination2"),
                 s.get("sentence_source_ipa"),
                 s.get("sentence_source_audio"),
+                s.get("text_provenance") or s.get("provenance"),
             )
             for s in sentences
         ]
@@ -1808,8 +1811,8 @@ class KardenwortDB:
                 session_zid, sentence_index, token_order, quotation, inflected_form,
                 lemma, pos, morphology, ipa, word_destination, word_destination_inflected,
                 selected, leitner_box, leitner_due, deck, classification_oxford,
-                classification_goethe, extra_fields
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                classification_goethe, word_provenance, extra_fields
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         inserted_ids: List[int] = []
 
@@ -1836,6 +1839,7 @@ class KardenwortDB:
                         w.get("deck"),
                         w.get("classification_oxford"),
                         w.get("classification_goethe"),
+                        w.get("word_provenance") or w.get("provenance"),
                         self._serialize_extra_fields(w.get("extra_fields")),
                     ),
                 )
@@ -1999,7 +2003,8 @@ class KardenwortDB:
             "sentence_index", "token_order", "quotation", "inflected_form",
             "lemma", "pos", "morphology", "ipa", "word_destination",
             "word_destination_inflected", "selected", "leitner_box", "leitner_due",
-            "deck", "classification_oxford", "classification_goethe", "extra_fields",
+            "deck", "classification_oxford", "classification_goethe", "word_provenance",
+            "extra_fields",
         }
         valid_updates: Dict[str, Any] = {}
         for k, v in updates.items():
@@ -2073,6 +2078,9 @@ class KardenwortDB:
             "classificationgoethe": "classification_goethe",
             "classificationgoethe": "classification_goethe",
             "pos": "pos",
+            "word_provenance": "word_provenance",
+            "wordprovenance": "word_provenance",
+            "provenance": "word_provenance",
         }
 
         updated_count = 0
@@ -2207,14 +2215,16 @@ class KardenwortDB:
                 sent_sql = """
                     INSERT INTO sentences (
                         session_zid, sentence_index, sentence_source, sentence_destination,
-                        sentence_destination2, sentence_source_ipa, sentence_source_audio
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?)
+                        sentence_destination2, sentence_source_ipa, sentence_source_audio,
+                        text_provenance
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(session_zid, sentence_index) DO UPDATE SET
                         sentence_source = excluded.sentence_source,
                         sentence_destination = excluded.sentence_destination,
                         sentence_destination2 = excluded.sentence_destination2,
                         sentence_source_ipa = excluded.sentence_source_ipa,
-                        sentence_source_audio = excluded.sentence_source_audio;
+                        sentence_source_audio = excluded.sentence_source_audio,
+                        text_provenance = COALESCE(excluded.text_provenance, sentences.text_provenance);
                 """
                 sent_records = [
                     (
@@ -2225,6 +2235,7 @@ class KardenwortDB:
                         s.get("sentence_destination2"),
                         s.get("sentence_source_ipa"),
                         s.get("sentence_source_audio"),
+                        s.get("text_provenance") or s.get("provenance"),
                     )
                     for s in sentences
                 ]
@@ -2237,8 +2248,8 @@ class KardenwortDB:
                         session_zid, sentence_index, token_order, quotation, inflected_form,
                         lemma, pos, morphology, ipa, word_destination, word_destination_inflected,
                         selected, leitner_box, leitner_due, deck, classification_oxford,
-                        classification_goethe, extra_fields
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                        classification_goethe, word_provenance, extra_fields
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """
                 word_records = [
                     (
@@ -2259,6 +2270,7 @@ class KardenwortDB:
                         w.get("deck"),
                         w.get("classification_oxford"),
                         w.get("classification_goethe"),
+                        w.get("word_provenance") or w.get("provenance"),
                         self._serialize_extra_fields(w.get("extra_fields")),
                     )
                     for w in words

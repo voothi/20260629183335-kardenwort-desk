@@ -487,3 +487,122 @@ def test_wal_pragma_optimization(temp_db):
     conn_ro = temp_db.get_connection(read_only=True)
     conn_ro.close()
     assert temp_db._wal_initialized is True
+
+
+def test_word_provenance_round_trip(temp_db):
+    """Verify round-trip write and read for word_provenance via insert_words and batch_update_words."""
+    temp_db.run_migrations()
+    sess_zid = "20260830225500"
+    temp_db.insert_session({
+        "zid": sess_zid,
+        "slug": "prov-word-test",
+        "source_language": "en",
+        "source_raw_text": "Apple tree.",
+    })
+    temp_db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "Apple tree.",
+    })
+    temp_db.insert_words([
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "Apple",
+            "lemma": "apple",
+            "word_destination": "яблоко",
+            "word_provenance": "live:argos",
+        },
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "token_order": 1,
+            "quotation": "tree",
+            "lemma": "tree",
+            "word_destination": "дерево",
+            "word_provenance": "corpus:wordfill:20260101120000",
+        },
+    ])
+
+    words = temp_db.get_words_by_session(sess_zid)
+    assert len(words) == 2
+    assert words[0]["word_provenance"] == "live:argos"
+    assert words[1]["word_provenance"] == "corpus:wordfill:20260101120000"
+
+    # Batch update word_provenance
+    temp_db.batch_update_words(
+        sess_zid,
+        [
+            {
+                "sentence_index": 1,
+                "token_order": 0,
+                "updates": {"word_destination": "яблочко", "word_provenance": "live:google"},
+            }
+        ],
+    )
+    updated_words = temp_db.get_words_by_session(sess_zid)
+    assert updated_words[0]["word_destination"] == "яблочко"
+    assert updated_words[0]["word_provenance"] == "live:google"
+
+
+def test_text_provenance_round_trip(temp_db):
+    """Verify round-trip write and read for text_provenance via insert_sentences and get_sentences_by_session."""
+    temp_db.run_migrations()
+    sess_zid = "20260830225501"
+    temp_db.insert_session({
+        "zid": sess_zid,
+        "slug": "prov-sent-test",
+        "source_language": "en",
+        "source_raw_text": "Hello world.",
+    })
+    temp_db.insert_sentences([
+        {
+            "session_zid": sess_zid,
+            "sentence_index": 1,
+            "sentence_source": "Hello world.",
+            "sentence_destination": "Привет мир.",
+            "text_provenance": "live:argos",
+        }
+    ])
+
+    sents = temp_db.get_sentences_by_session(sess_zid)
+    assert len(sents) == 1
+    assert sents[0]["sentence_destination"] == "Привет мир."
+    assert sents[0]["text_provenance"] == "live:argos"
+
+    bundle = temp_db.get_session_bundle(sess_zid)
+    assert bundle is not None
+    assert bundle["sentences"][0]["text_provenance"] == "live:argos"
+
+
+def test_pre_migration_simulation_returns_none_provenance(temp_db):
+    """Verify that rows without provenance values return None gracefully."""
+    temp_db.run_migrations()
+    sess_zid = "20260830225502"
+    temp_db.insert_session({
+        "zid": sess_zid,
+        "slug": "pre-mig-test",
+        "source_language": "en",
+        "source_raw_text": "Old session.",
+    })
+    temp_db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "Old session.",
+        "sentence_destination": "Старая сессия.",
+    })
+    temp_db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "Old",
+        "lemma": "old",
+        "word_destination": "старый",
+    })
+
+    sents = temp_db.get_sentences_by_session(sess_zid)
+    words = temp_db.get_words_by_session(sess_zid)
+    assert sents[0].get("text_provenance") is None
+    assert words[0].get("word_provenance") is None
+

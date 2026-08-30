@@ -2460,6 +2460,7 @@ class StorageAdapter:
         text: str,
         target_field: str = "sentence_destination",
         zid: Optional[str] = None,
+        provenance: Optional[str] = None,
     ) -> bool:
         return False
 
@@ -2870,6 +2871,7 @@ class SqliteStorageAdapter(StorageAdapter):
                                 "sentence_destination2": dst2_val,
                                 "sentence_source_ipa": ipa_val,
                                 "sentence_source_audio": aud_val,
+                                "text_provenance": existing_sent.get("text_provenance"),
                             }
 
                 # Extract word fields
@@ -2897,6 +2899,14 @@ class SqliteStorageAdapter(StorageAdapter):
                         if val:
                             extra[h_name] = val
 
+                existing_words_by_ord = {}
+                try:
+                    ex_words = self.db.get_words_by_session(session_zid, zid=zid)
+                    if ex_words:
+                        existing_words_by_ord = {w.get("token_order", idx): w for idx, w in enumerate(ex_words)}
+                except Exception:
+                    existing_words_by_ord = {}
+
                 t_ord_raw = get_col_val(row, "tokenorder")
                 token_order = int(t_ord_raw) if (t_ord_raw is not None and str(t_ord_raw).strip().isdigit()) else row_idx
 
@@ -2918,6 +2928,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     "deck": deck,
                     "classification_oxford": oxford,
                     "classification_goethe": goethe,
+                    "word_provenance": existing_words_by_ord.get(token_order, {}).get("word_provenance"),
                     "extra_fields": extra if extra else None,
                 }
                 word_list.append(word_entry)
@@ -3557,6 +3568,7 @@ class SqliteStorageAdapter(StorageAdapter):
         text: str,
         target_field: str = "sentence_destination",
         zid: Optional[str] = None,
+        provenance: Optional[str] = None,
     ) -> bool:
         """
         Pinpoint atomic SQL update for a sentence translation in the sentences table.
@@ -3567,10 +3579,16 @@ class SqliteStorageAdapter(StorageAdapter):
         col = target_field if target_field in allowed_cols else "sentence_destination"
         with self.db.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
-            cursor.execute(
-                f"UPDATE sentences SET {col} = ? WHERE session_zid = ? AND sentence_index = ?;",
-                (text, session_zid, sentence_index),
-            )
+            if provenance:
+                cursor.execute(
+                    f"UPDATE sentences SET {col} = ?, text_provenance = ? WHERE session_zid = ? AND sentence_index = ?;",
+                    (text, provenance, session_zid, sentence_index),
+                )
+            else:
+                cursor.execute(
+                    f"UPDATE sentences SET {col} = ? WHERE session_zid = ? AND sentence_index = ?;",
+                    (text, session_zid, sentence_index),
+                )
             return cursor.rowcount > 0
 
     def batch_update_words(
@@ -8291,11 +8309,20 @@ html, body {{
     
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     row_provenances = {}
-    for r_i, r in enumerate(data_rows):
-        if col_word_dest != -1 and len(r) > col_word_dest and r[col_word_dest].strip():
-            row_provenances[r_i] = "cached:sqlite"
-            if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip():
-                row_provenances[str(r[col_token_order]).strip()] = "cached:sqlite"
+    if is_sqlite:
+        try:
+            target_zid_to_read = zid if (zid and str(zid).strip() and zid != "00000000000000") else extract_zid(working_tsv_path)
+            if target_zid_to_read != "00000000000000":
+                db_words = storage_adapter.db.get_words_by_session(target_zid_to_read)
+                for w in db_words:
+                    w_prov = w.get("word_provenance")
+                    if w_prov:
+                        t_ord = str(w.get("token_order", ""))
+                        row_provenances[t_ord] = w_prov
+                        if t_ord.isdigit():
+                            row_provenances[int(t_ord)] = w_prov
+        except Exception:
+            pass
     
     # --- Word-fill early pre-fill step ---
     if not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
@@ -8566,7 +8593,8 @@ html, body {{
                     else:
                         sentence_translations[a_idx] = ""
     elif translation_text_path.exists():
-        sentence_provenance = "cached:sqlite" if is_sqlite else "cached:file"
+        stored_sent_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None) if (is_sqlite and db_sents) else None
+        sentence_provenance = stored_sent_prov if stored_sent_prov else ("cached:file" if not is_sqlite else None)
         translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
         if eff_mode == 'single':
             sentence_translations[0] = " ".join(translation_lines)
@@ -8585,8 +8613,8 @@ html, body {{
                 else:
                     sentence_translations[a_idx] = ""
     else:
-        if db_sents or extracted_translations:
-            sentence_provenance = "cached:sqlite"
+        stored_sent_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None) if (is_sqlite and db_sents) else None
+        sentence_provenance = stored_sent_prov
         if eff_mode == 'single':
             if is_sqlite and db_sents:
                 clean_lines = [str(s.get("sentence_destination")).strip() for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)) if s.get("sentence_destination") and str(s.get("sentence_destination")).strip()]
@@ -18016,8 +18044,6 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
                 row_obj["provenance"] = row_provenances[row_id]
             elif str(row_id) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(row_id)]
-        if not row_obj.get("provenance") and trans_val and "skeleton-loader" not in trans_val and "btn-retry-cell" not in trans_val:
-            row_obj["provenance"] = "cached:sqlite"
         rows_data[row_id] = row_obj
         if class_cols:
             class_vals = {}
@@ -18286,7 +18312,15 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                 sentence_translated = True
                 
-        active_text_prov = "cached:sqlite" if (sentence_translated and is_sqlite) else None
+        active_text_prov = None
+        if sentence_translated and is_sqlite:
+            try:
+                db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                if db_sents:
+                    stored_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
+                    active_text_prov = stored_prov
+            except Exception:
+                pass
         translated_text_emitted = False
         if not sentence_translated and run_text == 'auto':
             source_txt_path = tsv_path.with_suffix('.txt')
@@ -18313,6 +18347,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
 
                     sentence_translations_raw = translate_source_text(
                         text, getattr(args, 'language', 'en'), args.target_lang, getattr(args, 'text_mode', 'single'), config, resolved_paths, main_text_provider, zid=zid, trace_id=trace_id, chunk_callback=on_chunk_done)
+                    active_text_prov = f"live:{main_text_provider}"
                     
                     # Update sentences table directly in SQLite mode
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
@@ -18323,14 +18358,14 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             if trans and isinstance(trans, str):
                                 s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
                                 try:
-                                    storage_adapter.update_sentence_translation(zid, s_idx, trans, target_field="sentence_destination", zid=zid)
+                                    storage_adapter.update_sentence_translation(zid, s_idx, trans, target_field="sentence_destination", zid=zid, provenance=active_text_prov)
                                 except Exception:
                                     pass
                                 if padded_dict:
                                     padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
                                     if padded_trans and isinstance(padded_trans, str):
                                         try:
-                                            storage_adapter.update_sentence_translation(zid, s_idx, padded_trans, target_field="sentence_destination2", zid=zid)
+                                            storage_adapter.update_sentence_translation(zid, s_idx, padded_trans, target_field="sentence_destination2", zid=zid, provenance=active_text_prov)
                                         except Exception:
                                             pass
 
@@ -18371,12 +18406,19 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if row_provenances is None:
                 row_provenances = {}
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-            for r_i, r in enumerate(data_rows):
-                if col_word_dest != -1 and len(r) > col_word_dest and r[col_word_dest].strip():
-                    t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                    if is_sqlite and r_i not in row_provenances and t_ord not in row_provenances:
-                        row_provenances[r_i] = "cached:sqlite"
-                        row_provenances[t_ord] = "cached:sqlite"
+            if is_sqlite:
+                try:
+                    db_words = storage_adapter.db.get_words_by_session(zid)
+                    for w in db_words:
+                        w_prov = w.get("word_provenance")
+                        if w_prov:
+                            t_ord = str(w.get("token_order", ""))
+                            if t_ord not in row_provenances:
+                                row_provenances[t_ord] = w_prov
+                                if t_ord.isdigit():
+                                    row_provenances[int(t_ord)] = w_prov
+                except Exception:
+                    pass
             wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
             if wordfill_cfg and wordfill_cfg.get('enabled', False):
                 try:
@@ -18405,11 +18447,16 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 if col_lemma != -1 and len(row) > col_lemma:
                                     if col_word_dest != -1 and len(row) > col_word_dest and row[col_word_dest].strip():
                                         t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                        updates.append({
+                                        wf_p = row_provenances.get(t_ord) or row_provenances.get(str(t_ord)) or row_provenances.get(row_idx)
+                                        update_item = {
                                             "token_order": t_ord,
-                                            "field": "word_destination",
-                                            "value": row[col_word_dest],
-                                        })
+                                            "updates": {
+                                                "word_destination": row[col_word_dest],
+                                            }
+                                        }
+                                        if wf_p:
+                                            update_item["updates"]["word_provenance"] = wf_p
+                                        updates.append(update_item)
                             if updates:
                                 storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
                         else:
@@ -18484,8 +18531,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                         row_provenances[t_ord] = fast_prov
                                         updates.append({
                                             "token_order": int(t_ord) if t_ord.isdigit() else row_idx,
-                                            "field": "word_destination",
-                                            "value": trans_val,
+                                            "updates": {
+                                                "word_destination": trans_val,
+                                                "word_provenance": fast_prov,
+                                            },
                                         })
                             if updates:
                                 storage_adapter.batch_update_words(session_zid=zid, updates_list=updates, zid=zid)
@@ -19175,15 +19224,18 @@ def cmd_progressive_worker(args):
             col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
             worker_row_provenances = {}
-            if col_word_dest != -1:
-                for r_i, r in enumerate(data_rows):
-                    if len(r) > col_word_dest and r[col_word_dest].strip():
-                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                        worker_row_provenances[r_i] = "cached:sqlite"
-                        worker_row_provenances[str(r_i)] = "cached:sqlite"
-                        worker_row_provenances[t_ord] = "cached:sqlite"
-                        if t_ord.isdigit():
-                            worker_row_provenances[int(t_ord)] = "cached:sqlite"
+            if is_sqlite:
+                try:
+                    db_words = storage_adapter.db.get_words_by_session(zid)
+                    for w in db_words:
+                        w_prov = w.get("word_provenance")
+                        if w_prov:
+                            t_ord = str(w.get("token_order", ""))
+                            worker_row_provenances[t_ord] = w_prov
+                            if t_ord.isdigit():
+                                worker_row_provenances[int(t_ord)] = w_prov
+                except Exception:
+                    pass
 
             lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
@@ -19272,12 +19324,19 @@ def cmd_progressive_worker(args):
                     status_val = "failed" if worker_error else "success"
                     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
                     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-                    if col_word_dest != -1:
-                        for r_i, r in enumerate(data_rows):
-                            if len(r) > col_word_dest and r[col_word_dest].strip():
-                                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                                if is_sqlite and r_i not in worker_row_provenances and t_ord not in worker_row_provenances:
-                                    worker_row_provenances[t_ord] = "cached:sqlite"
+                    if is_sqlite:
+                        try:
+                            db_words = storage_adapter.db.get_words_by_session(zid)
+                            for w in db_words:
+                                w_prov = w.get("word_provenance")
+                                if w_prov:
+                                    t_ord = str(w.get("token_order", ""))
+                                    if t_ord not in worker_row_provenances:
+                                        worker_row_provenances[t_ord] = w_prov
+                                        if t_ord.isdigit():
+                                            worker_row_provenances[int(t_ord)] = w_prov
+                        except Exception:
+                            pass
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances, text_provenance=active_text_prov)
                     if tsv_path.exists():
