@@ -233,6 +233,52 @@ class TestTranslationProvenance(unittest.TestCase):
             self.assertEqual(res["row_provenances"].get(0) or res["row_provenances"].get("0"), "live:argos")
             self.assertEqual(res["rows"][0]["provenance"], "live:argos")
 
+    def test_format_update_rows_dict_defaults_unassigned_translations_to_cached_sqlite(self):
+        from kardenwort_desk import format_update_rows_dict
+        headers = ["TokenOrder", "WordSource", "WordDestination"]
+        role_fields = {"lemma": "WordSource", "word_translation": "WordDestination"}
+        data_rows = [
+            ["0", "run", "бег"],
+            ["1", "walk", ""],
+            ["2", "jump", '<span class="skeleton-loader">Argos...</span>'],
+            ["3", "fly", '<button class="btn-retry-cell">Retry</button>'],
+        ]
+        # Without any row_provenances passed
+        rows_dict = format_update_rows_dict(data_rows, headers, role_fields)
+        self.assertEqual(rows_dict[0].get("provenance"), "cached:sqlite")
+        self.assertIsNone(rows_dict[1].get("provenance"))
+        self.assertIsNone(rows_dict[2].get("provenance"))
+        self.assertIsNone(rows_dict[3].get("provenance"))
+
+    def test_session_status_fallback_attaches_cached_sqlite_provenance(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as td:
+            tmp_path = Path(td)
+            config = configparser.ConfigParser()
+            config.add_section("rendering")
+            config.set("rendering", "results_dir", str(tmp_path))
+            config.add_section("pipeline")
+            config.set("pipeline", "lemma_base_provider", "argos")
+            config.add_section("settings")
+            config.set("settings", "default_target_language", "ru")
+            resolved_paths = {
+                "results_dir": tmp_path,
+                "anki_mapping_file": tmp_path / "mapping.ini",
+            }
+            from kardenwort_controller import SessionArbiter
+            arbiter = SessionArbiter(config, resolved_paths)
+            headers = ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceDestination"]
+            data_rows = [["0", "run", "бег", "1", "Текст"]]
+            role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "sentence_destination": "SentenceDestination"}
+            from kardenwort_desk import format_update_rows_dict
+            fallback_row_provs = {}
+            col_word_dest = headers.index(role_fields['word_translation'])
+            for r_i, r in enumerate(data_rows):
+                if len(r) > col_word_dest and r[col_word_dest].strip():
+                    fallback_row_provs[r_i] = "cached:sqlite"
+            rows_dict = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fallback_row_provs)
+            self.assertEqual(rows_dict[0].get("provenance"), "cached:sqlite")
+
 def test_progressive_and_terminal_provenance_playwright(page, tmp_path):
     tsv_path = tmp_path / "20260830180000-hello.en.tsv"
     tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\thello\tпривет\t1\n", encoding="utf-8")
@@ -430,6 +476,65 @@ def test_single_sentence_tokenization_and_retry_tooltips(page, tmp_path):
     for s in spans:
         assert s.get_attribute("data-provenance") == "live:argos"
         assert s.get_attribute("title") == "Translated via Argos (offline)"
+
+def test_sqlite_cached_lemma_provenance_tooltips(page, tmp_path):
+    tsv_path = tmp_path / "20260830201500-sample.en.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\trun\tбег\t1\n1\tyou\t\t1\n", encoding="utf-8")
+    
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_destination=SentenceDestination\n", encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "argos")
+    config.set("pipeline", "lemma_base_provider", "argos")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "progressive")
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("languages")
+    config.set("languages", "en_prompt", "standard")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "results_dir": tmp_path,
+        "anki_mapping_file": mapping_path,
+    }
+
+    with patch("kardenwort_desk.translate_source_text", return_value={0: "Текст"}), patch("kardenwort_desk.run_progressive_worker_async"):
+        html = _run_render_flow_impl(
+            text="run you",
+            language="en",
+            zid="20260830201500",
+            text_mode="single",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+    page.set_content(html)
+
+    # Initial render should attribute pre-existing translation "бег" to cached:sqlite
+    cells = page.locator("td.col-translation").all()
+    assert len(cells) == 2
+    assert cells[0].get_attribute("data-provenance") == "cached:sqlite"
+    assert cells[0].get_attribute("title") == "Loaded from session cache (SQLite)"
+
+    # Even after stage="source" progressive delta arrives without explicit provenance,
+    # the client JS should preserve or default to cached:sqlite for the translated cell
+    page.evaluate("""() => {
+        window.receiveUpdate({
+            stage: 'source',
+            status: 'success',
+            rows: {
+                '0': { lemma: 'run', trans: 'бег', token_order: '0' },
+                '1': { lemma: 'you', trans: '', token_order: '1' }
+            }
+        });
+    }""")
+
+    assert cells[0].get_attribute("data-provenance") == "cached:sqlite"
+    assert cells[0].get_attribute("title") == "Loaded from session cache (SQLite)"
 
 if __name__ == "__main__":
     unittest.main()

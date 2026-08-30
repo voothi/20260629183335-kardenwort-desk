@@ -1405,6 +1405,25 @@ class SessionArbiter:
 
         session_zid = res["session_zid"]
 
+        init_row_provenances = {}
+        headers = res.get("headers", [])
+        data_rows = res.get("data_rows", [])
+        mapping = load_anki_mapping(self.resolved_paths.get('anki_mapping_file')) if (self.resolved_paths and 'anki_mapping_file' in self.resolved_paths) else None
+        role_fields = get_role_fields(mapping, headers) if mapping else {}
+        col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        if col_word_dest != -1:
+            for r_i, r in enumerate(data_rows):
+                if len(r) > col_word_dest and r[col_word_dest].strip():
+                    dest_v = r[col_word_dest].strip()
+                    if "skeleton-loader" not in dest_v and "btn-retry-cell" not in dest_v:
+                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                        init_row_provenances[r_i] = "cached:sqlite"
+                        init_row_provenances[str(r_i)] = "cached:sqlite"
+                        init_row_provenances[t_ord] = "cached:sqlite"
+                        if t_ord.isdigit():
+                            init_row_provenances[int(t_ord)] = "cached:sqlite"
+
         with self._lock:
             self.sessions[session_zid] = {
                 "session_zid": session_zid,
@@ -1416,10 +1435,14 @@ class SessionArbiter:
                 "headers": res["headers"],
                 "data_rows": res["data_rows"],
                 "sentence_translation": res["sentence_translation"],
+                "row_provenances": init_row_provenances,
                 "fingerprint": res["fingerprint"],
                 "lock": threading.Lock(),
                 "created_at": time.time(),
             }
+
+        res["row_provenances"] = init_row_provenances
+        res["rowProvenances"] = init_row_provenances
 
         # Emit initial source stage event
         self.emit_event(session_zid, {
@@ -1427,6 +1450,8 @@ class SessionArbiter:
             "stage": "source",
             "status": "success",
             "rows": res["data_rows"],
+            "row_provenances": init_row_provenances,
+            "rowProvenances": init_row_provenances,
             "fingerprint": res["fingerprint"]
         })
 
@@ -2730,10 +2755,28 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
                     )
                 sess_row_provs = safe_sess.get("row_provenances")
+                if sess_row_provs is None:
+                    sess_row_provs = {}
+                col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+                col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+                if col_word_dest != -1:
+                    for r_i, r in enumerate(data_rows):
+                        if len(r) > col_word_dest and r[col_word_dest].strip():
+                            dest_v = r[col_word_dest].strip()
+                            if "skeleton-loader" not in dest_v and "btn-retry-cell" not in dest_v:
+                                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                                if r_i not in sess_row_provs and str(r_i) not in sess_row_provs and t_ord not in sess_row_provs:
+                                    sess_row_provs[r_i] = "cached:sqlite"
+                                    sess_row_provs[str(r_i)] = "cached:sqlite"
+                                    sess_row_provs[t_ord] = "cached:sqlite"
+                                    if t_ord.isdigit():
+                                        sess_row_provs[int(t_ord)] = "cached:sqlite"
                 safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sess_row_provs)
-                if sess_row_provs:
-                    safe_sess["row_provenances"] = sess_row_provs
-                    safe_sess["rowProvenances"] = sess_row_provs
+                safe_sess["row_provenances"] = sess_row_provs
+                safe_sess["rowProvenances"] = sess_row_provs
+                if "text_provenance" not in safe_sess and "textProvenance" not in safe_sess:
+                    safe_sess["text_provenance"] = "cached:sqlite" if (safe_sess.get("translatedText") or safe_sess.get("sentence_translation")) else None
+                    safe_sess["textProvenance"] = safe_sess["text_provenance"]
                 if "translatedText" not in safe_sess or not safe_sess["translatedText"]:
                     st = safe_sess.get("sentence_translation")
                     if st:
@@ -2879,13 +2922,29 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
                 )
 
-            rows_dict = format_update_rows_dict(data_rows, headers, role_fields)
+            fallback_row_provs = {}
+            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+            if col_word_dest != -1:
+                for r_i, r in enumerate(data_rows):
+                    if len(r) > col_word_dest and r[col_word_dest].strip():
+                        dest_v = r[col_word_dest].strip()
+                        if "skeleton-loader" not in dest_v and "btn-retry-cell" not in dest_v:
+                            t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                            fallback_row_provs[r_i] = "cached:sqlite"
+                            fallback_row_provs[str(r_i)] = "cached:sqlite"
+                            fallback_row_provs[t_ord] = "cached:sqlite"
+                            if t_ord.isdigit():
+                                fallback_row_provs[int(t_ord)] = "cached:sqlite"
+
+            rows_dict = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fallback_row_provs)
             translated_html = format_translated_html(
                 sentence_translation,
                 text_mode=text_mode,
                 text=source_text,
                 config=self.server.config
             ) if sentence_translation else ""
+            eff_text_prov = "cached:sqlite" if (sentence_translation or translated_html) else None
 
             self._send_json(200, {
                 "ok": True,
@@ -2898,6 +2957,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     "stage": "translating" if session_is_busy else "finished"
                 },
                 "rows": rows_dict,
+                "row_provenances": fallback_row_provs,
+                "rowProvenances": fallback_row_provs,
+                "text_provenance": eff_text_prov,
+                "textProvenance": eff_text_prov,
                 "translatedText": translated_html,
                 "sentences": sentences_list,
             })

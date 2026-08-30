@@ -11325,13 +11325,17 @@ html, body {{
                         }
                     }
                     function applyCellProvenance(effectiveVal) {
-                        if (rowProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
-                            tds[2].setAttribute('data-provenance', rowProv);
-                            var pTitle = formatProvenanceTooltip(rowProv);
+                        var effProv = rowProv;
+                        if (!effProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
+                            effProv = 'cached:sqlite';
+                        }
+                        if (effProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
+                            tds[2].setAttribute('data-provenance', effProv);
+                            var pTitle = formatProvenanceTooltip(effProv);
                             if (pTitle) tds[2].setAttribute('title', pTitle);
                             var scrollDiv = tds[2].querySelector('.scrollable-cell');
                             if (scrollDiv) {
-                                scrollDiv.setAttribute('data-provenance', rowProv);
+                                scrollDiv.setAttribute('data-provenance', effProv);
                                 if (pTitle) scrollDiv.setAttribute('title', pTitle);
                             }
                         }
@@ -11377,7 +11381,7 @@ html, body {{
                                 applyCellProvenance(val);
                             }
                         }
-                    } else if (!tds[2].classList.contains('dirty') && !tds[2].classList.contains('editing') && rowProv) {
+                    } else if (!tds[2].classList.contains('dirty') && !tds[2].classList.contains('editing')) {
                         var div = tds[2].querySelector('.scrollable-cell') || tds[2];
                         var curText = (div.textContent || div.innerText || '').trim();
                         if (curText && curText !== '...' && curText !== 'Loading...' && !div.querySelector('.skeleton-loader') && !div.querySelector('.btn-retry-cell')) {
@@ -17873,6 +17877,10 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
                 row_obj["provenance"] = row_provenances[token_order_val]
             elif row_id in row_provenances:
                 row_obj["provenance"] = row_provenances[row_id]
+            elif str(row_id) in row_provenances:
+                row_obj["provenance"] = row_provenances[str(row_id)]
+        if not row_obj.get("provenance") and trans_val and "skeleton-loader" not in trans_val and "btn-retry-cell" not in trans_val:
+            row_obj["provenance"] = "cached:sqlite"
         rows_data[row_id] = row_obj
         if class_cols:
             class_vals = {}
@@ -19021,10 +19029,23 @@ def cmd_progressive_worker(args):
                 mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
                 role_fields = get_role_fields(mapping, headers)
                 
+            col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+            worker_row_provenances = {}
+            if col_word_dest != -1:
+                for r_i, r in enumerate(data_rows):
+                    if len(r) > col_word_dest and r[col_word_dest].strip():
+                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                        worker_row_provenances[r_i] = "cached:sqlite"
+                        worker_row_provenances[str(r_i)] = "cached:sqlite"
+                        worker_row_provenances[t_ord] = "cached:sqlite"
+                        if t_ord.isdigit():
+                            worker_row_provenances[int(t_ord)] = "cached:sqlite"
+
             lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             # Write initial source stage immediately so UI renders without delay
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances)
                 
             base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
             sibling_timeout = config.getfloat(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) if hasattr(config, 'getfloat') else float(config.get(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) or 0.0)
@@ -19033,7 +19054,6 @@ def cmd_progressive_worker(args):
                 wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
                 data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
                 
-            worker_row_provenances = {}
             try:
                 run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
                 run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
