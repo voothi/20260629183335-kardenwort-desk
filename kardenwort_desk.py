@@ -1687,6 +1687,34 @@ def _migrate_config(config):
                 lemma_reprocess = 'intellifiller'
     config.set(SEC_PIPELINE, 'lemma_reprocess_provider', lemma_reprocess)
 
+    # Resolve failover_strategy
+    failover_strategy = config.get(SEC_PIPELINE, 'failover_strategy', fallback=None)
+    if failover_strategy is None:
+        auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=False)
+        failover_strategy = 'offline_fallback' if auto_fallback else 'chain'
+    config.set(SEC_PIPELINE, 'failover_strategy', failover_strategy.strip().lower())
+
+    # Resolve text_provider_chain (migrated from text_base_provider)
+    text_chain = config.get(SEC_PIPELINE, 'text_provider_chain', fallback=None)
+    if text_chain is None:
+        if text_base:
+            if failover_strategy == 'offline_fallback' and text_base != 'argos':
+                text_chain = f"{text_base}, argos"
+            else:
+                text_chain = text_base
+        else:
+            text_chain = 'google'
+    config.set(SEC_PIPELINE, 'text_provider_chain', text_chain)
+
+    # Resolve lemma_provider_chain (migrated from lemma_base_provider)
+    lemma_chain = config.get(SEC_PIPELINE, 'lemma_provider_chain', fallback=None)
+    if lemma_chain is None:
+        if lemma_base:
+            lemma_chain = lemma_base
+        else:
+            lemma_chain = 'google'
+    config.set(SEC_PIPELINE, 'lemma_provider_chain', lemma_chain)
+
     # Read legacy triggers
     legacy_lazy = config.get(SEC_SETTINGS, 'lazy_processing', fallback=None) if config.has_section(SEC_SETTINGS) else None
 
@@ -5115,17 +5143,98 @@ def is_network_online_multi(hosts, port=53, timeout=1.0):
                 return True
         return False
 
-def translate_text(text, source, target, config, resolved_paths, provider, zid=None, trace_id=None):
+def resolve_provider_chain(config, task_type: str = 'text') -> Tuple[List[str], str]:
+    """
+    Resolves the ordered list of translation providers and the failover strategy.
+    
+    Args:
+        config: ConfigParser instance.
+        task_type: 'text' or 'lemma'.
+        
+    Returns:
+        Tuple[List[str], str]: (providers_list, failover_strategy)
+    """
+    if config is None:
+        return (['google'], 'chain')
+    
+    strategy = config.get(SEC_PIPELINE, 'failover_strategy', fallback=None) if config.has_section(SEC_PIPELINE) else None
+    if not strategy:
+        auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=False) if config.has_section(SEC_PIPELINE) else False
+        strategy = 'offline_fallback' if auto_fallback else 'chain'
+    else:
+        strategy = strategy.strip().lower()
+
+    if task_type == 'lemma':
+        chain_str = config.get(SEC_PIPELINE, 'lemma_provider_chain', fallback=None) if config.has_section(SEC_PIPELINE) else None
+        if not chain_str:
+            chain_str = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if config.has_section(SEC_PIPELINE) else 'google'
+    else:
+        chain_str = config.get(SEC_PIPELINE, 'text_provider_chain', fallback=None) if config.has_section(SEC_PIPELINE) else None
+        if not chain_str:
+            chain_str = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if config.has_section(SEC_PIPELINE) else 'google'
+
+    providers = [p.strip().lower() for p in chain_str.split(',') if p.strip()] if chain_str else []
+    if not providers:
+        providers = ['google']
+
+    if strategy == 'offline_fallback' and 'argos' not in providers:
+        providers.append('argos')
+
+    return (providers, strategy)
+
+def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None):
+    """Executes translation using a single explicit provider without failover branching."""
+    p_norm = (provider_name or "").strip().lower()
+    if p_norm == 'google':
+        return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+    elif p_norm == 'deepl':
+        return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+    elif p_norm == 'argos':
+        return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+    elif p_norm == 'mock':
+        time.sleep(0.01)
+        return f"[MOCK] {text}"
+    elif p_norm in ('combined', 'intellifiller'):
+        return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+    elif p_norm == 'none':
+        return ""
+    else:
+        raise Exception(f"Unsupported translation provider: {provider_name}")
+
+def translate_text(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None):
     with TraceTimer("translate_text", zid or "unknown", config, resolved_paths):
         return _translate_text_impl(text, source, target, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
 
-def _translate_text_impl(text, source, target, config, resolved_paths, provider, zid=None, trace_id=None):
-    auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=True)
+def _translate_text_impl(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None):
+    configured_chain, configured_strategy = resolve_provider_chain(config, task_type='text')
     
-    check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1'))
+    if provider and provider != 'default':
+        if ',' in provider:
+            providers_to_try = [p.strip().lower() for p in provider.split(',') if p.strip()]
+            strategy = configured_strategy
+        else:
+            p_norm = provider.strip().lower()
+            strategy = configured_strategy
+            if strategy == 'strict':
+                providers_to_try = [p_norm]
+            elif strategy == 'offline_fallback':
+                providers_to_try = [p_norm] if p_norm == 'argos' else [p_norm, 'argos']
+            else:
+                # strategy == 'chain'
+                providers_to_try = [p_norm] + [p for p in configured_chain if p != p_norm]
+                if p_norm == 'deepl' and 'google' not in providers_to_try:
+                    providers_to_try.append('google')
+    else:
+        providers_to_try = list(configured_chain)
+        strategy = configured_strategy
+
+    if not providers_to_try:
+        providers_to_try = ['google']
+
+    check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1')) if config and config.has_section(SEC_PIPELINE) else ''
     check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
-    
-    if auto_fallback and check_ips and provider != 'argos':
+
+    if strategy == 'offline_fallback' and check_ips and providers_to_try[0] != 'argos':
         if not is_network_online_multi(hosts=check_ips):
             logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online providers and going straight to Argos.")
             try:
@@ -5134,48 +5243,38 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider,
                 logger.error(f"Argos offline fallback failed: {ex2}")
                 raise ex2
 
-    try:
-        if provider == 'google':
-            return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-        elif provider == 'deepl':
-            try:
-                return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-            except Exception as e:
-                logger.warning(f"DeepL translation failed: {e}. Trying Google failover...")
-                return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-        elif provider == 'argos':
-            return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-        elif provider == 'mock':
-            time.sleep(0.01) # Simulate deterministic micro-delay
-            return f"[MOCK] {text}"
-        elif provider in ('combined', 'intellifiller'):
-            try:
-                return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-            except Exception as e:
-                logger.warning(f"Google translation failed: {e}. Trying DeepL failover...")
-                return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-        elif provider == 'none':
-            return ""
-        else:
-            raise Exception(f"Unsupported translation provider: {provider}")
-    except Exception as e:
-        if auto_fallback and provider != 'argos':
-            # Verify if it's an actual offline event vs an API rate limit (429)
-            if check_ips and not is_network_online_multi(hosts=check_ips):
-                logger.warning(f"Primary provider '{provider}' failed: {e}. Network appears offline. Auto-fallback to Argos...")
-                try:
-                    return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-                except Exception as ex2:
-                    logger.error(f"Argos offline fallback failed: {ex2}")
-                    raise ex2
-            else:
-                # Network is online. Likely a rate limit or transient API error. Raise to trigger retry loop.
-                logger.warning(f"Primary provider '{provider}' failed: {e}. Network is online. Raising exception for retries...")
+    last_exception = None
+    for idx, current_provider in enumerate(providers_to_try):
+        is_last = (idx == len(providers_to_try) - 1)
+        try:
+            return dispatch_single_provider(current_provider, text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+        except Exception as e:
+            last_exception = e
+            if strategy == 'strict':
+                logger.warning(f"Provider '{current_provider}' failed under strict strategy: {e}. Aborting failover.")
                 raise e
-        else:
-            if provider != 'argos':
-                logger.warning(f"Provider '{provider}' failed: {e}. Auto-offline fallback is disabled.")
-            raise e
+            
+            if strategy == 'offline_fallback':
+                if current_provider != 'argos' and 'argos' in providers_to_try:
+                    if check_ips and not is_network_online_multi(hosts=check_ips):
+                        logger.warning(f"Primary provider '{current_provider}' failed: {e}. Network offline. Falling back to Argos...")
+                        continue
+                    else:
+                        logger.warning(f"Primary provider '{current_provider}' failed: {e}. Network is online. Raising exception...")
+                        raise e
+                if is_last:
+                    raise e
+                continue
+
+            # strategy == 'chain'
+            if is_last:
+                logger.warning(f"Final provider '{current_provider}' in chain failed: {e}")
+                raise e
+            logger.warning(f"Provider '{current_provider}' failed ({e}), falling back to next provider '{providers_to_try[idx+1]}'...")
+
+    if last_exception:
+        raise last_exception
+    return ""
 
 def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider):
     if not lemmas:

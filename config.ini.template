@@ -43,6 +43,15 @@ use_local_fork = true
 ; Automatically fallback to offline argos translation when primary network providers fail
 auto_offline_fallback = false
 
+; The provider fallback chain for sentence text translation (comma-separated list, e.g. deepl, google, argos)
+text_provider_chain = deepl, google, argos
+
+; The provider fallback chain for lemma word translation (comma-separated list, e.g. google, argos)
+lemma_provider_chain = google, argos
+
+; Translation failover strategy: 'strict' (primary provider only), 'chain' (sequential fallback), 'offline_fallback' (primary online, argos offline)
+failover_strategy = chain
+
 ; The IP addresses to ping for the fast connectivity check before online translation (comma separated, e.g. 8.8.8.8, 1.1.1.1). Leave empty to disable.
 fast_connectivity_check_ips = 
 
