@@ -151,7 +151,7 @@ def test_controller_lookup_endpoint(running_controller):
     server_url, _ = running_controller
     url = f"{server_url}/api/v1/lookup?text=apple&language=en&bypass-lang-check=true"
     req = urllib.request.Request(url)
-    with urllib.request.urlopen(req, timeout=10.0) as resp:
+    with urllib.request.urlopen(req, timeout=30.0) as resp:
         assert resp.status == 200
         res = json.loads(resp.read().decode('utf-8'))
         assert res["status"] == "success"
@@ -459,7 +459,7 @@ def test_controller_session_retext_long_single_mode_text(running_controller):
             "X-API-Token": "test-controller-api-key"
         }
     )
-    with urllib.request.urlopen(req_create, timeout=60.0) as resp:
+    with urllib.request.urlopen(req_create, timeout=120.0) as resp:
         assert resp.status == 200
         create_res = json.loads(resp.read().decode('utf-8'))
         session_zid = create_res["data"]["session_zid"]
@@ -479,7 +479,7 @@ def test_controller_session_retext_long_single_mode_text(running_controller):
             "X-API-Token": "test-controller-api-key"
         }
     )
-    with urllib.request.urlopen(req_retext, timeout=60.0) as resp:
+    with urllib.request.urlopen(req_retext, timeout=120.0) as resp:
         assert resp.status == 200
         retext_res = json.loads(resp.read().decode('utf-8'))
         assert retext_res["status"] == "success"

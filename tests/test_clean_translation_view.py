@@ -332,8 +332,8 @@ def test_single_mode_multi_sentence_unified_div_and_matches_write_update_js(mock
             tsv_path=tsv_path,
         )
 
-    # Initial HTML #translation-container must contain a single unified <div> paragraph
-    expected_unified_html = "<div>First sentence. Second sentence.</div>"
+    # Initial HTML #translation-container must contain a single unified <div> paragraph with active provenance
+    expected_unified_html = '<div data-provenance="cached:sqlite" title="Loaded from session cache (SQLite)">First sentence. Second sentence.</div>'
     assert f'<div class="translation-text" id="translation-container">{expected_unified_html}</div>' in html
     assert "<div>First sentence.</div><div>Second sentence.</div>" not in html
 
