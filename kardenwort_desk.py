@@ -5314,50 +5314,150 @@ def format_provenance_tooltip(prov, zid=None):
         return f"Translated via fallback ({p})"
     return prov_str
 
+def _parse_numbered_response(response_text, n):
+    """
+    Extract n translations from a numbered response like:
+      1. Haus
+      2. Baum
+    Returns a list of n strings, or None if alignment fails.
+    """
+    lines = [l.strip() for l in response_text.splitlines() if l.strip()]
+    results = []
+    for line in lines:
+        m = re.match(r'^\d+[.)]\s*(.*)', line)
+        if m:
+            results.append(m.group(1).strip())
+    if len(results) == n:
+        return results
+    return None
+
+
 def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider):
+    """
+    Translate a list of lemmas using a multi-tier batch strategy.
+
+    Tier 0 (semicolon join): "Haus; Buch; ..." - fastest single request, works for providers that preserve semicolons.
+    Tier 1 (numbered prefix): "1. Haus\n2. Buch\n..." - robust against Argos semicolon mutations.
+    Tier 2 (plain newline join): "Haus\nBuch\n..." - fallback for providers that strip digit prefixes.
+    Tier 3 (concurrent individual calls): ThreadPoolExecutor(max_workers=4) - bounded parallel pool.
+    """
+    import concurrent.futures
+
     prov_tag = f"live:{provider}" if provider else "live:unknown"
     if not lemmas:
         return ProvenanceDict({}, provenance=prov_tag)
-        
-    compact_line = "; ".join(lemmas)
-    translations = {}
-    try:
-        translated_line = translate_text(compact_line, source, target, config, resolved_paths, provider)
-        parts = [p.strip() for p in translated_line.split(';')]
-        if len(parts) != len(lemmas):
-            # Check secondary delimiters like newline or period
-            lines = [p.strip() for p in translated_line.splitlines() if p.strip()]
-            if len(lines) == len(lemmas):
-                parts = lines
-            else:
-                periods = [p.strip() for p in translated_line.split('.') if p.strip()]
-                if len(periods) == len(lemmas):
-                    parts = periods
-                    
-        if len(parts) == len(lemmas):
-            logger.info("Fast-path lemma translation aligned successfully.")
-            for i, lemma in enumerate(lemmas):
-                val = parts[i]
-                if not val:
-                    try:
-                        val = translate_text(lemma, source, target, config, resolved_paths, provider)
-                    except Exception:
-                        val = ""
-                translations[lemma] = val.strip() if val else ""
-            return ProvenanceDict(translations, provenance=prov_tag)
-        else:
-            logger.warning(f"Fast-path alignment failure: expected {len(lemmas)} parts, got {len(parts)}. Falling back to individual calls.")
-    except Exception as e:
-        logger.warning(f"Fast-path translation failed: {e}. Falling back to individual calls.")
-        
-    for lemma in lemmas:
+
+    # Read optional batch size from config (default 15).
+    batch_size = 15
+    if config:
+        try:
+            batch_size = int(config.getint(SEC_TRANSLATION, 'lemma_batch_size', fallback=15))
+        except Exception:
+            pass
+
+    # Process in chunks when list exceeds batch_size.
+    if len(lemmas) > batch_size:
+        translations = {}
+        chunks = [lemmas[i:i + batch_size] for i in range(0, len(lemmas), batch_size)]
+        for chunk in chunks:
+            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, provider)
+            translations.update(chunk_result)
+        return ProvenanceDict(translations, provenance=prov_tag)
+
+    def _translate_single(lemma):
         try:
             val = translate_text(lemma, source, target, config, resolved_paths, provider)
-            translations[lemma] = val.strip() if val else ""
-        except Exception as e:
-            logger.warning(f"Failed to translate lemma '{lemma}': {e}")
-            translations[lemma] = ""
+            return lemma, val.strip() if val else ""
+        except Exception as exc:
+            logger.warning(f"Individual lemma translate failed for '{lemma}': {exc}")
+            return lemma, ""
+
+    n = len(lemmas)
+    translations = {}
+
+    # --- Tier 0: Semicolon join (fastest, works for providers that preserve punctuation) ---
+    try:
+        semicolon_input = "; ".join(lemmas)
+        translated_sc = translate_text(semicolon_input, source, target, config, resolved_paths, provider)
+        sc_parts = [p.strip() for p in translated_sc.split(';') if p.strip()]
+        if len(sc_parts) != n:
+            # Try secondary delimiters from the semicolon response before giving up on Tier 0
+            nl_parts = [p.strip() for p in translated_sc.splitlines() if p.strip()]
+            if len(nl_parts) == n:
+                sc_parts = nl_parts
+            else:
+                sc_parts = []
+        if len(sc_parts) == n:
+            logger.info(f"Fast-path lemma translation (semicolon, {n} lemmas) aligned successfully.")
+            for i, lemma in enumerate(lemmas):
+                val = sc_parts[i]
+                if not val:
+                    _, val = _translate_single(lemma)
+                translations[lemma] = val
+            return ProvenanceDict(translations, provenance=prov_tag)
+        else:
+            logger.debug(f"Fast-path semicolon alignment failed ({n} lemmas), trying numbered prefix.")
+    except Exception as e:
+        logger.warning(f"Fast-path semicolon batch failed: {e}")
+
+    # --- Tier 1: Numbered prefix batch (robust against Argos semicolon mutations) ---
+    try:
+        numbered_input = "\n".join(f"{i + 1}. {lemma}" for i, lemma in enumerate(lemmas))
+        translated_numbered = translate_text(numbered_input, source, target, config, resolved_paths, provider)
+        parsed = _parse_numbered_response(translated_numbered, n)
+        if parsed is not None:
+            # Echo guard: if every translation is identical to its source lemma, the engine echoed the input.
+            is_echo = all(parsed[i].strip() == lemmas[i].strip() for i in range(n))
+            if not is_echo:
+                logger.info(f"Fast-path lemma translation (numbered, {n} lemmas) aligned successfully.")
+                for i, lemma in enumerate(lemmas):
+                    val = parsed[i]
+                    if not val:
+                        _, val = _translate_single(lemma)
+                    translations[lemma] = val
+                return ProvenanceDict(translations, provenance=prov_tag)
+            else:
+                logger.debug(f"Fast-path numbered tier produced echo response ({n} lemmas), trying newline join.")
+        else:
+            logger.debug(f"Fast-path numbered alignment failed ({n} lemmas), trying newline join.")
+    except Exception as e:
+        logger.warning(f"Fast-path numbered batch failed: {e}")
+
+    # --- Tier 2: Plain newline join ---
+    try:
+        newline_input = "\n".join(lemmas)
+        translated_newline = translate_text(newline_input, source, target, config, resolved_paths, provider)
+        parts = [p.strip() for p in translated_newline.splitlines() if p.strip()]
+        if len(parts) == n:
+            # Echo guard: if every translation is identical to its source lemma, the engine echoed the input.
+            is_echo = all(parts[i] == lemmas[i] for i in range(n))
+            if not is_echo:
+                logger.info(f"Fast-path lemma translation (newline join, {n} lemmas) aligned successfully.")
+                for i, lemma in enumerate(lemmas):
+                    val = parts[i]
+                    if not val:
+                        _, val = _translate_single(lemma)
+                    translations[lemma] = val
+                return ProvenanceDict(translations, provenance=prov_tag)
+            else:
+                logger.debug(f"Fast-path newline tier produced echo response ({n} lemmas), falling back to concurrent individual calls.")
+        else:
+            logger.debug(f"Fast-path newline alignment failed (got {len(parts)} parts for {n} lemmas), falling back to concurrent individual calls.")
+    except Exception as e:
+        logger.warning(f"Fast-path newline batch failed: {e}")
+
+    # --- Tier 3: Concurrent individual calls (bounded pool, max 4 workers) ---
+    logger.warning(f"Fast-path alignment failed for all batch strategies ({n} lemmas). Using concurrent individual calls.")
+    max_workers = min(4, n)
+    with concurrent.futures.ThreadPoolExecutor(max_workers=max_workers) as pool:
+        futures = {pool.submit(_translate_single, lemma): lemma for lemma in lemmas}
+        for future in concurrent.futures.as_completed(futures):
+            lemma, val = future.result()
+            translations[lemma] = val
+
     return ProvenanceDict(translations, provenance=prov_tag)
+
+
 
 EXIT_PARTIAL_TRANSLATION_PERSISTED = 2
 

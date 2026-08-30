@@ -359,6 +359,23 @@ class ProcessSupervisor:
             except Exception:
                 pass
 
+            try:
+                if hasattr(self.config, 'getboolean'):
+                    warmup_argos = self.config.getboolean(SEC_TRANSLATION, 'warmup_argos', fallback=False)
+                else:
+                    warmup_argos = False
+                if warmup_argos:
+                    trans_cmd.append("--warmup-argos")
+            except Exception:
+                pass
+
+            try:
+                argos_conc = self.config.get(SEC_TRANSLATION, 'argos_concurrency', fallback=None)
+                if argos_conc is not None and str(argos_conc).strip():
+                    trans_cmd.extend(["--argos-concurrency", str(argos_conc).strip()])
+            except Exception:
+                pass
+
         self.services["translation"] = SidecarService(
             name="translation",
             port=trans_port,
