@@ -11340,7 +11340,15 @@ html, body {{
                             })(skel);
                             var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
                             if (rowId !== null && rowId !== undefined) {
-                                (p && p.classList.contains('scrollable-cell') ? p : skel).innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                                var skelTarget = (p && p.classList.contains('scrollable-cell') ? p : skel);
+                                var rStateS = window.AppState.rows[rowId];
+                                var rTransS = rStateS ? (rStateS.trans || rStateS.WordDestination || rStateS.word_translation || '') : '';
+                                if (rTransS && rTransS !== '') {
+                                    if (typeof setCellText === 'function') setCellText(skelTarget, rTransS);
+                                    else skelTarget.textContent = rTransS;
+                                } else {
+                                    skelTarget.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                                }
                             } else if (p && p.id === 'translation-container') {
                                 p.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                             } else if (p && p.id === 'source-container') {
@@ -11364,7 +11372,18 @@ html, body {{
                             var transDiv = transTd.querySelector('.scrollable-cell') || transTd;
                             var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
                             if (!transContent || transContent === '...' || transContent === 'Loading...' || transDiv.querySelector('.skeleton-loader')) {
-                                transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
+                                // Skip Retry if AppState already carries a resolved translation - DOM just hasn't rendered it yet.
+                                var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
+                                var rTrans = rState ? (rState.trans || rState.WordDestination || rState.word_translation || '') : '';
+                                if (rTrans && rTrans !== '') {
+                                    // Translation is available in state - render it instead of Retry
+                                    if (!transTd.classList.contains('editing')) {
+                                        if (typeof setCellText === 'function') setCellText(transDiv, rTrans);
+                                        else transDiv.textContent = rTrans;
+                                    }
+                                } else {
+                                    transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
+                                }
                                 updated = true;
                             } else {
                                 var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);

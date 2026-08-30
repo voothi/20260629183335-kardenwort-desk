@@ -832,13 +832,12 @@ def test_progressive_lemma_update_replaces_skeleton_and_sets_provenance(page, tm
 
 def test_rmb_flip_during_progressive_loading_does_not_flip_to_skeleton_text(page, tmp_path):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
-    source_text = "All artifacts complete."
+    source_text = "xyzartifact unkwordflip."
     tsv_content = (
         "# comment\n"
         "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
-        "0\tall\t\t1\n"
-        "1\tartifact\t\t1\n"
-        "2\tcomplete\t\t1\n"
+        "0\txyzartifact\t\t1\n"
+        "1\tunkwordflip\t\t1\n"
     )
     tsv_file = tmp_path / "20260831005500-skeleton-flip.en.tsv"
     tsv_file.write_text(tsv_content, encoding="utf-8")
@@ -856,15 +855,15 @@ def test_rmb_flip_during_progressive_loading_does_not_flip_to_skeleton_text(page
     page.set_content(html)
 
     # Initial stage has skeleton loaders in table cells
-    span_complete = page.locator("span.word[data-lower-clean='complete']").first
-    assert span_complete.is_visible()
+    span_unk = page.locator("span.word[data-lower-clean='unkwordflip']").first
+    assert span_unk.is_visible()
 
-    # Trigger RMB click on 'complete' while translation cell still has skeleton 'Argos...'
-    span_complete.click(button="right")
+    # Trigger RMB click on 'unkwordflip' while translation cell still has skeleton 'Argos...'
+    span_unk.click(button="right")
 
     # Word span must NOT be flipped to 'Argos...' and must NOT have .flipped class
-    assert span_complete.inner_text() == "complete"
-    assert "flipped" not in (span_complete.get_attribute("class") or "")
+    assert span_unk.inner_text() == "unkwordflip"
+    assert "flipped" not in (span_unk.get_attribute("class") or "")
     assert "Argos" not in (page.locator("#source-container").inner_text())
 
 

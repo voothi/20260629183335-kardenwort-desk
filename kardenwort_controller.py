@@ -2982,7 +2982,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
-            # Semantic completion check: if untranslated lemmas remain and session is recent (<= 300s) or locked
+            # Semantic completion check: if untranslated lemmas remain and session is recent or locked.
+            # Use 1800s (30 min) recency window - Argos can take many minutes for large texts.
             is_recent = False
             try:
                 if len(zid) >= 14 and zid[:14].isdigit():
@@ -2991,10 +2992,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     dt = datetime(yr, mo, dy, hr, mn, min(sc, 59)) + timedelta(seconds=max(0, sc - 59))
                     now = datetime.now()
                     age_sec = (now - dt).total_seconds()
-                    if abs(age_sec) <= 300:
+                    if abs(age_sec) <= 1800:
                         is_recent = True
             except Exception:
                 pass
+            # If the progressive worker is still actively registered, the session is busy
+            # regardless of age. This prevents premature Retry badges during slow Argos runs.
+            if not is_busy and hasattr(self.server, 'arbiter') and self.server.arbiter:
+                eq = getattr(self.server.arbiter, 'enrichment_queue', None)
+                if eq and hasattr(eq, '_active_progressive_sessions'):
+                    with eq._lock:
+                        if zid in eq._active_progressive_sessions:
+                            is_busy = True
 
             has_untranslated_lemmas = False
             if data_rows and headers:
