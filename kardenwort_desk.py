@@ -18283,6 +18283,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
     rows_data = {}
+    alias_candidates = []  # (token_order_str, row_obj)
     for row_id, row in enumerate(data_rows):
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
@@ -18310,16 +18311,21 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             elif str(row_id) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(row_id)]
         rows_data[row_id] = row_obj
-        if str(token_order_val) != str(row_id):
-            rows_data[str(token_order_val)] = row_obj
         if class_cols:
             class_vals = {}
             for name, col_idx in class_cols:
                 val = row[col_idx] if len(row) > col_idx else ""
                 class_vals[name] = val
             rows_data[row_id]["classifications"] = class_vals
-            if str(token_order_val) != str(row_id):
-                rows_data[str(token_order_val)]["classifications"] = class_vals
+        if str(token_order_val) != str(row_id):
+            alias_candidates.append((str(token_order_val), row_obj))
+    # Write token_order aliases only when the alias key is not already occupied by a
+    # sorted-position entry that maps to a different row. This preserves frequency-sort
+    # order while still making token_order lookup available for progressive updates.
+    row_id_keys = set(str(k) for k in rows_data)
+    for tok_str, row_obj in alias_candidates:
+        if tok_str not in row_id_keys:
+            rows_data[tok_str] = row_obj
     return rows_data
 
 def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, **extra_kwargs):

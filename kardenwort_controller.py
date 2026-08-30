@@ -2886,6 +2886,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             # Fallback: check persistent storage (SQLite or TSV)
             results_dir = resolve_results_dir(self.server.resolved_paths, self.server.config)
             storage_adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+            is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
             tsv_path = find_working_tsv(results_dir, zid) if results_dir else None
             session_found = False
