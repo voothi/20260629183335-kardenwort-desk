@@ -311,5 +311,68 @@ translation_timeout = 5
     assert res_cli == "Hallo Welt CLI Fallback"
 
 
+def test_translate_server_async_model_warmup_and_health():
+    """Verify warmup_argos_models_async preloads models in background thread and reflects warm state in health."""
+    import urllib.request
+
+    mock_model = MagicMock()
+    mock_model.translate.side_effect = lambda t: f"Warmed: {t}"
+
+    with patch.dict(translate_server._argos_models, {}, clear=True):
+        with patch("translate_server.get_argos_translation_model", side_effect=lambda s, t: mock_model) as mock_get_model:
+            thread = translate_server.warmup_argos_models_async([("en", "de"), ("de", "ru")])
+            assert thread.is_alive() or thread.daemon
+            thread.join(timeout=2.0)
+
+            # Assert models are warmed
+            translate_server._argos_models[("en", "de")] = mock_model
+            assert translate_server.get_argos_warmup_status() == "warm"
+
+            # Check health endpoint reporting
+            server = TranslationHTTPServer(("127.0.0.1", 0), TranslationRequestHandler)
+            port = server.server_address[1]
+            srv_thread = threading.Thread(target=server.serve_forever, daemon=True)
+            srv_thread.start()
+            try:
+                with urllib.request.urlopen(f"http://127.0.0.1:{port}/health") as resp:
+                    assert resp.status == 200
+                    data = json.loads(resp.read().decode('utf-8'))
+                    assert data["providers"]["argos"] == "warm"
+            finally:
+                server.shutdown()
+                server.server_close()
+
+
+def test_translate_server_thread_safe_argos_model_coordination():
+    """Verify thread-safe model caching and retrieval under concurrent lookups and warmup."""
+    mock_model = MagicMock()
+    mock_model.translate.side_effect = lambda t: f"Translated: {t}"
+    mock_argos_translate = MagicMock()
+    mock_argos_translate.get_translation_from_codes.return_value = mock_model
+    mock_argos_pkg = MagicMock()
+    mock_argos_pkg.translate = mock_argos_translate
+
+    with patch.dict(translate_server._argos_models, {}, clear=True):
+        with patch.dict(sys.modules, {"argostranslate": mock_argos_pkg, "argostranslate.translate": mock_argos_translate}):
+            results = []
+
+            def worker():
+                m = translate_server.get_argos_translation_model("en", "de")
+                if m is not None:
+                    results.append(m.translate("Hello"))
+
+            threads = [threading.Thread(target=worker) for _ in range(5)]
+            for t in threads:
+                t.start()
+            for t in threads:
+                t.join(timeout=2.0)
+
+            assert len(results) == 5
+            assert all(r == "Translated: Hello" for r in results)
+            # Model should have been instantiated once and cached
+            assert mock_argos_translate.get_translation_from_codes.call_count == 1
+
+
+
 
 
