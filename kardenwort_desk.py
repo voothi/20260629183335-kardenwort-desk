@@ -5309,6 +5309,8 @@ def format_provenance_tooltip(prov, zid=None):
         return f"Pre-filled from Corpus (ZID: {z})"
     if prov_str == "cached:sqlite":
         return "Loaded from session cache (SQLite)"
+    if prov_str == "cached:file":
+        return "Loaded from translation file cache"
     if prov_str.startswith("fallback:"):
         p = prov_str[9:].strip()
         return f"Translated via fallback ({p})"
@@ -8564,7 +8566,7 @@ html, body {{
                     else:
                         sentence_translations[a_idx] = ""
     elif translation_text_path.exists():
-        sentence_provenance = "cached:sqlite" if is_sqlite else "cached:sqlite"
+        sentence_provenance = "cached:sqlite" if is_sqlite else "cached:file"
         translation_lines = translation_text_path.read_text(encoding='utf-8').splitlines()
         if eff_mode == 'single':
             sentence_translations[0] = " ".join(translation_lines)
@@ -10503,6 +10505,9 @@ html, body {{
         }
         if (prov === 'cached:sqlite') {
             return 'Loaded from session cache (SQLite)';
+        }
+        if (prov === 'cached:file') {
+            return 'Loaded from translation file cache';
         }
         if (prov.indexOf('fallback:') === 0) {
             var p = prov.substring(9);
@@ -18281,7 +18286,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                 sentence_translated = True
                 
-        active_text_prov = "cached:sqlite" if sentence_translated else None
+        active_text_prov = "cached:sqlite" if (sentence_translated and is_sqlite) else None
         translated_text_emitted = False
         if not sentence_translated and run_text == 'auto':
             source_txt_path = tsv_path.with_suffix('.txt')
@@ -18369,7 +18374,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             for r_i, r in enumerate(data_rows):
                 if col_word_dest != -1 and len(r) > col_word_dest and r[col_word_dest].strip():
                     t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                    if r_i not in row_provenances and t_ord not in row_provenances:
+                    if is_sqlite and r_i not in row_provenances and t_ord not in row_provenances:
                         row_provenances[r_i] = "cached:sqlite"
                         row_provenances[t_ord] = "cached:sqlite"
             wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
@@ -19271,7 +19276,7 @@ def cmd_progressive_worker(args):
                         for r_i, r in enumerate(data_rows):
                             if len(r) > col_word_dest and r[col_word_dest].strip():
                                 t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                                if r_i not in worker_row_provenances and t_ord not in worker_row_provenances:
+                                if is_sqlite and r_i not in worker_row_provenances and t_ord not in worker_row_provenances:
                                     worker_row_provenances[t_ord] = "cached:sqlite"
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances, text_provenance=active_text_prov)
