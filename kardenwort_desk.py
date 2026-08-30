@@ -8923,7 +8923,7 @@ html, body {{
         has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
         text_provider_label = format_provider_skeleton_label(main_text_provider)
         if is_progressive and run_text == 'auto' and not has_real_text:
-            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; min-height: 1.6em; height: 1.6em;" title="{text_provider_label}">{text_provider_label}</div>'
+            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px;" title="{text_provider_label}">{text_provider_label}</div>'
         else:
             sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
 
@@ -9741,8 +9741,9 @@ html, body {{
     display: inline-flex;
     align-items: center;
     justify-content: center;
-    min-height: 1.6em;
-    height: 1.6em;
+    min-height: 20px;
+    height: 20px;
+    line-height: 20px;
     width: 100%;
     background: linear-gradient(-90deg, {table_border} 0%, {table_th_border} 50%, {table_border} 100%);
     background-size: 400% 400%;
@@ -9761,11 +9762,13 @@ html, body {{
     text-overflow: ellipsis;
   }
   #translation-container .skeleton-loader {
-    min-height: 1.6em;
-    height: 1.6em;
-    font-size: 13px;
+    min-height: 25.6px;
+    height: 25.6px;
+    line-height: 25.6px;
+    font-size: 12px;
     width: 100%;
     max-width: 500px;
+    box-sizing: border-box;
   }
   @keyframes pulse-skeleton {
     0% { background-position: 0% 50% }
@@ -14013,7 +14016,7 @@ html, body {{
                 if (parent) {
                     if (parent.id === 'translation-container') {
                         var pLabel = formatProviderSkeletonLabel(getTextBaseProvider());
-                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
+                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
                     } else {
                         parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 60px; display: inline-flex;" title="Retrying...">Retrying...</span>';
                     }
@@ -14555,7 +14558,7 @@ html, body {{
                     return '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
                 }
                 var pLabel = formatProviderSkeletonLabel(getTextBaseProvider());
-                return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
+                return '<span class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
             }
 
             function init() {
@@ -18376,7 +18379,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                         row[col_word_dest] = trans_val
                                         t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
                                         row_provenances[row_idx] = fast_prov
+                                        row_provenances[str(row_idx)] = fast_prov
                                         row_provenances[t_ord] = fast_prov
+                                        if t_ord.isdigit():
+                                            row_provenances[int(t_ord)] = fast_prov
                                         updates.append({
                                             "token_order": int(t_ord) if t_ord.isdigit() else row_idx,
                                             "field": "word_destination",
@@ -18398,7 +18404,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                                 row[col_word_dest] = lemma_translations[lemma_val]
                                                 t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(r_idx)
                                                 row_provenances[r_idx] = fast_prov
+                                                row_provenances[str(r_idx)] = fast_prov
                                                 row_provenances[t_ord] = fast_prov
+                                                if t_ord.isdigit():
+                                                    row_provenances[int(t_ord)] = fast_prov
                                 save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                                 data_rows = current_rows
                         

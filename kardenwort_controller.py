@@ -1169,7 +1169,11 @@ class EnrichmentQueue:
                 wordfill_cfg = getattr(arbiter, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
                 if wordfill_cfg and wordfill_cfg.get('enabled', False):
                     wf_applied = False
-                    for row in data_rows:
+                    if "row_provenances" not in arbiter.sessions.get(session_zid, {}):
+                        if session_zid in arbiter.sessions:
+                            arbiter.sessions[session_zid]["row_provenances"] = {}
+                    sess_row_provs = arbiter.sessions.get(session_zid, {}).get("row_provenances", {})
+                    for row_idx, row in enumerate(data_rows):
                         if len(row) > col_lemma and row[col_lemma].strip():
                             l_val = row[col_lemma].strip()
                             is_trans = (col_word_dest != -1 and len(row) > col_word_dest and bool(row[col_word_dest].strip()))
@@ -1178,6 +1182,13 @@ class EnrichmentQueue:
                                 if match:
                                     apply_wordfill_to_rows([row], headers, match)
                                     wf_applied = True
+                                    wf_prov = match.get('_provenance', 'corpus:wordfill')
+                                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
+                                    sess_row_provs[row_idx] = wf_prov
+                                    sess_row_provs[str(row_idx)] = wf_prov
+                                    sess_row_provs[t_ord] = wf_prov
+                                    if t_ord.isdigit():
+                                        sess_row_provs[int(t_ord)] = wf_prov
                     if wf_applied:
                         if is_sqlite:
                             updates = []
@@ -1218,6 +1229,11 @@ class EnrichmentQueue:
                     )
 
                     if translated_map:
+                        fast_prov = getattr(translated_map, 'provenance', None) or f"live:{lemma_provider}"
+                        if "row_provenances" not in arbiter.sessions.get(session_zid, {}):
+                            if session_zid in arbiter.sessions:
+                                arbiter.sessions[session_zid]["row_provenances"] = {}
+                        sess_row_provs = arbiter.sessions.get(session_zid, {}).get("row_provenances", {})
                         updates = []
                         for row_idx, row in enumerate(data_rows):
                             if col_lemma != -1 and len(row) > col_lemma:
@@ -1227,8 +1243,13 @@ class EnrichmentQueue:
                                     while len(row) <= col_word_dest:
                                         row.append("")
                                     row[col_word_dest] = t_val
-                                    t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                    updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+                                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_idx)
+                                    sess_row_provs[row_idx] = fast_prov
+                                    sess_row_provs[str(row_idx)] = fast_prov
+                                    sess_row_provs[t_ord] = fast_prov
+                                    if t_ord.isdigit():
+                                        sess_row_provs[int(t_ord)] = fast_prov
+                                    updates.append({"token_order": int(t_ord) if t_ord.isdigit() else row_idx, "field": "word_destination", "value": t_val})
 
                         if is_sqlite:
                             if updates:
@@ -1247,14 +1268,19 @@ class EnrichmentQueue:
                         arbiter.sessions[session_zid]["fingerprint"] = new_fp
 
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id)
+                sess_row_provs = arbiter.sessions.get(session_zid, {}).get("row_provenances", {})
+                structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id, row_provenances=sess_row_provs, text_provenance=active_text_prov)
                 arbiter.emit_event(session_zid, {
                     "type": "update",
                     "stage": "translated",
                     "status": "success",
                     "fingerprint": new_fp,
                     "rows": structured_rows,
+                    "row_provenances": sess_row_provs,
+                    "rowProvenances": sess_row_provs,
+                    "text_provenance": active_text_prov,
+                    "textProvenance": active_text_prov,
                 })
 
             # Stage 3: Enrichment (IntelliFiller)
@@ -1297,10 +1323,11 @@ class EnrichmentQueue:
             # Emit final finished event
             status_val = "failed" if worker_error else "success"
             new_fp = compute_content_fingerprint(data_rows) if data_rows else ""
-            structured_rows = format_update_rows_dict(data_rows, headers, role_fields) if (data_rows and headers and role_fields) else {}
+            sess_row_provs = arbiter.sessions.get(session_zid, {}).get("row_provenances", {})
+            structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sess_row_provs) if (data_rows and headers and role_fields) else {}
             if tsv_path and data_rows and headers:
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, row_provenances=sess_row_provs, text_provenance=active_text_prov)
 
             finished_event = {
                 "type": "update",
@@ -1309,6 +1336,8 @@ class EnrichmentQueue:
                 "error": worker_error,
                 "fingerprint": new_fp,
                 "rows": structured_rows,
+                "row_provenances": sess_row_provs,
+                "rowProvenances": sess_row_provs,
             }
             if active_text_prov:
                 finished_event["text_provenance"] = active_text_prov
@@ -2749,7 +2778,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         if path == '/session/status':
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            zid = qs.get('zid', [''])[0]
+            zid = qs.get('zid', [''])[0] or qs.get('session_zid', [''])[0]
             if not zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'zid' query parameter")
 

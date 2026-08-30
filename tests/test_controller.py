@@ -10,6 +10,7 @@ import urllib.error
 import pytest
 from pathlib import Path
 from http.server import ThreadingHTTPServer
+from unittest.mock import patch
 
 import kardenwort_desk
 from kardenwort_controller import (
@@ -1567,6 +1568,81 @@ def test_controller_session_restore_untranslated_lemmas_skeleton_loader(running_
         assert resp.status == 200
         content = resp.read().decode('utf-8')
         assert '<span class="skeleton-loader"' in content
+
+
+def test_controller_progressive_queue_retains_live_lemma_provenance(running_controller):
+    """Task 1.2 & 1.3: Progressive queue worker retains live:<provider> provenance on lemmas through status and updates."""
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+
+    sess_zid = kardenwort_desk.generate_unique_zid()
+    headers = ["TokenOrder", "SentenceSourceIndex", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
+    data_rows = [
+        ["0", "1", "Wald", "", "", ""],
+    ]
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="test-live-prov",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Der Wald.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[
+            {
+                "session_zid": sess_zid,
+                "sentence_index": 1,
+                "sentence_source": "Der Wald.",
+                "sentence_destination": "Лес.",
+            }
+        ],
+    )
+
+    # Initialize session in arbiter
+    server.arbiter.sessions[sess_zid] = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "target_language": "ru",
+        "headers": headers,
+        "data_rows": data_rows,
+        "row_provenances": {},
+        "text_provenance": "live:argos",
+    }
+
+    # Mock translate_lemmas_coalesced and disable wordfill match in progressive queue worker
+    with patch("kardenwort_controller.find_wordfill_match", return_value=None), \
+         patch.object(server.arbiter.enrichment_queue, "translate_lemmas_coalesced", return_value={"Wald": "лес"}):
+        server.arbiter.enrichment_queue._execute_progressive_task(
+            session_zid=sess_zid,
+            arbiter=server.arbiter,
+            language="de",
+            target_lang="ru",
+            text_mode="single",
+            prompt_name="reword",
+            skip_intellifiller=True,
+            zid=sess_zid,
+            trace_id=sess_zid,
+        )
+
+    # Verify arbiter session row_provenances is populated with live provenance
+    sess_row_provs = server.arbiter.sessions[sess_zid]["row_provenances"]
+    assert sess_row_provs.get("0") == "live:google" or sess_row_provs.get(0) == "live:google" or str(sess_row_provs.get("0")).startswith("live:")
+
+    # Query /session/status and verify provenance is returned as live:<provider> not cached:sqlite
+    req = urllib.request.Request(f"{server_url}/session/status?session_zid={sess_zid}")
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        res = json.loads(resp.read().decode('utf-8'))
+        data = res.get("data", res)
+        rows = data.get("rows", {})
+        row0 = rows.get("0") or rows.get(0)
+        assert row0 is not None
+        assert row0.get("trans") == "лес"
+        assert row0.get("provenance") != "cached:sqlite"
+        assert str(row0.get("provenance")).startswith("live:")
+
 
 
 

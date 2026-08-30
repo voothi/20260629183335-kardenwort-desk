@@ -522,7 +522,7 @@ def test_translation_container_word_span_zero_padding_and_window_tokenization(mo
 
 
 def test_skeleton_loader_proportions_unified(mock_clean_context_env):
-    """Task 3.1 & 3.2: Base .skeleton-loader and #translation-container .skeleton-loader share unified 1.6em height."""
+    """Task 2.1 & 2.2: Base .skeleton-loader (20px) and #translation-container .skeleton-loader (25.6px) match typography heights."""
     env = mock_clean_context_env
     config = env["config"]
     resolved_paths = env["resolved_paths"]
@@ -556,19 +556,21 @@ def test_skeleton_loader_proportions_unified(mock_clean_context_env):
             tsv_path=tsv_path,
         )
 
-    # 1. Base .skeleton-loader rule has min-height: 1.6em; height: 1.6em;
+    # 1. Base .skeleton-loader rule has min-height: 20px; height: 20px; line-height: 20px;
     base_match = re.search(r'\.skeleton-loader\s*\{([^}]+)\}', html)
     assert base_match is not None
     base_css = base_match.group(1)
-    assert "min-height: 1.6em;" in base_css
-    assert "height: 1.6em;" in base_css
+    assert "min-height: 20px;" in base_css
+    assert "height: 20px;" in base_css
+    assert "line-height: 20px;" in base_css
 
-    # 2. Translation container .skeleton-loader rule has min-height: 1.6em; height: 1.6em;
+    # 2. Translation container .skeleton-loader rule has min-height: 25.6px; height: 25.6px; line-height: 25.6px;
     tc_match = re.search(r'#translation-container\s+\.skeleton-loader\s*\{([^}]+)\}', html)
     assert tc_match is not None
     tc_css = tc_match.group(1)
-    assert "min-height: 1.6em;" in tc_css
-    assert "height: 1.6em;" in tc_css
+    assert "min-height: 25.6px;" in tc_css
+    assert "height: 25.6px;" in tc_css
+    assert "line-height: 25.6px;" in tc_css
 
 
 
