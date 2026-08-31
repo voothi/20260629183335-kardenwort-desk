@@ -1366,11 +1366,100 @@ de_prompt=test
     assert html.count('title="Loaded from session cache (SQLite)"') >= 2
 
 
+def test_sqlite_cached_session_new_zid_re_render_restores_provenance_tooltips(tmp_path):
+    """Test (20260831023908): When multi is called again on the same text with a new ZID,
+
+    the cached session words and provenance from SQLite are correctly restored on the initial render (without needing F5).
+    """
+    db_path = tmp_path / "kardenwort.db"
+    db = KardenwortDB(db_path)
+    db.run_migrations()
+    old_zid = "20260830120000"
+    new_zid = "20260831023836"
+    text = "Erste Zeile.\nZweite Zeile."
+    slug = kardenwort_desk.generate_slug(text)
+
+    db.insert_session({
+        "zid": old_zid,
+        "slug": slug,
+        "source_language": "de",
+        "target_language": "ru",
+        "text_mode": "multi",
+        "source_raw_text": text,
+    })
+    db.insert_sentence({
+        "session_zid": old_zid,
+        "sentence_index": 1,
+        "sentence_source": "Erste Zeile.",
+        "sentence_destination": "Первая строка.",
+        "text_provenance": "cached:sqlite",
+    })
+    db.insert_sentence({
+        "session_zid": old_zid,
+        "sentence_index": 2,
+        "sentence_source": "Zweite Zeile.",
+        "sentence_destination": "Вторая строка.",
+        "text_provenance": "cached:sqlite",
+    })
+    db.insert_word({
+        "session_zid": old_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "Zeile",
+        "lemma": "Zeile",
+        "word_source": "Zeile",
+        "word_destination": "строка",
+        "word_provenance": "live:google",
+    })
+    db.insert_word({
+        "session_zid": old_zid,
+        "sentence_index": 2,
+        "token_order": 1,
+        "quotation": "Zeile",
+        "lemma": "Zeile",
+        "word_source": "Zeile",
+        "word_destination": "строка",
+        "word_provenance": "live:google",
+    })
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+[storage]
+backend=sqlite
+sqlite_path={db_path.as_posix()}
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[languages]
+de_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+
+    # Initial render with NEW zid and no tsv_path (triggers get_cached_session finding old_zid)
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=new_zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=None,
+        spawn_children=False,
+        return_children=False,
+    )
+
+    # Provenance and tooltips from the cached session must be rendered immediately on the first render
+    assert 'data-provenance="live:google"' in html
+    assert 'title="Translated via Google"' in html
+
 
 if __name__ == "__main__":
     unittest.main()
-
-
-
-
-

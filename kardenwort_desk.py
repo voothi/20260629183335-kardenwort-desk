@@ -8371,15 +8371,17 @@ html, body {{
         tsv_slug = tsv_match.group(1)
 
     if is_sqlite and (not text or not text.strip()):
-        try:
-            target_zid_to_read = zid if (zid and str(zid).strip() and zid != "00000000000000") else extract_zid(working_tsv_path)
-            if target_zid_to_read != "00000000000000":
-                restored_meta = storage_adapter.restore_session(target_zid_to_read)
-                if restored_meta and restored_meta.get("source_text"):
-                    text = restored_meta["source_text"]
-                    eff_mode = _effective_text_mode(text, text_mode)
-        except Exception:
-            pass
+        tsv_zid = extract_zid(working_tsv_path)
+        for candidate_zid in [tsv_zid, zid]:
+            if candidate_zid and str(candidate_zid).strip() and str(candidate_zid).strip() != "00000000000000":
+                try:
+                    restored_meta = storage_adapter.restore_session(str(candidate_zid).strip())
+                    if restored_meta and restored_meta.get("source_text"):
+                        text = restored_meta["source_text"]
+                        eff_mode = _effective_text_mode(text, text_mode)
+                        break
+                except Exception:
+                    pass
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
@@ -8421,19 +8423,24 @@ html, body {{
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     row_provenances = {}
     if is_sqlite:
-        try:
-            target_zid_to_read = zid if (zid and str(zid).strip() and zid != "00000000000000") else extract_zid(working_tsv_path)
-            if target_zid_to_read != "00000000000000":
-                db_words = storage_adapter.db.get_words_by_session(target_zid_to_read)
-                for w in db_words:
-                    w_prov = w.get("word_provenance")
-                    if w_prov:
-                        t_ord = str(w.get("token_order", ""))
-                        row_provenances[t_ord] = w_prov
-                        if t_ord.isdigit():
-                            row_provenances[int(t_ord)] = w_prov
-        except Exception:
-            pass
+        tsv_zid = extract_zid(working_tsv_path)
+        for candidate_zid in [tsv_zid, zid]:
+            if candidate_zid and str(candidate_zid).strip() and str(candidate_zid).strip() != "00000000000000":
+                try:
+                    db_words = storage_adapter.db.get_words_by_session(str(candidate_zid).strip())
+                    if db_words:
+                        for w in db_words:
+                            w_prov = w.get("word_provenance")
+                            if w_prov:
+                                t_ord = str(w.get("token_order", ""))
+                                row_provenances[t_ord] = w_prov
+                                if t_ord.isdigit():
+                                    row_provenances[int(t_ord)] = w_prov
+                        if row_provenances:
+                            break
+                except Exception:
+                    pass
+
         # Fallback: rows that have a translation but no stored word_provenance (pre-provenance-column sessions).
         # Only fills in what is missing; does not overwrite explicitly stored provenance.
         # Key by token_order only (not by positional r_i) because data_rows is sorted later
@@ -8683,19 +8690,23 @@ html, body {{
 
     db_sents = None
     if is_sqlite:
-        try:
-            target_zid_to_read = zid if (zid and str(zid).strip() and zid != "00000000000000") else extract_zid(working_tsv_path)
-            if target_zid_to_read != "00000000000000":
-                db_sents = storage_adapter.db.get_sentences_by_session(target_zid_to_read)
-                for s in db_sents:
-                    s_idx = s.get("sentence_index", 1) - 1
-                    s_dest = s.get("sentence_destination")
-                    if s_dest and str(s_dest).strip():
-                        extracted_translations[s_idx] = str(s_dest).strip()
-                    elif str(s.get("sentence_source", "")).strip().startswith("#"):
-                        extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
-        except Exception:
-            pass
+        tsv_zid = extract_zid(working_tsv_path)
+        for candidate_zid in [tsv_zid, zid]:
+            if candidate_zid and str(candidate_zid).strip() and str(candidate_zid).strip() != "00000000000000":
+                try:
+                    db_sents = storage_adapter.db.get_sentences_by_session(str(candidate_zid).strip())
+                    if db_sents:
+                        for s in db_sents:
+                            s_idx = s.get("sentence_index", 1) - 1
+                            s_dest = s.get("sentence_destination")
+                            if s_dest and str(s_dest).strip():
+                                extracted_translations[s_idx] = str(s_dest).strip()
+                            elif str(s.get("sentence_source", "")).strip().startswith("#"):
+                                extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
+                        break
+                except Exception:
+                    pass
+
             
     sentence_translations = {}
     sentence_provenance = None
