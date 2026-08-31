@@ -8434,15 +8434,19 @@ html, body {{
                             row_provenances[int(t_ord)] = w_prov
         except Exception:
             pass
-        # Fallback: rows that have a translation but no stored word_provenance (pre-provenance-column sessions)
+        # Fallback: rows that have a translation but no stored word_provenance (pre-provenance-column sessions).
         # Only fills in what is missing; does not overwrite explicitly stored provenance.
+        # Key by token_order only (not by positional r_i) because data_rows is sorted later
+        # and prov_val lookup at render time uses token_order_val, not the sorted position index.
         if col_word_dest != -1:
             for r_i, r in enumerate(data_rows):
                 if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest] and "btn-retry-cell" not in r[col_word_dest]:
                     t_ord_str = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
-                    if t_ord_str not in row_provenances and r_i not in row_provenances:
+                    if t_ord_str not in row_provenances:
                         row_provenances[t_ord_str] = "cached:sqlite"
-                        row_provenances[r_i] = "cached:sqlite"
+                        if t_ord_str.isdigit():
+                            row_provenances[int(t_ord_str)] = "cached:sqlite"
+
 
     
     # --- Word-fill early pre-fill step ---
