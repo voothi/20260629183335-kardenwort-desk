@@ -2972,28 +2972,41 @@ class SqliteStorageAdapter(StorageAdapter):
                         or row_provenances.get(row_idx)
                     )
 
+                existing_w = existing_words_by_ord.get(token_order, {})
+                effective_w_dest = (
+                    w_dest
+                    if (w_dest and "skeleton-loader" not in w_dest and "btn-retry-cell" not in w_dest)
+                    else existing_w.get("word_destination")
+                )
+                effective_w_prov = (
+                    prov_from_arg
+                    or existing_w.get("word_provenance")
+                    or ("cached:sqlite" if (effective_w_dest and "skeleton-loader" not in str(effective_w_dest) and "btn-retry-cell" not in str(effective_w_dest)) else None)
+                )
+
                 word_entry = {
                     "session_zid": session_zid,
                     "sentence_index": s_idx,
                     "token_order": token_order,
                     "quotation": quotation,
-                    "inflected_form": inflected or None,
-                    "lemma": lemma,
+                    "inflected_form": inflected or existing_w.get("inflected_form") or None,
+                    "lemma": lemma or existing_w.get("lemma"),
                     "pos": None,
-                    "morphology": morph or None,
-                    "ipa": ipa or None,
-                    "word_destination": w_dest or None,
-                    "word_destination_inflected": w_dest_inf or None,
+                    "morphology": morph or existing_w.get("morphology") or None,
+                    "ipa": ipa or existing_w.get("ipa") or None,
+                    "word_destination": effective_w_dest or None,
+                    "word_destination_inflected": w_dest_inf or existing_w.get("word_destination_inflected") or None,
                     "selected": selected,
                     "leitner_box": box,
                     "leitner_due": due,
                     "deck": deck,
-                    "classification_oxford": oxford,
-                    "classification_goethe": goethe,
-                    "word_provenance": prov_from_arg or existing_words_by_ord.get(token_order, {}).get("word_provenance"),
+                    "classification_oxford": oxford or existing_w.get("classification_oxford") or None,
+                    "classification_goethe": goethe or existing_w.get("classification_goethe") or None,
+                    "word_provenance": effective_w_prov,
                     "extra_fields": extra if extra else None,
                 }
                 word_list.append(word_entry)
+
 
             if sentences is not None:
                 norm_sentences = [{**dict(s), "session_zid": session_zid} for s in sentences]
