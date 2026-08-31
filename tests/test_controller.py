@@ -1569,5 +1569,87 @@ def test_controller_session_restore_untranslated_lemmas_skeleton_loader(running_
         assert '<span class="skeleton-loader"' in content
 
 
+def test_controller_single_sentence_container_mode_does_not_force_seq_num_2(running_controller):
+    """Test (20260831013851, 20260831014735, 20260831015524): Single-sentence session
+
+    in container mode must not force resolved_seq_num=2 when seq_num=1 or omitted.
+    """
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+
+    sess_zid = kardenwort_desk.generate_unique_zid()
+    headers = ["SentenceSourceIndex", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination"]
+    data_rows = [["1", "Katze", "кошка", "Die Katze schlaeft.", "Кошка спит."]]
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="single-sent-test",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Die Katze schlaeft.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[
+            {
+                "session_zid": sess_zid,
+                "sentence_index": 1,
+                "sentence_source": "Die Katze schlaeft.",
+                "sentence_destination": "Кошка спит.",
+            }
+        ],
+    )
+
+    req = urllib.request.Request(f"{server_url}/?session_zid={sess_zid}")
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        content = resp.read().decode('utf-8')
+        # Single sentence must not have tab 2 chip
+        assert 'data-tab-seq="2"' not in content
+
+
+def test_controller_session_status_busy_when_in_active_progressive_sessions(running_controller):
+    """Test (20260831012448): /session/status reports is_finished=False and stage=translating
+
+    when a session is registered in arbiter's _active_progressive_sessions, suppressing Retry buttons.
+    """
+    server_url, server = running_controller
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    sess_zid = kardenwort_desk.generate_unique_zid()
+
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="busy-status-test",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Hallo Welt",
+        headers=["WordSource", "WordDestination"],
+        data_rows=[["Hallo", "Привет"], ["Welt", "Мир"]],
+        sentences=[{"session_zid": sess_zid, "sentence_index": 1, "sentence_source": "Hallo Welt", "sentence_destination": "Привет мир"}],
+    )
+
+    eq = server.arbiter.enrichment_queue
+    with eq._lock:
+        eq._active_progressive_sessions[sess_zid] = True
+
+    try:
+        req = urllib.request.Request(f"{server_url}/session/status?zid={sess_zid}")
+        with urllib.request.urlopen(req, timeout=5.0) as resp:
+            assert resp.status == 200
+            res_obj = json.loads(resp.read().decode('utf-8'))
+            data = res_obj.get("data") if (isinstance(res_obj, dict) and "data" in res_obj) else res_obj
+            assert data.get("is_finished") is False
+            assert data.get("stage") == "translating"
+
+    finally:
+        with eq._lock:
+            eq._active_progressive_sessions.pop(sess_zid, None)
+
+
+
+
+
+
 
 

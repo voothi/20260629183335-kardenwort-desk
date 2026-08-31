@@ -3,8 +3,10 @@ from unittest.mock import patch, MagicMock
 from pathlib import Path
 import tempfile
 import configparser
+import kardenwort_desk
 
 from kardenwort_desk import (
+
     ProvenanceString,
     ProvenanceDict,
     format_provenance_tooltip,
@@ -16,6 +18,8 @@ from kardenwort_desk import (
     safe_write_update_js,
     _run_render_flow_impl,
 )
+from kardenwort_db import KardenwortDB
+
 
 class TestTranslationProvenance(unittest.TestCase):
     def test_format_provenance_tooltip(self):
@@ -1201,8 +1205,172 @@ en_prompt=test
     assert "cached:sqlite" not in row_provs.values()
 
 
+def test_sqlite_cached_session_null_word_provenance_fallback_renders_tooltip(tmp_path):
+    """Test (20260831015822, 20260831020253): Sessions pre-dating the word_provenance column (NULL in DB)
+
+    fall back to cached:sqlite so data-provenance and title tooltip are rendered in HTML.
+    """
+    db_path = tmp_path / "kardenwort.db"
+    db = KardenwortDB(db_path)
+    db.run_migrations()
+    sess_zid = "20260831020001"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "null-prov-test",
+        "source_language": "de",
+        "target_language": "ru",
+        "text_mode": "single",
+        "source_raw_text": "Hund Katze",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "Hund Katze",
+        "sentence_destination": "Собака Кошка",
+        "text_provenance": None,
+    })
+    # Insert word with NULL word_provenance
+    db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "Hund",
+        "lemma": "Hund",
+        "word_source": "Hund",
+        "word_destination": "собака",
+        "word_provenance": None,
+    })
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+[storage]
+backend=sqlite
+sqlite_path={db_path.as_posix()}
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[languages]
+de_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    tsv_path = tmp_path / f"{sess_zid}-null-prov-test.de.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\tHund\tсобака\t1\n", encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="Hund Katze",
+        language="de",
+        zid=sess_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_path),
+        spawn_children=False,
+        return_children=False,
+    )
+
+    assert 'data-provenance="cached:sqlite"' in html
+    assert 'title="Loaded from session cache (SQLite)"' in html
+
+
+def test_sqlite_cached_session_frequency_sorted_preserves_provenance_tooltip(tmp_path):
+    """Test (20260831021457, 20260831021857): In multi-row / frequency-sorted tables,
+
+    fallback row_provenances keyed by TokenOrder ensures tooltips appear on all translated cells.
+    """
+    db_path = tmp_path / "kardenwort.db"
+    db = KardenwortDB(db_path)
+    db.run_migrations()
+    sess_zid = "20260831020002"
+    db.insert_session({
+        "zid": sess_zid,
+        "slug": "freq-sort-test",
+        "source_language": "de",
+        "target_language": "ru",
+        "text_mode": "single",
+        "source_raw_text": "Das Haus und der Hund",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "Das Haus und der Hund",
+        "sentence_destination": "Дом и собака",
+        "text_provenance": "cached:sqlite",
+    })
+    # Words with NULL word_provenance to exercise the TokenOrder-keyed fallback
+    db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "Haus",
+        "lemma": "Haus",
+        "word_source": "Haus",
+        "word_destination": "дом",
+        "word_provenance": None,
+    })
+    db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 1,
+        "quotation": "Hund",
+        "lemma": "Hund",
+        "word_source": "Hund",
+        "word_destination": "собака",
+        "word_provenance": None,
+    })
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+[storage]
+backend=sqlite
+sqlite_path={db_path.as_posix()}
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[languages]
+de_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    tsv_path = tmp_path / f"{sess_zid}-freq-sort-test.de.tsv"
+    tsv_path.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\tHaus\tдом\t1\n1\tHund\tсобака\t1\n", encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="Das Haus und der Hund",
+        language="de",
+        zid=sess_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_path),
+        spawn_children=False,
+        return_children=False,
+    )
+
+    # Both rows must receive the data-provenance attribute and tooltip title
+    assert html.count('data-provenance="cached:sqlite"') >= 2
+    assert html.count('title="Loaded from session cache (SQLite)"') >= 2
+
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
 
 
 

@@ -953,6 +953,38 @@ def test_skeleton_provider_state_indicators(page, tmp_path, monkeypatch):
     assert trans_container.locator(".skeleton-loader").inner_text().strip() == "Argos..."
 
 
+def test_single_sentence_container_mode_preserves_seq_num_1(tmp_path):
+    """Test (20260831013851, 20260831014735, 20260831015524): In container mode,
+
+    a single-sentence session must retain seq_num=1 (and not force seq_num=2).
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    text = "Ein einzelner Satz."
+    tsv_file = tmp_path / "20260831021500-single.de.tsv"
+    tsv_file.write_text("TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n0\tSatz\tпредложение\t1\n", encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid="20260831021500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=None,
+    )
+
+    # In a single-sentence session, active sequence number must be 1
+    assert 'data-active-seq-num="1"' in html or 'active_seq_num = 1' in html or '<title>' in html
+    # Ensure there is no [2/1] or favicon 2 forced
+    assert "data-tab-seq=\"2\"" not in html
+
+
+
 
 
 
