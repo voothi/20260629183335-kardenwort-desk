@@ -11658,7 +11658,8 @@ html, body {{
                         }
                     }
                     function applyCellProvenance(effectiveVal) {
-                        var effProv = rowProv;
+                        var existingProv = tds[2].getAttribute('data-provenance') || (tds[2].querySelector('.scrollable-cell') ? tds[2].querySelector('.scrollable-cell').getAttribute('data-provenance') : null);
+                        var effProv = rowProv || existingProv || (effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1 ? 'cached:sqlite' : null);
                         if (effProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
                             tds[2].setAttribute('data-provenance', effProv);
                             var pTitle = formatProvenanceTooltip(effProv);
@@ -18329,6 +18330,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             elif str(row_id) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(row_id)]
         rows_data[row_id] = row_obj
+
         if class_cols:
             class_vals = {}
             for name, col_idx in class_cols:
@@ -18714,6 +18716,14 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                     row_provenances[int(t_ord)] = w_prov
                 except Exception:
                     pass
+            if col_word_dest != -1:
+                for r_i, r in enumerate(data_rows):
+                    if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest] and "btn-retry-cell" not in r[col_word_dest]:
+                        t_ord_str = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
+                        if t_ord_str not in row_provenances:
+                            row_provenances[t_ord_str] = "cached:sqlite"
+                            if t_ord_str.isdigit():
+                                row_provenances[int(t_ord_str)] = "cached:sqlite"
             wordfill_cfg = resolve_wordfill_config(config, resolved_paths)
             if wordfill_cfg and wordfill_cfg.get('enabled', False):
                 try:
