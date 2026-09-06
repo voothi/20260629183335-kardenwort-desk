@@ -1457,6 +1457,60 @@ def test_container_update_matching_preserves_token_order_when_frequency_sorted(p
     assert "Собака лает." in page.locator("#translation-container").inner_text()
 
 
+def test_container_multi_mode_preserves_lines_and_hyphens(page, tmp_path):
+    """
+    Verifies that in multi mode with hyphenated list items or multiple lines,
+    the translation on Tab 1 (Master Overview) maintains the exact same number of lines
+    and leading hyphens as the original source text.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "- First line with hyphen.\n- Second line with hyphen."
+    tsv_file = tmp_path / "20260907011500-multi.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tTokenOrder\tSentenceSourceIndex\tSentenceDestination\n"
+        "First\tfirst\tпервый\t0\t1\t- Первый пункт с дефисом.\n"
+        "Second\tsecond\tвторой\t1\t2\t- Второй пункт с дефисом.\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260907011500",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Verify Tab 1 (Overview) is active
+    active_chip = page.locator(".kw-tab-chip.active")
+    assert active_chip.get_attribute("data-tab-seq") == "1"
+
+    # Verify translation-container has exactly 2 lines/divs
+    trans_divs = page.locator("#translation-container > div")
+    assert trans_divs.count() == 2
+
+    # Verify line content and hyphens
+    line1 = trans_divs.nth(0).inner_text().strip()
+    line2 = trans_divs.nth(1).inner_text().strip()
+    assert line1.startswith("-")
+    assert "Первый" in line1
+    assert line2.startswith("-")
+    assert "Второй" in line2
+
+
+
 
 
 

@@ -6185,7 +6185,7 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
     if not sentence_translations:
         return ""
     if isinstance(sentence_translations, str):
-        raw_lines = [sentence_translations]
+        raw_lines = [ln for ln in re.split(r'[\r\n]+', sentence_translations) if ln.strip()] or [sentence_translations]
     elif isinstance(sentence_translations, dict):
         sorted_keys = sorted([k for k in sentence_translations.keys() if isinstance(k, int) or (isinstance(k, str) and k.isdigit())], key=int)
         raw_lines = [sentence_translations[k] for k in sorted_keys if sentence_translations[k]]
@@ -9577,13 +9577,20 @@ html, body {{
         
     sentence_cards = []
     if smc.enabled and len(source_sentences) >= 2:
+        is_single_para = (eff_mode == 'single' and '\n' not in (text or '').strip() and '\r' not in (text or '').strip())
+        trans_joiner = " " if is_single_para else "\n"
         master_trans_full = ""
         if 'translated_paragraph' in locals() and translated_paragraph and str(translated_paragraph).strip() and str(translated_paragraph).strip().lower() != 'none':
-            master_trans_full = str(translated_paragraph).strip()
+            if is_single_para:
+                master_trans_full = str(translated_paragraph).strip()
+            else:
+                tp_str = str(translated_paragraph).strip()
+                if '\n' in tp_str or '\r' in tp_str:
+                    master_trans_full = tp_str
         elif sentence_translations and any(v is not None and str(v).strip() and str(v).strip().lower() != 'none' for v in sentence_translations.values()):
-            master_trans_full = " ".join(str(v).strip() for v in sentence_translations.values() if v is not None and str(v).strip() and str(v).strip().lower() != 'none')
+            master_trans_full = trans_joiner.join(str(v).strip() for v in sentence_translations.values() if v is not None and str(v).strip() and str(v).strip().lower() != 'none')
         elif extracted_translations and any(v is not None and str(v).strip() and str(v).strip().lower() != 'none' for v in extracted_translations.values()):
-            master_trans_full = " ".join(str(v).strip() for v in extracted_translations.values() if v is not None and str(v).strip() and str(v).strip().lower() != 'none')
+            master_trans_full = trans_joiner.join(str(v).strip() for v in extracted_translations.values() if v is not None and str(v).strip() and str(v).strip().lower() != 'none')
 
         # Build clean per-sentence translation map for child cards
         child_sentence_translations = {}
@@ -9621,7 +9628,11 @@ html, body {{
                     child_sentence_translations.setdefault(i, ps.strip())
 
         if not master_trans_full and child_sentence_translations:
-            master_trans_full = " ".join(child_sentence_translations[i] for i in range(len(source_sentences)) if i in child_sentence_translations and child_sentence_translations[i] and str(child_sentence_translations[i]).strip().lower() != 'none')
+            master_trans_full = trans_joiner.join(child_sentence_translations[i] for i in range(len(source_sentences)) if i in child_sentence_translations and child_sentence_translations[i] and str(child_sentence_translations[i]).strip().lower() != 'none')
+        elif not is_single_para and child_sentence_translations and ('\n' not in master_trans_full):
+            assembled_multi = "\n".join(child_sentence_translations[i] for i in range(len(source_sentences)) if i in child_sentence_translations and child_sentence_translations[i] and str(child_sentence_translations[i]).strip().lower() != 'none')
+            if assembled_multi.strip():
+                master_trans_full = assembled_multi
         
         if not working_tsv_path:
             master_slug = tsv_slug or (generate_slug(text) if text else "")
@@ -15364,12 +15375,25 @@ html, body {{
             function getTranslationHtml(tText) {
                 if (tText && tText.trim()) {
                     var clean = tText.trim();
-                    if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1) {
+                    var lines = [];
+                    if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1 || clean.indexOf('<p') !== -1 || clean.indexOf('<br') !== -1) {
                         var tmp = document.createElement('div');
                         tmp.innerHTML = clean;
-                        clean = (tmp.textContent || tmp.innerText || '').trim();
+                        var childDivs = tmp.querySelectorAll('div, p');
+                        if (childDivs.length > 0) {
+                            for (var cd = 0; cd < childDivs.length; cd++) {
+                                lines.push((childDivs[cd].textContent || childDivs[cd].innerText || '').trim());
+                            }
+                        }
+                        if (lines.length === 0) {
+                            var brClean = tmp.innerHTML.replace(/<br\s*[\/]?>/gi, String.fromCharCode(10));
+                            tmp.innerHTML = brClean;
+                            clean = (tmp.textContent || tmp.innerText || '').trim();
+                        }
                     }
-                    var lines = clean.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
+                    if (lines.length === 0) {
+                        lines = clean.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
+                    }
                     var isSingle = (typeof getTextMode === 'function' && getTextMode() === 'single');
                     if (isSingle) {
                         var srcContainer = document.getElementById('source-container');
@@ -15596,6 +15620,25 @@ html, body {{
                                     tText = cleanLines[sIdx0];
                                 } else if (cleanLines.length === 1 && cards.length === 2) {
                                     tText = cleanLines[0];
+                                }
+                            }
+                        }
+                        var isSingleMode = (typeof getTextMode === 'function' && getTextMode() === 'single');
+                        var srcContainer = document.getElementById('source-container');
+                        var srcText = srcContainer ? (srcContainer.textContent || srcContainer.innerText || '') : '';
+                        if (srcText.indexOf(String.fromCharCode(10)) !== -1 || srcText.indexOf(String.fromCharCode(13)) !== -1) {
+                            isSingleMode = false;
+                        }
+                        if (activeSentenceIdx === 0 && !isSingleMode) {
+                            if (!tText || tText.indexOf(String.fromCharCode(10)) === -1) {
+                                var childLines = [];
+                                for (var k = 0; k < cards.length; k++) {
+                                    if (cards[k].sentence_idx > 0 && cards[k].translated_text && cards[k].translated_text.trim()) {
+                                        childLines.push(cards[k].translated_text.trim());
+                                    }
+                                }
+                                if (childLines.length > 1) {
+                                    tText = childLines.join(String.fromCharCode(10));
                                 }
                             }
                         }
@@ -15878,12 +15921,28 @@ html, body {{
                         }
                     }
                 }
-                if (window.AppState && window.AppState.translatedText) {
-                    for (var c = 0; c < cards.length; c++) {
-                        if (cards[c].sentence_idx === 0) {
+                var isSingleMode = (typeof getTextMode === 'function' && getTextMode() === 'single');
+                var srcContainer = document.getElementById('source-container');
+                var srcText = srcContainer ? (srcContainer.textContent || srcContainer.innerText || '') : '';
+                if (srcText.indexOf(String.fromCharCode(10)) !== -1 || srcText.indexOf(String.fromCharCode(13)) !== -1) {
+                    isSingleMode = false;
+                }
+                for (var c = 0; c < cards.length; c++) {
+                    if (cards[c].sentence_idx === 0) {
+                        if (window.AppState && window.AppState.translatedText) {
                             cards[c].translated_text = window.AppState.translatedText;
-                            break;
+                        } else if (!isSingleMode) {
+                            var childTrans = [];
+                            for (var k = 0; k < cards.length; k++) {
+                                if (cards[k].sentence_idx > 0 && cards[k].translated_text) {
+                                    childTrans.push(cards[k].translated_text.trim());
+                                }
+                            }
+                            if (childTrans.length > 0) {
+                                cards[c].translated_text = childTrans.join(String.fromCharCode(10));
+                            }
                         }
+                        break;
                     }
                 }
                 updateActiveTabTranslation();
