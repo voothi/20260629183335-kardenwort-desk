@@ -8542,6 +8542,8 @@ html, body {{
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+    col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
+    col_sentence_dest_orig = headers.index('SentenceDestination') if 'SentenceDestination' in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
@@ -8665,9 +8667,11 @@ html, body {{
             source_text_path.write_text(text, encoding='utf-8')
             
     sentence_translated = False
-    if col_sentence_dest != -1:
-        if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
+    dest_cols = [c for c in (col_sentence_dest, col_sentence_dest_orig, col_sentence_dest2) if c != -1]
+    for c_d in dest_cols:
+        if any(len(row) > c_d and row[c_d].strip() for row in data_rows):
             sentence_translated = True
+            break
             
     has_untranslated_lemmas = False
     
@@ -8813,8 +8817,13 @@ html, body {{
                 content_line_idx = int(row[col_index]) - 1
             except ValueError:
                 pass
-        if col_sentence_dest != -1 and len(row) > col_sentence_dest:
-            extracted_translations[content_line_idx] = row[col_sentence_dest]
+        cand_dest = ""
+        for c_d in dest_cols:
+            if len(row) > c_d and row[c_d].strip():
+                cand_dest = row[c_d].strip()
+                break
+        if cand_dest:
+            extracted_translations[content_line_idx] = cand_dest
 
     db_sents = None
     if is_sqlite:
@@ -8827,9 +8836,9 @@ html, body {{
                         for s in db_sents:
                             s_idx = s.get("sentence_index", 1) - 1
                             s_dest = s.get("sentence_destination")
-                            if s_dest and str(s_dest).strip():
+                            if s_dest and str(s_dest).strip() and (s_idx not in extracted_translations or not extracted_translations[s_idx]):
                                 extracted_translations[s_idx] = str(s_dest).strip()
-                            elif str(s.get("sentence_source", "")).strip().startswith("#"):
+                            elif str(s.get("sentence_source", "")).strip().startswith("#") and (s_idx not in extracted_translations or not extracted_translations[s_idx]):
                                 extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
                         break
                 except Exception:
