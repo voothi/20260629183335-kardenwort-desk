@@ -1510,6 +1510,102 @@ def test_container_multi_mode_preserves_lines_and_hyphens(page, tmp_path):
     assert "Второй" in line2
 
 
+def test_drag_selection_across_filled_reword_row_in_table_of_lemmas(page, tmp_path):
+    """
+    Test (20260907012328): Verifies that selecting by dragging through an already filled
+    Re-word line (or rows whose data-row-id values are non-sequential / frequency-sorted)
+    correctly highlights and selects every row in the visual drag range.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "First word. Second word. Third word."
+    tsv_file = tmp_path / "20260907012000-drag.en.tsv"
+    # Row 1 is already filled/reworded; token order or row IDs can be non-sequential
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tTokenOrder\tSentenceSourceIndex\n"
+        "First\tfirst\t\t0\t1\n"
+        "Second\tsecond\tвторой\t1\t2\n"
+        "Third\tthird\t\t2\t3\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260907012000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    # Manually arrange data-row-ids so the middle row (already filled reword row) has a high out-of-order id (e.g. 15)
+    # Visual row 0: data-row-id="0"
+    # Visual row 1: data-row-id="15" (the filled Re-word line)
+    # Visual row 2: data-row-id="1"
+    page.evaluate("""() => {
+        const rows = document.querySelectorAll('#lemma-table tbody tr');
+        if (rows.length >= 3) {
+            rows[0].setAttribute('data-row-id', '0');
+            rows[1].setAttribute('data-row-id', '15');
+            rows[2].setAttribute('data-row-id', '1');
+            window.rebindTableRows();
+        }
+    }""")
+
+    # 1. Perform LMB drag from visual row 0, through visual row 1 (the filled Re-word line), to visual row 2
+    page.evaluate("""() => {
+        const rows = document.querySelectorAll('#lemma-table tbody tr');
+        rows[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        rows[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        rows[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    # All three visual rows must be selected and highlighted!
+    trs = page.locator('#lemma-table tbody tr')
+    assert "selected" in (trs.nth(0).get_attribute("class") or "")
+    assert trs.nth(0).get_attribute("data-selected") == "1"
+
+    assert "selected" in (trs.nth(1).get_attribute("class") or "")
+    assert trs.nth(1).get_attribute("data-selected") == "1"
+
+    assert "selected" in (trs.nth(2).get_attribute("class") or "")
+    assert trs.nth(2).get_attribute("data-selected") == "1"
+
+    # Selected rows in window.getSelectedRows() should contain all three IDs ("0", "15", "1")
+    selected_ids = page.evaluate("window.getSelectedRows()")
+    assert '"0"' in selected_ids or '0' in selected_ids
+    assert '"15"' in selected_ids or '15' in selected_ids
+    assert '"1"' in selected_ids or '1' in selected_ids
+
+    # 2. Deselect drag: drag from row 0 through row 1 to row 2 while row 0 was selected -> deselects all 3 rows
+    page.evaluate("""() => {
+        const rows = document.querySelectorAll('#lemma-table tbody tr');
+        rows[0].dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        rows[1].dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        rows[2].dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    assert "selected" not in (trs.nth(0).get_attribute("class") or "")
+    assert trs.nth(0).get_attribute("data-selected") == "0"
+    assert "selected" not in (trs.nth(1).get_attribute("class") or "")
+    assert trs.nth(1).get_attribute("data-selected") == "0"
+    assert "selected" not in (trs.nth(2).get_attribute("class") or "")
+    assert trs.nth(2).get_attribute("data-selected") == "0"
+
+
+
 
 
 

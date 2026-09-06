@@ -10293,11 +10293,18 @@ html, body {{
   tr:hover td {
     background: {row_hover};
   }
-  tr.selected.highlight-orange td {
+  tr.selected td,
+  tr.kw-row-selected td {
     background: {selected_orange_row_bg};
     color: {selected_orange_row_text};
   }
-  tr.selected.highlight-purple td {
+  tr.selected.highlight-orange td,
+  tr.kw-row-selected.highlight-orange td {
+    background: {selected_orange_row_bg};
+    color: {selected_orange_row_text};
+  }
+  tr.selected.highlight-purple td,
+  tr.kw-row-selected.highlight-purple td {
     background: {selected_purple_row_bg};
     color: {selected_purple_row_text};
   }
@@ -11482,6 +11489,9 @@ html, body {{
         var isDragSelecting = false;
         var dragStartRowId = null;
         var dragLastRowId = null;
+        var dragStartVisualIdx = -1;
+        var dragLastVisualIdx = -1;
+        var lastClickedVisualIdx = -1;
         var isShiftClick = false;
         var isCtrlKey = false;
         var mousedownTargetRow = null;
@@ -13495,16 +13505,28 @@ html, body {{
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
             var allIdsAttr = row.getAttribute('data-all-row-ids');
-            var constituentIds = allIdsAttr ? allIdsAttr.split(',').filter(Boolean) : [rowIdStr];
+            var constituentIds = allIdsAttr ? allIdsAttr.split(',').filter(Boolean) : [];
+            if (constituentIds.indexOf(rowIdStr) === -1) constituentIds.push(rowIdStr);
+            
+            var rowVisualIdx = -1;
+            for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
+                if (tableRows[rIdx] === row) {
+                    rowVisualIdx = rIdx;
+                    break;
+                }
+            }
             
             if (e.button === 0) { // LMB
                 isDragSelecting = true;
                 dragOccurred = false;
                 mousedownTargetRow = row;
-                isShiftClick = !!(e.shiftKey && lastClickedRowId !== null);
+                isShiftClick = !!(e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null));
                 isCtrlKey = !!(e.ctrlKey || e.metaKey);
                 
-                if (e.shiftKey && lastClickedRowId !== null) {
+                if (e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null)) {
+                    var sVisualIdx = (lastClickedVisualIdx !== -1) ? lastClickedVisualIdx : rowVisualIdx;
+                    dragStartVisualIdx = sVisualIdx;
+                    dragLastVisualIdx = rowVisualIdx;
                     dragStartRowId = lastClickedRowId;
                     dragLastRowId = rowId;
                     dragSelectMode = true;
@@ -13516,25 +13538,23 @@ html, body {{
                         }
                     }
                     
-                    var start = Math.min(dragStartRowId, rowId);
-                    var end = Math.max(dragStartRowId, rowId);
-                    for (var j = start; j <= end; j++) {
-                        selectedRowIdsMap[String(j)] = true;
-                    }
-                    for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
-                        var tr = tableRows[rIdx];
-                        var trId = parseInt(tr.getAttribute('data-row-id'), 10);
-                        if (trId >= start && trId <= end) {
+                    var start = Math.min(sVisualIdx, rowVisualIdx);
+                    var end = Math.max(sVisualIdx, rowVisualIdx);
+                    for (var rIdx = start; rIdx <= end; rIdx++) {
+                        if (rIdx >= 0 && rIdx < tableRows.length) {
+                            var tr = tableRows[rIdx];
+                            var trId = String(tr.getAttribute('data-row-id'));
                             var trAll = tr.getAttribute('data-all-row-ids');
-                            if (trAll) {
-                                var parts = trAll.split(',');
-                                for (var p = 0; p < parts.length; p++) {
-                                    if (parts[p]) selectedRowIdsMap[parts[p]] = true;
-                                }
+                            var pIds = trAll ? trAll.split(',').filter(Boolean) : [];
+                            if (pIds.indexOf(trId) === -1) pIds.push(trId);
+                            for (var p = 0; p < pIds.length; p++) {
+                                selectedRowIdsMap[pIds[p]] = true;
                             }
                         }
                     }
                 } else {
+                    dragStartVisualIdx = rowVisualIdx;
+                    dragLastVisualIdx = rowVisualIdx;
                     dragStartRowId = rowId;
                     dragLastRowId = rowId;
                     var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) || 
@@ -13558,6 +13578,7 @@ html, body {{
                     }
                 }
                 
+                lastClickedVisualIdx = rowVisualIdx;
                 lastClickedRowId = rowId;
                 focusedRowId = rowId;
                 updateRowStyles();
@@ -13584,12 +13605,25 @@ html, body {{
             if (isDragSelecting) {
                 if (e.buttons !== undefined && (e.buttons & 1) === 0) {
                     isDragSelecting = false;
+                    dragStartVisualIdx = -1;
+                    dragLastVisualIdx = -1;
                     notifyAHKSelection();
                     return;
                 }
                 dragOccurred = true;
                 var rowId = parseInt(row.getAttribute('data-row-id'), 10);
                 dragLastRowId = rowId;
+                
+                var currentVisualIdx = -1;
+                for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
+                    if (tableRows[rIdx] === row) {
+                        currentVisualIdx = rIdx;
+                        break;
+                    }
+                }
+                if (currentVisualIdx !== -1) {
+                    dragLastVisualIdx = currentVisualIdx;
+                }
                 
                 // Reset to the state before the current drag gesture started
                 selectedRowIdsMap = {};
@@ -13599,32 +13633,24 @@ html, body {{
                     }
                 }
                 
-                // Apply the drag selection range from dragStartRowId to current rowId
-                var start = Math.min(dragStartRowId, rowId);
-                var end = Math.max(dragStartRowId, rowId);
-                for (var j = start; j <= end; j++) {
-                    var rIdStr = String(j);
-                    if (dragSelectMode) {
-                        selectedRowIdsMap[rIdStr] = true;
-                    } else {
-                        delete selectedRowIdsMap[rIdStr];
-                    }
-                }
-                for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
-                    var tr = tableRows[rIdx];
-                    var trId = parseInt(tr.getAttribute('data-row-id'), 10);
-                    if (trId >= start && trId <= end) {
+                // Apply the visual drag selection range from dragStartVisualIdx to currentVisualIdx
+                var sIdx = (dragStartVisualIdx !== -1) ? dragStartVisualIdx : currentVisualIdx;
+                var eIdx = (currentVisualIdx !== -1) ? currentVisualIdx : sIdx;
+                var start = Math.min(sIdx, eIdx);
+                var end = Math.max(sIdx, eIdx);
+                
+                for (var rIdx = start; rIdx <= end; rIdx++) {
+                    if (rIdx >= 0 && rIdx < tableRows.length) {
+                        var tr = tableRows[rIdx];
+                        var trId = String(tr.getAttribute('data-row-id'));
                         var trAll = tr.getAttribute('data-all-row-ids');
-                        if (trAll) {
-                            var parts = trAll.split(',');
-                            for (var p = 0; p < parts.length; p++) {
-                                if (parts[p]) {
-                                    if (dragSelectMode) {
-                                        selectedRowIdsMap[parts[p]] = true;
-                                    } else {
-                                        delete selectedRowIdsMap[parts[p]];
-                                    }
-                                }
+                        var pIds = trAll ? trAll.split(',').filter(Boolean) : [];
+                        if (pIds.indexOf(trId) === -1) pIds.push(trId);
+                        for (var p = 0; p < pIds.length; p++) {
+                            if (dragSelectMode) {
+                                selectedRowIdsMap[pIds[p]] = true;
+                            } else {
+                                delete selectedRowIdsMap[pIds[p]];
                             }
                         }
                     }
@@ -13683,7 +13709,10 @@ html, body {{
                 var isHl = (hasHighlightCol && r.getAttribute('data-selected') === '1');
                 initialHighlights[rIdStr] = isHl;
             }
-            wireTableRowEvents(r);
+            if (!r.__kw_wired) {
+                r.__kw_wired = true;
+                wireTableRowEvents(r);
+            }
         }
         updateRowStyles();
         updateBidirectionalHighlights();
@@ -13720,21 +13749,19 @@ html, body {{
                             }
                         } else {
                             if (audioTableRangeMode === 'all' || activeCtrl) {
-                                var start = (dragStartRowId !== null) ? dragStartRowId : 0;
-                                var end = (dragLastRowId !== null) ? dragLastRowId : start;
-                                var minRow = Math.min(start, end);
-                                var maxRow = Math.max(start, end);
+                                var sIdx = (dragStartVisualIdx !== -1 && dragStartVisualIdx !== null) ? dragStartVisualIdx : 0;
+                                var eIdx = (dragLastVisualIdx !== -1 && dragLastVisualIdx !== null) ? dragLastVisualIdx : sIdx;
+                                var minRow = Math.min(sIdx, eIdx);
+                                var maxRow = Math.max(sIdx, eIdx);
                                 var rowWords = [];
                                 for (var r = minRow; r <= maxRow; r++) {
-                                    if (selectedRowIdsMap[String(r)]) {
-                                        var tr = null;
-                                        for (var t = 0; t < tableRows.length; t++) {
-                                            if (parseInt(tableRows[t].getAttribute('data-row-id')) === r) {
-                                                tr = tableRows[t];
-                                                break;
-                                            }
-                                        }
-                                        if (tr) {
+                                    if (r >= 0 && r < tableRows.length) {
+                                        var tr = tableRows[r];
+                                        var trId = String(tr.getAttribute('data-row-id'));
+                                        var trAll = tr.getAttribute('data-all-row-ids');
+                                        var pIds = trAll ? trAll.split(',').filter(Boolean) : [trId];
+                                        var isSel = pIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
+                                        if (isSel) {
                                             var term = getTableRowWordsToPlay(tr, audioLmbSource);
                                             if (term) {
                                                 rowWords.push(term);
@@ -13860,6 +13887,8 @@ html, body {{
             mousedownTargetRow = null;
             dragStartRowId = null;
             dragLastRowId = null;
+            dragStartVisualIdx = -1;
+            dragLastVisualIdx = -1;
             isShiftClick = false;
             isCtrlKey = false;
             tokenDragStartIdx = -1;
@@ -13929,6 +13958,8 @@ html, body {{
                 } catch(e) {}
                 if (window.clearMVPBookmarks) window.clearMVPBookmarks();
                 clearAllSelections();
+                lastClickedVisualIdx = -1;
+                lastClickedRowId = null;
                 updateBidirectionalHighlights();
                 notifyAHKSelection();
                 return;
