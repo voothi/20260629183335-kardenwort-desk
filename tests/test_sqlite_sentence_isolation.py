@@ -336,5 +336,115 @@ def test_render_flow_multi_sentence_container_reverse_order_isolation(tmp_path):
     assert card2["translated_text"] == "Предложение два."
     assert card3["translated_text"] == "Предложение три."
 
+def test_sqlite_sentence_card_local_vocabulary_and_inflection_isolation(tmp_path):
+    import json
+    import kardenwort_desk
+
+    cfg, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_path = tmp_path / "kardenwort.db"
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_path))
+    cfg.set("sentences_mode", "enabled", "true")
+    cfg.set("sentences_mode", "delivery_mode", "container")
+    cfg.set("sentences_mode", "deduplication_scope", "sentence")
+    cfg.set("sentences_mode", "min_sentences", "2")
+    cfg.set("settings", "text_mode", "single")
+    cfg.set("settings", "default_target_language", "ru")
+
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths)
+    session_zid = "20260906191000"
+
+    initial_sentences = [
+        {
+            "session_zid": session_zid,
+            "sentence_index": 1,
+            "sentence_source": "The boy is here.",
+            "sentence_destination": "Мальчик здесь.",
+        },
+        {
+            "session_zid": session_zid,
+            "sentence_index": 2,
+            "sentence_source": "The boys are here.",
+            "sentence_destination": "Мальчики здесь.",
+        },
+    ]
+
+    headers = ["WordSource", "WordSourceInflectedForm", "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "WordDestination", "DeskSelected"]
+    data_rows = [
+        ["be", "is", "1", "The boy is here.", "Мальчик здесь.", "быть", "1"],
+        ["boy", "boy", "1", "The boy is here.", "Мальчик здесь.", "мальчик", "0"],
+        ["be", "are", "2", "The boys are here.", "Мальчики здесь.", "быть", "0"],
+        ["boy", "boys", "2", "The boys are here.", "Мальчики здесь.", "мальчики", "0"],
+    ]
+
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="boy-be",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="The boy is here. The boys are here.",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=initial_sentences,
+        zid=session_zid,
+    )
+
+    tsv_path = tmp_path / f"{session_zid}-boy-be.en.tsv"
+    tsv_path.write_text("Quotation\tWordSource\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tWordDestination\n", encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="The boy is here. The boys are here.",
+        language="en",
+        zid=session_zid,
+        text_mode="single",
+        config=cfg,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_path),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2,
+    )
+
+    cards_json = html.split('<script id="sentence-cards" type="application/json">\n')[1].split('\n</script>')[0]
+    cards = json.loads(cards_json)
+    assert len(cards) == 3
+
+    # Master Overview card [1] (sentence_idx = 0)
+    master_card = [c for c in cards if c["sentence_idx"] == 0][0]
+    assert "words" in master_card
+    master_lemmas = [w["lemma"] for w in master_card["words"]]
+    assert "be" in master_lemmas
+    assert "boy" in master_lemmas
+    # Master card combines inflected forms
+    be_master = [w for w in master_card["words"] if w["lemma"] == "be"][0]
+    assert "is" in be_master["inflected"] and "are" in be_master["inflected"]
+
+    # Child card 1 (sentence_idx = 1)
+    card1 = [c for c in cards if c["sentence_idx"] == 1][0]
+    assert "words" in card1
+    card1_be = [w for w in card1["words"] if w["lemma"] == "be"][0]
+    assert card1_be["inflected"] == "is"
+    assert "are" not in card1_be["inflected"]
+    assert card1["SentenceSource"] == "The boy is here."
+    assert card1["SentenceDestination"] == "Мальчик здесь."
+
+    # Child card 2 (sentence_idx = 2) - must retain shared lemma 'be' without getting stripped by sentence 1
+    card2 = [c for c in cards if c["sentence_idx"] == 2][0]
+    assert "words" in card2
+    card2_lemmas = [w["lemma"] for w in card2["words"]]
+    assert "be" in card2_lemmas
+    card2_be = [w for w in card2["words"] if w["lemma"] == "be"][0]
+    assert card2_be["inflected"] == "are"
+    assert "is" not in card2_be["inflected"]
+    assert card2["SentenceSource"] == "The boys are here."
+    assert card2["SentenceDestination"] == "Мальчики здесь."
+
+
 
 

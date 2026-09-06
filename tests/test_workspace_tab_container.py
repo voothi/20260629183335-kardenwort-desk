@@ -983,6 +983,238 @@ def test_single_sentence_container_mode_preserves_seq_num_1(tmp_path):
     # Ensure there is no [2/1] or favicon 2 forced
     assert "data-tab-seq=\"2\"" not in html
 
+def test_card_oriented_workspace_container_vocabulary_and_inflection_isolation(tmp_path):
+    """
+    Verifies that in container mode with deduplication_scope=sentence:
+    - Sentence 2 retains shared lemmas (e.g. 'be')
+    - Sentence 1 does not contain foreign inflections ('are')
+    - Master Overview card [1] (sentence_idx = 0) has globally deduplicated vocabulary with combined inflections
+    - Each card includes words and sentence context metadata
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_isol.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "deduplication_scope", "sentence")
+    config.set("sentences_mode", "enabled", "true")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260906990003"
+    text = "She is happy. They are happy."
+    tsv_file = tmp_path / f"{unique_zid}-happy.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "is\tbe\tis\tбыть\t1\t0\n"
+        "happy\thappy\thappy\tсчастливый\t1\t0\n"
+        "are\tbe\tare\tбыть\t2\t0\n"
+        "happy\thappy\thappy\tсчастливый\t2\t0\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2
+    )
+
+    cards_json = html.split('<script id="sentence-cards" type="application/json">\n')[1].split('\n</script>')[0]
+    cards = json.loads(cards_json)
+    assert len(cards) == 3
+
+    # Master Overview Card [1] (sentence_idx = 0)
+    master = [c for c in cards if c["sentence_idx"] == 0][0]
+    assert "words" in master
+    master_lemmas = [w["lemma"] for w in master["words"]]
+    assert "be" in master_lemmas
+    assert "happy" in master_lemmas
+    be_master = [w for w in master["words"] if w["lemma"] == "be"][0]
+    assert "is" in be_master["inflected"] and "are" in be_master["inflected"]
+
+    # Child Card 1 (sentence_idx = 1)
+    card1 = [c for c in cards if c["sentence_idx"] == 1][0]
+    assert "words" in card1
+    card1_be = [w for w in card1["words"] if w["lemma"] == "be"][0]
+    assert card1_be["inflected"] == "is"
+    assert "are" not in card1_be["inflected"]
+    assert card1["SentenceSource"] == "She is happy."
+
+    # Child Card 2 (sentence_idx = 2)
+    card2 = [c for c in cards if c["sentence_idx"] == 2][0]
+    assert "words" in card2
+    card2_be = [w for w in card2["words"] if w["lemma"] == "be"][0]
+    assert card2_be["inflected"] == "are"
+    assert "is" not in card2_be["inflected"]
+    assert card2["SentenceSource"] == "They are happy."
+
+def test_playwright_card_scoped_independent_selections(page, tmp_path):
+    """
+    Verifies that selecting rows on Tab 2 (Sentence 1) does not leak into Tab 3 (Sentence 2),
+    and switching between tabs preserves each card's independent selections.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_selections.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260906990001"
+    text = "Das Haus ist gross. Die Katze schlaeft."
+    tsv_file = tmp_path / f"{unique_zid}-house-cat.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "Haus\tHaus\tHaus\tдом\t1\t0\n"
+        "Katze\tKatze\tKatze\tкошка\t2\t0\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # We are on Tab 2 (Sentence 1). Verify row is present and unselected initially.
+    row_sent1 = page.locator("#lemma-table tbody tr").first
+    assert row_sent1.get_attribute("data-selected") == "0"
+
+    # Click row on Tab 2 to select it
+    row_sent1.click()
+    assert row_sent1.get_attribute("data-selected") == "1"
+    assert "selected" in (row_sent1.get_attribute("class") or "")
+
+    # Switch to Tab 3 (Sentence 2)
+    tab3_chip = page.locator('.kw-tab-chip[data-tab-seq="3"]')
+    tab3_chip.click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr td') && document.querySelector('#lemma-table tbody tr td').textContent.includes('Katze')", timeout=5000)
+
+    # On Tab 3, the table row is for Katze and must NOT be selected
+    row_sent2 = page.locator("#lemma-table tbody tr").first
+    assert "Katze" in row_sent2.inner_text()
+    assert row_sent2.get_attribute("data-selected") == "0"
+
+    # Select row on Tab 3
+    row_sent2.click()
+    assert row_sent2.get_attribute("data-selected") == "1"
+
+    # Switch back to Tab 2 (Sentence 1)
+    tab2_chip = page.locator('.kw-tab-chip[data-tab-seq="2"]')
+    tab2_chip.click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr td') && document.querySelector('#lemma-table tbody tr td').textContent.includes('Haus')", timeout=5000)
+
+    # Verify Tab 2's row is still selected!
+    row_sent1_back = page.locator("#lemma-table tbody tr").first
+    assert "Haus" in row_sent1_back.inner_text()
+    assert row_sent1_back.get_attribute("data-selected") == "1"
+
+    # Switch back to Tab 3 (Sentence 2)
+    tab3_chip.click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr td') && document.querySelector('#lemma-table tbody tr td').textContent.includes('Katze')", timeout=5000)
+    row_sent2_back = page.locator("#lemma-table tbody tr").first
+    assert "Katze" in row_sent2_back.inner_text()
+    assert row_sent2_back.get_attribute("data-selected") == "1"
+
+def test_playwright_bidirectional_token_hover_mapping_parity(page, tmp_path):
+    """
+    Verifies bidirectional token hover and selection mapping parity across child tabs in container mode.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_hover.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260906990002"
+    text = "Das Haus ist gross. Die Katze schlaeft."
+    tsv_file = tmp_path / f"{unique_zid}-hover-parity.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tHaus\tдом\t1\tДом большой.\t0\n"
+        "Katze\tKatze\tKatze\tкошка\t2\tКошка спит.\t0\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # On Tab 2 (Sentence 1):
+    # 1. Hovering over token "Haus" highlights translation span in #translation-container
+    haus_token = page.locator('#source-container span.word', has_text='Haus')
+    haus_token.hover()
+    trans_span = page.locator('#translation-container span.hl-mvp')
+    assert trans_span.count() >= 1
+
+    # 2. Clicking token "Haus" triggers bidirectional selection to the active table row
+    haus_token.click()
+    haus_row = page.locator("#lemma-table tbody tr").first
+    assert haus_row.get_attribute("data-selected") == "1"
+    assert "highlight-orange-active" in (haus_token.get_attribute("class") or "")
+
+    # Switch to Tab 3 (Sentence 2)
+    tab3_chip = page.locator('.kw-tab-chip[data-tab-seq="3"]')
+    tab3_chip.click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr td') && document.querySelector('#lemma-table tbody tr td').textContent.includes('Katze')", timeout=5000)
+
+    # On Tab 3 (Sentence 2):
+    # 1. Hovering over token "Katze" highlights translation span
+    katze_token = page.locator('#source-container span.word', has_text='Katze')
+    katze_token.hover()
+
+    # 2. Clicking token "Katze" triggers bidirectional selection to Sentence 2 table row
+    katze_token.click()
+    katze_row = page.locator("#lemma-table tbody tr").first
+    assert katze_row.get_attribute("data-selected") == "1"
+    assert "highlight-orange-active" in (katze_token.get_attribute("class") or "")
+
+
 
 
 

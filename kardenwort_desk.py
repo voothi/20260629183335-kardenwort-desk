@@ -8027,7 +8027,29 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         
         dedup_scope_cfg = smc.deduplication_scope
         if col_word_source != -1 and dedup_scope_cfg != 'none':
-            master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text, language=language, resolved_paths=resolved_paths)
+            if smc.delivery_mode == 'container' and dedup_scope_cfg == 'sentence' and len(source_sentences) >= 2:
+                # Retain sentence-local lemma rows for each child card in container mode,
+                # preventing premature cross-sentence deduplication.
+                master_data_rows = []
+                for s_i in range(len(source_sentences)):
+                    s_idx_str = str(s_i + 1)
+                    s_rows = [list(r) for r in data_rows if (col_index != -1 and len(r) > col_index and str(r[col_index]).strip() == s_idx_str)]
+                    if not s_rows:
+                        sub_text = source_sentences[s_i]
+                        sub_tokens = tok.build_word_list_internal(sub_text, keep_spaces=True)
+                        sub_words = {t["lower_clean"] for t in sub_tokens if t.get("is_word") and "lower_clean" in t}
+                        for row in data_rows:
+                            row_inf = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_word_source)
+                            row_lem = row[col_word_source].strip() if col_word_source != -1 and len(row) > col_word_source else ""
+                            forms = [f.strip().lower() for f in row_inf.split(',') if f.strip()]
+                            if any(f in sub_words for f in forms) or (row_lem.lower() in sub_words):
+                                s_rows.append(list(row))
+                    s_text = source_sentences[s_i]
+                    s_dedup = deduplicate_rows(s_rows, col_word_source, col_pos, col_inflected, config, window_text=s_text, language=language, resolved_paths=resolved_paths)
+                    s_dedup = sort_rows_by_frequency(s_dedup, headers, language, config, resolved_paths, role_fields=role_fields)
+                    master_data_rows.extend(s_dedup)
+            else:
+                master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text, language=language, resolved_paths=resolved_paths)
         else:
             master_data_rows = [list(r) for r in data_rows]
 
@@ -8423,7 +8445,19 @@ html, body {{
         for r_i, r in enumerate(data_rows):
             r.append(str(r_i))
 
-    data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+    col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+    if smc.enabled and smc.delivery_mode == 'container' and smc.deduplication_scope == 'sentence' and len(source_sentences) >= 2 and col_index != -1:
+        sentence_sorted_rows = []
+        for s_idx in range(1, len(source_sentences) + 1):
+            s_rows = [r for r in data_rows if len(r) > col_index and str(r[col_index]).strip() == str(s_idx)]
+            s_sorted = sort_rows_by_frequency(s_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+            sentence_sorted_rows.extend(s_sorted)
+        other_rows = [r for r in data_rows if not (len(r) > col_index and str(r[col_index]).strip().isdigit() and 1 <= int(str(r[col_index]).strip()) <= len(source_sentences))]
+        if other_rows:
+            sentence_sorted_rows.extend(sort_rows_by_frequency(other_rows, headers, language, config, resolved_paths, role_fields=role_fields))
+        data_rows = sentence_sorted_rows
+    else:
+        data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -8849,8 +8883,32 @@ html, body {{
             try:
                 with storage_adapter.file_lock(working_tsv_path):
                     comments, headers_latest, current_rows = storage_adapter.load_tsv_rows(working_tsv_path)
-                    current_rows = sort_rows_by_frequency(current_rows, headers_latest, language, config, resolved_paths, role_fields=role_fields)
-                    data_rows = current_rows
+                    headers = headers_latest
+                    role_fields = get_role_fields(mapping, headers)
+                    col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+                    col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
+                    col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+                    col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+                    col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+                    col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
+                    col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
+                    col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
+                    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+                    col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
+                    col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
+                    if smc.enabled and smc.delivery_mode == 'container' and smc.deduplication_scope == 'sentence' and len(source_sentences) >= 2 and col_index != -1:
+                        sentence_sorted_rows = []
+                        for s_idx in range(1, len(source_sentences) + 1):
+                            s_rows = [r for r in current_rows if len(r) > col_index and str(r[col_index]).strip() == str(s_idx)]
+                            s_sorted = sort_rows_by_frequency(s_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                            sentence_sorted_rows.extend(s_sorted)
+                        other_rows = [r for r in current_rows if not (len(r) > col_index and str(r[col_index]).strip().isdigit() and 1 <= int(str(r[col_index]).strip()) <= len(source_sentences))]
+                        if other_rows:
+                            sentence_sorted_rows.extend(sort_rows_by_frequency(other_rows, headers, language, config, resolved_paths, role_fields=role_fields))
+                        data_rows = sentence_sorted_rows
+                    else:
+                        current_rows = sort_rows_by_frequency(current_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                        data_rows = current_rows
             except Exception as e:
                 logger.error(f"Error loading rows in UI thread: {e}")
 
@@ -9137,6 +9195,10 @@ html, body {{
             if eff_mode not in ('single', 'multi') and col_index != -1:
                 curr_c_idx = absolute_to_c_idx.get(current_a_idx, -1)
                 mapped_rows = [r_idx for r_idx in mapped_rows if row_to_c_idx.get(r_idx, -1) == curr_c_idx]
+            elif is_multi_sentence and col_index != -1:
+                s_mapped = [r_idx for r_idx in mapped_rows if row_to_c_idx.get(r_idx, -1) + 1 == tok_sent_idx]
+                if s_mapped:
+                    mapped_rows = s_mapped
 
             is_in_comp = token.get("is_in_compound", token.get("compound_id") is not None)
             filtered_cand_rows = []
@@ -9279,6 +9341,7 @@ html, body {{
     enrich_provider_label = format_provider_skeleton_label(enrich_provider)
 
     table_rows = []
+    all_word_objs = []
     for row_id, row in enumerate(data_rows):
         if col_lemma != -1 and len(row) > col_lemma and re.match(r'^\d{14}-', row[col_lemma]):
             row = list(row)
@@ -9337,7 +9400,7 @@ html, body {{
             if prov_title:
                 prov_attr += f' title="{prov_title}"'
 
-        table_rows.append(
+        row_html_line = (
             f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{lemma_val}</div></td>'
@@ -9347,6 +9410,22 @@ html, body {{
             f'{dynamic_tds}'
             f'</tr>'
         )
+        table_rows.append(row_html_line)
+        all_word_objs.append({
+            "row_id": str(row_id),
+            "token_order": str(token_order_val),
+            "sentence_idx": str(sent_idx_val),
+            "inflected": inflected_val,
+            "lemma": lemma_val,
+            "translation": trans_val,
+            "ipa": ipa_val,
+            "morphology": morph_val,
+            "selected": is_selected,
+            "highlight_class": row_highlight_class,
+            "provenance": prov_val or "",
+            "dynamic_tds": dynamic_tds,
+            "row_html": row_html_line,
+        })
     table_rows_html = "" if is_mismatch else "\n".join(table_rows)
     
     token_manifest = []
@@ -9495,6 +9574,93 @@ html, body {{
 
         master_trans_full = _strip_html(master_trans_full)
         master_card_slug = master_slug if 'master_slug' in locals() else (tsv_slug or (generate_slug(text) if text else ""))
+        
+        # Build Master Overview [1] (sentence_idx = 0) with globally deduplicated vocabulary and combined inflected forms
+        overview_word_objs = []
+        col_ws_dedup = col_lemma if col_lemma != -1 else (headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1)
+        col_pos_dedup = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
+        dedup_scope_val = smc.deduplication_scope
+        if col_ws_dedup != -1 and dedup_scope_val != 'none':
+            overview_rows = deduplicate_rows(
+                data_rows, col_ws_dedup, col_pos_dedup, col_inflected, config,
+                window_text=text, language=language, resolved_paths=resolved_paths
+            )
+            overview_rows = sort_rows_by_frequency(
+                overview_rows, headers, language, config, resolved_paths, role_fields=role_fields
+            )
+        else:
+            overview_rows = [list(r) for r in data_rows]
+
+        for ov_id, ov_r in enumerate(overview_rows):
+            ov_lemma = ov_r[col_lemma] if col_lemma != -1 and len(ov_r) > col_lemma else ""
+            ov_inflected = resolve_row_inflected_form(ov_r, col_inflected, col_inflected2, col_quotation, col_lemma)
+            ov_trans = ov_r[col_word_dest] if col_word_dest != -1 and len(ov_r) > col_word_dest else ""
+            if ov_trans == "[FAILED]":
+                ov_trans = ""
+            ov_morph = ov_r[col_morph] if col_morph != -1 and len(ov_r) > col_morph else ""
+            ov_ipa = ov_r[col_ipa] if col_ipa != -1 and len(ov_r) > col_ipa else ""
+            if run_base == 'auto' and not ov_trans.strip() and has_untranslated_lemmas:
+                ov_trans = f'<span class="skeleton-loader" style="width: 60px;" title="{lemma_provider_label}">{lemma_provider_label}</span>'
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_ipa.strip() and not llm_filled:
+                ov_ipa = f'<span class="skeleton-loader" style="width: 50px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_morph.strip() and not llm_filled:
+                ov_morph = f'<span class="skeleton-loader" style="width: 80px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+            ov_is_sel = "0"
+            if col_highlighted != -1 and len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
+                ov_is_sel = "1"
+            ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and ov_r[col_token_order].strip() else str(ov_id)
+            
+            ov_dynamic_tds = ""
+            for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
+                val = ov_r[d_idx] if d_idx != -1 and len(ov_r) > d_idx else ""
+                display_val = val
+                span_class = ""
+                if ":" in val:
+                    parts = val.split(":", 1)
+                    possible_prefix = parts[0].strip()
+                    if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
+                        display_val = parts[1].strip()
+                        span_class = f"level-{possible_prefix.lower()}"
+                if span_class:
+                    inner_html = f'<span class="{span_class}">{display_val}</span>'
+                else:
+                    inner_html = display_val
+                ov_dynamic_tds += f'<td class="col-classification" data-col="{role}"><div class="scrollable-cell">{inner_html}</div></td>'
+
+            ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
+            ov_prov_attr = ""
+            if ov_prov_val and ov_trans and "skeleton-loader" not in ov_trans and "btn-retry-cell" not in ov_trans:
+                p_title = format_provenance_tooltip(ov_prov_val)
+                ov_prov_attr = f' data-provenance="{ov_prov_val}"'
+                if p_title:
+                    ov_prov_attr += f' title="{p_title}"'
+
+            ov_row_html = (
+                f'<tr data-row-id="ov_{ov_id}" data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="highlight-orange">'
+                f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{ov_inflected}</div></td>'
+                f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{ov_lemma}</div></td>'
+                f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
+                f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ov_ipa}</div></td>'
+                f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{ov_morph}</div></td>'
+                f'{ov_dynamic_tds}'
+                f'</tr>'
+            )
+            overview_word_objs.append({
+                "row_id": f"ov_{ov_id}",
+                "token_order": str(ov_token_order),
+                "sentence_idx": "0",
+                "inflected": ov_inflected,
+                "lemma": ov_lemma,
+                "translation": ov_trans,
+                "ipa": ov_ipa,
+                "morphology": ov_morph,
+                "selected": ov_is_sel,
+                "highlight_class": "highlight-orange",
+                "provenance": ov_prov_val or "",
+                "dynamic_tds": ov_dynamic_tds,
+                "row_html": ov_row_html,
+            })
+
         master_card = {
             "index": 0,
             "seq_num": 1,
@@ -9505,6 +9671,12 @@ html, body {{
             "tsv_filename": master_tsv_name,
             "source_text": text,
             "translated_text": master_trans_full,
+            "SentenceSource": text,
+            "SentenceDestination": master_trans_full,
+            "sentence_source": text,
+            "sentence_destination": master_trans_full,
+            "selected_ids": [w["row_id"] for w in overview_word_objs if w.get("selected") == "1"],
+            "words": overview_word_objs,
         }
         
         child_cards = []
@@ -9536,6 +9708,7 @@ html, body {{
                     l_p = bare_c_match.group(2) or language
                     c_tsv_name = f"{z_p}-{c_slug}.{l_p}.tsv"
 
+            sent_words = [w for w in all_word_objs if str(w.get("sentence_idx")) == str(sent_i)]
             child_cards.append({
                 "index": idx + 1,
                 "seq_num": seq,
@@ -9546,6 +9719,12 @@ html, body {{
                 "tsv_filename": c_tsv_name,
                 "source_text": s_src,
                 "translated_text": s_trans,
+                "SentenceSource": s_src,
+                "SentenceDestination": s_trans,
+                "sentence_source": s_src,
+                "sentence_destination": s_trans,
+                "selected_ids": [w["row_id"] for w in sent_words if w.get("selected") == "1"],
+                "words": sent_words,
             })
 
         if smc.spawn_order == "reverse":
@@ -9564,6 +9743,14 @@ html, body {{
         valid_seqs = {c["seq_num"] for c in sentence_cards}
         if active_seq_num not in valid_seqs:
             active_seq_num = 2 if 2 in valid_seqs else 1
+
+    if smc.delivery_mode == "container" and len(sentence_cards) > 1 and not is_mismatch:
+        if active_seq_num == 1:
+            table_rows_html = "\n".join(w["row_html"] for w in overview_word_objs)
+        else:
+            active_c = next((c for c in sentence_cards if c["seq_num"] == active_seq_num), None)
+            if active_c and active_c.get("words"):
+                table_rows_html = "\n".join(w["row_html"] for w in active_c["words"])
 
     dock_body_class = ""
     if len(sentence_cards) > 1 and smc.delivery_mode == "container":
@@ -13141,10 +13328,158 @@ html, body {{
         }
         
         var lemmaTable = document.getElementById('lemma-table');
-        var tableRows = [];
-        if (lemmaTable) {
-            var tbodies = lemmaTable.getElementsByTagName('tbody');
-            var rowsContainer = tbodies.length > 0 ? tbodies[0] : lemmaTable;
+    var tableRows = [];
+    var hasHighlightCol = {has_highlight_col};
+
+    function wireTableRowEvents(row) {
+        addEvent(row, 'mousedown', function(e) {
+            if (window.__selectableTextMode) return;
+            e = e || window.event;
+            var target = e.target || e.srcElement;
+            if (target && target.tagName === 'INPUT') {
+                return;
+            }
+            if (e.button !== 0 && e.button !== 2) {
+                return;
+            }
+            var rowId = parseInt(row.getAttribute('data-row-id'));
+            var rowIdStr = String(rowId);
+            
+            if (e.button === 0) { // LMB
+                isDragSelecting = true;
+                dragOccurred = false;
+                mousedownTargetRow = row;
+                isShiftClick = !!(e.shiftKey && lastClickedRowId !== null);
+                isCtrlKey = !!(e.ctrlKey || e.metaKey);
+                
+                if (e.shiftKey && lastClickedRowId !== null) {
+                    dragStartRowId = lastClickedRowId;
+                    dragLastRowId = rowId;
+                    dragSelectMode = true;
+                    
+                    initialSelectedMap = {};
+                    for (var key in selectedRowIdsMap) {
+                        if (selectedRowIdsMap.hasOwnProperty(key)) {
+                            initialSelectedMap[key] = selectedRowIdsMap[key];
+                        }
+                    }
+                    
+                    var start = Math.min(dragStartRowId, rowId);
+                    var end = Math.max(dragStartRowId, rowId);
+                    for (var j = start; j <= end; j++) {
+                        selectedRowIdsMap[String(j)] = true;
+                    }
+                } else {
+                    dragStartRowId = rowId;
+                    dragLastRowId = rowId;
+                    dragSelectMode = !selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                    
+                    initialSelectedMap = {};
+                    for (var key in selectedRowIdsMap) {
+                        if (selectedRowIdsMap.hasOwnProperty(key)) {
+                            initialSelectedMap[key] = selectedRowIdsMap[key];
+                        }
+                    }
+                    
+                    if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
+                        delete selectedRowIdsMap[rowIdStr];
+                    } else {
+                        selectedRowIdsMap[rowIdStr] = true;
+                    }
+                }
+                
+                lastClickedRowId = rowId;
+                focusedRowId = rowId;
+                updateRowStyles();
+                updateBidirectionalHighlights();
+                notifyAHKSelection();
+            } else if (e.button === 2) { // RMB
+                if (audioRmbPlay) {
+                    var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
+                    var textToPlay = getTableRowWordsToPlay(row, audioLmbSource);
+                    if (textToPlay) {
+                        playAudio(textToPlay, sourceLang);
+                    }
+                }
+            }
+            
+            e = e || window.event;
+            if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+            return false;
+        });
+        
+        addEvent(row, 'mouseover', function(e) {
+            if (window.__selectableTextMode) return;
+            e = e || window.event;
+            if (isDragSelecting) {
+                if (e.buttons !== undefined && (e.buttons & 1) === 0) {
+                    isDragSelecting = false;
+                    notifyAHKSelection();
+                    return;
+                }
+                dragOccurred = true;
+                var rowId = parseInt(row.getAttribute('data-row-id'));
+                dragLastRowId = rowId;
+                
+                // Reset to the state before the current drag gesture started
+                selectedRowIdsMap = {};
+                for (var key in initialSelectedMap) {
+                    if (initialSelectedMap.hasOwnProperty(key)) {
+                        selectedRowIdsMap[key] = initialSelectedMap[key];
+                    }
+                }
+                
+                // Apply the drag selection range from dragStartRowId to current rowId
+                var start = Math.min(dragStartRowId, rowId);
+                var end = Math.max(dragStartRowId, rowId);
+                for (var j = start; j <= end; j++) {
+                    var rIdStr = String(j);
+                    if (dragSelectMode) {
+                        selectedRowIdsMap[rIdStr] = true;
+                    } else {
+                        delete selectedRowIdsMap[rIdStr];
+                    }
+                }
+                
+                focusedRowId = rowId;
+                updateRowStyles();
+                updateBidirectionalHighlights();
+            }
+        });
+        
+        var tds = row.getElementsByTagName('td');
+        for (var j = 0; j < tds.length; j++) {
+            if (tds[j].classList.contains('editable')) {
+                (function(cell) {
+                    addEvent(cell, 'click', function(e) {
+                        if (window.__selectableTextMode) return;
+                        lastClickedCell = cell;
+                    });
+                    addEvent(cell, 'mouseover', function(e) {
+                        if (window.__selectableTextMode) return;
+                        lastHoveredCell = cell;
+                    });
+                    addEvent(cell, 'mouseout', function(e) {
+                        if (window.__selectableTextMode) return;
+                        if (lastHoveredCell === cell) {
+                            lastHoveredCell = null;
+                        }
+                    });
+                    addEvent(cell, 'dblclick', function() {
+                        if (window.__selectableTextMode) return;
+                        makeEditable(cell);
+                    });
+                })(tds[j]);
+            }
+        }
+    }
+
+    function rebindTableRows() {
+        var lt = document.getElementById('lemma-table');
+        tableRows = [];
+        if (lt) {
+            var tbodies = lt.getElementsByTagName('tbody');
+            var rowsContainer = tbodies.length > 0 ? tbodies[0] : lt;
             var allRows = rowsContainer.getElementsByTagName('tr');
             for (var i = 0; i < allRows.length; i++) {
                 if (allRows[i].getAttribute('data-row-id') !== null) {
@@ -13152,184 +13487,22 @@ html, body {{
                 }
             }
         }
-        
-        var hasHighlightCol = {has_highlight_col};
-
         for (var i = 0; i < tableRows.length; i++) {
-            var row = tableRows[i];
-            var rowIdStr = String(row.getAttribute('data-row-id'));
-            var isHighlighted = false;
-            if (hasHighlightCol && row.getAttribute('data-selected') === '1') {
-                isHighlighted = true;
+            var r = tableRows[i];
+            var rIdStr = String(r.getAttribute('data-row-id'));
+            if (!initialHighlights.hasOwnProperty(rIdStr)) {
+                var isHl = (hasHighlightCol && r.getAttribute('data-selected') === '1');
+                initialHighlights[rIdStr] = isHl;
             }
-            initialHighlights[rowIdStr] = isHighlighted;
-            if (isHighlighted) {
-                selectedRowIdsMap[rowIdStr] = true;
-            }
+            wireTableRowEvents(r);
         }
         updateRowStyles();
         updateBidirectionalHighlights();
-        
-        for (var i = 0; i < tableRows.length; i++) {
-            (function(row) {
-                addEvent(row, 'mousedown', function(e) {
-                    if (window.__selectableTextMode) return;
-                    e = e || window.event;
-                    var target = e.target || e.srcElement;
-                    if (target && target.tagName === 'INPUT') {
-                        return;
-                    }
-                    if (e.button !== 0 && e.button !== 2) {
-                        return;
-                    }
-                    var rowId = parseInt(row.getAttribute('data-row-id'));
-                    var rowIdStr = String(rowId);
-                    
-                    if (e.button === 0) { // LMB
-                        isDragSelecting = true;
-                        dragOccurred = false;
-                        mousedownTargetRow = row;
-                        isShiftClick = !!(e.shiftKey && lastClickedRowId !== null);
-                        isCtrlKey = !!(e.ctrlKey || e.metaKey);
-                        
-                        if (e.shiftKey && lastClickedRowId !== null) {
-                            dragStartRowId = lastClickedRowId;
-                            dragLastRowId = rowId;
-                            dragSelectMode = true;
-                            
-                            initialSelectedMap = {};
-                            for (var key in selectedRowIdsMap) {
-                                if (selectedRowIdsMap.hasOwnProperty(key)) {
-                                    initialSelectedMap[key] = selectedRowIdsMap[key];
-                                }
-                            }
-                            
-                            var start = Math.min(parseInt(lastClickedRowId), parseInt(rowId));
-                            var end = Math.max(parseInt(lastClickedRowId), parseInt(rowId));
-                            for (var j = start; j <= end; j++) {
-                                selectedRowIdsMap[String(j)] = true;
-                            }
-                            lastClickedRowId = rowId;
-                        } else {
-                            dragStartRowId = rowId;
-                            dragLastRowId = rowId;
-                            
-                            initialSelectedMap = {};
-                            for (var key in selectedRowIdsMap) {
-                                if (selectedRowIdsMap.hasOwnProperty(key)) {
-                                    initialSelectedMap[key] = selectedRowIdsMap[key];
-                                }
-                            }
-                            
-                            if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
-                                delete selectedRowIdsMap[rowIdStr];
-                                dragSelectMode = false;
-                            } else {
-                                selectedRowIdsMap[rowIdStr] = true;
-                                dragSelectMode = true;
-                            }
-                            lastClickedRowId = rowId;
-                        }
-                        
-                        focusedRowId = rowId;
-                        updateRowStyles();
-                        updateBidirectionalHighlights();
-                    } else if (e.button === 2) { // RMB
-                        if (audioRmbPlay) {
-                            var tds = row.getElementsByTagName('td');
-                            var translation = "";
-                            for (var m = 0; m < tds.length; m++) {
-                                if (tds[m].getAttribute('data-col') === 'WordDestination') {
-                                    translation = (tds[m].textContent || tds[m].innerText || "").trim();
-                                }
-                            }
-                            var targetLang = (document.getElementById('session-target-lang').textContent || document.getElementById('session-target-lang').innerText || 'ru').trim();
-                            playAudio(translation, targetLang);
-                        }
-                    }
-                    
-                    if (e.preventDefault) {
-                        e.preventDefault();
-                    } else {
-                        e.returnValue = false;
-                    }
-                });
-                
-                addEvent(row, 'contextmenu', function(e) {
-                    if (window.__selectableTextMode) return;
-                    e = e || window.event;
-                    if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                    return false;
-                });
-                
-                addEvent(row, 'mouseover', function(e) {
-                    if (window.__selectableTextMode) return;
-                    e = e || window.event;
-                    if (isDragSelecting) {
-                        if (e.buttons !== undefined && (e.buttons & 1) === 0) {
-                            isDragSelecting = false;
-                            notifyAHKSelection();
-                            return;
-                        }
-                        dragOccurred = true;
-                        var rowId = parseInt(row.getAttribute('data-row-id'));
-                        dragLastRowId = rowId;
-                        
-                        // Reset to the state before the current drag gesture started
-                        selectedRowIdsMap = {};
-                        for (var key in initialSelectedMap) {
-                            if (initialSelectedMap.hasOwnProperty(key)) {
-                                selectedRowIdsMap[key] = initialSelectedMap[key];
-                            }
-                        }
-                        
-                        // Apply the drag selection range from dragStartRowId to current rowId
-                        var start = Math.min(dragStartRowId, rowId);
-                        var end = Math.max(dragStartRowId, rowId);
-                        for (var j = start; j <= end; j++) {
-                            var rIdStr = String(j);
-                            if (dragSelectMode) {
-                                selectedRowIdsMap[rIdStr] = true;
-                            } else {
-                                delete selectedRowIdsMap[rIdStr];
-                            }
-                        }
-                        
-                        focusedRowId = rowId;
-                        updateRowStyles();
-                        updateBidirectionalHighlights();
-                    }
-                });
-                
-                var tds = row.getElementsByTagName('td');
-                for (var j = 0; j < tds.length; j++) {
-                    if (tds[j].classList.contains('editable')) {
-                        (function(cell) {
-                            addEvent(cell, 'click', function(e) {
-                                if (window.__selectableTextMode) return;
-                                lastClickedCell = cell;
-                            });
-                            addEvent(cell, 'mouseover', function(e) {
-                                if (window.__selectableTextMode) return;
-                                lastHoveredCell = cell;
-                            });
-                            addEvent(cell, 'mouseout', function(e) {
-                                if (window.__selectableTextMode) return;
-                                if (lastHoveredCell === cell) {
-                                    lastHoveredCell = null;
-                                }
-                            });
-                            addEvent(cell, 'dblclick', function() {
-                                if (window.__selectableTextMode) return;
-                                makeEditable(cell);
-                            });
-                        })(tds[j]);
-                    }
-                }
-            })(tableRows[i]);
-        }
-        
-        function handleMouseUp(e) {
+    }
+    window.rebindTableRows = rebindTableRows;
+    rebindTableRows();
+    
+    function handleMouseUp(e) {
             e = e || window.event;
             var isMouseUpCtrl = !!(e && (e.ctrlKey || e.metaKey));
             var activeCtrl = isCtrlKey || isMouseUpCtrl;
@@ -13674,8 +13847,10 @@ html, body {{
                 var rowIdStr = String(row.getAttribute('data-row-id'));
                 if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
                     row.classList.add('selected');
+                    row.setAttribute('data-selected', '1');
                 } else {
                     row.classList.remove('selected');
+                    row.setAttribute('data-selected', '0');
                 }
             }
         }
@@ -13748,6 +13923,15 @@ html, body {{
         }
         
         function notifyAHKSelection() {
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+                var curCard = window.WorkspaceTabs.getActiveCard();
+                if (curCard) {
+                    curCard.selected_ids = [];
+                    for (var k in selectedRowIdsMap) {
+                        if (selectedRowIdsMap.hasOwnProperty(k)) curCard.selected_ids.push(k);
+                    }
+                }
+            }
             if (window.ahkCall) {
                 try {
                     window.ahkCall('selection', getSelectedRowsArray().join(','));
@@ -14312,6 +14496,10 @@ html, body {{
         };
 
         function getSessionZid() {
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+                var c = window.WorkspaceTabs.getActiveCard();
+                if (c && c.zid) return c.zid;
+            }
             var el = document.getElementById('session-zid');
             var zidVal = el ? (el.textContent || el.innerText || "").trim() : "";
             if (!zidVal) {
@@ -15074,8 +15262,59 @@ html, body {{
                 return activeTabSeq;
             }
 
+            function getActiveCard() {
+                if (!cards || cards.length === 0) return null;
+                for (var i = 0; i < cards.length; i++) {
+                    if (cards[i].seq_num === activeTabSeq) return cards[i];
+                }
+                return cards[0] || null;
+            }
+
             function getCards() {
                 return cards;
+            }
+
+            function bindCardWordsToTbody(tbody, words, selectedMap) {
+                if (!tbody || !words) return;
+                var htmlParts = [];
+                for (var i = 0; i < words.length; i++) {
+                    var w = words[i];
+                    var rIdStr = String(w.row_id);
+                    var isSel = selectedMap && selectedMap.hasOwnProperty(rIdStr);
+                    if (w.row_html) {
+                        var rowHtml = w.row_html;
+                        if (isSel) {
+                            rowHtml = rowHtml.replace('data-selected="0"', 'data-selected="1"');
+                            if (rowHtml.indexOf('selected') === -1) {
+                                rowHtml = rowHtml.replace('class="', 'class="selected kw-row-selected ');
+                            }
+                        } else {
+                            rowHtml = rowHtml.replace('data-selected="1"', 'data-selected="0"');
+                            rowHtml = rowHtml.replace('selected kw-row-selected ', '');
+                            rowHtml = rowHtml.replace('selected kw-row-selected', '');
+                        }
+                        htmlParts.push(rowHtml);
+                    } else {
+                        var selAttr = isSel ? '1' : '0';
+                        var hlClass = w.highlight_class || 'highlight-orange';
+                        if (isSel) hlClass += ' selected kw-row-selected';
+                        var provAttr = w.provenance ? (' data-provenance="' + escapeHtml(w.provenance) + '" title="' + escapeHtml(formatProvenanceTooltip(w.provenance)) + '"') : '';
+                        htmlParts.push(
+                            '<tr data-row-id="' + escapeHtml(rIdStr) + '" data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
+                            '<td class="editable" data-col="WordSourceInflectedForm"><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
+                            '<td class="editable" data-col="WordSource"><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
+                            '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
+                            '<td data-col="WordSourceIPA"><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
+                            '<td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell">' + (w.morphology || '') + '</div></td>' +
+                            (w.dynamic_tds || '') +
+                            '</tr>'
+                        );
+                    }
+                }
+                tbody.innerHTML = htmlParts.join('');
+                if (typeof window.rebindTableRows === 'function') {
+                    window.rebindTableRows();
+                }
             }
 
             function updateActiveTabTranslation() {
@@ -15084,6 +15323,7 @@ html, body {{
                 for (var c = 0; c < cards.length; c++) {
                     if (cards[c].seq_num === activeTabSeq) {
                         var tText = cards[c].translated_text || (activeSentenceIdx === 0 && window.AppState ? window.AppState.translatedText : '');
+                        cards[c].translated_text = tText;
                         transContainer.classList.remove('skeleton-loader');
                         transContainer.removeAttribute('data-pending');
                         transContainer.innerHTML = getTranslationHtml(tText);
@@ -15145,6 +15385,25 @@ html, body {{
                 }
                 if (!targetCard) return;
 
+                // 1. Save selections of previous card before leaving
+                if (activeTabSeq) {
+                    var prevCard = null;
+                    for (var p = 0; p < cards.length; p++) {
+                        if (cards[p].seq_num === activeTabSeq) {
+                            prevCard = cards[p];
+                            break;
+                        }
+                    }
+                    if (prevCard) {
+                        prevCard.selected_ids = [];
+                        for (var k in selectedRowIdsMap) {
+                            if (selectedRowIdsMap.hasOwnProperty(k)) {
+                                prevCard.selected_ids.push(k);
+                            }
+                        }
+                    }
+                }
+
                 activeTabSeq = targetCard.seq_num;
                 activeSentenceIdx = targetCard.sentence_idx;
                 window._kwActiveTabSeq = activeTabSeq;
@@ -15177,7 +15436,6 @@ html, body {{
 
                 var srcContainer = document.getElementById('source-container');
                 var transContainer = document.getElementById('translation-container');
-                var tableRows = document.querySelectorAll('#lemma-table tbody tr');
 
                 if (activeSentenceIdx === 0) {
                     if (srcContainer) {
@@ -15196,9 +15454,6 @@ html, body {{
                     if (transContainer) {
                         var tText = targetCard.translated_text || (window.AppState ? window.AppState.translatedText : '');
                         transContainer.innerHTML = getTranslationHtml(tText);
-                    }
-                    for (var r = 0; r < tableRows.length; r++) {
-                        tableRows[r].style.display = '';
                     }
                 } else {
                     if (srcContainer) {
@@ -15229,14 +15484,34 @@ html, body {{
                         var tText = targetCard.translated_text || '';
                         transContainer.innerHTML = getTranslationHtml(tText);
                     }
+                }
+
+                // Restore target card's selections
+                selectedRowIdsMap = {};
+                if (targetCard.selected_ids && targetCard.selected_ids.length > 0) {
+                    for (var s = 0; s < targetCard.selected_ids.length; s++) {
+                        selectedRowIdsMap[String(targetCard.selected_ids[s])] = true;
+                    }
+                }
+
+                // Dynamic viewport binding: bind active card's words into #lemma-table tbody
+                var tbody = document.querySelector('#lemma-table tbody');
+                if (tbody && targetCard.words && targetCard.words.length > 0) {
+                    bindCardWordsToTbody(tbody, targetCard.words, selectedRowIdsMap);
+                } else {
+                    // Fallback to tableRows display toggling if words collection is absent
+                    var tableRows = document.querySelectorAll('#lemma-table tbody tr');
                     var sentStr = String(activeSentenceIdx);
                     for (var r = 0; r < tableRows.length; r++) {
-                        var rowSentIdx = tableRows[r].getAttribute('data-sentence-idx');
-                        if (rowSentIdx && rowSentIdx === sentStr) {
+                        if (activeSentenceIdx === 0) {
                             tableRows[r].style.display = '';
                         } else {
-                            tableRows[r].style.display = 'none';
+                            var rowSentIdx = tableRows[r].getAttribute('data-sentence-idx');
+                            tableRows[r].style.display = (rowSentIdx && rowSentIdx === sentStr) ? '' : 'none';
                         }
+                    }
+                    if (typeof window.rebindTableRows === 'function') {
+                        window.rebindTableRows();
                     }
                 }
 
