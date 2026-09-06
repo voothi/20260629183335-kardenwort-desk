@@ -1307,6 +1307,81 @@ def test_background_translation_update_automatically_hydrates_active_child_tab_a
     assert page.locator("#translation-container .skeleton-loader").count() == 0
 
 
+def test_tab1_overview_row_and_source_text_highlight(page, tmp_path):
+    """
+    Test (20260906213101): Verifies that in container mode, on the first (overview) tab:
+    1. Clicking a table row highlights the row in yellow (.selected) and highlights corresponding source text words.
+    2. Clicking a word in SOURCE TEXT highlights the word and highlights the corresponding row in yellow in the table.
+    3. Selections on Tab 1 persist across tab switching.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "Das Haus ist gross. Die Katze schlaeft."
+    tsv_file = tmp_path / "20260906223000-tab1-hl.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\t0\n"
+        "Katze\tKatze\tкошка\t2\t0\n",
+        encoding="utf-8"
+    )
+
+    # Start on Tab 2 (Sentence 1)
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid="20260906223000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Switch to Tab 1 (All)
+    tab1 = page.locator('.kw-tab-chip[data-tab-seq="1"]')
+    tab1.click()
+    page.wait_for_selector('#lemma-table tbody tr')
+
+    first_tr = page.locator('#lemma-table tbody tr').first
+    assert "selected" not in (first_tr.get_attribute("class") or "")
+
+    # 1. Click first row on Tab 1 -> must become selected (yellow)
+    first_tr.click()
+    assert "selected" in (first_tr.get_attribute("class") or "")
+    assert first_tr.get_attribute("data-selected") == "1"
+
+    # Corresponding word in source text must also be highlighted
+    haus_word = page.locator('#source-container span.word:has-text("Haus")').first
+    assert "highlight-orange-active" in (haus_word.get_attribute("class") or "")
+
+    # Switch to Tab 2 (Sentence 1) and back to Tab 1 -> Tab 1 selection must persist
+    tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
+    tab2.click()
+    page.wait_for_selector('#lemma-table tbody tr')
+
+    tab1.click()
+    page.wait_for_selector('#lemma-table tbody tr')
+    first_tr_back = page.locator('#lemma-table tbody tr').first
+    assert "selected" in (first_tr_back.get_attribute("class") or "")
+    assert first_tr_back.get_attribute("data-selected") == "1"
+
+    # 2. Click word in SOURCE TEXT on Tab 1 -> corresponding row in table must highlight
+    katze_word = page.locator('#source-container span.word:has-text("Katze")').first
+    katze_word.click()
+    katze_tr = page.locator('#lemma-table tbody tr:has-text("Katze")').first
+    assert "selected" in (katze_tr.get_attribute("class") or "")
+    assert katze_tr.get_attribute("data-selected") == "1"
+
+
+
 
 
 

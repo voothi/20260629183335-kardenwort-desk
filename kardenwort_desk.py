@@ -9656,6 +9656,21 @@ html, body {{
         else:
             overview_rows = [list(r) for r in data_rows]
 
+        # Map each overview row to constituent data_rows indices
+        lemma_pos_to_row_ids = {}
+        for r_i, r in enumerate(data_rows):
+            r_lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
+            r_pos = r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(r) > col_pos_dedup else ""
+            k = (r_lem, r_pos) if col_pos_dedup != -1 else r_lem
+            if k not in lemma_pos_to_row_ids:
+                lemma_pos_to_row_ids[k] = []
+            lemma_pos_to_row_ids[k].append(r_i)
+            if r_lem not in lemma_pos_to_row_ids:
+                lemma_pos_to_row_ids[r_lem] = []
+            if r_i not in lemma_pos_to_row_ids[r_lem]:
+                lemma_pos_to_row_ids[r_lem].append(r_i)
+
+        used_primary_ids = set()
         for ov_id, ov_r in enumerate(overview_rows):
             ov_lemma = ov_r[col_lemma] if col_lemma != -1 and len(ov_r) > col_lemma else ""
             ov_inflected = resolve_row_inflected_form(ov_r, col_inflected, col_inflected2, col_quotation, col_lemma)
@@ -9675,6 +9690,14 @@ html, body {{
                 ov_is_sel = "1"
             ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and ov_r[col_token_order].strip() else str(ov_id)
             
+            ov_lem_clean = ov_lemma.strip().lower()
+            ov_pos_clean = ov_r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(ov_r) > col_pos_dedup else ""
+            ov_k = (ov_lem_clean, ov_pos_clean) if col_pos_dedup != -1 else ov_lem_clean
+            matched_ids = lemma_pos_to_row_ids.get(ov_k) or lemma_pos_to_row_ids.get(ov_lem_clean) or [ov_id]
+            primary_id = next((mid for mid in matched_ids if mid not in used_primary_ids), matched_ids[0])
+            used_primary_ids.add(primary_id)
+            all_ids_str = ",".join(str(x) for x in matched_ids)
+
             ov_dynamic_tds = ""
             for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
                 val = ov_r[d_idx] if d_idx != -1 and len(ov_r) > d_idx else ""
@@ -9701,7 +9724,7 @@ html, body {{
                     ov_prov_attr += f' title="{p_title}"'
 
             ov_row_html = (
-                f'<tr data-row-id="ov_{ov_id}" data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="highlight-orange">'
+                f'<tr data-row-id="{primary_id}" data-all-row-ids="{all_ids_str}" data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="highlight-orange">'
                 f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{ov_inflected}</div></td>'
                 f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
@@ -9711,7 +9734,8 @@ html, body {{
                 f'</tr>'
             )
             overview_word_objs.append({
-                "row_id": f"ov_{ov_id}",
+                "row_id": str(primary_id),
+                "all_row_ids": [str(x) for x in matched_ids],
                 "token_order": str(ov_token_order),
                 "sentence_idx": "0",
                 "inflected": ov_inflected,
@@ -13430,8 +13454,10 @@ html, body {{
             if (e.button !== 0 && e.button !== 2) {
                 return;
             }
-            var rowId = parseInt(row.getAttribute('data-row-id'));
-            var rowIdStr = String(rowId);
+            var rowIdStr = String(row.getAttribute('data-row-id'));
+            var rowId = parseInt(rowIdStr, 10);
+            var allIdsAttr = row.getAttribute('data-all-row-ids');
+            var constituentIds = allIdsAttr ? allIdsAttr.split(',').filter(Boolean) : [rowIdStr];
             
             if (e.button === 0) { // LMB
                 isDragSelecting = true;
@@ -13457,10 +13483,25 @@ html, body {{
                     for (var j = start; j <= end; j++) {
                         selectedRowIdsMap[String(j)] = true;
                     }
+                    for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
+                        var tr = tableRows[rIdx];
+                        var trId = parseInt(tr.getAttribute('data-row-id'), 10);
+                        if (trId >= start && trId <= end) {
+                            var trAll = tr.getAttribute('data-all-row-ids');
+                            if (trAll) {
+                                var parts = trAll.split(',');
+                                for (var p = 0; p < parts.length; p++) {
+                                    if (parts[p]) selectedRowIdsMap[parts[p]] = true;
+                                }
+                            }
+                        }
+                    }
                 } else {
                     dragStartRowId = rowId;
                     dragLastRowId = rowId;
-                    dragSelectMode = !selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) || 
+                        constituentIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
+                    dragSelectMode = !isCurrentlySelected;
                     
                     initialSelectedMap = {};
                     for (var key in selectedRowIdsMap) {
@@ -13469,10 +13510,13 @@ html, body {{
                         }
                     }
                     
-                    if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
-                        delete selectedRowIdsMap[rowIdStr];
-                    } else {
-                        selectedRowIdsMap[rowIdStr] = true;
+                    for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
+                        var cId = constituentIds[cIdx];
+                        if (dragSelectMode) {
+                            selectedRowIdsMap[cId] = true;
+                        } else {
+                            delete selectedRowIdsMap[cId];
+                        }
                     }
                 }
                 
@@ -13506,7 +13550,7 @@ html, body {{
                     return;
                 }
                 dragOccurred = true;
-                var rowId = parseInt(row.getAttribute('data-row-id'));
+                var rowId = parseInt(row.getAttribute('data-row-id'), 10);
                 dragLastRowId = rowId;
                 
                 // Reset to the state before the current drag gesture started
@@ -13526,6 +13570,25 @@ html, body {{
                         selectedRowIdsMap[rIdStr] = true;
                     } else {
                         delete selectedRowIdsMap[rIdStr];
+                    }
+                }
+                for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
+                    var tr = tableRows[rIdx];
+                    var trId = parseInt(tr.getAttribute('data-row-id'), 10);
+                    if (trId >= start && trId <= end) {
+                        var trAll = tr.getAttribute('data-all-row-ids');
+                        if (trAll) {
+                            var parts = trAll.split(',');
+                            for (var p = 0; p < parts.length; p++) {
+                                if (parts[p]) {
+                                    if (dragSelectMode) {
+                                        selectedRowIdsMap[parts[p]] = true;
+                                    } else {
+                                        delete selectedRowIdsMap[parts[p]];
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
                 
@@ -13798,7 +13861,14 @@ html, body {{
                 if (typeof tableRows !== 'undefined' && tableRows.length > 0) {
                     for (var i = 0; i < tableRows.length; i++) {
                         var rowId = String(tableRows[i].getAttribute('data-row-id'));
+                        var allIds = tableRows[i].getAttribute('data-all-row-ids');
                         selectedRowIdsMap[rowId] = true;
+                        if (allIds) {
+                            var parts = allIds.split(',');
+                            for (var p = 0; p < parts.length; p++) {
+                                if (parts[p]) selectedRowIdsMap[parts[p]] = true;
+                            }
+                        }
                     }
                     updateRowStyles();
                     updateBidirectionalHighlights();
@@ -13847,12 +13917,19 @@ html, body {{
             } else if (keyCode === 32) { // Space
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (focusedRowId !== null) {
-                    if (selectedRowIdsMap.hasOwnProperty(focusedRowId)) {
-                        delete selectedRowIdsMap[focusedRowId];
-                    } else {
-                        selectedRowIdsMap[focusedRowId] = true;
+                    var fRow = (focusedRowId >= 0 && focusedRowId < tableRows.length) ? tableRows[focusedRowId] : null;
+                    var fRowId = fRow ? fRow.getAttribute('data-row-id') : String(focusedRowId);
+                    var fAllIds = fRow ? fRow.getAttribute('data-all-row-ids') : null;
+                    var cIds = fAllIds ? fAllIds.split(',').filter(Boolean) : [fRowId];
+                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(fRowId) || cIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
+                    for (var c = 0; c < cIds.length; c++) {
+                        if (isCurrentlySelected) {
+                            delete selectedRowIdsMap[cIds[c]];
+                        } else {
+                            selectedRowIdsMap[cIds[c]] = true;
+                        }
                     }
-                    lastClickedRowId = focusedRowId;
+                    lastClickedRowId = parseInt(fRowId, 10);
                     updateRowStyles();
                     updateBidirectionalHighlights();
                     notifyAHKSelection();
@@ -13933,11 +14010,24 @@ html, body {{
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
-                if (selectedRowIdsMap.hasOwnProperty(rowIdStr)) {
+                var allIdsAttr = row.getAttribute('data-all-row-ids');
+                var isSel = selectedRowIdsMap.hasOwnProperty(rowIdStr);
+                if (!isSel && allIdsAttr) {
+                    var cIds = allIdsAttr.split(',');
+                    for (var c = 0; c < cIds.length; c++) {
+                        if (selectedRowIdsMap.hasOwnProperty(cIds[c])) {
+                            isSel = true;
+                            break;
+                        }
+                    }
+                }
+                if (isSel) {
                     row.classList.add('selected');
+                    row.classList.add('kw-row-selected');
                     row.setAttribute('data-selected', '1');
                 } else {
                     row.classList.remove('selected');
+                    row.classList.remove('kw-row-selected');
                     row.setAttribute('data-selected', '0');
                 }
             }
@@ -15383,7 +15473,8 @@ html, body {{
                     var w = words[i];
                     var rIdStr = String(w.row_id);
                     var tOrdStr = String(w.token_order !== undefined && w.token_order !== null ? w.token_order : rIdStr);
-                    var isSel = selectedMap && selectedMap.hasOwnProperty(rIdStr);
+                    var allIds = w.all_row_ids || [rIdStr];
+                    var isSel = selectedMap && (selectedMap.hasOwnProperty(rIdStr) || allIds.some(function(id) { return selectedMap.hasOwnProperty(String(id)); }));
                     var appRow = (window.AppState && window.AppState.rows) ? (window.AppState.rows[rIdStr] || (tOrdStr !== rIdStr ? window.AppState.rows[tOrdStr] : null)) : null;
                     if (appRow) {
                         var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
@@ -15416,8 +15507,9 @@ html, body {{
                         var hlClass = w.highlight_class || 'highlight-orange';
                         if (isSel) hlClass += ' selected kw-row-selected';
                         var provAttr = w.provenance ? (' data-provenance="' + escapeHtml(w.provenance) + '" title="' + escapeHtml(formatProvenanceTooltip(w.provenance)) + '"') : '';
+                        var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
                         htmlParts.push(
-                            '<tr data-row-id="' + escapeHtml(rIdStr) + '" data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
+                            '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
                             '<td class="editable" data-col="WordSourceInflectedForm"><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
                             '<td class="editable" data-col="WordSource"><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
                             '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
