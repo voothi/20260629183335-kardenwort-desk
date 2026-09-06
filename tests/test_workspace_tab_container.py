@@ -1221,10 +1221,18 @@ def test_background_translation_update_automatically_hydrates_active_child_tab_a
     hydrates the active child tab translation container and word rows without requiring the user
     to click the Update button, and preserves translations across tab switches.
     """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_isol.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
 
     text = "Das Haus ist gross. Die Katze schlaeft."
     tsv_file = tmp_path / "20260906200500-test-auto-hydrate.de.tsv"

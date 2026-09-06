@@ -831,7 +831,16 @@ def test_progressive_lemma_update_replaces_skeleton_and_sets_provenance(page, tm
 
 
 def test_rmb_flip_during_progressive_loading_does_not_flip_to_skeleton_text(page, tmp_path):
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_isol.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
     source_text = "xyzartifact unkwordflip."
     tsv_content = (
         "# comment\n"
