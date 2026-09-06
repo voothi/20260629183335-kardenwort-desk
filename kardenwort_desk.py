@@ -3340,7 +3340,10 @@ class SqliteStorageAdapter(StorageAdapter):
                 st = (s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
                 if st:
                     sentence_trans_parts.append(st)
-            sentence_translation = "\n".join(sentence_trans_parts)
+            text_mode_val = session.get("text_mode", "single") if session else "single"
+            is_single_para = (text_mode_val == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
+            joiner = " " if is_single_para else "\n"
+            sentence_translation = joiner.join(sentence_trans_parts)
 
             return {
                 "session_zid": zid,
@@ -6203,10 +6206,15 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
         is_single = False
 
     if is_single:
-        valid_lines = [s for s in lines if s]
-        if valid_lines and all(s == valid_lines[0] for s in valid_lines):
-            valid_lines = [valid_lines[0]]
-        return f"<div>{' '.join(valid_lines)}</div>" if valid_lines else ""
+        flattened_lines = []
+        for line in lines:
+            for sub_line in re.split(r'[\r\n]+', line):
+                sub_clean = sub_line.strip()
+                if sub_clean:
+                    flattened_lines.append(sub_clean)
+        if flattened_lines and all(s == flattened_lines[0] for s in flattened_lines):
+            flattened_lines = [flattened_lines[0]]
+        return f"<div>{' '.join(flattened_lines)}</div>" if flattened_lines else ""
     else:
         return "".join(f"<div>{line if line else '&nbsp;'}</div>" for line in lines)
 
@@ -15343,6 +15351,18 @@ html, body {{
                         clean = (tmp.textContent || tmp.innerText || '').trim();
                     }
                     var lines = clean.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
+                    var isSingle = (typeof getTextMode === 'function' && getTextMode() === 'single');
+                    if (isSingle) {
+                        var srcContainer = document.getElementById('source-container');
+                        var srcText = srcContainer ? (srcContainer.textContent || srcContainer.innerText || '') : '';
+                        if (srcText.indexOf(String.fromCharCode(10)) !== -1 || srcText.indexOf(String.fromCharCode(13)) !== -1) {
+                            isSingle = false;
+                        }
+                    }
+                    if (isSingle) {
+                        var validLines = lines.map(function(line) { return line.trim(); }).filter(function(line) { return line.length > 0; });
+                        return escapeHtml(validLines.join(' '));
+                    }
                     if (lines.length > 1) {
                         return lines.map(function(line) {
                             return '<div>' + (line ? escapeHtml(line) : '&nbsp;') + '</div>';

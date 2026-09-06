@@ -3024,6 +3024,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             # If sentence_translation not found directly, try extracting from TSV columns or SQLite sentences
             role_fields = get_role_fields(mapping, headers) if mapping else {}
+            is_single_para = (text_mode == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
+            joiner = " " if is_single_para else "\n"
+            if is_single_para and sentence_translation:
+                sentence_translation = " ".join([p.strip() for p in re.split(r'[\r\n]+', sentence_translation) if p.strip()])
             if not sentence_translation and data_rows and headers:
                 col_sent_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
                 col_sent_idx = headers.index(role_fields['sentence_index']) if 'sentence_index' in role_fields and role_fields['sentence_index'] in headers else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
@@ -3037,7 +3041,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                 seen_idx.add(idx)
                                 sent_trans_list.append(r[col_sent_dest].strip())
                     if sent_trans_list:
-                        sentence_translation = "\n".join(sent_trans_list)
+                        sentence_translation = joiner.join(sent_trans_list)
 
             sentences_list = []
             if hasattr(storage_adapter, 'backend_name') and storage_adapter.backend_name == 'sqlite' and hasattr(storage_adapter, 'db'):
@@ -3055,7 +3059,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         if not sentence_translation:
                             clean_translations = [s["sentence_destination"] for s in sentences_list if s["sentence_destination"]]
                             if clean_translations:
-                                sentence_translation = "\n".join(clean_translations)
+                                sentence_translation = joiner.join(clean_translations)
                 except Exception:
                     pass
 
@@ -3427,7 +3431,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 comments = synthesized.get("comments", [])
                 sentence_translation = ""
                 if synthesized.get("sentences"):
-                    sentence_translation = "\n".join([
+                    is_single_para = ((synthesized.get("text_mode") or "single") == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
+                    joiner = " " if is_single_para else "\n"
+                    sentence_translation = joiner.join([
                         str(s.get("sentence_destination") or s.get("sentence_destination2") or s.get("sentence_source") or "").strip()
                         for s in synthesized["sentences"]
                     ])
@@ -3540,12 +3546,17 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 headers = restored.get("headers", [])
                 comments = restored.get("comments", [])
                 sentence_translation = restored.get("sentence_translation", "")
+                text_mode_val = restored.get("text_mode") or (restored.get("session") or {}).get("text_mode") or "single"
+                is_single_para = (text_mode_val == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
+                joiner = " " if is_single_para else "\n"
                 if not sentence_translation and restored.get("sentences"):
-                    sentence_translation = "\n".join([
+                    sentence_translation = joiner.join([
                         str(s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
                         for s in restored["sentences"]
                         if (s.get("sentence_destination") or s.get("sentence_destination2"))
                     ])
+                elif is_single_para and sentence_translation:
+                    sentence_translation = " ".join([p.strip() for p in re.split(r'[\r\n]+', sentence_translation) if p.strip()])
 
                 mapping_path = None
                 if self.server.resolved_paths and "anki_mapping_file" in self.server.resolved_paths:
@@ -3775,7 +3786,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 comments = synthesized.get("comments", [])
                 sentence_translation = ""
                 if synthesized.get("sentences"):
-                    sentence_translation = "\n".join([
+                    is_single_para = ((synthesized.get("text_mode") or "single") == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
+                    joiner = " " if is_single_para else "\n"
+                    sentence_translation = joiner.join([
                         str(s.get("sentence_destination") or s.get("sentence_destination2") or s.get("sentence_source") or "").strip()
                         for s in synthesized["sentences"]
                     ])
@@ -3836,6 +3849,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 headers = restored.get("headers", [])
                 comments = restored.get("comments", [])
                 sentence_translation = restored.get("sentence_translation", "")
+                text_mode_val = restored.get("text_mode") or (restored.get("session") or {}).get("text_mode") or "single"
+                is_single_para = (text_mode_val == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
+                if is_single_para and sentence_translation:
+                    sentence_translation = " ".join([p.strip() for p in re.split(r'[\r\n]+', sentence_translation) if p.strip()])
 
                 mapping_path = None
                 if self.server.resolved_paths and "anki_mapping_file" in self.server.resolved_paths:
