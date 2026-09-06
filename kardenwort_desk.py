@@ -11628,12 +11628,33 @@ html, body {{
                 if (rowsData && window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
                     var wCards = window.WorkspaceTabs.getCards();
                     if (wCards && wCards.length > 0) {
+                        var deltasByTokenOrder = {};
+                        var deltasByRowId = {};
+                        for (var rk in rowsData) {
+                            if (rowsData.hasOwnProperty(rk)) {
+                                var d = rowsData[rk];
+                                if (d) {
+                                    if (d.token_order !== undefined && d.token_order !== null && String(d.token_order) !== "") {
+                                        deltasByTokenOrder[String(d.token_order)] = d;
+                                    }
+                                    if (d.row_id !== undefined && d.row_id !== null && String(d.row_id) !== "") {
+                                        deltasByRowId[String(d.row_id)] = d;
+                                    }
+                                    deltasByRowId[String(rk)] = d;
+                                }
+                            }
+                        }
                         for (var wc = 0; wc < wCards.length; wc++) {
                             var cardWords = wCards[wc].words;
                             if (cardWords) {
                                 for (var ww = 0; ww < cardWords.length; ww++) {
                                     var cw = cardWords[ww];
-                                    var matchingDelta = rowsData[String(cw.row_id)] || (cw.token_order !== undefined && cw.token_order !== null ? rowsData[String(cw.token_order)] : null);
+                                    var matchingDelta = null;
+                                    if (cw.token_order !== undefined && cw.token_order !== null && deltasByTokenOrder[String(cw.token_order)]) {
+                                        matchingDelta = deltasByTokenOrder[String(cw.token_order)];
+                                    } else if (cw.row_id !== undefined && cw.row_id !== null && deltasByRowId[String(cw.row_id)]) {
+                                        matchingDelta = deltasByRowId[String(cw.row_id)];
+                                    }
                                     if (matchingDelta) {
                                         var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
                                         if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
@@ -11645,6 +11666,9 @@ html, body {{
                                     }
                                 }
                             }
+                        }
+                        if (window.WorkspaceTabs && typeof window.WorkspaceTabs.rebindActiveTab === 'function') {
+                            window.WorkspaceTabs.rebindActiveTab();
                         }
                     }
                 }
@@ -11932,8 +11956,7 @@ html, body {{
                 var tr = null;
                 if (rowData.token_order !== undefined && rowData.token_order !== null && String(rowData.token_order) !== "") {
                     tr = document.querySelector('tr[data-token-order="' + rowData.token_order + '"]');
-                }
-                if (!tr) {
+                } else {
                     tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
                 }
                 if (!tr) return false;
@@ -12532,10 +12555,6 @@ html, body {{
         try {
             initWatchdog();
         } catch(e) {}
-
-        window.startPolling = function() {
-            // Manual trigger fallback if needed
-        };
 
         var workerLaunched = false;
         try {
@@ -15495,7 +15514,7 @@ html, body {{
                     var tOrdStr = String(w.token_order !== undefined && w.token_order !== null ? w.token_order : rIdStr);
                     var allIds = w.all_row_ids || [rIdStr];
                     var isSel = selectedMap && (selectedMap.hasOwnProperty(rIdStr) || allIds.some(function(id) { return selectedMap.hasOwnProperty(String(id)); }));
-                    var appRow = (window.AppState && window.AppState.rows) ? (window.AppState.rows[rIdStr] || (tOrdStr !== rIdStr ? window.AppState.rows[tOrdStr] : null)) : null;
+                    var appRow = (window.AppState && window.AppState.rows) ? ((tOrdStr && window.AppState.rows[tOrdStr]) || window.AppState.rows[rIdStr]) : null;
                     if (appRow) {
                         var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
                         if (updatedTrans !== undefined && updatedTrans !== "") {
@@ -15848,8 +15867,8 @@ html, body {{
                 var updatedAny = false;
                 for (var i = 0; i < sents.length; i++) {
                     var s = sents[i];
-                    var sIdx = s.sentence_index;
-                    var sDst = s.sentence_destination || "";
+                    var sIdx = (typeof s === 'object' && s !== null && s.sentence_index !== undefined) ? s.sentence_index : (i + 1);
+                    var sDst = (typeof s === 'string') ? s : ((s && (s.sentence_destination || s.translation)) || "");
                     for (var c = 0; c < cards.length; c++) {
                         if (cards[c].sentence_idx === sIdx) {
                             if (cards[c].translated_text !== sDst) {
@@ -15870,6 +15889,20 @@ html, body {{
                 updateActiveTabTranslation();
             }
 
+            function rebindActiveTab() {
+                var tb = document.querySelector('#lemma-table tbody');
+                var targetCard = null;
+                for (var i = 0; i < cards.length; i++) {
+                    if (cards[i].seq_num === activeTabSeq) {
+                        targetCard = cards[i];
+                        break;
+                    }
+                }
+                if (tb && targetCard && targetCard.words && targetCard.words.length > 0) {
+                    bindCardWordsToTbody(tb, targetCard.words, selectedRowIdsMap);
+                }
+            }
+
             return {
                 init: init,
                 switchToTab: switchToTab,
@@ -15880,7 +15913,8 @@ html, body {{
                 getCards: getCards,
                 getTranslationHtml: getTranslationHtml,
                 updateActiveTabTranslation: updateActiveTabTranslation,
-                updateSentences: updateSentences
+                updateSentences: updateSentences,
+                rebindActiveTab: rebindActiveTab
             };
         })();
         window.WorkspaceTabs = WorkspaceTabs;
@@ -17408,7 +17442,7 @@ def is_wordfill_eligible(col_name):
     We avoid hardcoding explicit fields. Instead we fill Word-level attributes,
     while avoiding Sentence-level attributes and the primary WordSource itself.
     """
-    if col_name in ('WordSource', 'WordSourceInflectedForm', 'WordSourceInflectedForm2', 'WordDestinationInflectedForm'):
+    if col_name in ('WordSource', 'WordSource2', 'WordSourceInflectedForm', 'WordSourceInflectedForm2', 'WordDestinationInflectedForm'):
         return False
     if col_name.startswith('Sentence'):
         return False
@@ -19092,6 +19126,16 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
             if row_provenances is not None:
                 update_data["row_provenances"] = row_provenances
                 update_data["rowProvenances"] = row_provenances
+
+            if sentences is None and zid:
+                try:
+                    storage_adapter = get_storage_adapter(config)
+                    if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
+                        db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                        if db_sents:
+                            sentences = db_sents
+                except Exception:
+                    pass
 
             if sentences is not None:
                 update_data["sentences"] = sentences

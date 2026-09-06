@@ -2059,6 +2059,11 @@ class KardenwortDB:
             JOIN sessions s ON w.session_zid = s.zid
             WHERE (w.lemma = ? OR w.quotation = ? OR w.inflected_form = ?)
               AND s.deleted_at IS NULL
+              AND (
+                  (w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%' AND w.word_destination NOT LIKE '%btn-retry-cell%')
+                  OR (w.ipa IS NOT NULL AND trim(w.ipa) != '' AND w.ipa NOT LIKE '%skeleton-loader%')
+                  OR (w.morphology IS NOT NULL AND trim(w.morphology) != '' AND w.morphology NOT LIKE '%skeleton-loader%')
+              )
         """
         params: List[Any] = [clean_word, clean_word, clean_word]
 
@@ -2070,7 +2075,9 @@ class KardenwortDB:
             sql += " AND s.zid != ?"
             params.append(exclude_zid)
 
-        sql += " ORDER BY s.created_at DESC LIMIT ?;"
+        sql += """ ORDER BY 
+            (CASE WHEN w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%' AND w.word_destination NOT LIKE '%btn-retry-cell%' THEN 1 ELSE 0 END) DESC,
+            s.created_at DESC LIMIT ?;"""
         params.append(limit)
 
         if conn is not None:

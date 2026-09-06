@@ -358,3 +358,56 @@ def test_cmd_reprocess_worker_sqlite_mode_classification(tmp_path, monkeypatch):
     lemma_idx = restored["headers"].index("WordSource")
     assert restored["data_rows"][0][lemma_idx] == "invest"
 
+
+def test_wordfill_ignores_wordsource2_and_prioritizes_destination(tmp_path):
+    """
+    Verifies that WordSource2 is excluded from wordfill eligibility,
+    and find_wordfill_candidates prioritizes rows with actual translations over
+    empty child card placeholders.
+    """
+    assert desk.is_wordfill_eligible("WordSource") is False
+    assert desk.is_wordfill_eligible("WordSource2") is False
+    assert desk.is_wordfill_eligible("WordDestination") is True
+
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_wf.db"
+    db = KardenwortDB(str(db_path))
+    db.run_migrations()
+
+    # Insert two candidate words: one with empty destination and WordSource2, one with clean translation
+    db.save_session_bundle(
+        session={
+            "zid": "20260901000001",
+            "slug": "empty-dest",
+            "source_language": "en",
+            "target_language": "ru",
+            "text_mode": "single",
+            "source_raw_text": "the",
+        },
+        sentences=[{"sentence_index": 1, "sentence_source": "the"}],
+        words=[
+            {"sentence_index": 1, "token_order": 0, "quotation": "the", "lemma": "the", "word_destination": None, "extra_fields": {"WordSource2": "the"}}
+        ]
+    )
+    db.save_session_bundle(
+        session={
+            "zid": "20260901000002",
+            "slug": "clean-dest",
+            "source_language": "en",
+            "target_language": "ru",
+            "text_mode": "single",
+            "source_raw_text": "the",
+        },
+        sentences=[{"sentence_index": 1, "sentence_source": "the"}],
+        words=[
+            {"sentence_index": 1, "token_order": 0, "quotation": "the", "lemma": "the", "word_destination": "тот", "ipa": "/ðə/", "extra_fields": {}}
+        ]
+    )
+
+    candidates = db.find_wordfill_candidates("the", "en", "ru")
+    assert len(candidates) >= 1
+    best = candidates[0]
+    assert best["word_destination"] == "тот"
+    assert best.get("WordSource2") is None
+
+

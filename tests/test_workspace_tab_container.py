@@ -1381,6 +1381,83 @@ def test_tab1_overview_row_and_source_text_highlight(page, tmp_path):
     assert katze_tr.get_attribute("data-selected") == "1"
 
 
+def test_container_update_matching_preserves_token_order_when_frequency_sorted(page, tmp_path):
+    """
+    Verifies that when receiveUpdate receives rows sorted globally by frequency,
+    words are matched by token_order rather than sort index, preventing table rebuilding
+    or row scrambling on Update. Also verifies sentence translation hydration.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "The cat sleeps.\nA dog barks."
+    tsv_file = tmp_path / "20260906233000-sample.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tTokenOrder\tSentenceSourceIndex\n"
+        "The\tThe\t\t0\t1\n"
+        "cat\tcat\t\t1\t1\n"
+        "sleeps\tsleep\t\t2\t1\n"
+        "A\tA\t\t3\t2\n"
+        "dog\tdog\t\t4\t2\n"
+        "barks\tbark\t\t5\t2\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid="20260906233000",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num="2"
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Simulate frequency-sorted payload from /session/status:
+    # Most frequent globally: dog (TokenOrder 4) at key 0, cat (TokenOrder 1) at key 1
+    status_payload = {
+        "ok": True,
+        "rows": {
+            "0": {"token_order": "4", "sentence_idx": "2", "lemma": "dog", "trans": "собака"},
+            "1": {"token_order": "1", "sentence_idx": "1", "lemma": "cat", "trans": "кот"},
+            "2": {"token_order": "0", "sentence_idx": "1", "lemma": "The", "trans": "этот"},
+        },
+        "sentences": [
+            {"sentence_index": 1, "sentence_destination": "Кот спит."},
+            {"sentence_index": 2, "sentence_destination": "Собака лает."}
+        ]
+    }
+
+    # Call receiveUpdate with status payload
+    page.evaluate("(payload) => window.receiveUpdate(payload)", status_payload)
+
+    # Active tab is Tab 2 (Sentence 1). Verify row 'cat' (TokenOrder 1) has translation 'кот'
+    # and NOT 'собака' (which was at sorted index 0)!
+    cat_tr = page.locator('#lemma-table tbody tr[data-token-order="1"]')
+    assert cat_tr.count() == 1
+    assert "кот" in cat_tr.locator('td.col-translation').inner_text()
+    assert "собака" not in cat_tr.locator('td.col-translation').inner_text()
+
+    # Verify sentence translation for Tab 2 was updated to 'Кот спит.'
+    assert "Кот спит." in page.locator("#translation-container").inner_text()
+
+    # Switch to Tab 3 (Sentence 2). Verify row 'dog' has translation 'собака'
+    page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
+    dog_tr = page.locator('#lemma-table tbody tr[data-token-order="4"]')
+    assert dog_tr.count() == 1
+    assert "собака" in dog_tr.locator('td.col-translation').inner_text()
+    assert "Собака лает." in page.locator("#translation-container").inner_text()
+
+
+
 
 
 
