@@ -1215,6 +1215,91 @@ def test_playwright_bidirectional_token_hover_mapping_parity(page, tmp_path):
     assert "highlight-orange-active" in (katze_token.get_attribute("class") or "")
 
 
+def test_background_translation_update_automatically_hydrates_active_child_tab_and_switched_tabs(page, tmp_path):
+    """Regression test (20260906194642): Verify that background translation update dynamically
+
+    hydrates the active child tab translation container and word rows without requiring the user
+    to click the Update button, and preserves translations across tab switches.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "Das Haus ist gross. Die Katze schlaeft."
+    tsv_file = tmp_path / "20260906200500-test-auto-hydrate.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "Haus\tHaus\t\t1\t\n"
+        "Katze\tKatze\t\t2\t\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid="20260906200500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2  # AutoHotkey launches on Tab 2 (Sentence 1)
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Initial state on Tab 2: skeleton loader present
+    trans_container = page.locator("#translation-container")
+    assert page.locator("#translation-container .skeleton-loader").count() >= 1
+
+    # Simulate background translation arriving via receiveUpdate (SSE or watchdog)
+    update_payload = {
+        "type": "update",
+        "stage": "translated_text",
+        "translatedText": "<div>Дом большой.</div><div>Кошка спит.</div>",
+        "rows": {
+            "0": {"WordDestination": "дом", "trans": "дом"},
+            "1": {"WordDestination": "кошка", "trans": "кошка"}
+        }
+    }
+    page.evaluate(f"window.receiveUpdate({json.dumps(update_payload)});")
+
+    # Verify Tab 2 (Sentence 1) is automatically populated with sentence 1 translation
+    assert page.locator("#translation-container .skeleton-loader").count() == 0
+    assert page.locator("#translation-container .btn-retry-cell").count() == 0
+    assert trans_container.inner_text().strip() == "Дом большой."
+
+    # Verify table row for Haus on Tab 2 is populated
+    haus_td = page.locator('tr[data-token-order="0"] td[data-col="WordDestination"]')
+    assert haus_td.inner_text().strip() == "дом"
+
+    # Switch to Tab 3 (Sentence 2)
+    tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
+    tab3.click()
+    assert page.locator("#translation-container .skeleton-loader").count() == 0
+    assert trans_container.inner_text().strip() == "Кошка спит."
+    katze_td = page.locator('tr[data-token-order="1"] td[data-col="WordDestination"]')
+    assert katze_td.inner_text().strip() == "кошка"
+
+    # Switch to Tab 1 (All sentences)
+    tab1 = page.locator('.kw-tab-chip[data-tab-seq="1"]')
+    tab1.click()
+    tab1_text = trans_container.inner_text()
+    assert "Дом большой." in tab1_text
+    assert "Кошка спит." in tab1_text
+
+    # Switch back to Tab 2: translation and row remain populated without skeletons
+    tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
+    tab2.click()
+    assert trans_container.inner_text().strip() == "Дом большой."
+    assert haus_td.inner_text().strip() == "дом"
+    assert page.locator("#translation-container .skeleton-loader").count() == 0
+
+
+
 
 
 

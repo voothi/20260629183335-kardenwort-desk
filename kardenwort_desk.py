@@ -2251,7 +2251,7 @@ class SessionLogger:
     def debug(self, message, trace_id=None):
         self._write_entry("DEBUG", message, trace_id)
 
-def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, **extra_kwargs):
+def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, sentences=None, **extra_kwargs):
     if not tsv_path:
         return None
     import inspect
@@ -2271,6 +2271,7 @@ def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, 
         "text_provenance": text_provenance,
         "row_provenances": row_provenances,
         "provenance": provenance,
+        "sentences": sentences,
     }
     kwargs.update(extra_kwargs)
     try:
@@ -11528,6 +11529,30 @@ html, body {{
                         }
                     }
                 }
+                if (rowsData && window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
+                    var wCards = window.WorkspaceTabs.getCards();
+                    if (wCards && wCards.length > 0) {
+                        for (var wc = 0; wc < wCards.length; wc++) {
+                            var cardWords = wCards[wc].words;
+                            if (cardWords) {
+                                for (var ww = 0; ww < cardWords.length; ww++) {
+                                    var cw = cardWords[ww];
+                                    var cwKey = String(cw.token_order !== undefined && cw.token_order !== null ? cw.token_order : cw.row_id);
+                                    var matchingDelta = rowsData[cwKey] || rowsData[String(cw.row_id)];
+                                    if (matchingDelta) {
+                                        var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
+                                        if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
+                                        if (matchingDelta.lemma) cw.lemma = matchingDelta.lemma;
+                                        if (matchingDelta.ipa) cw.ipa = matchingDelta.ipa;
+                                        if (matchingDelta.morphology) cw.morphology = matchingDelta.morphology;
+                                        if (matchingDelta.provenance) cw.provenance = matchingDelta.provenance;
+                                        cw.row_html = null;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
                 if (window.AppState.isFinished) {
                     var tc = document.getElementById('translation-container');
                     if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader') || !tc.textContent.trim())) {
@@ -12172,7 +12197,7 @@ html, body {{
                             .then(function(res) { if (res.ok) return res.json(); })
                             .then(function(resObj) {
                                 var data = (resObj && resObj.data) ? resObj.data : resObj;
-                                if (data && data.rows && window.receiveUpdate) {
+                                if (data && (data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
                                     window.receiveUpdate(data);
                                 }
                             })
@@ -12213,7 +12238,7 @@ html, body {{
                                         clearTimeout(window._kwWatchdogMaxTimer);
                                         window._kwWatchdogMaxTimer = null;
                                     }
-                                    if (sData.rows && window.receiveUpdate) {
+                                    if ((sData.rows || sData.translatedText || sData.translated_text || sData.sentences) && window.receiveUpdate) {
                                         window.receiveUpdate(sData);
                                     }
                                     if (window.onSessionReload) {
@@ -12283,8 +12308,8 @@ html, body {{
                                     lastVisibleTime = Date.now();
                                 }
                             }
-                            if (data && (data.rows || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
-                                if (data.rows && window.receiveUpdate) {
+                            if (data && (data.rows || data.translatedText || data.translated_text || data.sentences || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
+                                if ((data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
                                     window.receiveUpdate(data);
                                 }
                                 var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
@@ -15280,7 +15305,22 @@ html, body {{
                 for (var i = 0; i < words.length; i++) {
                     var w = words[i];
                     var rIdStr = String(w.row_id);
+                    var tOrdStr = String(w.token_order !== undefined && w.token_order !== null ? w.token_order : rIdStr);
                     var isSel = selectedMap && selectedMap.hasOwnProperty(rIdStr);
+                    var appRow = (window.AppState && window.AppState.rows) ? (window.AppState.rows[tOrdStr] || window.AppState.rows[rIdStr]) : null;
+                    if (appRow) {
+                        var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
+                        if (updatedTrans !== undefined && updatedTrans !== "") {
+                            w.translation = updatedTrans;
+                        }
+                        if (appRow.lemma !== undefined && appRow.lemma !== "") w.lemma = appRow.lemma;
+                        if (appRow.ipa !== undefined && appRow.ipa !== "") w.ipa = appRow.ipa;
+                        if (appRow.morphology !== undefined && appRow.morphology !== "") w.morphology = appRow.morphology;
+                        if (appRow.provenance) w.provenance = appRow.provenance;
+                        if (updatedTrans || appRow.provenance) {
+                            w.row_html = null;
+                        }
+                    }
                     if (w.row_html) {
                         var rowHtml = w.row_html;
                         if (isSel) {
@@ -15322,10 +15362,41 @@ html, body {{
                 if (!transContainer || !cards || cards.length === 0) return;
                 for (var c = 0; c < cards.length; c++) {
                     if (cards[c].seq_num === activeTabSeq) {
-                        var tText = cards[c].translated_text || (activeSentenceIdx === 0 && window.AppState ? window.AppState.translatedText : '');
+                        var tText = cards[c].translated_text;
+                        if ((!tText || !tText.trim()) && window.AppState && window.AppState.translatedText) {
+                            if (activeSentenceIdx === 0) {
+                                tText = window.AppState.translatedText;
+                            } else {
+                                var rawText = window.AppState.translatedText;
+                                var lines = [];
+                                if (rawText.indexOf('<div') !== -1 || rawText.indexOf('</div') !== -1) {
+                                    var tmpDiv = document.createElement('div');
+                                    tmpDiv.innerHTML = rawText;
+                                    var childDivs = tmpDiv.querySelectorAll('div');
+                                    if (childDivs.length > 0) {
+                                        for (var cd = 0; cd < childDivs.length; cd++) {
+                                            lines.push((childDivs[cd].textContent || childDivs[cd].innerText || '').trim());
+                                        }
+                                    }
+                                }
+                                if (lines.length === 0) {
+                                    lines = rawText.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
+                                }
+                                var cleanLines = lines.map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+                                var sIdx0 = (cards[c].sentence_idx !== undefined ? cards[c].sentence_idx : activeSentenceIdx) - 1;
+                                if (sIdx0 >= 0 && sIdx0 < cleanLines.length) {
+                                    tText = cleanLines[sIdx0];
+                                } else if (cleanLines.length === 1 && cards.length === 2) {
+                                    tText = cleanLines[0];
+                                }
+                            }
+                        }
+                        tText = tText || '';
                         cards[c].translated_text = tText;
-                        transContainer.classList.remove('skeleton-loader');
-                        transContainer.removeAttribute('data-pending');
+                        if (tText && tText.trim()) {
+                            transContainer.classList.remove('skeleton-loader');
+                            transContainer.removeAttribute('data-pending');
+                        }
                         transContainer.innerHTML = getTranslationHtml(tText);
                         var tabProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || transContainer.getAttribute('data-provenance');
                         if (tabProv) {
@@ -15452,8 +15523,7 @@ html, body {{
                         }
                     }
                     if (transContainer) {
-                        var tText = targetCard.translated_text || (window.AppState ? window.AppState.translatedText : '');
-                        transContainer.innerHTML = getTranslationHtml(tText);
+                        updateActiveTabTranslation();
                     }
                 } else {
                     if (srcContainer) {
@@ -15481,8 +15551,7 @@ html, body {{
                         }
                     }
                     if (transContainer) {
-                        var tText = targetCard.translated_text || '';
-                        transContainer.innerHTML = getTranslationHtml(tText);
+                        updateActiveTabTranslation();
                     }
                 }
 
@@ -18636,7 +18705,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             rows_data[tok_str] = row_obj
     return rows_data
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, **extra_kwargs):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, sentences=None, **extra_kwargs):
     import time
     global _update_seq_counter
     _update_seq_counter += 1
@@ -18835,6 +18904,10 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 update_data["row_provenances"] = row_provenances
                 update_data["rowProvenances"] = row_provenances
 
+            if sentences is not None:
+                update_data["sentences"] = sentences
+            elif "sentences" in extra_kwargs and extra_kwargs["sentences"] is not None:
+                update_data["sentences"] = extra_kwargs["sentences"]
             if error is not None:
                 update_data["error"] = error
             if zid is not None:

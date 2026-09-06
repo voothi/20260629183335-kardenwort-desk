@@ -1142,19 +1142,42 @@ class EnrichmentQueue:
                         persist=(not is_sqlite), return_single=False
                     )
 
+                    sentences_list = []
+                    if is_sqlite and hasattr(storage_adapter, 'backend_name') and storage_adapter.backend_name == 'sqlite' and hasattr(storage_adapter, 'db'):
+                        try:
+                            db_sents = storage_adapter.db.get_sentences_by_session(session_zid)
+                            if db_sents:
+                                for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
+                                    sentences_list.append({
+                                        "sentence_index": s.get("sentence_index", 1),
+                                        "sentence_source": str(s.get("sentence_source") or "").strip(),
+                                        "sentence_destination": str(s.get("sentence_destination") or "").strip(),
+                                    })
+                        except Exception:
+                            pass
+                    if not sentences_list and isinstance(sentence_translations_raw, dict):
+                        for s_idx_raw, trans_val in sorted(sentence_translations_raw.items(), key=lambda x: int(x[0]) if (isinstance(x[0], int) or str(x[0]).isdigit()) else 1):
+                            s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                            sentences_list.append({
+                                "sentence_index": s_idx,
+                                "sentence_source": "",
+                                "sentence_destination": str(trans_val).strip() if trans_val else "",
+                            })
+
                     new_fp = compute_content_fingerprint(data_rows)
                     with arbiter._lock:
                         if session_zid in arbiter.sessions:
                             arbiter.sessions[session_zid]["data_rows"] = data_rows
                             arbiter.sessions[session_zid]["fingerprint"] = new_fp
                             arbiter.sessions[session_zid]["sentence_translation"] = sentence_translations_raw
+                            arbiter.sessions[session_zid]["sentences"] = sentences_list
                             arbiter.sessions[session_zid]["text_provenance"] = active_text_prov
                             arbiter.sessions[session_zid]["textProvenance"] = active_text_prov
 
                     translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
@@ -1169,6 +1192,7 @@ class EnrichmentQueue:
                         "translatedText": translated_html,
                         "text_provenance": active_text_prov,
                         "textProvenance": active_text_prov,
+                        "sentences": sentences_list,
                     })
                 except Exception as text_err:
                     logger.warning(f"Sentence translation error in progressive queue for {session_zid}: {text_err}")
@@ -1304,6 +1328,9 @@ class EnrichmentQueue:
                     "row_provenances": sess_row_provs,
                     "rowProvenances": sess_row_provs,
                 }
+                curr_sents = arbiter.sessions.get(session_zid, {}).get("sentences")
+                if curr_sents:
+                    trans_event["sentences"] = curr_sents
                 if active_text_prov:
                     trans_event["text_provenance"] = active_text_prov
                     trans_event["textProvenance"] = active_text_prov
@@ -1362,6 +1389,9 @@ class EnrichmentQueue:
                 "fingerprint": new_fp,
                 "rows": structured_rows,
             }
+            curr_sents = arbiter.sessions.get(session_zid, {}).get("sentences")
+            if curr_sents:
+                finished_event["sentences"] = curr_sents
             if active_text_prov:
                 finished_event["text_provenance"] = active_text_prov
                 finished_event["textProvenance"] = active_text_prov
@@ -2880,6 +2910,52 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         )
                     else:
                         safe_sess["translatedText"] = ""
+
+                is_busy = False
+                if hasattr(self.server, 'arbiter') and self.server.arbiter:
+                    eq = getattr(self.server.arbiter, 'enrichment_queue', None)
+                    if eq and hasattr(eq, '_active_progressive_sessions'):
+                        with eq._lock:
+                            if zid in eq._active_progressive_sessions:
+                                is_busy = True
+                safe_sess["ok"] = True
+                safe_sess["zid"] = zid
+                safe_sess["session_zid"] = zid
+                safe_sess["is_finished"] = not is_busy
+                safe_sess["stage"] = "translating" if is_busy else "finished"
+                safe_sess["status"] = {
+                    "is_finished": not is_busy,
+                    "stage": "translating" if is_busy else "finished"
+                }
+
+                if "sentences" not in safe_sess or not safe_sess["sentences"]:
+                    s_list = []
+                    if hasattr(self.server, 'resolved_paths') and hasattr(self.server, 'config'):
+                        storage_adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+                        if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
+                            try:
+                                db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                                if db_sents:
+                                    for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)):
+                                        s_list.append({
+                                            "sentence_index": s.get("sentence_index", 1),
+                                            "sentence_source": str(s.get("sentence_source") or "").strip(),
+                                            "sentence_destination": str(s.get("sentence_destination") or "").strip(),
+                                        })
+                            except Exception:
+                                pass
+                    if not s_list:
+                        st = safe_sess.get("sentence_translation")
+                        if isinstance(st, dict):
+                            for s_idx_raw, trans_val in sorted(st.items(), key=lambda x: int(x[0]) if (isinstance(x[0], int) or str(x[0]).isdigit()) else 1):
+                                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                                s_list.append({
+                                    "sentence_index": s_idx,
+                                    "sentence_source": "",
+                                    "sentence_destination": str(trans_val).strip() if trans_val else "",
+                                })
+                    safe_sess["sentences"] = s_list
+
                 self._send_json(200, safe_sess)
                 return
 
