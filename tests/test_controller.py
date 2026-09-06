@@ -12,6 +12,7 @@ from pathlib import Path
 from http.server import ThreadingHTTPServer
 
 import kardenwort_desk
+import kardenwort_controller
 from kardenwort_controller import (
     ProcessSupervisor,
     SessionArbiter,
@@ -1648,8 +1649,95 @@ def test_controller_session_status_busy_when_in_active_progressive_sessions(runn
 
 
 
+def test_controller_session_reword_multi_sentence_container_no_shift(running_controller, tmp_path, monkeypatch):
+    """
+    Regression test (20260906204055): Verify that calling /session/reword on a multi-sentence
+    container session where Sentence 2 has common words does not shift row indices, ensuring
+    the selected rows accurately match the displayed table lemmas.
+    """
+    server_url, server = running_controller
+    arbiter = server.arbiter
+    sess_zid = kardenwort_desk.generate_unique_zid()
 
+    storage_adapter = kardenwort_desk.get_storage_adapter(server.config, server.resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
+    # Sentence 1 has "Transporter" and "Automobil" (rarer words)
+    # Sentence 2 has "der" and "die" (top-frequency words)
+    headers = ["Quotation", "WordSource", "WordDestination", "TokenOrder", "SentenceSourceIndex"]
+    data_rows = [
+        ["Transporter", "Transporter", "transporter", "0", "1"],
+        ["Automobil", "Automobil", "automobile", "1", "1"],
+        ["der", "der", "the", "2", "2"],
+        ["die", "die", "the", "3", "2"],
+    ]
 
+    if is_sqlite:
+        storage_adapter.save_session(
+            session_zid=sess_zid,
+            slug="test-multi-reword-no-shift",
+            source_language="de",
+            target_language="en",
+            text_mode="single",
+            source_raw_text="Ein seltener Transporter und ein Automobil. Das ist der Weg und die Strasse.",
+            sentences=[
+                {"sentence_index": 1, "sentence_source": "Ein seltener Transporter und ein Automobil.", "sentence_destination": "A rare transporter and an automobile."},
+                {"sentence_index": 2, "sentence_source": "Das ist der Weg und die Strasse.", "sentence_destination": "That is the way and the street."},
+            ],
+            headers=headers,
+            data_rows=data_rows,
+        )
+    else:
+        results_dir = Path(server.resolved_paths['results_dir'])
+        tsv_path = results_dir / f"{sess_zid}.de.tsv"
+        storage_adapter.save_tsv_rows_safely(tsv_path, ["# test"], headers, data_rows)
 
+    def mock_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+        c, h, rows = storage_adapter.load_tsv_rows(tsv_path)
+        dest_col = h.index("WordDestination")
+        lemma_col = h.index("WordSource")
+        for s_idx in (selected_rows or []):
+            if 0 <= s_idx < len(rows):
+                rows[s_idx][dest_col] = f"reworded_{rows[s_idx][lemma_col]}"
+        storage_adapter.save_tsv_rows_safely(tsv_path, c, h, rows)
+        return True
+
+    monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", mock_headless)
+    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", mock_headless)
+
+    try:
+        # Reword Sentence 1 words: Row 0 (Transporter) and Row 1 (Automobil)
+        reword_url = f"{server_url}/session/reword"
+        reword_payload = json.dumps({
+            "session_zid": sess_zid,
+            "row_ids": [0, 1],
+            "language": "de",
+        }).encode("utf-8")
+        req_reword = urllib.request.Request(
+            reword_url,
+            data=reword_payload,
+            headers={"Content-Type": "application/json", "X-API-Token": "test-controller-api-key"}
+        )
+        with urllib.request.urlopen(req_reword, timeout=10.0) as resp:
+            assert resp.status == 200
+            res_data = json.loads(resp.read().decode("utf-8"))
+            data = res_data.get("data", res_data)
+            rows = data.get("rows", {})
+
+            # Row 0 must be Transporter and reworded_Transporter (NOT der or shifted)
+            row0 = rows.get("0") or rows.get(0)
+            assert row0 is not None
+            assert row0["lemma"] == "Transporter"
+            assert row0["trans"] == "reworded_Transporter"
+
+            # Row 1 must be Automobil and reworded_Automobil (NOT die or shifted)
+            row1 = rows.get("1") or rows.get(1)
+            assert row1 is not None
+            assert row1["lemma"] == "Automobil"
+            assert row1["trans"] == "reworded_Automobil"
+    finally:
+        try:
+            storage_adapter.delete_session(sess_zid)
+        except Exception:
+            pass
 

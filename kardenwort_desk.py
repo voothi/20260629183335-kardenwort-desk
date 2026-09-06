@@ -3717,7 +3717,7 @@ class SqliteStorageAdapter(StorageAdapter):
         # Frequency sort data_rows and align db_words in lockstep to ensure selected_rows parity
         headers_with_idx = list(headers) + ["__temp_sort_idx__"]
         data_rows_with_idx = [list(r) + [str(i)] for i, r in enumerate(data_rows)]
-        sorted_rows_with_idx = sort_rows_by_frequency(
+        sorted_rows_with_idx = sort_session_data_rows(
             data_rows_with_idx, headers_with_idx, lang, self.config, self.resolved_paths, role_fields=role_fields
         )
         sorted_indices = [int(r[-1]) for r in sorted_rows_with_idx]
@@ -4392,6 +4392,85 @@ def sort_rows_by_frequency(
     except Exception as sort_err:
         logger.warning(f"Failed to sort rows by frequency: {sort_err}")
         return data_rows
+
+
+def sort_session_data_rows(
+    data_rows: List[List[str]],
+    headers: List[str],
+    lang: Optional[str] = None,
+    config: Optional[Any] = None,
+    resolved_paths: Optional[Dict[str, Any]] = None,
+    role_fields: Optional[Dict[str, Any]] = None,
+    source_sentences: Optional[List[str]] = None,
+    delivery_mode: Optional[str] = None,
+) -> List[List[str]]:
+    """
+    Sorts session data rows consistently for UI display, enrichment, and rewording.
+    If multiple sentences are present in container delivery mode, rows are grouped
+    per-sentence and frequency-sorted within each sentence group to match the UI layout.
+    """
+    if not data_rows or not headers:
+        return data_rows
+
+    if not lang:
+        lang = (
+            config.get(SEC_SETTINGS, "default_language", fallback="en")
+            if config and hasattr(config, "get")
+            else "en"
+        )
+
+    try:
+        sent_col = (
+            role_fields.get('sentence_index', 'SentenceSourceIndex')
+            if isinstance(role_fields, dict)
+            else 'SentenceSourceIndex'
+        )
+        col_index = (
+            headers.index(sent_col)
+            if sent_col in headers
+            else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
+        )
+
+        num_sentences = len(source_sentences) if source_sentences else 0
+        sent_vals = set()
+        if col_index != -1:
+            for r in data_rows:
+                if len(r) > col_index:
+                    v = str(r[col_index]).strip()
+                    if v.isdigit():
+                        sent_vals.add(int(v))
+            if num_sentences == 0 and len(sent_vals) >= 2:
+                num_sentences = max(sent_vals)
+
+        is_container = False
+        if col_index != -1 and num_sentences >= 2:
+            if delivery_mode is not None:
+                is_container = (delivery_mode == 'container')
+            else:
+                deliv = None
+                if config and hasattr(config, "get"):
+                    deliv = config.get(SEC_SENTENCES_MODE, "delivery_mode", fallback=None)
+                if deliv:
+                    is_container = (deliv == 'container')
+                else:
+                    is_container = True
+
+        if is_container and col_index != -1:
+            sentence_sorted_rows = []
+            target_range = range(1, num_sentences + 1) if num_sentences >= 2 else sorted(s for s in sent_vals if s >= 1)
+            for s_idx in target_range:
+                s_rows = [r for r in data_rows if len(r) > col_index and str(r[col_index]).strip() == str(s_idx)]
+                s_sorted = sort_rows_by_frequency(s_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+                sentence_sorted_rows.extend(s_sorted)
+            other_rows = [r for r in data_rows if not (len(r) > col_index and str(r[col_index]).strip().isdigit() and int(str(r[col_index]).strip()) in target_range)]
+            if other_rows:
+                sentence_sorted_rows.extend(sort_rows_by_frequency(other_rows, headers, lang, config, resolved_paths, role_fields=role_fields))
+            return sentence_sorted_rows
+
+        return sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+    except Exception as sort_err:
+        logger.warning(f"Failed to sort session data rows: {sort_err}")
+        return sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
 
 
 def synthesize_project_materials(
@@ -8447,18 +8526,11 @@ html, body {{
             r.append(str(r_i))
 
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-    if smc.enabled and smc.delivery_mode == 'container' and smc.deduplication_scope == 'sentence' and len(source_sentences) >= 2 and col_index != -1:
-        sentence_sorted_rows = []
-        for s_idx in range(1, len(source_sentences) + 1):
-            s_rows = [r for r in data_rows if len(r) > col_index and str(r[col_index]).strip() == str(s_idx)]
-            s_sorted = sort_rows_by_frequency(s_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-            sentence_sorted_rows.extend(s_sorted)
-        other_rows = [r for r in data_rows if not (len(r) > col_index and str(r[col_index]).strip().isdigit() and 1 <= int(str(r[col_index]).strip()) <= len(source_sentences))]
-        if other_rows:
-            sentence_sorted_rows.extend(sort_rows_by_frequency(other_rows, headers, language, config, resolved_paths, role_fields=role_fields))
-        data_rows = sentence_sorted_rows
-    else:
-        data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+    data_rows = sort_session_data_rows(
+        data_rows, headers, language, config, resolved_paths,
+        role_fields=role_fields, source_sentences=source_sentences,
+        delivery_mode=smc.delivery_mode if (smc.enabled and smc.deduplication_scope == 'sentence') else None
+    )
         
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
@@ -8897,19 +8969,11 @@ html, body {{
                     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
                     col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
                     col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
-                    if smc.enabled and smc.delivery_mode == 'container' and smc.deduplication_scope == 'sentence' and len(source_sentences) >= 2 and col_index != -1:
-                        sentence_sorted_rows = []
-                        for s_idx in range(1, len(source_sentences) + 1):
-                            s_rows = [r for r in current_rows if len(r) > col_index and str(r[col_index]).strip() == str(s_idx)]
-                            s_sorted = sort_rows_by_frequency(s_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-                            sentence_sorted_rows.extend(s_sorted)
-                        other_rows = [r for r in current_rows if not (len(r) > col_index and str(r[col_index]).strip().isdigit() and 1 <= int(str(r[col_index]).strip()) <= len(source_sentences))]
-                        if other_rows:
-                            sentence_sorted_rows.extend(sort_rows_by_frequency(other_rows, headers, language, config, resolved_paths, role_fields=role_fields))
-                        data_rows = sentence_sorted_rows
-                    else:
-                        current_rows = sort_rows_by_frequency(current_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-                        data_rows = current_rows
+                    data_rows = sort_session_data_rows(
+                        current_rows, headers, language, config, resolved_paths,
+                        role_fields=role_fields, source_sentences=source_sentences,
+                        delivery_mode=smc.delivery_mode if (smc.enabled and smc.deduplication_scope == 'sentence') else None
+                    )
             except Exception as e:
                 logger.error(f"Error loading rows in UI thread: {e}")
 
@@ -11537,8 +11601,7 @@ html, body {{
                             if (cardWords) {
                                 for (var ww = 0; ww < cardWords.length; ww++) {
                                     var cw = cardWords[ww];
-                                    var cwKey = String(cw.token_order !== undefined && cw.token_order !== null ? cw.token_order : cw.row_id);
-                                    var matchingDelta = rowsData[cwKey] || rowsData[String(cw.row_id)];
+                                    var matchingDelta = rowsData[String(cw.row_id)] || (cw.token_order !== undefined && cw.token_order !== null ? rowsData[String(cw.token_order)] : null);
                                     if (matchingDelta) {
                                         var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
                                         if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
@@ -14520,10 +14583,18 @@ html, body {{
             setTimeout(dismiss, durationMs);
         };
 
+        function getDeliveryMode() {
+            var el = document.getElementById('delivery-mode');
+            return el ? (el.textContent || el.innerText || "").trim() : "";
+        }
+
         function getSessionZid() {
-            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
-                var c = window.WorkspaceTabs.getActiveCard();
-                if (c && c.zid) return c.zid;
+            var delMode = getDeliveryMode();
+            if (delMode !== 'container') {
+                if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+                    var c = window.WorkspaceTabs.getActiveCard();
+                    if (c && c.zid) return c.zid;
+                }
             }
             var el = document.getElementById('session-zid');
             var zidVal = el ? (el.textContent || el.innerText || "").trim() : "";
@@ -14532,6 +14603,12 @@ html, body {{
                     var urlParams = new URLSearchParams(window.location.search);
                     zidVal = urlParams.get('zid') || urlParams.get('session_zid') || "";
                 } catch(e) {}
+            }
+            if (!zidVal) {
+                if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+                    var c = window.WorkspaceTabs.getActiveCard();
+                    if (c && c.zid) return c.zid;
+                }
             }
             return zidVal;
         }
@@ -15307,7 +15384,7 @@ html, body {{
                     var rIdStr = String(w.row_id);
                     var tOrdStr = String(w.token_order !== undefined && w.token_order !== null ? w.token_order : rIdStr);
                     var isSel = selectedMap && selectedMap.hasOwnProperty(rIdStr);
-                    var appRow = (window.AppState && window.AppState.rows) ? (window.AppState.rows[tOrdStr] || window.AppState.rows[rIdStr]) : null;
+                    var appRow = (window.AppState && window.AppState.rows) ? (window.AppState.rows[rIdStr] || (tOrdStr !== rIdStr ? window.AppState.rows[tOrdStr] : null)) : null;
                     if (appRow) {
                         var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
                         if (updatedTrans !== undefined && updatedTrans !== "") {
@@ -18379,7 +18456,7 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
             
             with storage_adapter.file_lock(tsv_path):
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                data_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
                 col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
                 col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
                 if col_lemma != -1 and col_word_dest != -1:
@@ -18396,7 +18473,7 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                 
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
-                sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id)
     return data_rows
 
@@ -18417,7 +18494,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
             trace_id=trace_id,
         )
         comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+        sorted_rows = sort_session_data_rows(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
         safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="enrichment", zid=zid, trace_id=trace_id)
         return sorted_rows
 
@@ -18431,7 +18508,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         try:
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
-            sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
+            sorted_rows = sort_session_data_rows(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=batch_trace_id)
@@ -18516,7 +18593,7 @@ def cmd_reprocess_worker(args):
                 else:
                     with storage_adapter.file_lock(tsv_path):
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id)
                 selected_rows = remaining_selected
         
@@ -18545,7 +18622,7 @@ def cmd_reprocess_worker(args):
             if not run_lemmatizer and col_lemma != -1 and original_lemmas:
                 with storage_adapter.file_lock(tsv_path):
                     comments_latest, headers_latest, data_rows_latest = storage_adapter.load_tsv_rows(tsv_path)
-                    data_rows_latest = sort_rows_by_frequency(data_rows_latest, headers_latest, language, config, resolved_paths, role_fields=role_fields)
+                    data_rows_latest = sort_session_data_rows(data_rows_latest, headers_latest, language, config, resolved_paths, role_fields=role_fields)
                     for row_id, orig_val in original_lemmas.items():
                         if 0 <= row_id < len(data_rows_latest):
                             data_rows_latest[row_id][col_lemma] = orig_val
@@ -18593,7 +18670,7 @@ def cmd_reprocess_worker(args):
                     if col_lemma != -1:
                         with storage_adapter.file_lock(tsv_path):
                             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                            data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+                            data_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
                             for name, c_dict in classifications.items():
                                 if name in role_fields and role_fields[name] in headers:
                                     col_idx = headers.index(role_fields[name])
@@ -18638,7 +18715,7 @@ def cmd_reprocess_worker(args):
                                 reprocess_provenances[int(t_ord)] = w_prov
                 except Exception:
                     pass
-            sorted_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+            sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, class_cols=class_cols, error=worker_error, zid=zid, trace_id=trace_id, row_provenances=reprocess_provenances)
             if sess_logger:
                 sess_logger.info("Reprocess finished event emitted")

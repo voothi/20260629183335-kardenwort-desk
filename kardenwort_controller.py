@@ -66,6 +66,7 @@ from kardenwort_desk import (
     apply_wordfill_to_rows,
     resolve_wordfill_config,
     sort_rows_by_frequency,
+    sort_session_data_rows,
     resolve_translations,
     SEC_SETTINGS,
     SEC_LANGUAGES,
@@ -1091,7 +1092,7 @@ class EnrichmentQueue:
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
             # Emit initial source stage if not already emitted
-            sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+            sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=session_zid, trace_id=eff_trace_id)
             arbiter.emit_event(session_zid, {
                 "type": "stage",
@@ -1175,7 +1176,7 @@ class EnrichmentQueue:
                             arbiter.sessions[session_zid]["textProvenance"] = active_text_prov
 
                     translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
-                    sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                    sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list)
                     arbiter.emit_event(session_zid, {
@@ -1197,7 +1198,7 @@ class EnrichmentQueue:
                 except Exception as text_err:
                     logger.warning(f"Sentence translation error in progressive queue for {session_zid}: {text_err}")
                     active_text_prov = None
-                    sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                    sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text="", text_translation_status="failed", text_translation_failed=True)
                     arbiter.emit_event(session_zid, {
@@ -1316,7 +1317,7 @@ class EnrichmentQueue:
                                 if t_ord.isdigit():
                                     sess_row_provs[int(t_ord)] = lemma_prov_tag
 
-                sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs)
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=sess_row_provs)
                 trans_event = {
@@ -1378,7 +1379,7 @@ class EnrichmentQueue:
             new_fp = compute_content_fingerprint(data_rows) if data_rows else ""
             structured_rows = format_update_rows_dict(data_rows, headers, role_fields) if (data_rows and headers and role_fields) else {}
             if tsv_path and data_rows and headers:
-                sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov)
 
             finished_event = {
@@ -1885,7 +1886,7 @@ class SessionArbiter:
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
 
         # Enforce frequency sort parity so selected_rows match displayed UI table rows
-        data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+        data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
         wordfill_cfg = getattr(self, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
         if wordfill_cfg and wordfill_cfg.get('enabled', False) and col_lemma != -1:
@@ -1932,7 +1933,7 @@ class SessionArbiter:
                 except Exception as e:
                     raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
                 col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
                 col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
                 col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
@@ -1987,7 +1988,7 @@ class SessionArbiter:
                             zid=req_zid,
                         )
                         comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                        data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                        data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
                         col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
                         col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
                         col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
@@ -2158,7 +2159,7 @@ class SessionArbiter:
                         except Exception as e:
                             logger.warning(f"Failed to save propagated sibling TSV {sib_zid}: {e}")
 
-                sorted_rows = sort_rows_by_frequency(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
+                sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
                 if not is_sqlite and sib_tsv:
                     safe_write_update_js(sib_tsv, sorted_rows, headers, role_fields, stage="translated", zid=sib_zid)
@@ -2219,7 +2220,7 @@ class SessionArbiter:
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
-        data_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+        data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
         if col_lemma == -1:
             raise StructuredError(ErrorCode.DESK_FAILED, f"Lemma column not found for session {session_zid}")
@@ -2377,7 +2378,7 @@ class SessionArbiter:
                         self.sessions[session_zid]["row_provenances"] = {}
                     self.sessions[session_zid]["row_provenances"].update(retried_row_provenances)
 
-        sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+        sorted_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
         structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=retried_row_provenances)
         effective_text_prov = f"live:{text_provider}" if (need_sentence_trans and translated_text_res) else None
 
