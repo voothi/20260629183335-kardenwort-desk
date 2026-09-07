@@ -2884,6 +2884,20 @@ class SqliteStorageAdapter(StorageAdapter):
                         if not sent_map[k].get("text_provenance"):
                             sent_map[k]["text_provenance"] = text_provenance
 
+            existing_words_by_ord = {}
+            existing_words_by_lemma = {}
+            try:
+                ex_words = self.db.get_words_by_session(session_zid, zid=zid)
+                if ex_words:
+                    existing_words_by_ord = {w.get("token_order", idx): w for idx, w in enumerate(ex_words)}
+                    for w in ex_words:
+                        l_k = (w.get("lemma") or "").strip().lower()
+                        if l_k and l_k not in existing_words_by_lemma:
+                            existing_words_by_lemma[l_k] = w
+            except Exception:
+                existing_words_by_ord = {}
+                existing_words_by_lemma = {}
+
             word_list: List[Dict[str, Any]] = []
 
             for row_idx, row in enumerate(data_rows):
@@ -2954,14 +2968,6 @@ class SqliteStorageAdapter(StorageAdapter):
                         if val:
                             extra[h_name] = val
 
-                existing_words_by_ord = {}
-                try:
-                    ex_words = self.db.get_words_by_session(session_zid, zid=zid)
-                    if ex_words:
-                        existing_words_by_ord = {w.get("token_order", idx): w for idx, w in enumerate(ex_words)}
-                except Exception:
-                    existing_words_by_ord = {}
-
                 t_ord_raw = get_col_val(row, "tokenorder")
                 token_order = int(t_ord_raw) if (t_ord_raw is not None and str(t_ord_raw).strip().isdigit()) else row_idx
 
@@ -2974,6 +2980,8 @@ class SqliteStorageAdapter(StorageAdapter):
                     )
 
                 existing_w = existing_words_by_ord.get(token_order, {})
+                if existing_w and lemma and existing_w.get("lemma") and existing_w["lemma"].strip().lower() != lemma.strip().lower():
+                    existing_w = existing_words_by_lemma.get(lemma.strip().lower(), {})
                 effective_w_dest = (
                     w_dest
                     if (w_dest and "skeleton-loader" not in w_dest and "btn-retry-cell" not in w_dest)
@@ -11683,14 +11691,23 @@ html, body {{
                                     if (cw.token_order !== undefined && cw.token_order !== null && deltasByTokenOrder[String(cw.token_order)]) {
                                         matchingDelta = deltasByTokenOrder[String(cw.token_order)];
                                     } else if (cw.row_id !== undefined && cw.row_id !== null && deltasByRowId[String(cw.row_id)]) {
-                                        matchingDelta = deltasByRowId[String(cw.row_id)];
+                                        var candDelta = deltasByRowId[String(cw.row_id)];
+                                        if (candDelta) {
+                                            var candLem = (candDelta.lemma || '').trim().toLowerCase();
+                                            var cwLem = (cw.lemma || '').trim().toLowerCase();
+                                            var candOrd = (candDelta.token_order !== undefined && candDelta.token_order !== null) ? String(candDelta.token_order) : null;
+                                            if ((candOrd && String(cw.token_order) === candOrd) || (candLem && cwLem && candLem === cwLem) || !candLem) {
+                                                matchingDelta = candDelta;
+                                            }
+                                        }
                                     }
                                     if (matchingDelta) {
                                         var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
                                         if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
                                         if (matchingDelta.lemma) cw.lemma = matchingDelta.lemma;
                                         if (matchingDelta.ipa) cw.ipa = matchingDelta.ipa;
-                                        if (matchingDelta.morphology) cw.morphology = matchingDelta.morphology;
+                                        var mMorph = (matchingDelta.morph !== undefined && matchingDelta.morph !== "") ? matchingDelta.morph : ((matchingDelta.morphology !== undefined && matchingDelta.morphology !== "") ? matchingDelta.morphology : matchingDelta.WordSourceMorphologyAI);
+                                        if (mMorph !== undefined && mMorph !== "") cw.morphology = mMorph;
                                         if (matchingDelta.provenance) cw.provenance = matchingDelta.provenance;
                                         cw.row_html = null;
                                     }
@@ -12118,9 +12135,9 @@ html, body {{
                             }
                         }
                     }
-                    if (!tds[4].classList.contains('dirty') && rowData.hasOwnProperty('morph') && rowData.morph !== undefined) {
+                    if (!tds[4].classList.contains('dirty') && (rowData.hasOwnProperty('morph') || rowData.hasOwnProperty('morphology') || rowData.hasOwnProperty('WordSourceMorphologyAI')) && (rowData.morph !== undefined || rowData.morphology !== undefined || rowData.WordSourceMorphologyAI !== undefined)) {
                         var div = tds[4].querySelector('.scrollable-cell') || tds[4];
-                        var val = rowData.morph || "";
+                        var val = (rowData.morph !== undefined && rowData.morph !== "") ? rowData.morph : ((rowData.morphology !== undefined && rowData.morphology !== "") ? rowData.morphology : (rowData.WordSourceMorphologyAI || ""));
                         var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
@@ -15077,8 +15094,24 @@ html, body {{
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.retext_started)) {
                     window.showToast("Retext completed", "success");
                     var payload = (resObj.data && resObj.data.data) ? resObj.data.data : resObj.data;
-                    if (window.receiveUpdate && payload && (payload.rows || payload.translatedText || payload.translated_text)) {
-                        window.receiveUpdate(payload);
+                    var tText = payload ? (payload.translatedText || payload.translated_text) : null;
+                    if (tText) {
+                        var tc = document.getElementById('translation-container');
+                        if (tc) {
+                            tc.classList.remove('skeleton-loader');
+                            tc.removeAttribute('data-pending');
+                            tc.innerHTML = tText;
+                        }
+                        if (window.AppState) window.AppState.translatedText = tText;
+                    }
+                    if (window.receiveUpdate && tText) {
+                        var retextUpdate = {
+                            stage: "translated_text",
+                            status: "success",
+                            translatedText: tText,
+                            translated_text: tText
+                        };
+                        window.receiveUpdate(retextUpdate);
                     } else if (window.onUpdateClick) {
                         window.onUpdateClick();
                     }
@@ -15580,16 +15613,23 @@ html, body {{
                     var isSel = selectedMap && (selectedMap.hasOwnProperty(rIdStr) || allIds.some(function(id) { return selectedMap.hasOwnProperty(String(id)); }));
                     var appRow = (window.AppState && window.AppState.rows) ? ((tOrdStr && window.AppState.rows[tOrdStr]) || window.AppState.rows[rIdStr]) : null;
                     if (appRow) {
-                        var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
-                        if (updatedTrans !== undefined && updatedTrans !== "") {
-                            w.translation = updatedTrans;
-                        }
-                        if (appRow.lemma !== undefined && appRow.lemma !== "") w.lemma = appRow.lemma;
-                        if (appRow.ipa !== undefined && appRow.ipa !== "") w.ipa = appRow.ipa;
-                        if (appRow.morphology !== undefined && appRow.morphology !== "") w.morphology = appRow.morphology;
-                        if (appRow.provenance) w.provenance = appRow.provenance;
-                        if (updatedTrans || appRow.provenance) {
-                            w.row_html = null;
+                        var appLem = (appRow.lemma || '').trim().toLowerCase();
+                        var wLem = (w.lemma || '').trim().toLowerCase();
+                        var appOrd = (appRow.token_order !== undefined && appRow.token_order !== null) ? String(appRow.token_order) : null;
+                        var isMatchingRow = (appOrd && appOrd === tOrdStr) || (appLem && wLem && appLem === wLem) || !appLem;
+                        if (isMatchingRow) {
+                            var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
+                            if (updatedTrans !== undefined && updatedTrans !== "") {
+                                w.translation = updatedTrans;
+                            }
+                            if (appRow.lemma !== undefined && appRow.lemma !== "") w.lemma = appRow.lemma;
+                            if (appRow.ipa !== undefined && appRow.ipa !== "") w.ipa = appRow.ipa;
+                            var updatedMorph = (appRow.morphology !== undefined && appRow.morphology !== "") ? appRow.morphology : ((appRow.morph !== undefined && appRow.morph !== "") ? appRow.morph : appRow.WordSourceMorphologyAI);
+                            if (updatedMorph !== undefined && updatedMorph !== "") w.morphology = updatedMorph;
+                            if (appRow.provenance) w.provenance = appRow.provenance;
+                            if (updatedTrans || appRow.provenance || appRow.ipa || updatedMorph || appRow.lemma) {
+                                w.row_html = null;
+                            }
                         }
                     }
                     if (w.row_html) {
@@ -18996,6 +19036,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             "trans": trans_val,
             "ipa": ipa_val,
             "morph": morph_val,
+            "morphology": morph_val,
             "token_order": token_order_val,
             "sentence_idx": sent_idx_val
         }
@@ -19901,7 +19942,8 @@ def cmd_retext_worker(args):
                 except Exception:
                     pass
             text_prov = f"live:{text_reprocess_provider}" if 'text_reprocess_provider' in locals() and text_reprocess_provider else None
-            safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage="finished", status=status_val, source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id, config=config, row_provenances=retext_provenances, text_provenance=text_prov)
+            sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
+            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, source_text="", translated_text=translated_html, error=worker_error, zid=zid, trace_id=trace_id, config=config, row_provenances=retext_provenances, text_provenance=text_prov)
         except Exception as fe:
             logger.error(f"Failed to write finished event in retext: {fe}")
 def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):

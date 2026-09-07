@@ -1735,10 +1735,11 @@ class SessionArbiter:
                 self.sessions[session_zid]["fingerprint"] = new_fp
 
         translated_html = format_translated_html(sentence_trans, text_mode=text_mode, text=text, config=self.config)
-        structured_rows = format_update_rows_dict(data_rows, headers, role_fields)
+        sorted_rows = sort_session_data_rows(data_rows, headers, language, self.config, self.resolved_paths, role_fields=role_fields)
+        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
         safe_write_update_js(
             tsv_path,
-            data_rows,
+            sorted_rows,
             headers,
             role_fields,
             stage="finished",
@@ -1754,7 +1755,6 @@ class SessionArbiter:
             "stage": "translated_text",
             "status": "success",
             "fingerprint": new_fp,
-            "rows": structured_rows,
             "translated_text": translated_html,
             "translatedText": translated_html
         })
