@@ -3641,12 +3641,17 @@ class SqliteStorageAdapter(StorageAdapter):
                     "UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;",
                     (sel_val, session_zid, sentence_idx, token_order),
                 )
+            elif sentence_idx == 0:
+                cursor.execute(
+                    "UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = 0 AND token_order = ?;",
+                    (sel_val, session_zid, token_order),
+                )
             else:
                 cursor.execute(
                     "UPDATE words SET selected = ? WHERE session_zid = ? AND token_order = ?;",
                     (sel_val, session_zid, token_order),
                 )
-            if cursor.rowcount == 0 and token_order is not None:
+            if cursor.rowcount == 0 and token_order is not None and sentence_idx is None:
                 cursor.execute(
                     "UPDATE words SET selected = ? WHERE session_zid = ? AND token_order = ?;",
                     (sel_val, session_zid, token_order),
@@ -9770,8 +9775,10 @@ html, body {{
                 if p_title:
                     ov_prov_attr += f' title="{p_title}"'
 
+            is_container = (smc.delivery_mode == "container")
+            all_ids_attr = "" if is_container else f' data-all-row-ids="{all_ids_str}"'
             ov_row_html = (
-                f'<tr data-row-id="{primary_id}" data-all-row-ids="{all_ids_str}" data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="highlight-orange">'
+                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="highlight-orange">'
                 f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{ov_inflected}</div></td>'
                 f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
@@ -9782,7 +9789,7 @@ html, body {{
             )
             overview_word_objs.append({
                 "row_id": str(primary_id),
-                "all_row_ids": [str(x) for x in matched_ids],
+                "all_row_ids": [str(primary_id)] if is_container else [str(x) for x in matched_ids],
                 "token_order": str(ov_token_order),
                 "sentence_idx": "0",
                 "inflected": ov_inflected,
@@ -13541,9 +13548,15 @@ html, body {{
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
-            var allIdsAttr = row.getAttribute('data-all-row-ids');
-            var constituentIds = allIdsAttr ? allIdsAttr.split(',').filter(Boolean) : [];
-            if (constituentIds.indexOf(rowIdStr) === -1) constituentIds.push(rowIdStr);
+            var isContainer = !!(window.WorkspaceTabs && window.WorkspaceTabs.getCards);
+            var constituentIds = [rowIdStr];
+            if (!isContainer) {
+                var allIdsAttr = row.getAttribute('data-all-row-ids');
+                if (allIdsAttr) {
+                    constituentIds = allIdsAttr.split(',').filter(Boolean);
+                    if (constituentIds.indexOf(rowIdStr) === -1) constituentIds.push(rowIdStr);
+                }
+            }
             
             var rowVisualIdx = -1;
             for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
@@ -13581,9 +13594,14 @@ html, body {{
                         if (rIdx >= 0 && rIdx < tableRows.length) {
                             var tr = tableRows[rIdx];
                             var trId = String(tr.getAttribute('data-row-id'));
-                            var trAll = tr.getAttribute('data-all-row-ids');
-                            var pIds = trAll ? trAll.split(',').filter(Boolean) : [];
-                            if (pIds.indexOf(trId) === -1) pIds.push(trId);
+                            var pIds = [trId];
+                            if (!isContainer) {
+                                var trAll = tr.getAttribute('data-all-row-ids');
+                                if (trAll) {
+                                    pIds = trAll.split(',').filter(Boolean);
+                                    if (pIds.indexOf(trId) === -1) pIds.push(trId);
+                                }
+                            }
                             for (var p = 0; p < pIds.length; p++) {
                                 selectedRowIdsMap[pIds[p]] = true;
                             }
@@ -13680,9 +13698,15 @@ html, body {{
                     if (rIdx >= 0 && rIdx < tableRows.length) {
                         var tr = tableRows[rIdx];
                         var trId = String(tr.getAttribute('data-row-id'));
-                        var trAll = tr.getAttribute('data-all-row-ids');
-                        var pIds = trAll ? trAll.split(',').filter(Boolean) : [];
-                        if (pIds.indexOf(trId) === -1) pIds.push(trId);
+                        var isContainer = !!(window.WorkspaceTabs && window.WorkspaceTabs.getCards);
+                        var pIds = [trId];
+                        if (!isContainer) {
+                            var trAll = tr.getAttribute('data-all-row-ids');
+                            if (trAll) {
+                                pIds = trAll.split(',').filter(Boolean);
+                                if (pIds.indexOf(trId) === -1) pIds.push(trId);
+                            }
+                        }
                         for (var p = 0; p < pIds.length; p++) {
                             if (dragSelectMode) {
                                 selectedRowIdsMap[pIds[p]] = true;
@@ -13748,11 +13772,13 @@ html, body {{
             }
             if (isHl) {
                 selectedRowIdsMap[rIdStr] = true;
-                var trAll = r.getAttribute('data-all-row-ids');
-                if (trAll) {
-                    var pIds = trAll.split(',').filter(Boolean);
-                    for (var p = 0; p < pIds.length; p++) {
-                        selectedRowIdsMap[pIds[p]] = true;
+                if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) {
+                    var trAll = r.getAttribute('data-all-row-ids');
+                    if (trAll) {
+                        var pIds = trAll.split(',').filter(Boolean);
+                        for (var p = 0; p < pIds.length; p++) {
+                            selectedRowIdsMap[pIds[p]] = true;
+                        }
                     }
                 }
             }
@@ -13979,12 +14005,14 @@ html, body {{
                 if (typeof tableRows !== 'undefined' && tableRows.length > 0) {
                     for (var i = 0; i < tableRows.length; i++) {
                         var rowId = String(tableRows[i].getAttribute('data-row-id'));
-                        var allIds = tableRows[i].getAttribute('data-all-row-ids');
                         selectedRowIdsMap[rowId] = true;
-                        if (allIds) {
-                            var parts = allIds.split(',');
-                            for (var p = 0; p < parts.length; p++) {
-                                if (parts[p]) selectedRowIdsMap[parts[p]] = true;
+                        if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) {
+                            var allIds = tableRows[i].getAttribute('data-all-row-ids');
+                            if (allIds) {
+                                var parts = allIds.split(',');
+                                for (var p = 0; p < parts.length; p++) {
+                                    if (parts[p]) selectedRowIdsMap[parts[p]] = true;
+                                }
                             }
                         }
                     }
@@ -14039,9 +14067,12 @@ html, body {{
                 if (focusedRowId !== null) {
                     var fRow = (focusedRowId >= 0 && focusedRowId < tableRows.length) ? tableRows[focusedRowId] : null;
                     var fRowId = fRow ? fRow.getAttribute('data-row-id') : String(focusedRowId);
-                    var fAllIds = fRow ? fRow.getAttribute('data-all-row-ids') : null;
-                    var cIds = fAllIds ? fAllIds.split(',').filter(Boolean) : [fRowId];
-                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(fRowId) || cIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
+                    var cIds = [fRowId];
+                    if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) {
+                        var fAllIds = fRow ? fRow.getAttribute('data-all-row-ids') : null;
+                        if (fAllIds) cIds = fAllIds.split(',').filter(Boolean);
+                    }
+                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(fRowId);
                     for (var c = 0; c < cIds.length; c++) {
                         if (isCurrentlySelected) {
                             delete selectedRowIdsMap[cIds[c]];
@@ -14141,14 +14172,16 @@ html, body {{
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
-                var allIdsAttr = row.getAttribute('data-all-row-ids');
                 var isSel = selectedRowIdsMap.hasOwnProperty(rowIdStr);
-                if (!isSel && allIdsAttr) {
-                    var cIds = allIdsAttr.split(',');
-                    for (var c = 0; c < cIds.length; c++) {
-                        if (selectedRowIdsMap.hasOwnProperty(cIds[c])) {
-                            isSel = true;
-                            break;
+                if (!isSel && (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards)) {
+                    var allIdsAttr = row.getAttribute('data-all-row-ids');
+                    if (allIdsAttr) {
+                        var cIds = allIdsAttr.split(',');
+                        for (var c = 0; c < cIds.length; c++) {
+                            if (selectedRowIdsMap.hasOwnProperty(cIds[c])) {
+                                isSel = true;
+                                break;
+                            }
                         }
                     }
                 }
@@ -14593,10 +14626,11 @@ html, body {{
                                     var rIdStr = String(cw.row_id);
                                     var isCur = curSelMap.hasOwnProperty(rIdStr);
                                     var isInit = (cw.selected === '1' || cw.selected === 1);
-                                    if (isCur !== isInit && !seenWordDeltas[rIdStr]) {
-                                        seenWordDeltas[rIdStr] = true;
-                                        var tOrdVal = (cw.token_order !== undefined && cw.token_order !== null && cw.token_order !== '') ? parseInt(cw.token_order, 10) : parseInt(rIdStr, 10);
-                                        var sIdxVal = parseInt(cw.sentence_idx || 1, 10);
+                                    var sIdxVal = (cw.sentence_idx !== undefined && cw.sentence_idx !== null && String(cw.sentence_idx) !== '') ? parseInt(cw.sentence_idx, 10) : (card.sentence_idx !== undefined ? card.sentence_idx : 1);
+                                    var deltaKey = sIdxVal + '_' + rIdStr;
+                                    if (isCur !== isInit && !seenWordDeltas[deltaKey]) {
+                                        seenWordDeltas[deltaKey] = true;
+                                        var tOrdVal = (cw.token_order !== undefined && cw.token_order !== null && String(cw.token_order) !== '') ? parseInt(cw.token_order, 10) : parseInt(rIdStr, 10);
                                         mergedDeltas.push({
                                             row_id: parseInt(rIdStr, 10),
                                             token_order: tOrdVal,
@@ -15714,6 +15748,8 @@ html, body {{
                         initialSeq = parsedSeq;
                     }
                 }
+                activeTabSeq = initialSeq;
+                window._kwActiveTabSeq = activeTabSeq;
                 if (cards && cards.length > 0) {
                     switchToTab(initialSeq, true);
                 }
@@ -15758,8 +15794,7 @@ html, body {{
                     var w = words[i];
                     var rIdStr = String(w.row_id);
                     var tOrdStr = String(w.token_order !== undefined && w.token_order !== null ? w.token_order : rIdStr);
-                    var allIds = w.all_row_ids || [rIdStr];
-                    var isSel = selectedMap && (selectedMap.hasOwnProperty(rIdStr) || allIds.some(function(id) { return selectedMap.hasOwnProperty(String(id)); }));
+                    var isSel = !!(selectedMap && selectedMap.hasOwnProperty(rIdStr));
                     var appRow = (window.AppState && window.AppState.rows) ? ((tOrdStr && window.AppState.rows[tOrdStr]) || window.AppState.rows[rIdStr]) : null;
                     if (appRow) {
                         var appLem = (appRow.lemma || '').trim().toLowerCase();
@@ -15801,7 +15836,7 @@ html, body {{
                         var hlClass = w.highlight_class || 'highlight-orange';
                         if (isSel) hlClass += ' selected kw-row-selected';
                         var provAttr = w.provenance ? (' data-provenance="' + escapeHtml(w.provenance) + '" title="' + escapeHtml(formatProvenanceTooltip(w.provenance)) + '"') : '';
-                        var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
+                        var allIdsAttr = (!window.WorkspaceTabs && w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
                         htmlParts.push(
                             '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
                             '<td class="editable" data-col="WordSourceInflectedForm"><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
