@@ -13736,7 +13736,7 @@ html, body {{
         for (var i = 0; i < tableRows.length; i++) {
             var r = tableRows[i];
             var rIdStr = String(r.getAttribute('data-row-id'));
-            var isHl = (r.getAttribute('data-selected') === '1');
+            var isHl = (hasHighlightCol && r.getAttribute('data-selected') === '1');
             if (!initialHighlights.hasOwnProperty(rIdStr)) {
                 initialHighlights[rIdStr] = isHl;
             }
