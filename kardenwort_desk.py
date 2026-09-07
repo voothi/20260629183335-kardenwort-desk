@@ -13962,7 +13962,11 @@ html, body {{
             if (activeEl && activeEl.tagName === 'INPUT') return;
             
             var keyCode = e.keyCode;
-            if (e.ctrlKey && keyCode === 90) { // Ctrl+Z
+            if ((e.ctrlKey || e.metaKey) && (keyCode === 83 || e.key === 's' || e.key === 'S' || e.code === 'KeyS')) { // Ctrl+S
+                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
+                if (typeof window.onSaveClick === 'function') window.onSaveClick();
+                return;
+            } else if (e.ctrlKey && keyCode === 90) { // Ctrl+Z
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (window.undo) window.undo();
                 return;
@@ -14123,6 +14127,17 @@ html, body {{
         }
         
         function updateRowStyles() {
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+                var activeC = window.WorkspaceTabs.getActiveCard();
+                if (activeC) {
+                    activeC.selected_ids = [];
+                    for (var sk in selectedRowIdsMap) {
+                        if (selectedRowIdsMap.hasOwnProperty(sk)) {
+                            activeC.selected_ids.push(sk);
+                        }
+                    }
+                }
+            }
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
@@ -14146,6 +14161,9 @@ html, body {{
                     row.classList.remove('kw-row-selected');
                     row.setAttribute('data-selected', '0');
                 }
+            }
+            if (typeof updateToolbarState === 'function') {
+                updateToolbarState();
             }
         }
         
@@ -14776,7 +14794,7 @@ html, body {{
         function updateToolbarState() {
             var saveBtn = document.getElementById('kw-btn-save');
             if (saveBtn) {
-                saveBtn.disabled = !window.isDirty();
+                saveBtn.disabled = (typeof window.isDirty === 'function') ? !window.isDirty() : true;
             }
         }
         window.updateToolbarState = updateToolbarState;
@@ -14933,10 +14951,20 @@ html, body {{
             }
             try {
                 var params = new URLSearchParams(window.location.search);
-                return params.get('token') || params.get('api_token') || "";
+                var tok = params.get('token') || params.get('api_token') || "";
+                if (tok) {
+                    try {
+                        sessionStorage.setItem('kw_api_token', tok);
+                        localStorage.setItem('kw_api_token', tok);
+                    } catch(e) {}
+                    return tok;
+                }
+                var stored = sessionStorage.getItem('kw_api_token') || localStorage.getItem('kw_api_token');
+                if (stored) return stored;
             } catch(e) {
                 return "";
             }
+            return "";
         }
         window.getApiToken = getApiToken;
 
@@ -16419,9 +16447,9 @@ html, body {{
             }
 
             // Ctrl+S -> Save
-            if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.keyCode === 83)) {
+            if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S' || e.keyCode === 83 || e.code === 'KeyS')) {
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                window.onSaveClick();
+                if (typeof window.onSaveClick === 'function') window.onSaveClick();
                 return false;
             }
 

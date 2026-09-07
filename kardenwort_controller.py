@@ -3362,6 +3362,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             else:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid'")
 
+            server_api_key = getattr(self.server, 'api_key', '')
+            if server_api_key and html_result:
+                tok_injection = f'<script>window.API_TOKEN = "{server_api_key}";</script>'
+                if '</head>' in html_result:
+                    html_result = html_result.replace('</head>', f'{tok_injection}</head>', 1)
+                else:
+                    html_result = tok_injection + html_result
+
             b64_html = encode(html_result)
             self._send_json(200, {
                 "ok": True,
@@ -3703,6 +3711,13 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         tsv_path=tsv_path,
                         seq_num=resolved_seq_num,
                     )
+                    server_api_key = getattr(self.server, 'api_key', '')
+                    if server_api_key and html:
+                        tok_injection = f'<script>window.API_TOKEN = "{server_api_key}";</script>'
+                        if '</head>' in html:
+                            html = html.replace('</head>', f'{tok_injection}</head>', 1)
+                        else:
+                            html = tok_injection + html
                 body = html.encode('utf-8')
                 self.send_response(200)
                 self._send_cors_headers()
