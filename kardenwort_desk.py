@@ -14069,11 +14069,16 @@ html, body {{
         addEvent(document, 'keydown', function(e) {
             e = e || window.event;
             var keyCode = e.keyCode || e.which;
-            var isSaveKey = (keyCode === 83 || e.key === 's' || e.key === 'S' || e.key === 'ы' || e.key === 'Ы' || e.code === 'KeyS');
+            var isSaveKey = (keyCode === 83 || (e.key && (e.key.toLowerCase() === 's' || e.key.toLowerCase() === 'ы')) || e.code === 'KeyS');
             if ((e.ctrlKey || e.metaKey) && isSaveKey) { // Ctrl+S
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                if (typeof window.onSaveClick === 'function') window.onSaveClick();
-                return;
+                var saveBtn = document.getElementById('kw-btn-save');
+                if (saveBtn && !saveBtn.disabled) {
+                    saveBtn.click();
+                } else if (typeof window.onSaveClick === 'function') {
+                    window.onSaveClick();
+                }
+                return false;
             }
 
             var activeEl = document.activeElement;
@@ -16516,7 +16521,9 @@ html, body {{
         };
 
         var btnSave = document.getElementById('kw-btn-save');
-        if (btnSave) addEvent(btnSave, 'click', window.onSaveClick);
+        if (btnSave) addEvent(btnSave, 'click', function(e) {
+            if (typeof window.onSaveClick === 'function') window.onSaveClick(e);
+        });
         var btnUpdate = document.getElementById('kw-btn-update');
         if (btnUpdate) addEvent(btnUpdate, 'click', window.onUpdateClick);
         var btnRetext = document.getElementById('kw-btn-retext');
