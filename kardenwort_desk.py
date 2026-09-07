@@ -26,7 +26,7 @@ import http.client
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
 from dataclasses import dataclass
-from typing import Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict
+from typing import Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict, Set
 from enum import Enum, auto
 
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
@@ -2479,6 +2479,13 @@ class StorageAdapter:
     ) -> bool:
         return False
 
+    def get_overview_selections(
+        self,
+        session_zid: str,
+        zid: Optional[str] = None,
+    ) -> Set[int]:
+        return set()
+
     def update_sentence_translation(
         self,
         session_zid: str,
@@ -2764,7 +2771,29 @@ class SqliteStorageAdapter(StorageAdapter):
             resolved_paths=self.resolved_paths,
         )
         self.db.run_migrations()
+        self._init_db()
         self._tsv_fallback = TsvStorageAdapter(config=config, resolved_paths=resolved_paths)
+
+    def _init_db(self) -> None:
+        """
+        Ensures dedicated tables such as overview_selections exist.
+        """
+        with self.db.get_connection() as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                """
+                CREATE TABLE IF NOT EXISTS overview_selections (
+                    session_zid TEXT NOT NULL,
+                    token_order INTEGER NOT NULL,
+                    selected INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (session_zid, token_order),
+                    FOREIGN KEY (session_zid) REFERENCES sessions(zid) ON DELETE CASCADE
+                );
+                """
+            )
+            cursor.execute(
+                "CREATE INDEX IF NOT EXISTS idx_overview_selections_session ON overview_selections(session_zid);"
+            )
 
     def save_session(
         self,
@@ -3632,19 +3661,31 @@ class SqliteStorageAdapter(StorageAdapter):
     ) -> bool:
         """
         Updates the 'selected' state (0 or 1) for a word row atomically in SQLite.
+        When sentence_idx == 0, upserts into the overview_selections table to ensure
+        Tab 1 Overview selections are persisted and strictly isolated from constituent sentences.
         """
         sel_val = 1 if str(selected).strip() in ("1", "true", "True") else 0
+        try:
+            s_idx = int(sentence_idx) if sentence_idx is not None else None
+        except (ValueError, TypeError):
+            s_idx = None
+
         with self.db.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
-            if sentence_idx is not None and sentence_idx > 0:
+            if s_idx == 0:
+                cursor.execute(
+                    """
+                    INSERT INTO overview_selections (session_zid, token_order, selected)
+                    VALUES (?, ?, ?)
+                    ON CONFLICT(session_zid, token_order) DO UPDATE SET selected = excluded.selected;
+                    """,
+                    (session_zid, token_order, sel_val),
+                )
+                return True
+            elif s_idx is not None and s_idx > 0:
                 cursor.execute(
                     "UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;",
-                    (sel_val, session_zid, sentence_idx, token_order),
-                )
-            elif sentence_idx == 0:
-                cursor.execute(
-                    "UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = 0 AND token_order = ?;",
-                    (sel_val, session_zid, token_order),
+                    (sel_val, session_zid, s_idx, token_order),
                 )
             else:
                 cursor.execute(
@@ -3657,6 +3698,25 @@ class SqliteStorageAdapter(StorageAdapter):
                     (sel_val, session_zid, token_order),
                 )
             return cursor.rowcount > 0
+
+    def get_overview_selections(
+        self,
+        session_zid: str,
+        zid: Optional[str] = None,
+    ) -> Set[int]:
+        """
+        Retrieves the set of selected token orders for the master overview (sentence_idx = 0).
+        """
+        with self.db.get_connection(read_only=True, zid=zid) as conn:
+            cursor = conn.cursor()
+            try:
+                cursor.execute(
+                    "SELECT token_order FROM overview_selections WHERE session_zid = ? AND selected = 1;",
+                    (session_zid,),
+                )
+                return {int(row[0]) for row in cursor.fetchall()}
+            except Exception:
+                return set()
 
     def update_sentence_translation(
         self,
@@ -4827,6 +4887,9 @@ class StorageRouter:
     def update_word_selection(self, *args, **kwargs):
         return self.adapter.update_word_selection(*args, **kwargs)
 
+    def get_overview_selections(self, *args, **kwargs):
+        return self.adapter.get_overview_selections(*args, **kwargs)
+
     def update_sentence_translation(self, *args, **kwargs):
         return self.adapter.update_sentence_translation(*args, **kwargs)
 
@@ -4872,6 +4935,9 @@ def get_storage_adapter(config=None, resolved_paths=None, storage_override=None)
     if backend == "sqlite":
         return SqliteStorageAdapter(config=config, resolved_paths=resolved_paths)
     return TsvStorageAdapter(config=config, resolved_paths=resolved_paths)
+
+
+SQLiteStorageAdapter = SqliteStorageAdapter
 
 
 @contextlib.contextmanager

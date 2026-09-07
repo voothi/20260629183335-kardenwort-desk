@@ -182,6 +182,40 @@ class TestSqliteAtomicMutations:
         words = adapter.db.get_words_by_session(session_zid)
         assert words[0]["selected"] == 0
 
+    def test_sqlite_overview_selections(self, temp_env):
+        adapter = SqliteStorageAdapter(
+            config=temp_env["config"],
+            resolved_paths=temp_env["resolved_paths"],
+            db_path=temp_env["db_path"],
+        )
+        session_zid = "20260821190255"
+        _seed_sample_session(adapter, session_zid)
+
+        # Initially empty overview selections
+        assert adapter.get_overview_selections(session_zid) == set()
+
+        # Check initial words state
+        words_before = [w["selected"] for w in adapter.db.get_words_by_session(session_zid)]
+
+        # Select token 0 and 2 for overview (sentence_idx = 0)
+        ok1 = adapter.update_word_selection(session_zid, sentence_idx=0, token_order=0, selected=1)
+        ok2 = adapter.update_word_selection(session_zid, sentence_idx=0, token_order=2, selected=True)
+        assert ok1 is True
+        assert ok2 is True
+
+        # Check get_overview_selections
+        assert adapter.get_overview_selections(session_zid) == {0, 2}
+
+        # Verify constituent sentence words table is NOT touched / polluted
+        words_after = [w["selected"] for w in adapter.db.get_words_by_session(session_zid)]
+        assert words_after == words_before
+
+        # Unselect token 0 for overview
+        ok3 = adapter.update_word_selection(session_zid, sentence_idx=0, token_order=0, selected=0)
+        assert ok3 is True
+        assert adapter.get_overview_selections(session_zid) == {2}
+        assert [w["selected"] for w in adapter.db.get_words_by_session(session_zid)] == words_before
+
     def test_sqlite_update_sentence_translation(self, temp_env):
         adapter = SqliteStorageAdapter(
             config=temp_env["config"],
