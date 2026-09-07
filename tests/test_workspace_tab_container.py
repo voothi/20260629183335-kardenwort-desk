@@ -1605,16 +1605,108 @@ def test_drag_selection_across_filled_reword_row_in_table_of_lemmas(page, tmp_pa
     assert trs.nth(2).get_attribute("data-selected") == "0"
 
 
+def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_path):
+    """Regression test: Selecting words in Tab 2 (Sentence 1) and Tab 3 (Sentence 2)
 
+    MUST NOT leak into Tab 1 (Overview) upon render, update (F5), or tab switching.
+    Tab 1 must remain clean with zero selections if user did not select anything there.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_tab1_clean.db"
+    KardenwortDB(db_path=db_path).run_migrations()
 
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
 
+    unique_zid = "20260907041500"
+    text = "The first sentence has the word. On the second sentence we are on track."
+    tsv_file = tmp_path / f"{unique_zid}.en.tsv"
 
+    # Tab 2 (Sentence 1) has 'the' selected (DeskSelected=1)
+    # Tab 3 (Sentence 2) has 'on' selected (DeskSelected=1)
+    # User selected nothing on Tab 1
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "the\tthe\tthe\t1\t1\n"
+        "first\tfirst\tfirst\t1\t0\n"
+        "on\ton\ton\t2\t1\n"
+        "second\tsecond\tsecond\t2\t0\n",
+        encoding="utf-8"
+    )
 
+    adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
+    adapter.save_session(
+        session_zid=unique_zid,
+        slug="test-clean-tab1",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text=text,
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "DeskSelected"],
+        data_rows=[
+            ["the", "the", "the", "1", "1"],
+            ["first", "first", "first", "1", "0"],
+            ["on", "on", "on", "2", "1"],
+            ["second", "second", "second", "2", "0"],
+        ],
+        zid=unique_zid,
+    )
 
+    # Initial render starts on Tab 2 (Sentence 1)
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2
+    )
 
+    # Verify sentence_cards JSON in rendered HTML
+    import json, re
+    cards_match = re.search(r'<script id="sentence-cards" type="application/json">\s*([\s\S]*?)\s*</script>', html)
+    assert cards_match is not None
+    cards = json.loads(cards_match.group(1))
 
+    # Tab 1 (Overview, sentence_idx=0) MUST have empty selected_ids
+    assert cards[0]["selected_ids"] == [], f"Tab 1 must not inherit child sentence selections, got {cards[0]['selected_ids']}"
+    assert cards[1]["selected_ids"] == ["0"]  # 'the' selected in Tab 2
+    assert cards[2]["selected_ids"] == ["2"]  # 'on' selected in Tab 3
 
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
 
+    # On Tab 2: 'the' is selected
+    tab2_the = page.locator('#lemma-table tbody tr[data-row-id="0"]')
+    assert tab2_the.get_attribute("data-selected") == "1"
 
+    # Switch to Tab 1 (Overview)
+    tab1 = page.locator('.kw-tab-chip[data-tab-seq="1"]')
+    tab1.click()
+    page.wait_for_selector('#lemma-table tbody tr')
 
+    # All rows on Tab 1 MUST be unselected
+    tab1_rows = page.locator('#lemma-table tbody tr')
+    for i in range(tab1_rows.count()):
+        row = tab1_rows.nth(i)
+        assert row.get_attribute("data-selected") == "0", f"Row {i} on Tab 1 should be unselected"
+        assert "selected" not in (row.get_attribute("class") or "")
+
+    # Switch to Tab 3 (Sentence 2): 'on' MUST be selected
+    tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
+    tab3.click()
+    page.wait_for_selector('#lemma-table tbody tr')
+    tab3_on = page.locator('#lemma-table tbody tr[data-row-id="2"]')
+    assert tab3_on.get_attribute("data-selected") == "1"
 

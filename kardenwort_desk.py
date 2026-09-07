@@ -9722,6 +9722,7 @@ html, body {{
             if r_i not in lemma_pos_to_row_ids[r_lem]:
                 lemma_pos_to_row_ids[r_lem].append(r_i)
 
+        is_container = (smc.delivery_mode == "container")
         used_primary_ids = set()
         for ov_id, ov_r in enumerate(overview_rows):
             ov_lemma = ov_r[col_lemma] if col_lemma != -1 and len(ov_r) > col_lemma else ""
@@ -9738,7 +9739,7 @@ html, body {{
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_morph.strip() and not llm_filled:
                 ov_morph = f'<span class="skeleton-loader" style="width: 80px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
             ov_is_sel = "0"
-            if col_highlighted != -1 and len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
+            if not is_container and col_highlighted != -1 and len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
                 ov_is_sel = "1"
             ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and ov_r[col_token_order].strip() else str(ov_id)
             
@@ -9775,7 +9776,6 @@ html, body {{
                 if p_title:
                     ov_prov_attr += f' title="{p_title}"'
 
-            is_container = (smc.delivery_mode == "container")
             all_ids_attr = "" if is_container else f' data-all-row-ids="{all_ids_str}"'
             ov_row_html = (
                 f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="highlight-orange">'
