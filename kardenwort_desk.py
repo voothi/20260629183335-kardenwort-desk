@@ -9789,6 +9789,14 @@ html, body {{
                 lemma_pos_to_row_ids[r_lem].append(r_i)
 
         is_container = (smc.delivery_mode == "container")
+        saved_overview_selections = set()
+        if is_container and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
+            try:
+                saved_overview_selections = storage_adapter.get_overview_selections(str(zid).strip())
+            except Exception as e:
+                logger.warning(f"[{zid}] Failed to retrieve overview selections: {e}")
+                saved_overview_selections = set()
+
         used_primary_ids = set()
         for ov_id, ov_r in enumerate(overview_rows):
             ov_lemma = ov_r[col_lemma] if col_lemma != -1 and len(ov_r) > col_lemma else ""
@@ -9804,10 +9812,17 @@ html, body {{
                 ov_ipa = f'<span class="skeleton-loader" style="width: 50px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_morph.strip() and not llm_filled:
                 ov_morph = f'<span class="skeleton-loader" style="width: 80px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+            ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and str(ov_r[col_token_order]).strip() else str(ov_id)
             ov_is_sel = "0"
-            if not is_container and col_highlighted != -1 and len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
+            if is_container:
+                try:
+                    ov_ord_int = int(ov_token_order)
+                except (ValueError, TypeError):
+                    ov_ord_int = None
+                if ov_ord_int is not None and ov_ord_int in saved_overview_selections:
+                    ov_is_sel = "1"
+            elif col_highlighted != -1 and len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
                 ov_is_sel = "1"
-            ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and ov_r[col_token_order].strip() else str(ov_id)
             
             ov_lem_clean = ov_lemma.strip().lower()
             ov_pos_clean = ov_r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(ov_r) > col_pos_dedup else ""
@@ -9843,8 +9858,11 @@ html, body {{
                     ov_prov_attr += f' title="{p_title}"'
 
             all_ids_attr = "" if is_container else f' data-all-row-ids="{all_ids_str}"'
+            ov_hl_class = "highlight-orange"
+            if ov_is_sel == "1":
+                ov_hl_class += " selected kw-row-selected"
             ov_row_html = (
-                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="highlight-orange">'
+                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
                 f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{ov_inflected}</div></td>'
                 f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
@@ -9864,7 +9882,7 @@ html, body {{
                 "ipa": ov_ipa,
                 "morphology": ov_morph,
                 "selected": ov_is_sel,
-                "highlight_class": "highlight-orange",
+                "highlight_class": ov_hl_class,
                 "provenance": ov_prov_val or "",
                 "dynamic_tds": ov_dynamic_tds,
                 "row_html": ov_row_html,
@@ -14050,15 +14068,18 @@ html, body {{
         
         addEvent(document, 'keydown', function(e) {
             e = e || window.event;
-            var activeEl = document.activeElement;
-            if (activeEl && activeEl.tagName === 'INPUT') return;
-            
-            var keyCode = e.keyCode;
-            if ((e.ctrlKey || e.metaKey) && (keyCode === 83 || e.key === 's' || e.key === 'S' || e.code === 'KeyS')) { // Ctrl+S
+            var keyCode = e.keyCode || e.which;
+            var isSaveKey = (keyCode === 83 || e.key === 's' || e.key === 'S' || e.key === 'ы' || e.key === 'Ы' || e.code === 'KeyS');
+            if ((e.ctrlKey || e.metaKey) && isSaveKey) { // Ctrl+S
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (typeof window.onSaveClick === 'function') window.onSaveClick();
                 return;
-            } else if (e.ctrlKey && keyCode === 90) { // Ctrl+Z
+            }
+
+            var activeEl = document.activeElement;
+            if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
+
+            if (e.ctrlKey && keyCode === 90) { // Ctrl+Z
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (window.undo) window.undo();
                 return;
@@ -16545,13 +16566,6 @@ html, body {{
                         return false;
                     }
                 }
-            }
-
-            // Ctrl+S -> Save
-            if ((e.ctrlKey || e.metaKey) && (e.key === 's' || e.key === 'S' || e.keyCode === 83 || e.code === 'KeyS')) {
-                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                if (typeof window.onSaveClick === 'function') window.onSaveClick();
-                return false;
             }
 
             // Ctrl+1 through Ctrl+9 or Alt+1 through Alt+9: Switch workspace tab
