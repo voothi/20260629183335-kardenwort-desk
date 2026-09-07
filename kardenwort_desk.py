@@ -3636,12 +3636,17 @@ class SqliteStorageAdapter(StorageAdapter):
         sel_val = 1 if str(selected).strip() in ("1", "true", "True") else 0
         with self.db.get_connection(zid=zid) as conn:
             cursor = conn.cursor()
-            if sentence_idx is not None:
+            if sentence_idx is not None and sentence_idx > 0:
                 cursor.execute(
                     "UPDATE words SET selected = ? WHERE session_zid = ? AND sentence_index = ? AND token_order = ?;",
                     (sel_val, session_zid, sentence_idx, token_order),
                 )
             else:
+                cursor.execute(
+                    "UPDATE words SET selected = ? WHERE session_zid = ? AND token_order = ?;",
+                    (sel_val, session_zid, token_order),
+                )
+            if cursor.rowcount == 0 and token_order is not None:
                 cursor.execute(
                     "UPDATE words SET selected = ? WHERE session_zid = ? AND token_order = ?;",
                     (sel_val, session_zid, token_order),
@@ -13731,9 +13736,19 @@ html, body {{
         for (var i = 0; i < tableRows.length; i++) {
             var r = tableRows[i];
             var rIdStr = String(r.getAttribute('data-row-id'));
+            var isHl = (r.getAttribute('data-selected') === '1');
             if (!initialHighlights.hasOwnProperty(rIdStr)) {
-                var isHl = (hasHighlightCol && r.getAttribute('data-selected') === '1');
                 initialHighlights[rIdStr] = isHl;
+            }
+            if (isHl) {
+                selectedRowIdsMap[rIdStr] = true;
+                var trAll = r.getAttribute('data-all-row-ids');
+                if (trAll) {
+                    var pIds = trAll.split(',').filter(Boolean);
+                    for (var p = 0; p < pIds.length; p++) {
+                        selectedRowIdsMap[pIds[p]] = true;
+                    }
+                }
             }
             if (!r.__kw_wired) {
                 r.__kw_wired = true;
@@ -14205,6 +14220,9 @@ html, body {{
                     }
                 }
             }
+            if (typeof updateToolbarState === 'function') {
+                updateToolbarState();
+            }
             if (window.ahkCall) {
                 try {
                     window.ahkCall('selection', getSelectedRowsArray().join(','));
@@ -14528,6 +14546,47 @@ html, body {{
                 mergedDeltas.push(deltas[i]);
             }
             if (hasHighlightCol) {
+                if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                    var wCards = window.WorkspaceTabs.getCards();
+                    if (wCards && wCards.length > 0) {
+                        var activeC = (typeof window.WorkspaceTabs.getActiveCard === 'function') ? window.WorkspaceTabs.getActiveCard() : null;
+                        if (activeC) {
+                            activeC.selected_ids = [];
+                            for (var sk in selectedRowIdsMap) {
+                                if (selectedRowIdsMap.hasOwnProperty(sk)) activeC.selected_ids.push(sk);
+                            }
+                        }
+                        var seenWordDeltas = {};
+                        for (var c = 0; c < wCards.length; c++) {
+                            var card = wCards[c];
+                            var curSelMap = {};
+                            if (card.selected_ids) {
+                                for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
+                            }
+                            if (card.words) {
+                                for (var w = 0; w < card.words.length; w++) {
+                                    var cw = card.words[w];
+                                    var rIdStr = String(cw.row_id);
+                                    var isCur = curSelMap.hasOwnProperty(rIdStr);
+                                    var isInit = (cw.selected === '1' || cw.selected === 1);
+                                    if (isCur !== isInit && !seenWordDeltas[rIdStr]) {
+                                        seenWordDeltas[rIdStr] = true;
+                                        var tOrdVal = (cw.token_order !== undefined && cw.token_order !== null && cw.token_order !== '') ? parseInt(cw.token_order, 10) : parseInt(rIdStr, 10);
+                                        var sIdxVal = parseInt(cw.sentence_idx || 1, 10);
+                                        mergedDeltas.push({
+                                            row_id: parseInt(rIdStr, 10),
+                                            token_order: tOrdVal,
+                                            sentence_idx: sIdxVal,
+                                            column: '{selected_col_name}',
+                                            value: isCur ? '1' : ''
+                                        });
+                                    }
+                                }
+                            }
+                        }
+                        return JSON.stringify(mergedDeltas);
+                    }
+                }
                 for (var i = 0; i < tableRows.length; i++) {
                     var row = tableRows[i];
                     var rowIdStr = String(row.getAttribute('data-row-id'));
@@ -14556,6 +14615,26 @@ html, body {{
             historyIndex = -1;
             deltas = [];
             if (hasHighlightCol) {
+                if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                    var wCards = window.WorkspaceTabs.getCards();
+                    if (wCards && wCards.length > 0) {
+                        for (var c = 0; c < wCards.length; c++) {
+                            var card = wCards[c];
+                            var curSelMap = {};
+                            if (card.selected_ids) {
+                                for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
+                            }
+                            if (card.words) {
+                                for (var w = 0; w < card.words.length; w++) {
+                                    var cw = card.words[w];
+                                    var isCur = curSelMap.hasOwnProperty(String(cw.row_id));
+                                    cw.selected = isCur ? '1' : '0';
+                                    initialHighlights[String(cw.row_id)] = isCur;
+                                }
+                            }
+                        }
+                    }
+                }
                 for (var i = 0; i < tableRows.length; i++) {
                     var row = tableRows[i];
                     var rowIdStr = String(row.getAttribute('data-row-id'));
@@ -14578,6 +14657,35 @@ html, body {{
         window.isDirty = function() {
             if (deltas.length > 0) return true;
             if (hasHighlightCol) {
+                if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                    var wCards = window.WorkspaceTabs.getCards();
+                    if (wCards && wCards.length > 0) {
+                        var activeC = (typeof window.WorkspaceTabs.getActiveCard === 'function') ? window.WorkspaceTabs.getActiveCard() : null;
+                        if (activeC) {
+                            activeC.selected_ids = [];
+                            for (var sk in selectedRowIdsMap) {
+                                if (selectedRowIdsMap.hasOwnProperty(sk)) activeC.selected_ids.push(sk);
+                            }
+                        }
+                        for (var c = 0; c < wCards.length; c++) {
+                            var card = wCards[c];
+                            var curSelMap = {};
+                            if (card.selected_ids) {
+                                for (var s = 0; s < card.selected_ids.length; s++) curSelMap[String(card.selected_ids[s])] = true;
+                            }
+                            if (card.words) {
+                                for (var w = 0; w < card.words.length; w++) {
+                                    var cw = card.words[w];
+                                    var rId = String(cw.row_id);
+                                    var isCur = curSelMap.hasOwnProperty(rId);
+                                    var isInit = (cw.selected === '1' || cw.selected === 1);
+                                    if (isCur !== isInit) return true;
+                                }
+                            }
+                        }
+                        return false;
+                    }
+                }
                 for (var i = 0; i < tableRows.length; i++) {
                     var row = tableRows[i];
                     var rowIdStr = String(row.getAttribute('data-row-id'));
@@ -15431,7 +15539,7 @@ html, body {{
 
         var WorkspaceTabs = (function() {
             var cards = [];
-            var activeTabSeq = 1;
+            var activeTabSeq = null;
             var activeSentenceIdx = 0;
             var masterSourceHtml = "";
 
@@ -15636,13 +15744,15 @@ html, body {{
                         var rowHtml = w.row_html;
                         if (isSel) {
                             rowHtml = rowHtml.replace('data-selected="0"', 'data-selected="1"');
-                            if (rowHtml.indexOf('selected') === -1) {
+                            if (rowHtml.indexOf('kw-row-selected') === -1) {
                                 rowHtml = rowHtml.replace('class="', 'class="selected kw-row-selected ');
                             }
                         } else {
                             rowHtml = rowHtml.replace('data-selected="1"', 'data-selected="0"');
                             rowHtml = rowHtml.replace('selected kw-row-selected ', '');
                             rowHtml = rowHtml.replace('selected kw-row-selected', '');
+                            rowHtml = rowHtml.replace('kw-row-selected ', '');
+                            rowHtml = rowHtml.replace('kw-row-selected', '');
                         }
                         htmlParts.push(rowHtml);
                     } else {
@@ -15788,7 +15898,7 @@ html, body {{
                 if (!targetCard) return;
 
                 // 1. Save selections of previous card before leaving
-                if (activeTabSeq) {
+                if (activeTabSeq !== null) {
                     var prevCard = null;
                     for (var p = 0; p < cards.length; p++) {
                         if (cards[p].seq_num === activeTabSeq) {
@@ -15796,7 +15906,7 @@ html, body {{
                             break;
                         }
                     }
-                    if (prevCard) {
+                    if (prevCard && prevCard !== targetCard) {
                         prevCard.selected_ids = [];
                         for (var k in selectedRowIdsMap) {
                             if (selectedRowIdsMap.hasOwnProperty(k)) {
@@ -15921,6 +16031,8 @@ html, body {{
                 updateRowStyles();
                 updateFavicon(activeTabSeq);
                 updateTitle(targetCard);
+                if (typeof window.updateToolbarState === 'function') window.updateToolbarState();
+                else if (typeof updateToolbarState === 'function') updateToolbarState();
                 if (window.forceRepaint) window.forceRepaint();
             }
 
