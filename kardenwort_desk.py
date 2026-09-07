@@ -7954,7 +7954,16 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     spawn_order = smc.spawn_order
     parent_mode = smc.parent_mode
     multi_mode_decompose = smc.multi_mode_decompose
-    will_split = not is_mismatch and not tsv_path and (
+    storage_adapter = get_storage_adapter(config, resolved_paths)
+    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+    session_exists_in_storage = False
+    if is_sqlite and zid and str(zid).strip() and str(zid).strip() != "00000000000000":
+        try:
+            session_exists_in_storage = bool(storage_adapter.load_session(str(zid).strip()))
+        except Exception:
+            session_exists_in_storage = False
+
+    will_split = not is_mismatch and not tsv_path and not session_exists_in_storage and (
         smc.should_split_sentences(len(source_sentences)) or 
         # legacy_spawn_children only fires when sentences_mode is enabled to avoid
         # unexpected splits from old config files migrated with enabled=false.
@@ -8463,9 +8472,6 @@ html, body {{
     
     eff_mode = _effective_text_mode(text, text_mode)
     
-    storage_adapter = get_storage_adapter(config, resolved_paths)
-    is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
-
     cached_session_bundle = None
     if is_sqlite and not tsv_path:
         ttl_val = config.getint(SEC_STORAGE, 'cache_ttl_seconds', fallback=config.getint(SEC_SETTINGS, 'lookup_ttl_seconds', fallback=86400))
@@ -8484,8 +8490,8 @@ html, body {{
         comments = []
         headers = ["WordSource", "WordDestination", "WordSourceInflectedForm", "WordSourceIPA", "WordSourceMorphologyAI", "DeskSelected"]
         data_rows = []
-    elif tsv_path and (Path(tsv_path).exists() or is_sqlite):
-        working_tsv_path = Path(tsv_path)
+    elif (tsv_path and (Path(tsv_path).exists() or is_sqlite)) or (is_sqlite and session_exists_in_storage):
+        working_tsv_path = Path(tsv_path) if tsv_path else (results_dir / f"{zid}-{slug}.{language}.tsv")
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
     elif cached_session_bundle and cached_session_bundle.get("session"):
@@ -14618,6 +14624,13 @@ html, body {{
                 if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
                     var wCards = window.WorkspaceTabs.getCards();
                     if (wCards && wCards.length > 0) {
+                        var activeC = (typeof window.WorkspaceTabs.getActiveCard === 'function') ? window.WorkspaceTabs.getActiveCard() : null;
+                        if (activeC) {
+                            activeC.selected_ids = [];
+                            for (var sk in selectedRowIdsMap) {
+                                if (selectedRowIdsMap.hasOwnProperty(sk)) activeC.selected_ids.push(sk);
+                            }
+                        }
                         for (var c = 0; c < wCards.length; c++) {
                             var card = wCards[c];
                             var curSelMap = {};
@@ -16160,6 +16173,7 @@ html, body {{
                 nextTab: nextTab,
                 prevTab: prevTab,
                 getActiveTabSeq: getActiveTabSeq,
+                getActiveCard: getActiveCard,
                 getActiveSentenceIdx: function() { return activeSentenceIdx; },
                 getCards: getCards,
                 getTranslationHtml: getTranslationHtml,
