@@ -174,6 +174,8 @@ def test_session_status_tsv_fallback(running_controller):
         ["world", "мир", "1", "1", "Привет мир"],
     ]
     kardenwort_desk.save_tsv_rows_safely(tsv_file, ["# test TSV"], headers, data_rows)
+    with server.arbiter._lock:
+        server.arbiter.sessions.pop(tsv_zid, None)
 
     try:
         req_status = urllib.request.Request(f"{server_url}/session/status?zid={tsv_zid}")

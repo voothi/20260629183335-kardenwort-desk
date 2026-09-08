@@ -641,6 +641,10 @@ class EnrichmentQueue:
             max_workers=self.translation_max_workers,
             thread_name_prefix="TranslationWorker",
         )
+        self._progressive_executor = concurrent.futures.ThreadPoolExecutor(
+            max_workers=4,
+            thread_name_prefix="ProgressiveWorker",
+        )
         self._cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
         self._inflight_lemmas: Dict[Tuple[str, str], concurrent.futures.Future] = {}
         self._lemma_trans_cache: Dict[Tuple[str, str, str], str] = {}
@@ -983,7 +987,7 @@ class EnrichmentQueue:
                 if not existing_fut.done():
                     return {"status": "in_progress", "session_zid": session_zid}
 
-            fut = self._translation_executor.submit(
+            fut = self._progressive_executor.submit(
                 self._execute_progressive_task,
                 session_zid,
                 arbiter,
@@ -1025,6 +1029,14 @@ class EnrichmentQueue:
         sess_lang = language
         sess_target = target_lang
         tsv_path = None
+
+        if is_sqlite and hasattr(storage_adapter, 'db'):
+            try:
+                now_iso = datetime.now(timezone.utc).isoformat()
+                storage_adapter.db.set_worker_status(session_zid, "running", started_at=now_iso)
+                storage_adapter.db.update_worker_heartbeat(session_zid, heartbeat_at=now_iso)
+            except Exception:
+                pass
 
         try:
             # 1. Recover / Load session data
@@ -1244,7 +1256,7 @@ class EnrichmentQueue:
                             with storage_adapter.file_lock(tsv_path):
                                 storage_adapter.save_tsv_rows_safely(tsv_path, session_data["comments"], headers, data_rows)
 
-                # 2b. Coalesced lemma translations
+                # 2b. Batch lemma translations
                 lemmas_to_translate = []
                 seen_lemmas = set()
                 for row in data_rows:
@@ -1259,16 +1271,29 @@ class EnrichmentQueue:
                 if trans_order == 'bottom_to_top':
                     lemmas_to_translate = list(reversed(lemmas_to_translate))
 
+                translated_map: Dict[str, str] = {}
                 if lemmas_to_translate:
                     lemma_provider = self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google'
-                    translated_map = self.translate_lemmas_coalesced(
-                        lemmas_to_translate,
-                        source_lang=sess_lang,
-                        target_lang=sess_target,
-                        provider=lemma_provider,
-                        zid=req_zid,
-                        trace_id=eff_trace_id,
-                    )
+                    chunk_size = 15
+                    if self.config and hasattr(self.config, 'getint'):
+                        chunk_size = self.config.getint(SEC_TRANSLATION, 'lemma_batch_size', fallback=15)
+                    chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
+                    for chunk in chunks:
+                        if is_sqlite and hasattr(storage_adapter, 'db'):
+                            try:
+                                storage_adapter.db.update_worker_heartbeat(session_zid, heartbeat_at=datetime.now(timezone.utc).isoformat())
+                            except Exception:
+                                pass
+                        chunk_trans = translate_lemmas_fast_path(
+                            chunk,
+                            source=sess_lang,
+                            target=sess_target,
+                            config=self.config,
+                            resolved_paths=self.resolved_paths,
+                            provider=lemma_provider,
+                        )
+                        if chunk_trans:
+                            translated_map.update(chunk_trans)
 
                     if translated_map:
                         updates = []
@@ -1374,6 +1399,16 @@ class EnrichmentQueue:
                 if session_zid in self._active_progressive_sessions:
                     del self._active_progressive_sessions[session_zid]
 
+            if is_sqlite and hasattr(storage_adapter, 'db'):
+                try:
+                    storage_adapter.db.set_worker_status(
+                        session_zid,
+                        "failed" if worker_error else "finished",
+                        finished_at=datetime.now(timezone.utc).isoformat()
+                    )
+                except Exception:
+                    pass
+
             # Emit final finished event
             status_val = "failed" if worker_error else "success"
             new_fp = compute_content_fingerprint(data_rows) if data_rows else ""
@@ -1414,6 +1449,7 @@ class EnrichmentQueue:
     def shutdown(self, wait: bool = True):
         self._executor.shutdown(wait=wait)
         self._translation_executor.shutdown(wait=wait)
+        self._progressive_executor.shutdown(wait=wait)
 
 
 # ---------------------------------------------------------------------------
