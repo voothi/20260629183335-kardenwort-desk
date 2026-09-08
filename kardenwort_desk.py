@@ -13455,11 +13455,9 @@ html, body {{
                         var clickedTokenData = findTokenData(span);
                         if (!clickedTokenData) return;
 
-                        var targetRowIds = (clickedTokenData.atomic_row_ids && clickedTokenData.atomic_row_ids.length > 0)
+                        var targetRowIds = (clickedTokenData.atomic_row_ids !== undefined)
                             ? clickedTokenData.atomic_row_ids.slice()
-                            : (clickedTokenData.compound_row_ids && clickedTokenData.compound_row_ids.length > 0)
-                                ? clickedTokenData.compound_row_ids.slice()
-                                : (clickedTokenData.row_ids || []).slice();
+                            : (clickedTokenData.row_ids || []).slice();
                         
                         isTokenDragSelecting = true;
                         dragOccurred = false;
@@ -13619,11 +13617,9 @@ html, body {{
                             var s = tokenSpans[k];
                             var td = findTokenData(s);
                             if (td) {
-                                var atomics = (td.atomic_row_ids && td.atomic_row_ids.length > 0)
+                                var atomics = (td.atomic_row_ids !== undefined)
                                     ? td.atomic_row_ids
-                                    : (td.compound_row_ids && td.compound_row_ids.length > 0)
-                                        ? td.compound_row_ids
-                                        : (td.row_ids || []);
+                                    : (td.row_ids || []);
                                 for (var j = 0; j < atomics.length; j++) {
                                     if (tokenDragMode) {
                                         selectedRowIdsMap[String(atomics[j])] = true;

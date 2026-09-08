@@ -2999,7 +2999,7 @@ def test_subtoken_inflected_form_lmb_click_selects_lemma_and_highlights(page, tm
     assert "highlight-orange-active" not in (ai_span.get_attribute("class") or "")
 
 
-def test_subtoken_click_fallback_when_atomic_row_ids_empty(page):
+def test_subtoken_click_suppresses_composite_row_when_atomic_row_ids_empty(page):
     manifest = [
         {"text": "custom", "is_word": True, "visual_idx": 0, "lower_clean": "custom", "row_ids": [0], "atomic_row_ids": [], "compound_row_ids": [0]}
     ]
@@ -3034,8 +3034,112 @@ def test_subtoken_click_fallback_when_atomic_row_ids_empty(page):
     span.click(button="left")
 
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
-    assert selected_rows == [0]
-    assert "highlight-orange-active" in (span.get_attribute("class") or "")
+    assert selected_rows == []
+    assert "highlight-orange-active" not in (span.get_attribute("class") or "")
+
+
+def test_ebike_zweisitzer_lastenrad_click_and_drag_selection(page):
+    manifest = [
+        {"text": "E", "is_word": True, "visual_idx": 0, "lower_clean": "e", "row_ids": [0], "atomic_row_ids": [], "compound_row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 1},
+        {"text": "Bike", "is_word": True, "visual_idx": 2, "lower_clean": "bike", "row_ids": [0, 1], "atomic_row_ids": [1], "compound_row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 3},
+        {"text": "Zweisitzer", "is_word": True, "visual_idx": 4, "lower_clean": "zweisitzer", "row_ids": [0, 2], "atomic_row_ids": [2], "compound_row_ids": [0]},
+        {"text": "-", "is_word": False, "visual_idx": 5},
+        {"text": "Lastenrad", "is_word": True, "visual_idx": 6, "lower_clean": "lastenrad", "row_ids": [0, 3], "atomic_row_ids": [3], "compound_row_ids": [0]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">
+      <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="e">E</span>-<span class="word highlight-orange" data-word-idx="2" data-line-idx="0" data-lower-clean="bike">Bike</span>-<span class="word highlight-orange" data-word-idx="4" data-line-idx="0" data-lower-clean="zweisitzer">Zweisitzer</span>-<span class="word highlight-orange" data-word-idx="6" data-line-idx="0" data-lower-clean="lastenrad">Lastenrad</span>
+    </div>
+  </div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0">
+          <td data-col="WordSource"><div class="scrollable-cell">E-Bike-Zweisitzer-Lastenrad</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">электровелосипед-двухместный-карго</div></td>
+        </tr>
+        <tr data-row-id="1">
+          <td data-col="WordSource"><div class="scrollable-cell">Bike</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">велосипед</div></td>
+        </tr>
+        <tr data-row-id="2">
+          <td data-col="WordSource"><div class="scrollable-cell">Zweisitzer</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">двухместный</div></td>
+        </tr>
+        <tr data-row-id="3">
+          <td data-col="WordSource"><div class="scrollable-cell">Lastenrad</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">каргобайк</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">ru</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # 1. Single click on 'E' (prefix with no atomic row) -> must NOT select composite row 0
+    page.evaluate("""() => {
+        const s = document.querySelector("span[data-lower-clean='e']");
+        s.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [], f"Expected no rows selected when clicking 'E', got {selected_rows}"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='e']\").classList.contains('highlight-orange-active')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='bike']\").classList.contains('highlight-orange-active')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='zweisitzer']\").classList.contains('highlight-orange-active')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='lastenrad']\").classList.contains('highlight-orange-active')") is False
+
+    # 2. Single click on 'Bike' -> selects only atomic row [1]
+    page.evaluate("""() => {
+        const s = document.querySelector("span[data-lower-clean='bike']");
+        s.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == [1], f"Expected only atomic row [1] to be selected, got {selected_rows}"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='e']\").classList.contains('highlight-orange-active')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='bike']\").classList.contains('highlight-orange-active')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='zweisitzer']\").classList.contains('highlight-orange-active')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='lastenrad']\").classList.contains('highlight-orange-active')") is False
+
+    # Toggle 'Bike' off by clicking again
+    page.evaluate("""() => {
+        const s = document.querySelector("span[data-lower-clean='bike']");
+        s.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    assert json.loads(page.evaluate("window.getSelectedRows()")) == []
+
+    # 3. Full drag selection from 'E' to 'Lastenrad' -> selects composite row 0 and constituent atomic rows
+    page.evaluate("""() => {
+        const s1 = document.querySelector("span[data-lower-clean='e']");
+        const s4 = document.querySelector("span[data-lower-clean='lastenrad']");
+        s1.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        s4.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert set(selected_rows) == {0, 1, 2, 3}, f"Expected rows [0, 1, 2, 3] to be selected on full compound drag, got {selected_rows}"
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='e']\").classList.contains('highlight-orange-active')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='bike']\").classList.contains('highlight-orange-active')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='zweisitzer']\").classList.contains('highlight-orange-active')") is True
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='lastenrad']\").classList.contains('highlight-orange-active')") is True
 
 
 def test_sample_file_ai_curated_bidirectional_selection(page, monkeypatch):
