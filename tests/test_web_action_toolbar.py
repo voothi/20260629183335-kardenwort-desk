@@ -1138,6 +1138,98 @@ window.fetch = async function(url, options) {
     assert toasts.count() == 0
 
 
+def test_update_button_triggers_active_retranslation_for_unpopulated_fields(page, tmp_path):
+    """
+    Verifies that clicking the Update button on a page with empty/skeleton fields
+    actively dispatches POST /session/retext and POST /session/reword before fetching status.
+    """
+    mock_script = """<script>
+window.__fetches = [];
+window.fetch = async function(url, options) {
+    var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    window.__fetches.push({ url: url, options: options, body: bodyObj });
+    if (url === '/session/retext') {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                retext_started: true,
+                translatedText: '<div>Переведенный текст</div>'
+            })
+        };
+    }
+    if (url === '/session/reword') {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                reprocess_started: true,
+                rows: {
+                    0: {
+                        lemma: 'Haus',
+                        trans: 'дом_активно_обновлен',
+                        token_order: '0'
+                    }
+                }
+            })
+        };
+    }
+    if (url.indexOf('/session/status') !== -1) {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                is_finished: true,
+                translatedText: '<div>Переведенный текст</div>',
+                rows: {
+                    0: {
+                        lemma: 'Haus',
+                        trans: 'дом_активно_обновлен',
+                        token_order: '0'
+                    }
+                }
+            })
+        };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+};
+</script>"""
+
+    html = get_desk_page_html(tmp_path)
+    # Insert pending skeletons and mock fetch
+    html = html.replace(
+        '<div class="translation-text" id="translation-container">',
+        '<div class="translation-text skeleton-loader" data-pending="true" id="translation-container">'
+    ).replace(
+        '>дом<',
+        '><span class="skeleton-loader" data-pending="true"></span><'
+    )
+    html = html.replace("<head>", f"<head>\n{mock_script}")
+    page.set_content(html)
+
+    # Click Update button
+    page.click("#kw-btn-update")
+    page.wait_for_timeout(100)
+
+    # Verify requests sent
+    fetches = page.evaluate("window.__fetches")
+    urls = [f["url"] for f in fetches]
+    assert any("/session/retext" in u for u in urls), f"Expected /session/retext in {urls}"
+    assert any("/session/reword" in u for u in urls), f"Expected /session/reword in {urls}"
+    assert any("/session/status" in u for u in urls), f"Expected /session/status in {urls}"
+
+    # Toast displayed
+    toast = page.locator(".kw-toast-success")
+    assert toast.count() >= 1
+
+
+
 
 
 

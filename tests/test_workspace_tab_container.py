@@ -1787,3 +1787,87 @@ def test_overview_tab_multi_sentence_bidirectional_highlighting(page, tmp_path):
     assert "highlight-orange-active" in (die_word.get_attribute("class") or "")
 
 
+def test_tab_switching_after_background_update_renders_fresh_translations_without_stale_skeletons(page, tmp_path):
+    """
+    Verifies that when background updates arrive for sentence cards and rows,
+    subsequent tab switching invalidates cached row_html and renders updated translations
+    without retaining stale skeleton placeholders.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+
+    text = "Das Haus ist gross. Die Katze schlaeft."
+    tsv_file = tmp_path / "20260908221500-test.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\t\n"
+        "Katze\tKatze\tкошка\t2\t\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid="20260908221500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    # Simulate cards having initial skeleton loaders in card word cache
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Dispatch background update payload
+    page.evaluate("""
+        if (window.receiveUpdate) {
+            window.receiveUpdate({
+                stage: "finished",
+                status: "success",
+                translatedText: "Дом большой. Кошка спит.",
+                sentences: [
+                    { sentence_index: 1, sentence_destination: "Дом большой." },
+                    { sentence_index: 2, sentence_destination: "Кошка спит." }
+                ],
+                rows: {
+                    "0": { lemma: "Haus", trans: "дом_обновлен", token_order: "0", sentence_idx: "1" },
+                    "1": { lemma: "Katze", trans: "кошка_обновлена", token_order: "1", sentence_idx: "2" }
+                }
+            });
+        }
+    """)
+
+    # Switch to Tab 2 (Sentence 1: Das Haus ist gross)
+    tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
+    tab2.click()
+    page.wait_for_timeout(50)
+
+    # Check sentence translation and word destination on Tab 2
+    tc = page.locator("#translation-container")
+    assert "Дом большой." in tc.inner_text()
+    assert tc.locator(".skeleton-loader").count() == 0
+
+    tr1 = page.locator('#lemma-table tbody tr[data-token-order="0"]')
+    assert "дом_обновлен" in tr1.inner_text()
+    assert tr1.locator(".skeleton-loader").count() == 0
+
+    # Switch to Tab 3 (Sentence 2: Die Katze schlaeft)
+    tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
+    tab3.click()
+    page.wait_for_timeout(50)
+
+    # Check sentence translation and word destination on Tab 3
+    assert "Кошка спит." in tc.inner_text()
+    assert tc.locator(".skeleton-loader").count() == 0
+
+    tr2 = page.locator('#lemma-table tbody tr[data-token-order="1"]')
+    assert "кошка_обновлена" in tr2.inner_text()
+    assert tr2.locator(".skeleton-loader").count() == 0
+
+
+

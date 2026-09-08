@@ -1333,6 +1333,91 @@ def test_record_worker_heartbeat_throttle_verification(tmp_path):
         assert res_fast is False
 
 
+def test_run_progressive_worker_async_configured_interpreter_and_credentials(monkeypatch, tmp_path):
+    """
+    Verifies that run_progressive_worker_async passes configured controller port & token,
+    and uses resolved_paths['kardenwort_python'] when falling back to detached subprocess.
+    """
+    import json
+    from unittest.mock import MagicMock
+
+    cfg = configparser.ConfigParser()
+    cfg.read_string("""
+[server]
+controller_port = 19999
+api_key = test-secret-token-123
+""")
+    custom_py = tmp_path / "venv" / "Scripts" / "python.exe"
+    resolved_paths = {
+        'kardenwort_python': custom_py,
+        'config': cfg
+    }
+    tsv_path = tmp_path / "20260908220000-test.en.tsv"
+    tsv_path.write_text("Quotation\tWordSource\tWordDestination\n", encoding="utf-8")
+
+    sent_requests = []
+
+    class MockHTTPResponse:
+        status = 200
+        def __enter__(self): return self
+        def __exit__(self, *a): pass
+
+    def mock_urlopen(req, timeout=0.5):
+        sent_requests.append(req)
+        return MockHTTPResponse()
+
+    monkeypatch.setattr("urllib.request.urlopen", mock_urlopen)
+
+    # 1. Enqueue path with controller daemon
+    desk.run_progressive_worker_async(
+        tsv_path=str(tsv_path),
+        language="en",
+        target_lang="ru",
+        prompt_name="default",
+        lemmas_provider="google",
+        word_translations_empty="True",
+        resolved_paths=resolved_paths,
+        config=cfg
+    )
+
+    assert len(sent_requests) == 1
+    req = sent_requests[0]
+    assert req.full_url == "http://127.0.0.1:19999/session/progressive/enqueue"
+    assert req.headers.get("X-api-token") == "test-secret-token-123"
+    body_data = json.loads(req.data.decode("utf-8"))
+    assert body_data["token"] == "test-secret-token-123"
+    assert body_data["session_zid"] == "20260908220000"
+
+    # 2. Subprocess fallback path (controller daemon offline)
+    def mock_urlopen_fail(req, timeout=0.5):
+        raise ConnectionRefusedError("Offline")
+
+    popen_cmds = []
+    def mock_popen(cmd, *a, **kw):
+        popen_cmds.append(cmd)
+        mock_proc = MagicMock()
+        return mock_proc
+
+    monkeypatch.setattr("urllib.request.urlopen", mock_urlopen_fail)
+    monkeypatch.setattr("subprocess.Popen", mock_popen)
+
+    desk.run_progressive_worker_async(
+        tsv_path=str(tsv_path),
+        language="en",
+        target_lang="ru",
+        prompt_name="default",
+        lemmas_provider="google",
+        word_translations_empty="True",
+        resolved_paths=resolved_paths,
+        config=cfg
+    )
+
+    assert len(popen_cmds) == 1
+    assert popen_cmds[0][0] == str(custom_py)
+    assert popen_cmds[0][2] == "progressive-worker"
+
+
+
 
 
 

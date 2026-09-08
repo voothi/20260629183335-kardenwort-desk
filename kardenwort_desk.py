@@ -6848,8 +6848,18 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
         if cfg:
             if hasattr(cfg, 'getint'):
                 port = cfg.getint('server', 'controller_port', fallback=cfg.getint('server', 'port', fallback=18335))
+            elif hasattr(cfg, 'get'):
+                try:
+                    port = int(cfg.get('server', 'controller_port', fallback=cfg.get('server', 'port', fallback=18335)))
+                except Exception:
+                    port = 18335
+            elif isinstance(cfg, dict):
+                port = int(cfg.get('server.controller_port', cfg.get('server.port', cfg.get('controller_port', cfg.get('port', 18335)))))
+
             if hasattr(cfg, 'get'):
-                api_key = cfg.get('server', 'api_key', fallback='')
+                api_key = cfg.get('server', 'api_key', fallback=cfg.get('server', 'token', fallback=''))
+            elif isinstance(cfg, dict):
+                api_key = cfg.get('server.api_key', cfg.get('server.token', cfg.get('api_key', cfg.get('token', ''))))
 
         import urllib.request
         import json
@@ -6882,7 +6892,7 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
     except Exception as e:
         logger.debug(f"Controller daemon not available or enqueue failed ({e}); falling back to detached subprocess")
 
-    python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
+    python_exe = (resolved_paths.get('kardenwort_python') if isinstance(resolved_paths, dict) else None) or sys.executable
     desk_script = Path(__file__).resolve()
 
     cmd = [
@@ -6915,6 +6925,7 @@ def run_progressive_worker_async(tsv_path, language, target_lang, prompt_name, l
             cmd, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL,
             stderr=subprocess.DEVNULL, close_fds=True
         )
+    return True
 
 def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_id=None):
     python_exe = resolved_paths['kardenwort_python']
@@ -9067,7 +9078,8 @@ html, body {{
                             working_tsv_path, language, target_lang, prompt_name,
                             base_provider, str(has_untranslated_lemmas),
                             skip_intellifiller, eff_mode,
-                            zid=zid, trace_id=(trace_id or f"{zid}:progressive:worker")
+                            zid=zid, trace_id=(trace_id or f"{zid}:progressive:worker"),
+                            resolved_paths=resolved_paths, config=config
                         )
                     except TypeError:
                         run_progressive_worker_async(
@@ -12417,6 +12429,23 @@ html, body {{
 
         // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling + 30s Safety Timeout)
         function initWatchdog() {
+            if (window._kwSkeletonPollTimer) {
+                clearInterval(window._kwSkeletonPollTimer);
+                window._kwSkeletonPollTimer = null;
+            }
+            if (window._kwWatchdogMaxTimer) {
+                clearTimeout(window._kwWatchdogMaxTimer);
+                window._kwWatchdogMaxTimer = null;
+            }
+            if (window._kwSseSafetyTimer) {
+                clearTimeout(window._kwSseSafetyTimer);
+                window._kwSseSafetyTimer = null;
+            }
+            if (window._kwEvtSource) {
+                try { window._kwEvtSource.close(); } catch(e) {}
+                window._kwEvtSource = null;
+            }
+
             var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
             var sessZidEl = document.getElementById('session-zid');
             var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
@@ -12488,9 +12517,6 @@ html, body {{
                 var executeRenderRetryButtons = function() {
                     if (resolved) return;
                     var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
-                    if (pendings.length === 0) {
-                        return;
-                    }
                     for (var i = 0; i < pendings.length; i++) {
                         var el = pendings[i];
                         el.classList.remove("skeleton-loader");
@@ -12530,6 +12556,25 @@ html, body {{
                     var tc = document.getElementById('translation-container');
                     if (tc && (!tc.textContent.trim() || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader'))) {
                         tc.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                    }
+
+                    if (window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
+                        var cList = window.WorkspaceTabs.getCards();
+                        if (cList) {
+                            for (var c = 0; c < cList.length; c++) {
+                                var card = cList[c];
+                                if (card.words) {
+                                    for (var wIdx = 0; wIdx < card.words.length; wIdx++) {
+                                        var wObj = card.words[wIdx];
+                                        if (!wObj.translation || wObj.translation.indexOf('skeleton-loader') !== -1 || wObj.translation.indexOf('...') !== -1) {
+                                            var retryRowId = wObj.row_id !== undefined ? wObj.row_id : wObj.token_order;
+                                            wObj.translation = '<button class="btn-retry-cell" data-row-id="' + retryRowId + '" title="Retry translation">Retry</button>';
+                                        }
+                                        wObj.row_html = null;
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     if (typeof window.showToast === 'function') {
@@ -15485,28 +15530,102 @@ html, body {{
             var tok = getApiToken();
             var headers = { 'Accept': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
-            fetch('/session/status?zid=' + encodeURIComponent(sZid), { method: 'GET', headers: headers })
-                .then(function(res) {
-                    return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
-                })
-                .then(function(resObj) {
-                    setButtonLoading(updateBtn, false, "", "Update");
-                    var payload = (resObj && resObj.data && resObj.data.data) ? resObj.data.data : ((resObj && resObj.data) ? resObj.data : resObj);
-                    var hasRows = payload && payload.rows && typeof payload.rows === 'object' && Object.keys(payload.rows).length > 0;
-                    var hasTrans = payload && (payload.translatedText || payload.translated_text);
-                    if (resObj.ok && payload && (hasRows || hasTrans) && window.receiveUpdate) {
-                        window.receiveUpdate(payload);
-                        window.showToast("Session updated", "success");
-                    } else {
+            var postHeaders = { 'Content-Type': 'application/json', 'Accept': 'application/json' };
+            if (tok) postHeaders['X-API-Token'] = tok;
+
+            // Check if sentence translation or any lemma translation is missing or in error/skeleton state
+            var tc = document.getElementById('translation-container');
+            var tcText = tc ? (tc.textContent || tc.innerText || "").trim() : "";
+            var needsRetext = false;
+            if (!tcText || tcText === 'Loading' || tcText === 'Loading translation' || tcText === 'Processed' || tcText.indexOf('...') !== -1 || (tc && (tc.classList.contains('skeleton-loader') || tc.querySelector('.skeleton-loader') || tc.querySelector('.btn-retry-cell')))) {
+                needsRetext = true;
+            }
+            if (window.AppState && (!window.AppState.translatedText || window.AppState.translatedText.trim() === '')) {
+                needsRetext = true;
+            }
+
+            var untranslatedRowIds = [];
+            var allRows = document.querySelectorAll('#lemma-table tbody tr[data-row-id]');
+            for (var r = 0; r < allRows.length; r++) {
+                var rowEl = allRows[r];
+                var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
+                var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || rowEl.querySelector('.col-translation');
+                if (!transTd) {
+                    var tds = rowEl.getElementsByTagName('td');
+                    if (tds.length >= 3) transTd = tds[2];
+                }
+                var transCell = transTd ? (transTd.querySelector('.scrollable-cell') || transTd) : null;
+                var transContent = transCell ? (transCell.textContent || transCell.innerText || "").trim() : "";
+                if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') || transCell.querySelector('.skeleton-loader') || transCell.querySelector('.btn-retry-cell')))) {
+                    if (rId !== null && rId !== undefined) {
+                        untranslatedRowIds.push(rId);
+                    }
+                }
+            }
+
+            var actions = [];
+            if (needsRetext) {
+                var retextBody = { session_zid: sZid, language: getSessionLang() };
+                if (tok) retextBody.token = tok;
+                actions.push(
+                    fetch('/session/retext', {
+                        method: 'POST',
+                        headers: postHeaders,
+                        body: JSON.stringify(retextBody)
+                    }).catch(function(e) { return null; })
+                );
+            }
+            if (untranslatedRowIds.length > 0) {
+                var rewordBody = { session_zid: sZid, row_ids: untranslatedRowIds, language: getSessionLang() };
+                if (tok) rewordBody.token = tok;
+                actions.push(
+                    fetch('/session/reword', {
+                        method: 'POST',
+                        headers: postHeaders,
+                        body: JSON.stringify(rewordBody)
+                    }).catch(function(e) { return null; })
+                );
+            }
+
+            var proceedWithStatus = function() {
+                fetch('/session/status?zid=' + encodeURIComponent(sZid), { method: 'GET', headers: headers })
+                    .then(function(res) {
+                        return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
+                    })
+                    .then(function(resObj) {
+                        setButtonLoading(updateBtn, false, "", "Update");
+                        var payload = (resObj && resObj.data && resObj.data.data) ? resObj.data.data : ((resObj && resObj.data) ? resObj.data : resObj);
+                        var hasRows = payload && payload.rows && typeof payload.rows === 'object' && Object.keys(payload.rows).length > 0;
+                        var hasTrans = payload && (payload.translatedText || payload.translated_text);
+                        var hasSentences = payload && payload.sentences && payload.sentences.length > 0;
+                        if (resObj.ok && payload && (hasRows || hasTrans || hasSentences) && window.receiveUpdate) {
+                            window.receiveUpdate(payload);
+                            window.showToast("Session updated", "success");
+                        } else {
+                            if (window.onSessionReload) window.onSessionReload();
+                            else if (window.location && window.location.reload) window.location.reload();
+                        }
+                        if (needsRetext || untranslatedRowIds.length > 0 || (payload && (payload.is_finished === false || payload.stage === 'translating'))) {
+                            if (window.initWatchdog) window.initWatchdog();
+                            else if (window.startPolling) window.startPolling();
+                        }
+                    })
+                    .catch(function(err) {
+                        setButtonLoading(updateBtn, false, "", "Update");
                         if (window.onSessionReload) window.onSessionReload();
                         else if (window.location && window.location.reload) window.location.reload();
-                    }
-                })
-                .catch(function(err) {
-                    setButtonLoading(updateBtn, false, "", "Update");
-                    if (window.onSessionReload) window.onSessionReload();
-                    else if (window.location && window.location.reload) window.location.reload();
+                    });
+            };
+
+            if (actions.length > 0) {
+                Promise.all(actions).then(function() {
+                    proceedWithStatus();
+                }).catch(function() {
+                    proceedWithStatus();
                 });
+            } else {
+                proceedWithStatus();
+            }
         };
 
         window.onRetextClick = function() {
@@ -16085,6 +16204,11 @@ html, body {{
                             }
                         }
                     }
+                    if (w.row_html && (w.row_html.indexOf('skeleton-loader') !== -1 || w.row_html.indexOf('data-pending') !== -1)) {
+                        if (w.translation && w.translation.indexOf('skeleton-loader') === -1) {
+                            w.row_html = null;
+                        }
+                    }
                     if (w.row_html) {
                         var rowHtml = w.row_html;
                         if (isSel) {
@@ -16482,6 +16606,13 @@ html, body {{
                         break;
                     }
                 }
+                for (var c = 0; c < cards.length; c++) {
+                    if (cards[c].words) {
+                        for (var wIdx = 0; wIdx < cards[c].words.length; wIdx++) {
+                            cards[c].words[wIdx].row_html = null;
+                        }
+                    }
+                }
                 updateActiveTabTranslation();
             }
 
@@ -16495,6 +16626,14 @@ html, body {{
                     }
                 }
                 if (tb && targetCard && targetCard.words && targetCard.words.length > 0) {
+                    for (var wIdx = 0; wIdx < targetCard.words.length; wIdx++) {
+                        var wItem = targetCard.words[wIdx];
+                        if (wItem && wItem.row_html && (wItem.row_html.indexOf('skeleton-loader') !== -1 || wItem.row_html.indexOf('data-pending') !== -1)) {
+                            if (wItem.translation && wItem.translation.indexOf('skeleton-loader') === -1) {
+                                wItem.row_html = null;
+                            }
+                        }
+                    }
                     bindCardWordsToTbody(tb, targetCard.words, selectedRowIdsMap);
                 }
             }
