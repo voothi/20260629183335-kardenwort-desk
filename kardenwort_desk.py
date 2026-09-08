@@ -7426,6 +7426,22 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                 if part:
                     window_words_exact.add(part)
 
+        if token_mappings_enabled and language:
+            token_mappings = get_desk_token_mappings(resolved_paths, language, config)
+            if token_mappings:
+                for w in list(window_words_exact):
+                    norm_w = w.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
+                    norm_w = re.sub(r'\s+', '', norm_w).lower()
+                    if norm_w in token_mappings:
+                        for tgt in token_mappings[norm_w]:
+                            window_words_exact.add(tgt)
+                norm_window = window_text.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'").lower()
+                norm_window_stripped = re.sub(r'\s+', '', norm_window)
+                for norm_key, targets in token_mappings.items():
+                    if len(norm_key) > 1 and norm_key in norm_window_stripped:
+                        for tgt in targets:
+                            window_words_exact.add(tgt)
+
         window_words_lower = set(w.lower() for w in window_words_exact)
 
         def _is_in_window(p_clean):
@@ -15834,7 +15850,7 @@ html, body {{
                             }
                         }
                         if (lines.length === 0) {
-                            var brClean = tmp.innerHTML.replace(/<br\s*[\/]?>/gi, String.fromCharCode(10));
+                            var brClean = tmp.innerHTML.replace(/<br\\s*[\\/]?>/gi, String.fromCharCode(10));
                             tmp.innerHTML = brClean;
                             clean = (tmp.textContent || tmp.innerText || '').trim();
                         }

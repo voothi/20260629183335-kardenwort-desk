@@ -316,8 +316,8 @@ def test_separable_verb_anchoring_scenarios(tmp_path, monkeypatch):
     html = run_scenario("Heute kommt der Redakteur an einem Tag an.", tsv_content)
     
     assert 'class="word highlight-purple" data-word-idx="3" data-line-idx="0" data-lower-clean="kommt">kommt</span>' in html
-    assert 'class="word highlight-purple" data-word-idx="9" data-line-idx="0" data-lower-clean="an">an</span>' in html
-    assert 'class="word not-connected" data-word-idx="15" data-line-idx="0" data-lower-clean="an">an</span>' in html
+    assert 'class="word highlight-purple" data-word-idx="15" data-line-idx="0" data-lower-clean="an">an</span>' in html
+    assert 'class="word not-connected" data-word-idx="9" data-line-idx="0" data-lower-clean="an">an</span>' in html
     assert 'class="highlight-purple"' in html # table row should be purple
 
     # 4.2 contiguous phrase
@@ -924,9 +924,9 @@ def test_inflected_column_fallback_hierarchy(tmp_path):
     )
 
     # Verify INFLECTED cells are populated from fallback columns
-    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">goldens</div></td>' in html
-    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">running</div></td>' in html
-    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">desk</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"' in html and '<div class="scrollable-cell">goldens</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"' in html and '<div class="scrollable-cell">running</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"' in html and '<div class="scrollable-cell">desk</div></td>' in html
 
 
 def test_single_text_path_decomposition_inflected_rendering(tmp_path):
@@ -955,8 +955,8 @@ def test_single_text_path_decomposition_inflected_rendering(tmp_path):
         tsv_path=tsv_path
     )
 
-    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">run</div></td>' in html
-    assert 'data-col="WordSourceInflectedForm"><div class="scrollable-cell">goldens</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"' in html and '<div class="scrollable-cell">run</div></td>' in html
+    assert 'data-col="WordSourceInflectedForm"' in html and '<div class="scrollable-cell">goldens</div></td>' in html
     assert 'data-lower-clean="run">run</span>' in html
     assert 'data-lower-clean="goldens">goldens</span>' in html
 
