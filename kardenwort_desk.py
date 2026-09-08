@@ -11648,6 +11648,7 @@ html, body {{
         checkAhkHost();
         var tableRows = [];
         var selectedRowIdsMap = {};
+        var selectedOrphanWordIdxsMap = {};
         var initialHighlights = {};
         var hasHighlightCol = false;
         var lastClickedRowId = null;
@@ -13482,7 +13483,18 @@ html, body {{
                         
                         var allSelected = true;
                         if (targetRowIds.length === 0) {
-                            allSelected = false;
+                            var wIdx = clickedTokenData.visual_idx;
+                            if (wIdx !== undefined && wIdx !== null) {
+                                if (selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
+                                    delete selectedOrphanWordIdxsMap[String(wIdx)];
+                                    allSelected = true;
+                                } else {
+                                    selectedOrphanWordIdxsMap[String(wIdx)] = true;
+                                    allSelected = false;
+                                }
+                            } else {
+                                allSelected = false;
+                            }
                         } else {
                             for (var j = 0; j < targetRowIds.length; j++) {
                                 var tid = String(targetRowIds[j]);
@@ -14320,6 +14332,7 @@ html, body {{
         
         function clearAllSelections() {
             selectedRowIdsMap = {};
+            selectedOrphanWordIdxsMap = {};
             lastClickedRowId = null;
             updateRowStyles();
             updateBidirectionalHighlights();
@@ -14445,12 +14458,15 @@ html, body {{
             
             for (var i = 0; i < tokenMap.length; i++) {
                 var token = tokenMap[i];
-                if (!token.row_ids || token.row_ids.length === 0) continue;
-                var hasMatchingRow = false;
-                for (var r = 0; r < token.row_ids.length; r++) {
-                    if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
-                        hasMatchingRow = true;
-                        break;
+                var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
+                if ((!token.row_ids || token.row_ids.length === 0) && !isOrphanSelected) continue;
+                var hasMatchingRow = isOrphanSelected;
+                if (!hasMatchingRow && token.row_ids) {
+                    for (var r = 0; r < token.row_ids.length; r++) {
+                        if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
+                            hasMatchingRow = true;
+                            break;
+                        }
                     }
                 }
                 if (hasMatchingRow) {
@@ -14467,6 +14483,9 @@ html, body {{
                                 span.classList.add('highlight-purple-active');
                             } else if (span.classList.contains('highlight-orange')) {
                                 span.classList.add('highlight-orange-active');
+                            }
+                            if (isOrphanSelected) {
+                                span.classList.add('active-subtoken');
                             }
                         } catch(e) {}
                     }
@@ -14639,6 +14658,7 @@ html, body {{
             try {
                 var arr = JSON.parse(rowsJsonStr);
                 selectedRowIdsMap = {};
+                selectedOrphanWordIdxsMap = {};
                 for (var i = 0; i < arr.length; i++) {
                     selectedRowIdsMap[String(arr[i])] = true;
                 }

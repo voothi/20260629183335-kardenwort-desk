@@ -3035,6 +3035,10 @@ def test_subtoken_click_suppresses_composite_row_when_atomic_row_ids_empty(page)
 
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
     assert selected_rows == []
+    assert "highlight-orange-active" in (span.get_attribute("class") or "")
+
+    # Click again to toggle off
+    span.click(button="left")
     assert "highlight-orange-active" not in (span.get_attribute("class") or "")
 
 
@@ -3089,7 +3093,7 @@ def test_ebike_zweisitzer_lastenrad_click_and_drag_selection(page):
     page.set_content(html)
     page.evaluate(extract_desk_js())
 
-    # 1. Single click on 'E' (prefix with no atomic row) -> must NOT select composite row 0
+    # 1. Single click on 'E' (prefix with no atomic row) -> highlights 'E' directly in yellow, no table row selected
     page.evaluate("""() => {
         const s = document.querySelector("span[data-lower-clean='e']");
         s.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
@@ -3098,10 +3102,18 @@ def test_ebike_zweisitzer_lastenrad_click_and_drag_selection(page):
 
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
     assert selected_rows == [], f"Expected no rows selected when clicking 'E', got {selected_rows}"
-    assert page.evaluate("document.querySelector(\"span[data-lower-clean='e']\").classList.contains('highlight-orange-active')") is False
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='e']\").classList.contains('highlight-orange-active')") is True
     assert page.evaluate("document.querySelector(\"span[data-lower-clean='bike']\").classList.contains('highlight-orange-active')") is False
     assert page.evaluate("document.querySelector(\"span[data-lower-clean='zweisitzer']\").classList.contains('highlight-orange-active')") is False
     assert page.evaluate("document.querySelector(\"span[data-lower-clean='lastenrad']\").classList.contains('highlight-orange-active')") is False
+
+    # 1b. Single click on 'E' again -> toggles off active highlight on 'E'
+    page.evaluate("""() => {
+        const s = document.querySelector("span[data-lower-clean='e']");
+        s.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0, buttons: 0 }));
+    }""")
+    assert page.evaluate("document.querySelector(\"span[data-lower-clean='e']\").classList.contains('highlight-orange-active')") is False
 
     # 2. Single click on 'Bike' -> selects only atomic row [1]
     page.evaluate("""() => {
