@@ -5216,6 +5216,114 @@ def test_workspace_tabs_dynamic_translation_and_render_translated_text(page):
     assert "Первое предложение. Второе предложение." in tc.inner_text()
 
 
+def test_compound_subtoken_selection_and_highlight_isolation_across_shared_subtokens(page, tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.add_section("triggers")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "manual")
+    config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(tmp_path))
+    config.add_section("languages")
+    config.set("languages", "de_lemma_index", "de_idx")
+    config.set("languages", "de_lemma_override", "de_over")
+    config.set("languages", "de_prompt", "de_prompt")
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section("fields")
+    mapping.add_section("fields_mapping.word")
+    mapping.add_section("desk_columns")
+    mapping.set("desk_columns", "WordSource", "lemma")
+    mapping.set("desk_columns", "WordSourceInflectedForm", "inflected")
+    mapping.set("desk_columns", "WordDestination", "word_translation")
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, "w") as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "anki_mapping_file": str(mapping_file),
+        "kardenwort_python": sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "123-cargo-duo.de.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "Cargo-Modus\tCargo-Modus\tгрузовой режим\n"
+        "Duo-Modus\tDuo-Modus\tдвойной режим\n"
+        "Modus\tModus\tрежим\n",
+        encoding="utf-8"
+    )
+
+    html = run_render_flow(
+        text="Cargo-Modus und Duo-Modus.",
+        language="de",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # Spans for Cargo-Modus
+    span_cargo = page.locator("span[data-lower-clean='cargo']")
+    span_modus_cargo = page.locator("span[data-lower-clean='modus']").nth(0)
+
+    # Spans for Duo-Modus
+    span_duo = page.locator("span[data-lower-clean='duo']")
+    span_modus_duo = page.locator("span[data-lower-clean='modus']").nth(1)
+
+    # 1. Single click on 'modus' in Cargo-Modus: selects ONLY Row 2 (atomic 'Modus') and NOT Row 0 or Row 1
+    span_modus_cargo.click(button="left")
+    selected = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected == [2]
+    # Modus spans get active highlight; Cargo and Duo are not active
+    assert "highlight-orange-active" in (span_modus_cargo.get_attribute("class") or "")
+    assert "highlight-orange-active" in (span_modus_duo.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_cargo.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_duo.get_attribute("class") or "")
+
+    # Deselect by clicking again
+    span_modus_cargo.click(button="left")
+    assert json.loads(page.evaluate("window.getSelectedRows()")) == []
+
+    # 2. Drag LMB across 'Cargo-Modus' (from span_cargo to span_modus_cargo)
+    page.evaluate("""() => {
+        const sCargo = document.querySelectorAll("span[data-lower-clean='cargo']")[0];
+        const sModus = document.querySelectorAll("span[data-lower-clean='modus']")[0];
+        sCargo.dispatchEvent(new MouseEvent('mousedown', { bubbles: true, button: 0, buttons: 1 }));
+        sModus.dispatchEvent(new MouseEvent('mouseover', { bubbles: true, button: 0, buttons: 1 }));
+        document.dispatchEvent(new MouseEvent('mouseup', { bubbles: true, button: 0 }));
+    }""")
+
+    selected_after_drag = json.loads(page.evaluate("window.getSelectedRows()"))
+    # Must select Row 0 (Cargo-Modus) and Row 2 (Modus atomic), but NOT Row 1 (Duo-Modus)
+    assert 0 in selected_after_drag
+    assert 1 not in selected_after_drag
+
+    # Verify highlight isolation: Cargo and first Modus are active; Duo and second Modus are not
+    assert "highlight-orange-active" in (span_cargo.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_duo.get_attribute("class") or "")
+
+
+
 
 
 

@@ -9251,12 +9251,22 @@ html, body {{
                 else:
                     break
             if len(chain) > 1:
+                comp_text = "".join(source_tokens[k].get("text", "") for k in range(chain[0], chain[-1] + 1))
                 for idx in chain:
                     source_tokens[idx]["is_in_compound"] = True
+                    source_tokens[idx]["compound_text"] = comp_text
                 i = chain[-1] + 1
                 continue
             elif source_tokens[i].get("compound_id") is not None:
                 source_tokens[i]["is_in_compound"] = True
+                cid = source_tokens[i].get("compound_id")
+                same_cid = [k for k in range(n_tokens) if source_tokens[k].get("compound_id") == cid]
+                comp_text = "".join(source_tokens[k].get("text", "") for k in same_cid)
+                for idx in same_cid:
+                    source_tokens[idx]["is_in_compound"] = True
+                    source_tokens[idx]["compound_text"] = comp_text
+                i = max(same_cid) + 1 if same_cid else i + 1
+                continue
             else:
                 source_tokens[i]["is_in_compound"] = False
         i += 1
@@ -9688,6 +9698,28 @@ html, body {{
                             compound_cand_rows.append(r_idx)
                     else:
                         atomic_rows.append(r_idx)
+
+                if is_in_comp:
+                    comp_text = token.get("compound_text", "")
+                    comp_clean = tok.utf8_to_lower("".join(ch for ch in comp_text if ch.isalnum() or ch in apo_set)) if comp_text else ""
+                    if comp_clean:
+                        filtered_comp_rows = []
+                        for r_idx in compound_cand_rows:
+                            r_comp_strings = set()
+                            lem = row_primary_lemmas.get(r_idx, "")
+                            if lem:
+                                r_comp_strings.add(tok.utf8_to_lower("".join(ch for ch in lem if ch.isalnum() or ch in apo_set)))
+                            if 0 <= r_idx < len(data_rows):
+                                r = data_rows[r_idx]
+                                inf = resolve_row_inflected_form(r, col_inflected, col_inflected2, col_quotation, col_lemma)
+                                for f in inf.split(','):
+                                    f_clean = tok.utf8_to_lower("".join(ch for ch in f.strip() if ch.isalnum() or ch in apo_set))
+                                    if f_clean:
+                                        r_comp_strings.add(f_clean)
+                            if any(rc == comp_clean for rc in r_comp_strings if rc):
+                                filtered_comp_rows.append(r_idx)
+                        compound_cand_rows = filtered_comp_rows
+
                 tok_data["atomic_row_ids"] = atomic_rows
                 tok_data["compound_row_ids"] = compound_cand_rows
             word_counter += 1
@@ -12761,6 +12793,12 @@ html, body {{
             if (node.nodeType === 3) { // Text node
                 var txt = node._origVal !== undefined ? node._origVal : (node.nodeValue || node.textContent || "");
                 return txt.length > 0 && /^[-_–—.:#@]+$/.test(txt);
+            }
+            if (node.nodeType === 1) { // Element node (e.g. <span class="sentence-delimiter">-</span>)
+                if (node.classList && node.classList.contains('sentence-delimiter')) {
+                    var txt = node._origVal !== undefined ? node._origVal : (node.textContent || "");
+                    return txt.length > 0 && /^[-_–—.:#@]+$/.test(txt);
+                }
             }
             return false;
         }
