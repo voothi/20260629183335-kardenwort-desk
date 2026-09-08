@@ -1710,3 +1710,80 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     tab3_on = page.locator('#lemma-table tbody tr[data-row-id="2"]')
     assert tab3_on.get_attribute("data-selected") == "1"
 
+
+def test_overview_tab_multi_sentence_bidirectional_highlighting(page, tmp_path):
+    """
+    Test (20260908161928): Verifies that on Tab 1 (Master Overview):
+    1. Selecting a deduplicated lemma row highlights all matching tokens across all sentences in SOURCE TEXT.
+    2. Clicking a word in Sentence 2..N in SOURCE TEXT selects the corresponding deduplicated lemma row in the table.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "Am Morgen geht der Mann. Die Katze schlaeft in der Nacht."
+    tsv_file = tmp_path / "20260908164000-tab1-multihl.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "Am\tder\tAm\tthe\t1\t0\n"
+        "der\tder\tder\tthe\t1\t0\n"
+        "Mann\tMann\tMann\tman\t1\t0\n"
+        "Die\tder\tDie\tthe\t2\t0\n"
+        "Katze\tKatze\tKatze\tcat\t2\t0\n"
+        "der\tder\tder\tthe\t2\t0\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid="20260908164000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Switch to Tab 1 (Overview)
+    tab1 = page.locator('.kw-tab-chip[data-tab-seq="1"]')
+    tab1.click()
+    page.wait_for_selector('#lemma-table tbody tr')
+
+    # Find the deduplicated row for lemma 'der'
+    der_tr = page.locator('#lemma-table tbody tr:has-text("der")').first
+    assert der_tr.count() == 1
+
+    # 1. Click row 'der' on Tab 1 -> must highlight tokens across sentence 1 and sentence 2
+    der_tr.click()
+    assert "selected" in (der_tr.get_attribute("class") or "")
+    assert der_tr.get_attribute("data-selected") == "1"
+
+    # In SOURCE TEXT: Am (sent 1), der (sent 1), Die (sent 2), der (sent 2) must all be highlighted!
+    am_word = page.locator('#source-container span.word:has-text("Am")').first
+    der1_word = page.locator('#source-container span.word:has-text("der")').first
+    die_word = page.locator('#source-container span.word:has-text("Die")').first
+
+    assert "highlight-orange-active" in (am_word.get_attribute("class") or "")
+    assert "highlight-orange-active" in (der1_word.get_attribute("class") or "")
+    assert "highlight-orange-active" in (die_word.get_attribute("class") or "")
+
+    # 2. Deselect row 'der' -> highlights cleared
+    der_tr.click()
+    assert "selected" not in (der_tr.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (am_word.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (die_word.get_attribute("class") or "")
+
+    # 3. Click word 'Die' (from sentence 2) in SOURCE TEXT -> row 'der' must become selected and all words highlighted!
+    die_word.click()
+    assert "selected" in (der_tr.get_attribute("class") or "")
+    assert "highlight-orange-active" in (am_word.get_attribute("class") or "")
+    assert "highlight-orange-active" in (die_word.get_attribute("class") or "")
+
+

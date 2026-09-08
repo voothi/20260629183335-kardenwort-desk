@@ -4311,12 +4311,16 @@ def deduplicate_rows_by_lemma(
                     merged_row[i] = cell
             if col_inflected != -1:
                 inf_val = r[col_inflected].strip() if len(r) > col_inflected else ""
-                if not inf_val and col_quotation != -1 and len(r) > col_quotation:
-                    inf_val = r[col_quotation].strip()
                 if inf_val:
                     for part in [p.strip() for p in inf_val.split(',') if p.strip()]:
                         if part not in merged_inflected:
                             merged_inflected.append(part)
+                if col_quotation != -1 and len(r) > col_quotation:
+                    q_val = r[col_quotation].strip()
+                    if q_val and q_val.lower() not in {"'s", "’s", "‘s", "´s", "`s", "ʼs", "'", "’"}:
+                        for part in [p.strip() for p in q_val.split(',') if p.strip()]:
+                            if part not in merged_inflected:
+                                merged_inflected.append(part)
         if col_inflected != -1 and merged_inflected:
             merged_row[col_inflected] = ", ".join(sort_inflected_forms(
                 merged_inflected,
@@ -7391,7 +7395,7 @@ def get_desk_token_mappings(resolved_paths=None, language=None, config=None) -> 
     return mappings
 
 
-def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None):
+def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None, col_quotation=-1):
     deduped_rows = []
     seen_words = {}
 
@@ -7421,22 +7425,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
             for part in re.split(r"[" + apo_pattern + r"]+", w):
                 if part:
                     window_words_exact.add(part)
-
-        if token_mappings_enabled and language:
-            token_mappings = get_desk_token_mappings(resolved_paths, language, config)
-            if token_mappings:
-                for w in list(window_words_exact):
-                    norm_w = w.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
-                    norm_w = re.sub(r'\s+', '', norm_w).lower()
-                    if norm_w in token_mappings:
-                        for tgt in token_mappings[norm_w]:
-                            window_words_exact.add(tgt)
-                norm_window = window_text.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'").lower()
-                norm_window_stripped = re.sub(r'\s+', '', norm_window)
-                for norm_key, targets in token_mappings.items():
-                    if len(norm_key) > 1 and norm_key in norm_window_stripped:
-                        for tgt in targets:
-                            window_words_exact.add(tgt)
 
         window_words_lower = set(w.lower() for w in window_words_exact)
 
@@ -7470,7 +7458,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                 continue
             if w == "s":
                 inf_val = row[col_inflected].strip().lower() if col_inflected != -1 and len(row) > col_inflected else ""
-                quot_val = row[0].strip().lower() if len(row) > 0 else ""
+                quot_val = row[col_quotation].strip().lower() if col_quotation != -1 and len(row) > col_quotation else (row[0].strip().lower() if len(row) > 0 else "")
                 if not inf_val or inf_val in POSSESSIVE_DISCARD_TOKENS or inf_val == "s" or quot_val in POSSESSIVE_DISCARD_TOKENS:
                     continue
             pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
@@ -7479,45 +7467,54 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                 key = (w, pos, inf_form_lower)
             else:
                 key = (w, pos)
+
+            row_inf_candidates = []
+            if col_inflected != -1 and len(row) > col_inflected:
+                cand_inf = row[col_inflected].strip()
+                if cand_inf:
+                    for p in cand_inf.split(','):
+                        if p.strip() and p.strip() not in row_inf_candidates:
+                            row_inf_candidates.append(p.strip())
+            if col_quotation != -1 and len(row) > col_quotation:
+                cand_quot = row[col_quotation].strip()
+                if cand_quot and cand_quot.lower() not in POSSESSIVE_DISCARD_TOKENS:
+                    for p in cand_quot.split(','):
+                        if p.strip() and p.strip() not in row_inf_candidates:
+                            row_inf_candidates.append(p.strip())
+
             if w and key in seen_words:
                 existing_row_idx = seen_words[key]
-                if col_inflected != -1 and len(row) > col_inflected:
-                    new_inflected = row[col_inflected].strip()
-                    if new_inflected:
-                        while len(deduped_rows[existing_row_idx]) <= col_inflected:
-                            deduped_rows[existing_row_idx].append("")
-                        existing_inflected = deduped_rows[existing_row_idx][col_inflected].strip()
-                        existing_parts = [p.strip() for p in existing_inflected.split(',') if p.strip()]
-                        new_parts = [p.strip() for p in new_inflected.split(',') if p.strip()]
-                        for p in new_parts:
-                            if p and p not in existing_parts:
-                                existing_parts.append(p)
-                        if is_filtering_window:
-                            final_parts = []
-                            for p in existing_parts:
-                                p_clean = p.strip()
-                                if _is_in_window(p_clean):
-                                    final_parts.append(p)
-                            existing_parts = final_parts
-                        deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
+                if col_inflected != -1:
+                    while len(deduped_rows[existing_row_idx]) <= col_inflected:
+                        deduped_rows[existing_row_idx].append("")
+                    existing_inflected = deduped_rows[existing_row_idx][col_inflected].strip()
+                    existing_parts = [p.strip() for p in existing_inflected.split(',') if p.strip()]
+                    for p in row_inf_candidates:
+                        if p and p not in existing_parts:
+                            existing_parts.append(p)
+                    if is_filtering_window:
+                        final_parts = []
+                        for p in existing_parts:
+                            p_clean = p.strip()
+                            if _is_in_window(p_clean):
+                                final_parts.append(p)
+                        existing_parts = final_parts
+                    deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
                 continue
             if w:
                 seen_words[key] = len(deduped_rows)
                 if col_inflected != -1 and len(row) > col_inflected:
-                    cur_inf = row[col_inflected].strip()
-                    if cur_inf:
-                        parts = [p.strip() for p in cur_inf.split(',') if p.strip()]
-                        final_parts = []
-                        if is_filtering_window:
-                            for p in parts:
-                                p_clean = p.strip()
-                                if _is_in_window(p_clean):
-                                    final_parts.append(p)
-                        else:
-                            final_parts = parts
-                        row = list(row)
-                        row[col_inflected] = ", ".join(sort_inflected_forms(final_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
-                        row = tuple(row)
+                    final_parts = []
+                    if is_filtering_window:
+                        for p in row_inf_candidates:
+                            p_clean = p.strip()
+                            if _is_in_window(p_clean):
+                                final_parts.append(p)
+                    else:
+                        final_parts = row_inf_candidates
+                    row = list(row)
+                    row[col_inflected] = ", ".join(sort_inflected_forms(final_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
+                    row = tuple(row)
         deduped_rows.append(list(row))
     return deduped_rows
 
@@ -9574,7 +9571,7 @@ html, body {{
 
         row_html_line = (
             f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
-            f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{inflected_val}</div></td>'
+            f'<td class="{inflected_class}" data-col="{inflected_col_name}" title="{html.escape(inflected_val)}"><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{lemma_val}</div></td>'
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
             f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ipa_val}</div></td>'
@@ -9766,7 +9763,8 @@ html, body {{
         if col_ws_dedup != -1 and dedup_scope_val != 'none':
             overview_rows = deduplicate_rows(
                 data_rows, col_ws_dedup, col_pos_dedup, col_inflected, config,
-                window_text=text, language=language, resolved_paths=resolved_paths
+                window_text=text, language=language, resolved_paths=resolved_paths,
+                col_quotation=col_quotation
             )
             overview_rows = sort_rows_by_frequency(
                 overview_rows, headers, language, config, resolved_paths, role_fields=role_fields
@@ -9857,13 +9855,13 @@ html, body {{
                 if p_title:
                     ov_prov_attr += f' title="{p_title}"'
 
-            all_ids_attr = "" if is_container else f' data-all-row-ids="{all_ids_str}"'
+            all_ids_attr = f' data-all-row-ids="{all_ids_str}"' if all_ids_str else ""
             ov_hl_class = "highlight-orange"
             if ov_is_sel == "1":
                 ov_hl_class += " selected kw-row-selected"
             ov_row_html = (
                 f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
-                f'<td class="{inflected_class}" data-col="{inflected_col_name}"><div class="scrollable-cell">{ov_inflected}</div></td>'
+                f'<td class="{inflected_class}" data-col="{inflected_col_name}" title="{html.escape(ov_inflected)}"><div class="scrollable-cell">{ov_inflected}</div></td>'
                 f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
                 f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ov_ipa}</div></td>'
@@ -9873,7 +9871,7 @@ html, body {{
             )
             overview_word_objs.append({
                 "row_id": str(primary_id),
-                "all_row_ids": [str(primary_id)] if is_container else [str(x) for x in matched_ids],
+                "all_row_ids": [str(x) for x in matched_ids],
                 "token_order": str(ov_token_order),
                 "sentence_idx": "0",
                 "inflected": ov_inflected,
@@ -13426,7 +13424,25 @@ html, body {{
                             allSelected = false;
                         } else {
                             for (var j = 0; j < targetRowIds.length; j++) {
-                                if (!selectedRowIdsMap.hasOwnProperty(String(targetRowIds[j]))) {
+                                var tid = String(targetRowIds[j]);
+                                var isTidSel = selectedRowIdsMap.hasOwnProperty(tid);
+                                if (!isTidSel) {
+                                    for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+                                        var tr = tableRows[trIdx];
+                                        var allAttr = tr.getAttribute('data-all-row-ids');
+                                        if (allAttr) {
+                                            var pList = allAttr.split(',').map(function(s) { return s.trim(); });
+                                            if (pList.indexOf(tid) !== -1) {
+                                                var trId = String(tr.getAttribute('data-row-id'));
+                                                if (selectedRowIdsMap.hasOwnProperty(trId) || tr.getAttribute('data-selected') === '1') {
+                                                    isTidSel = true;
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                                if (!isTidSel) {
                                     allSelected = false;
                                     break;
                                 }
@@ -13436,10 +13452,34 @@ html, body {{
                         tokenDragMode = !allSelected;
                         
                         for (var j = 0; j < targetRowIds.length; j++) {
+                            var tid = String(targetRowIds[j]);
                             if (tokenDragMode) {
-                                selectedRowIdsMap[String(targetRowIds[j])] = true;
+                                selectedRowIdsMap[tid] = true;
+                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+                                    var tr = tableRows[trIdx];
+                                    var allAttr = tr.getAttribute('data-all-row-ids');
+                                    if (allAttr) {
+                                        var pList = allAttr.split(',').map(function(s) { return s.trim(); });
+                                        if (pList.indexOf(tid) !== -1) {
+                                            selectedRowIdsMap[String(tr.getAttribute('data-row-id'))] = true;
+                                        }
+                                    }
+                                }
                             } else {
-                                delete selectedRowIdsMap[String(targetRowIds[j])];
+                                delete selectedRowIdsMap[tid];
+                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+                                    var tr = tableRows[trIdx];
+                                    var allAttr = tr.getAttribute('data-all-row-ids');
+                                    if (allAttr) {
+                                        var pList = allAttr.split(',').map(function(s) { return s.trim(); });
+                                        if (pList.indexOf(tid) !== -1) {
+                                            delete selectedRowIdsMap[String(tr.getAttribute('data-row-id'))];
+                                            for (var p = 0; p < pList.length; p++) {
+                                                delete selectedRowIdsMap[pList[p]];
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         updateRowStyles();
@@ -13632,13 +13672,12 @@ html, body {{
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
-            var isContainer = !!(window.WorkspaceTabs && window.WorkspaceTabs.getCards);
             var constituentIds = [rowIdStr];
-            if (!isContainer) {
-                var allIdsAttr = row.getAttribute('data-all-row-ids');
-                if (allIdsAttr) {
-                    constituentIds = allIdsAttr.split(',').filter(Boolean);
-                    if (constituentIds.indexOf(rowIdStr) === -1) constituentIds.push(rowIdStr);
+            var allIdsAttr = row.getAttribute('data-all-row-ids');
+            if (allIdsAttr) {
+                var pList = allIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                for (var p = 0; p < pList.length; p++) {
+                    if (constituentIds.indexOf(pList[p]) === -1) constituentIds.push(pList[p]);
                 }
             }
             
@@ -13679,11 +13718,11 @@ html, body {{
                             var tr = tableRows[rIdx];
                             var trId = String(tr.getAttribute('data-row-id'));
                             var pIds = [trId];
-                            if (!isContainer) {
-                                var trAll = tr.getAttribute('data-all-row-ids');
-                                if (trAll) {
-                                    pIds = trAll.split(',').filter(Boolean);
-                                    if (pIds.indexOf(trId) === -1) pIds.push(trId);
+                            var trAll = tr.getAttribute('data-all-row-ids');
+                            if (trAll) {
+                                var trParts = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                                for (var tp = 0; tp < trParts.length; tp++) {
+                                    if (pIds.indexOf(trParts[tp]) === -1) pIds.push(trParts[tp]);
                                 }
                             }
                             for (var p = 0; p < pIds.length; p++) {
@@ -13856,13 +13895,11 @@ html, body {{
             }
             if (isHl) {
                 selectedRowIdsMap[rIdStr] = true;
-                if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) {
-                    var trAll = r.getAttribute('data-all-row-ids');
-                    if (trAll) {
-                        var pIds = trAll.split(',').filter(Boolean);
-                        for (var p = 0; p < pIds.length; p++) {
-                            selectedRowIdsMap[pIds[p]] = true;
-                        }
+                var trAll = r.getAttribute('data-all-row-ids');
+                if (trAll) {
+                    var pIds = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                    for (var p = 0; p < pIds.length; p++) {
+                        selectedRowIdsMap[pIds[p]] = true;
                     }
                 }
             }
@@ -14261,14 +14298,24 @@ html, body {{
                     }
                 }
             }
+            if (typeof tableRows === 'undefined' || !tableRows) {
+                var lt = document.getElementById('lemma-table');
+                if (lt) {
+                    var tbodies = lt.getElementsByTagName('tbody');
+                    var rowsContainer = tbodies.length > 0 ? tbodies[0] : lt;
+                    tableRows = rowsContainer.getElementsByTagName('tr');
+                } else {
+                    return;
+                }
+            }
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
                 var rowIdStr = String(row.getAttribute('data-row-id'));
                 var isSel = selectedRowIdsMap.hasOwnProperty(rowIdStr);
-                if (!isSel && (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards)) {
+                if (!isSel) {
                     var allIdsAttr = row.getAttribute('data-all-row-ids');
                     if (allIdsAttr) {
-                        var cIds = allIdsAttr.split(',');
+                        var cIds = allIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
                         for (var c = 0; c < cIds.length; c++) {
                             if (selectedRowIdsMap.hasOwnProperty(cIds[c])) {
                                 isSel = true;
@@ -14315,28 +14362,54 @@ html, body {{
                 } catch(e) {}
             }
             
+            var activeTargetRowIds = {};
             for (var rId in selectedRowIdsMap) {
                 if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
-                var rowId = parseInt(rId);
-                for (var i = 0; i < tokenMap.length; i++) {
-                    var token = tokenMap[i];
-                    if (token.row_ids && token.row_ids.indexOf(rowId) !== -1) {
-                        var span = null;
-                        for (var k = 0; k < tokenSpans.length; k++) {
-                            if (tokenSpans[k].getAttribute('data-word-idx') == token.visual_idx) {
-                                span = tokenSpans[k];
-                                break;
+                var rowId = parseInt(rId, 10);
+                if (!isNaN(rowId)) activeTargetRowIds[rowId] = true;
+            }
+            for (var i = 0; i < tableRows.length; i++) {
+                var tr = tableRows[i];
+                var trId = String(tr.getAttribute('data-row-id'));
+                var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
+                if (trSelected) {
+                    var allAttr = tr.getAttribute('data-all-row-ids');
+                    if (allAttr) {
+                        var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                        for (var p = 0; p < parts.length; p++) {
+                            var pInt = parseInt(parts[p], 10);
+                            if (!isNaN(pInt)) activeTargetRowIds[pInt] = true;
+                        }
+                    }
+                }
+            }
+            
+            for (var i = 0; i < tokenMap.length; i++) {
+                var token = tokenMap[i];
+                if (!token.row_ids || token.row_ids.length === 0) continue;
+                var hasMatchingRow = false;
+                for (var r = 0; r < token.row_ids.length; r++) {
+                    if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
+                        hasMatchingRow = true;
+                        break;
+                    }
+                }
+                if (hasMatchingRow) {
+                    var span = null;
+                    for (var k = 0; k < tokenSpans.length; k++) {
+                        if (tokenSpans[k].getAttribute('data-word-idx') == token.visual_idx) {
+                            span = tokenSpans[k];
+                            break;
+                        }
+                    }
+                    if (span) {
+                        try {
+                            if (span.classList.contains('highlight-purple')) {
+                                span.classList.add('highlight-purple-active');
+                            } else if (span.classList.contains('highlight-orange')) {
+                                span.classList.add('highlight-orange-active');
                             }
-                        }
-                        if (span) {
-                            try {
-                                if (span.classList.contains('highlight-purple')) {
-                                    span.classList.add('highlight-purple-active');
-                                } else if (span.classList.contains('highlight-orange')) {
-                                    span.classList.add('highlight-orange-active');
-                                }
-                            } catch(e) {}
-                        }
+                        } catch(e) {}
                     }
                 }
             }
@@ -15928,10 +16001,10 @@ html, body {{
                         var hlClass = w.highlight_class || 'highlight-orange';
                         if (isSel) hlClass += ' selected kw-row-selected';
                         var provAttr = w.provenance ? (' data-provenance="' + escapeHtml(w.provenance) + '" title="' + escapeHtml(formatProvenanceTooltip(w.provenance)) + '"') : '';
-                        var allIdsAttr = (!window.WorkspaceTabs && w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
+                        var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
                         htmlParts.push(
                             '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
-                            '<td class="editable" data-col="WordSourceInflectedForm"><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
+                            '<td class="editable" data-col="WordSourceInflectedForm" title="' + escapeHtml(w.inflected || '') + '"><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
                             '<td class="editable" data-col="WordSource"><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
                             '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
                             '<td data-col="WordSourceIPA"><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +

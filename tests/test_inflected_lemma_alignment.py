@@ -288,3 +288,69 @@ def test_subtoken_candidate_isolation_and_compound_highlighting(tmp_path):
     assert 2 in record_tok["compound_row_ids"]  # row 2 is composite 'record-set'
     assert 2 in setting_tok["compound_row_ids"]  # row 2 is composite 'record-set'
 
+
+def test_german_contraction_surface_forms_collected_and_filtered():
+    """Verify that deduplicate_rows extracts surface forms (am, im, beim) from Quotation and filters out un-occurring dem."""
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section(desk.SEC_SETTINGS)
+    config.set(desk.SEC_SETTINGS, 'filter_inflected_by_window', 'true')
+    config.set(desk.SEC_SETTINGS, 'combine_source_words', 'true')
+
+    # data_rows: [Quotation, WordSource (lemma), WordSourceInflectedForm (spacy decomp)]
+    data_rows = [
+        ["am", "der", "dem"],
+        ["im", "der", "dem"],
+        ["die", "der", "die"],
+        ["beim", "der", "dem"],
+    ]
+    window_text = "am Morgen im Haus beim Spiel die Katze"
+    deduped = desk.deduplicate_rows(
+        data_rows, col_word_source=1, col_pos=-1, col_inflected=2, config=config,
+        window_text=window_text, col_quotation=0
+    )
+
+    assert len(deduped) == 1
+    inflected_result = deduped[0][2]
+    # Surface words 'am', 'im', 'beim', 'die' must be present; synthetic 'dem' must be absent!
+    assert "am" in inflected_result
+    assert "im" in inflected_result
+    assert "beim" in inflected_result
+    assert "die" in inflected_result
+    assert "dem" not in inflected_result.split(', ')
+
+
+def test_overview_tab_all_row_ids_and_inflected_title_tooltip(tmp_path):
+    """Verify that Tab 1 overview rows contain data-all-row-ids and title tooltip on WordSourceInflectedForm cell."""
+    config, resolved_paths = _create_render_test_env(tmp_path)
+    config.add_section("sentences_mode")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_file = res_dir / "20260908163000-ovtest.de.tsv"
+    tsv_content = (
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\n"
+        "am\tder\tam\tthe\t1\n"
+        "die\tder\tdie\tthe\t2\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = run_render_flow(
+        text="am Morgen. die Katze.",
+        language="de",
+        zid="20260908163000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+
+    assert 'all_row_ids' in html or 'data-all-row-ids' in html
+    assert 'data-col="WordSourceInflectedForm"' in html or 'WordSourceInflectedForm' in html
+    assert 'am' in html and 'die' in html
+
+
