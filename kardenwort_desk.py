@@ -7584,8 +7584,23 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
     if not valid_tuples:
         return set(), False
 
-    # Sort candidates by (span, start_pos)
-    valid_tuples.sort(key=lambda t: (t[-1] - t[0], t[0]))
+    if k == 2:
+        # For discontinuous 2-word verb+particle constructs, disambiguate identical preposition tokens
+        # by selecting the clause-final particle (maximum valid span within the clause/sentence boundary).
+        p0_occs = occs[0]
+        def sort_2word_tuple(t):
+            p0, p1 = t[0], t[1]
+            subsequent_p0 = [pos for pos in p0_occs if pos > p0]
+            next_p0 = min(subsequent_p0) if subsequent_p0 else float('inf')
+            is_within_clause = (p1 < next_p0)
+            if is_within_clause:
+                return (0, p0, -p1)
+            else:
+                return (1, p1 - p0, p0)
+        valid_tuples.sort(key=sort_2word_tuple)
+    else:
+        # Sort candidates by (span, start_pos)
+        valid_tuples.sort(key=lambda t: (t[-1] - t[0], t[0]))
 
     used_positions = set()
     selected_positions = set()
@@ -9259,22 +9274,34 @@ html, body {{
         
         has_single_word_form = False
         row_anchored_pos = set()
+
+        # Check explicit multi-token indices in TokenOrder first
+        if col_token_order != -1 and len(row) > col_token_order:
+            t_ord_val = str(row[col_token_order]).strip()
+            if '+' in t_ord_val:
+                try:
+                    parsed_indices = {int(p.strip()) for p in t_ord_val.split('+') if p.strip().isdigit()}
+                    if parsed_indices:
+                        row_anchored_pos.update(parsed_indices)
+                except Exception:
+                    pass
         
-        for form in forms:
-            if not form: continue
-            inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch in apo_set))
-                         for p in re.findall(apo_regex, form)]
-            inf_words = [w for w in inf_words if w]
-            
-            if len(inf_words) >= 2 and not any(ch in form for ch in SINGLE_WORD_DELIMITERS):
-                pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
-                if ok:
-                    row_anchored_pos.update(pos_set)
-            elif len(inf_words) == 1 or any(ch in form for ch in SINGLE_WORD_DELIMITERS):
-                has_single_word_form = True
+        if not row_anchored_pos:
+            for form in forms:
+                if not form: continue
+                inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch in apo_set))
+                             for p in re.findall(apo_regex, form)]
+                inf_words = [w for w in inf_words if w]
                 
-        if has_single_word_form or not forms:
-            single_word_rows.add(row_id)
+                if len(inf_words) >= 2 and not any(ch in form for ch in SINGLE_WORD_DELIMITERS):
+                    pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
+                    if ok:
+                        row_anchored_pos.update(pos_set)
+                elif len(inf_words) == 1 or any(ch in form for ch in SINGLE_WORD_DELIMITERS):
+                    has_single_word_form = True
+                    
+            if has_single_word_form or not forms:
+                single_word_rows.add(row_id)
             
         anchored_positions[row_id] = row_anchored_pos
 

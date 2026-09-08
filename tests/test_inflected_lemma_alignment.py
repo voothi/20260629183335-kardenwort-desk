@@ -354,3 +354,77 @@ def test_overview_tab_all_row_ids_and_inflected_title_tooltip(tmp_path):
     assert 'am' in html and 'die' in html
 
 
+def test_separable_verb_exact_token_indices_and_particle_disambiguation(tmp_path):
+    """Verify that German separable verbs pair finite stem with clause-final particle (purple) without stealing internal preposition."""
+    config, resolved_paths = _create_render_test_env(tmp_path)
+    config.set(SEC_TOKEN_MAPPINGS, 'split_gap_limit', '60')
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_file = res_dir / "20260908165354-sepverb.de.tsv"
+    
+    # 1. Test with explicit TokenOrder coordinate (4+14)
+    tsv_content = (
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tTokenOrder\tSentenceSourceIndex\n"
+        "passt\tanpassen\tpasst, an\tадаптировать\t4+14\t1\n"
+        "an\tan\tan\tк\t11\t1\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    sentence = "Mit dem passenden Zubehör passt du das Bike schnell und einfach an deinen Alltag an."
+    html = run_render_flow(
+        text=sentence,
+        language="de",
+        zid="20260908165354",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+
+    import re
+    # Extract source text word spans in sequential order
+    word_spans = re.findall(r'<span class="(word[^"]*)" data-word-idx="\d+"[^>]*data-lower-clean="[^"]+"[^>]*>([^<]+)</span>', html)
+    assert len(word_spans) == 15, f"Expected 15 source text word spans, got {len(word_spans)}"
+
+    cls_passt, text_passt = word_spans[4]
+    assert text_passt == "passt"
+    assert "highlight-purple" in cls_passt, f"passt (idx 4) must be highlight-purple, got {cls_passt}"
+
+    cls_an_prep, text_an_prep = word_spans[11]
+    assert text_an_prep == "an"
+    assert "highlight-purple" not in cls_an_prep, f"preposition an (idx 11) must NOT be highlight-purple, got {cls_an_prep}"
+    assert "highlight-orange" in cls_an_prep, f"preposition an should be highlight-orange for its own row, got {cls_an_prep}"
+
+    cls_an_part, text_an_part = word_spans[14]
+    assert text_an_part == "an"
+    assert "highlight-purple" in cls_an_part, f"terminal an (idx 14) must be highlight-purple, got {cls_an_part}"
+
+    # 2. Test fallback without TokenOrder coordinate (resolves via resolve_anchored_positions)
+    tsv_file_fallback = res_dir / "20260908165354-fallback.de.tsv"
+    tsv_content_fallback = (
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\n"
+        "passt\tanpassen\tpasst an\tадаптировать\t1\n"
+        "an\tan\tan\tк\t1\n"
+    )
+    tsv_file_fallback.write_text(tsv_content_fallback, encoding="utf-8")
+
+    html_fb = run_render_flow(
+        text=sentence,
+        language="de",
+        zid="20260908165354",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file_fallback),
+    )
+    word_spans_fb = re.findall(r'<span class="(word[^"]*)" data-word-idx="\d+"[^>]*data-lower-clean="[^"]+"[^>]*>([^<]+)</span>', html_fb)
+    assert len(word_spans_fb) == 15
+
+    assert "highlight-purple" in word_spans_fb[4][0], f"fallback passt must be highlight-purple, got {word_spans_fb[4][0]}"
+    assert "highlight-purple" in word_spans_fb[14][0], f"fallback terminal an must be highlight-purple, got {word_spans_fb[14][0]}"
+    assert "highlight-purple" not in word_spans_fb[11][0], f"fallback preposition an must NOT be highlight-purple, got {word_spans_fb[11][0]}"
+
+
+
+
+

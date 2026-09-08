@@ -282,7 +282,14 @@ def test_resolve_anchored_positions():
     # Inflected: "kommt an"
     pos, ok = desk.resolve_anchored_positions(["kommt", "an"], source, 60)
     assert ok is True
-    assert pos == {1, 4} # minimum span is (1, 4) with span 3; (1, 7) has span 6
+    assert pos == {1, 7} # clause-final particle at index 7 is selected; preposition at index 4 is disambiguated
+
+    # 1b. Real-world German separable verb with internal preposition
+    # Source: "mit dem passenden zubehör passt du das bike schnell und einfach an deinen alltag an"
+    source_real = ["mit", "dem", "passenden", "zubehör", "passt", "du", "das", "bike", "schnell", "und", "einfach", "an", "deinen", "alltag", "an"]
+    pos_real, ok_real = desk.resolve_anchored_positions(["passt", "an"], source_real, 60)
+    assert ok_real is True
+    assert pos_real == {4, 14} # passt at 4, terminal an at 14 (preposition an at 11 is not selected)
 
     # 2. contiguous phrase
     # Source: "he did it in spite of the rule of which he was aware"
