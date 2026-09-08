@@ -349,6 +349,38 @@ def test_resolve_anchored_positions():
     assert ok is True
     assert pos == {0, 1, 2, 3}
 
+    # 9. Multi-sentence text with competing preposition across sentence boundary
+    # Sentence 1 (0..14): "mit dem passenden zubehör passt du das bike schnell und einfach an deinen alltag an"
+    # Sentence 2 (15..30): "so transportierst du im cargo modus den großen wochenendeinkauf und genießt später im duo modus einen ausflug an den see"
+    source_s1 = ["mit", "dem", "passenden", "zubehör", "passt", "du", "das", "bike", "schnell", "und", "einfach", "an", "deinen", "alltag", "an"]
+    source_s2 = ["so", "transportierst", "du", "im", "cargo", "modus", "den", "großen", "wochenendeinkauf", "und", "genießt", "später", "im", "duo", "modus", "einen", "ausflug", "an", "den", "see"]
+    source_multi = source_s1 + source_s2
+    sent_bounds = [1] * len(source_s1) + [2] * len(source_s2)
+    pos_multi, ok_multi = desk.resolve_anchored_positions(["passt", "an"], source_multi, 60, sentence_boundaries=sent_bounds)
+    assert ok_multi is True
+    assert pos_multi == {4, 14} # Anchored to terminal 'an' in Sentence 1 (idx 14), NOT preposition 'an' in Sentence 2 (idx 32)
+
+    # 10. Range-based sentence boundaries format: [(0, 15), (15, 35)]
+    range_bounds = [(0, len(source_s1)), (len(source_s1), len(source_multi))]
+    pos_ranges, ok_ranges = desk.resolve_anchored_positions(["passt", "an"], source_multi, 60, sentence_boundaries=range_bounds)
+    assert ok_ranges is True
+    assert pos_ranges == {4, 14}
+
+    # 11. Cross-sentence false candidate rejection
+    # Verb in sentence 1, only matching particle in sentence 2 -> must not form tuple
+    source_cross = ["er", "sieht", "immer", "gut", "aus", "sie", "geht", "an", "den", "strand"]
+    sent_cross = [1, 1, 1, 1, 1, 2, 2, 2, 2, 2]
+    pos_cross, ok_cross = desk.resolve_anchored_positions(["sieht", "an"], source_cross, 60, sentence_boundaries=sent_cross)
+    assert ok_cross is False
+    assert pos_cross == set()
+
+    # 12. Multiple separable verbs across distinct sentences
+    source_multi_verbs = ["er", "steht", "morgens", "auf", "sie", "steht", "später", "auf"]
+    sent_multi_verbs = [1, 1, 1, 1, 2, 2, 2, 2]
+    pos_mv, ok_mv = desk.resolve_anchored_positions(["steht", "auf"], source_multi_verbs, 60, sentence_boundaries=sent_multi_verbs)
+    assert ok_mv is True
+    assert pos_mv == {1, 3, 5, 7}
+
 
 def test_build_field_mapping_includes_tts():
     mapping = configparser.ConfigParser(allow_no_value=True, interpolation=None)

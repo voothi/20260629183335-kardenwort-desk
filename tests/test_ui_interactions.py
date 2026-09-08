@@ -5439,6 +5439,126 @@ def test_compound_subtoken_selection_and_highlight_isolation_across_shared_subto
     assert "highlight-orange-active" not in (span_duo.get_attribute("class") or "")
 
 
+def test_separable_verb_multi_sentence_click_interaction(page, tmp_path, monkeypatch):
+    import configparser
+    import sys
+    import json
+    from kardenwort_desk import run_render_flow
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "default_target_language", "ru")
+    config.add_section("rendering")
+    config.set("rendering", "display_mode", "monolithic")
+    config.set("rendering", "highlight_source_tokens", "true")
+    config.add_section("sentences_mode")
+    config.set("sentences_mode", "enabled", "false")
+    config.add_section("triggers")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "manual")
+    config.add_section("environment")
+    config.set("environment", "kardenwort_workspace", str(tmp_path))
+    config.add_section("languages")
+    config.set("languages", "de_lemma_index", "de_idx")
+    config.set("languages", "de_lemma_override", "de_over")
+    config.set("languages", "de_prompt", "de_prompt")
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section("fields")
+    mapping.add_section("fields_mapping.word")
+    mapping.add_section("desk_columns")
+    mapping.set("desk_columns", "WordSource", "lemma")
+    mapping.set("desk_columns", "WordSourceInflectedForm", "inflected")
+    mapping.set("desk_columns", "WordDestination", "word_translation")
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, "w") as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "anki_mapping_file": str(mapping_file),
+        "kardenwort_python": sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    text = (
+        "Mit dem passenden Zubehör passt du das Bike schnell und einfach an deinen Alltag an. "
+        "So genießt du später im Duo-Modus einen Ausflug an den See."
+    )
+
+    tsv_path = res_dir / "20260908214259-anpassen.de.tsv"
+    tsv_path.write_text(
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "anpassen\tpasst an\tадаптировать\n"
+        "an\tan\tк\n",
+        encoding="utf-8"
+    )
+
+    html = run_render_flow(
+        text=text,
+        language="de",
+        zid="20260908214259",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # In Sentence 1:
+    # passt (idx 4) -> highlight-purple
+    # an (idx 11, 'an deinen Alltag') -> highlight-orange (preposition)
+    # an (idx 14, terminal particle) -> highlight-purple
+    # In Sentence 2:
+    # an (idx 23, 'an den See') -> highlight-orange (preposition)
+    span_passt = page.locator("span[data-lower-clean='passt']")
+    an_spans = page.locator("span[data-lower-clean='an']")
+    assert an_spans.count() == 3
+
+    span_an_prep_s1 = an_spans.nth(0)  # preposition in sentence 1
+    span_an_part_s1 = an_spans.nth(1)  # particle at end of sentence 1
+    span_an_prep_s2 = an_spans.nth(2)  # preposition in sentence 2
+
+    # Verify initial classes
+    assert "highlight-purple" in (span_passt.get_attribute("class") or "")
+    assert "highlight-purple" in (span_an_part_s1.get_attribute("class") or "")
+    assert "highlight-purple" not in (span_an_prep_s1.get_attribute("class") or "")
+    assert "highlight-purple" not in (span_an_prep_s2.get_attribute("class") or "")
+
+    # Click on 'passt'
+    span_passt.click(button="left")
+
+    # Table row 0 (anpassen) must be selected
+    selected = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected == [0]
+
+    # Both constituent tokens in Sentence 1 must receive active purple highlight
+    assert "highlight-purple-active" in (span_passt.get_attribute("class") or "")
+    assert "highlight-purple-active" in (span_an_part_s1.get_attribute("class") or "")
+
+    # Sentence 2's preposition must NOT be active
+    assert "highlight-purple-active" not in (span_an_prep_s2.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_an_prep_s2.get_attribute("class") or "")
+
+    # Click on 'passt' again to deselect
+    span_passt.click(button="left")
+
+    # Deselects row 0
+    selected_after = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_after == []
+    assert "highlight-purple-active" not in (span_passt.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (span_an_part_s1.get_attribute("class") or "")
+
+
+
 
 
 

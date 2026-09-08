@@ -7536,12 +7536,13 @@ def resolve_row_inflected_form(row, col_inflected, col_inflected2=-1, col_quotat
 SPLIT_GAP_LIMIT = 60
 
 
-def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
+def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, sentence_boundaries=None):
     """
     Finds the set of non-overlapping minimum-span ordered tuples of source-word positions.
     inflected_words: list of lowered, cleaned inflected form words.
     source_word_cleans: list of lowered, cleaned source words.
     gap_limit: int, maximum allowed distance between consecutive positions.
+    sentence_boundaries: optional list of sentence indices per word position, or list of (start, end) word index tuples.
     """
     if len(inflected_words) < 2:
         return set(), False
@@ -7554,6 +7555,24 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
     # If any of the words are not in the source text, no tuple can be formed
     if any(not lst for lst in occs):
         return set(), False
+
+    get_sent_id = None
+    if sentence_boundaries is not None:
+        if isinstance(sentence_boundaries, (list, tuple)):
+            if sentence_boundaries and isinstance(sentence_boundaries[0], (list, tuple)):
+                range_map = {}
+                for item in sentence_boundaries:
+                    if len(item) == 2:
+                        s_id, s_start, s_end = id(item), item[0], item[1]
+                    else:
+                        s_id, s_start, s_end = item[0], item[1], item[2]
+                    for w_idx in range(s_start, s_end):
+                        range_map[w_idx] = s_id
+                get_sent_id = lambda pos: range_map.get(pos, pos)
+            else:
+                get_sent_id = lambda pos: sentence_boundaries[pos] if 0 <= pos < len(sentence_boundaries) else pos
+        elif isinstance(sentence_boundaries, dict):
+            get_sent_id = lambda pos: sentence_boundaries.get(pos, pos)
 
     valid_tuples = []
     k = len(inflected_words)
@@ -7570,6 +7589,8 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
                     continue
                 if pos - prev_pos > gap_limit:
                     continue
+                if get_sent_id is not None and get_sent_id(pos) != get_sent_id(prev_pos):
+                    continue
             current_tuple.append(pos)
             backtrack(step + 1, current_tuple)
             current_tuple.pop()
@@ -7585,7 +7606,11 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
         p0_occs = occs[0]
         def sort_2word_tuple(t):
             p0, p1 = t[0], t[1]
-            subsequent_p0 = [pos for pos in p0_occs if pos > p0]
+            if get_sent_id is not None:
+                p0_sent = get_sent_id(p0)
+                subsequent_p0 = [pos for pos in p0_occs if pos > p0 and get_sent_id(pos) == p0_sent]
+            else:
+                subsequent_p0 = [pos for pos in p0_occs if pos > p0]
             next_p0 = min(subsequent_p0) if subsequent_p0 else float('inf')
             is_within_clause = (p1 < next_p0)
             if is_within_clause:
@@ -7612,11 +7637,10 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit):
 def parse_source_sentences(text, text_mode, config):
     smc = SentencesModeConfig.from_config(config)
     sbc = SentenceBoundaryConfig.from_config(config)
-    wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     eff_mode = _effective_text_mode(text, text_mode)
     
     if eff_mode == 'single':
-        source_sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
+        source_sentences = split_single_mode_text(text, 0, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
     else:
         # Match kardenwort.py core behavior: if multi_mode_remove_empty_lines is true, drop empty lines.
         remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
@@ -9230,7 +9254,42 @@ html, body {{
 
             
     source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
+    sentence_ranges = []
+    curr_search_offset = 0
+    for s_idx, sent_str in enumerate(source_sentences):
+        if not sent_str.strip():
+            continue
+        found_pos = text.find(sent_str, curr_search_offset)
+        if found_pos != -1:
+            start_p = found_pos
+            end_p = found_pos + len(sent_str)
+            sentence_ranges.append((s_idx + 1, start_p, end_p))
+            curr_search_offset = end_p
+        else:
+            sentence_ranges.append((s_idx + 1, curr_search_offset, curr_search_offset + len(sent_str)))
+            curr_search_offset += len(sent_str)
+
+    def _get_sentence_idx(char_pos):
+        if not sentence_ranges:
+            return 1
+        if char_pos < sentence_ranges[0][1]:
+            return sentence_ranges[0][0]
+        for i, (s_idx, start_p, end_p) in enumerate(sentence_ranges):
+            if start_p <= char_pos < end_p:
+                return s_idx
+            if i + 1 < len(sentence_ranges) and end_p <= char_pos < sentence_ranges[i + 1][1]:
+                return s_idx
+        return sentence_ranges[-1][0]
+
+    char_cursor = 0
+    for token in source_tokens:
+        tok_len = len(token["text"])
+        token_sent_idx = _get_sentence_idx(char_cursor)
+        token["sentence_idx"] = token_sent_idx
+        char_cursor += tok_len
+
     source_word_cleans = [t["lower_clean"] for t in source_tokens if t.get("is_word") and "lower_clean" in t]
+    source_word_sentences = [t.get("sentence_idx", 1) for t in source_tokens if t.get("is_word") and "lower_clean" in t]
 
     COMPOUND_DELIMITERS = {'_', '-', '.', '/', '\\', ':', '#', '@'}
     n_tokens = len(source_tokens)
@@ -9299,7 +9358,7 @@ html, body {{
                 inf_words = [w for w in inf_words if w]
                 
                 if len(inf_words) >= 2 and not any(ch in form for ch in SINGLE_WORD_DELIMITERS):
-                    pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit)
+                    pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit, sentence_boundaries=source_word_sentences)
                     if ok:
                         row_anchored_pos.update(pos_set)
                 elif len(inf_words) == 1 or any(ch in form for ch in SINGLE_WORD_DELIMITERS):
@@ -9329,40 +9388,6 @@ html, body {{
             if ln.strip():
                 absolute_to_c_idx[a_idx] = c_idx
                 c_idx += 1
-
-    sentence_ranges = []
-    curr_search_offset = 0
-    for s_idx, sent_str in enumerate(source_sentences):
-        if not sent_str.strip():
-            continue
-        found_pos = text.find(sent_str, curr_search_offset)
-        if found_pos != -1:
-            start_p = found_pos
-            end_p = found_pos + len(sent_str)
-            sentence_ranges.append((s_idx + 1, start_p, end_p))
-            curr_search_offset = end_p
-        else:
-            sentence_ranges.append((s_idx + 1, curr_search_offset, curr_search_offset + len(sent_str)))
-            curr_search_offset += len(sent_str)
-
-    def _get_sentence_idx(char_pos):
-        if not sentence_ranges:
-            return 1
-        if char_pos < sentence_ranges[0][1]:
-            return sentence_ranges[0][0]
-        for i, (s_idx, start_p, end_p) in enumerate(sentence_ranges):
-            if start_p <= char_pos < end_p:
-                return s_idx
-            if i + 1 < len(sentence_ranges) and end_p <= char_pos < sentence_ranges[i + 1][1]:
-                return s_idx
-        return sentence_ranges[-1][0]
-
-    char_cursor = 0
-    for token in source_tokens:
-        tok_len = len(token["text"])
-        token_sent_idx = _get_sentence_idx(char_cursor)
-        token["sentence_idx"] = token_sent_idx
-        char_cursor += tok_len
 
     span_htmls = []
     sentence_chunks = []
