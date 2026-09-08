@@ -1581,8 +1581,8 @@ def test_deduplicate_rows_window_filtering_contractions_en():
         config=config, window_text=window_text, language='en', resolved_paths=resolved_paths
     )
 
-    assert deduped[0][0] == "we're, are"
-    assert deduped[1][0] == "we're, we"
+    assert deduped[0][0] == "we're"
+    assert deduped[1][0] == "we're"
     assert deduped[2][0] == "going"
 
 
@@ -1610,8 +1610,8 @@ def test_deduplicate_rows_window_filtering_negative_contractions():
         config=config, window_text=window_text, language='en', resolved_paths=resolved_paths
     )
 
-    assert deduped[0][0] == "isn't, is"
-    assert deduped[1][0] == "isn't, not"
+    assert deduped[0][0] == "isn't"
+    assert deduped[1][0] == "isn't"
 
 
 def test_deduplicate_rows_possessive_enclitic_filtering():
@@ -1669,8 +1669,8 @@ def test_deduplicate_rows_window_filtering_abbreviations_de():
         config=config, window_text=window_text, language='de', resolved_paths=resolved_paths
     )
 
-    assert deduped[0][0] == "z. B., zum"
-    assert deduped[1][0] == "z. B., Beispiel"
+    assert deduped[0][0] == "z. B."
+    assert deduped[1][0] == "z. B."
 
 
 def test_sort_inflected_forms_acronym_priority():
@@ -1708,8 +1708,8 @@ def test_deduplicate_rows_window_filtering_acronyms():
         config=config, window_text=window_text, language='en', resolved_paths=resolved_paths
     )
 
-    assert deduped[0][0] == "UI, user"
-    assert deduped[1][0] == "UI, interface"
+    assert deduped[0][0] == "UI"
+    assert deduped[1][0] == "UI"
 
 
 

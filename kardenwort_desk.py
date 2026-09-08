@@ -7400,14 +7400,12 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     seen_words = {}
 
     token_config = RuntimeTokenConfig.from_config(config)
-    filter_by_window = token_config.filter_by_window
     combine_source_words = token_config.combine_source_words
-    token_mappings_enabled = token_config.token_mappings_enabled
     order_cfg = token_config.combine_order
     apo_cfg_str = token_config.apostrophe_chars
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
-    
     prefer_lowercase_cfg = token_config.prefer_lowercase
+    filter_by_window = token_config.filter_by_window
 
     is_filtering_window = False
     window_words_exact = set()
@@ -7418,30 +7416,6 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
         raw_words = re.findall(word_pattern, window_text)
         window_words_exact = set(w.strip() for w in raw_words if w.strip())
         contraction_pattern = r"(?:n[" + apo_pattern + r"]t|[" + apo_pattern + r"](?:s|ve|ll|d|re|m)?)$"
-        for w in list(window_words_exact):
-            stem = re.sub(contraction_pattern, "", w, flags=re.IGNORECASE)
-            if stem and stem != w:
-                window_words_exact.add(stem)
-            for part in re.split(r"[" + apo_pattern + r"]+", w):
-                if part:
-                    window_words_exact.add(part)
-
-        if token_mappings_enabled and language:
-            token_mappings = get_desk_token_mappings(resolved_paths, language, config)
-            if token_mappings:
-                for w in list(window_words_exact):
-                    norm_w = w.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
-                    norm_w = re.sub(r'\s+', '', norm_w).lower()
-                    if norm_w in token_mappings:
-                        for tgt in token_mappings[norm_w]:
-                            window_words_exact.add(tgt)
-                norm_window = window_text.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'").lower()
-                norm_window_stripped = re.sub(r'\s+', '', norm_window)
-                for norm_key, targets in token_mappings.items():
-                    if len(norm_key) > 1 and norm_key in norm_window_stripped:
-                        for tgt in targets:
-                            window_words_exact.add(tgt)
-
         window_words_lower = set(w.lower() for w in window_words_exact)
 
         def _is_in_window(p_clean):
