@@ -3830,6 +3830,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     for col_idx, h in enumerate(updated_headers):
                         if col_idx < len(r):
                             row_updates[h] = r[col_idx]
+                    row_updates["word_provenance"] = "live:intellifiller"
 
                     if row_idx < len(db_words):
                         w_id = db_words[row_idx].get("id")
@@ -5587,7 +5588,11 @@ def format_provenance_tooltip(prov, zid=None):
             return "Translated via DeepL"
         if p.lower() == "lingva":
             return "Translated via Lingva"
+        if p.lower() in ("intellifiller", "ai"):
+            return "Translated via IntelliFiller (AI)"
         return f"Translated via {p.capitalize()}"
+    if prov_str.lower() in ("intellifiller", "ai", "live:intellifiller", "live:ai"):
+        return "Translated via IntelliFiller (AI)"
     if prov_str in ("corpus:wordfill", "wordfill:corpus"):
         if zid:
             return f"Pre-filled from Corpus (ZID: {zid})"
@@ -11109,6 +11114,7 @@ html, body {{
         if (pLower === 'google') return 'Translated via Google';
         if (pLower === 'deepl') return 'Translated via DeepL';
         if (pLower === 'lingva') return 'Translated via Lingva';
+        if (pLower === 'intellifiller' || pLower === 'ai') return 'Translated via IntelliFiller (AI)';
         if (pLower === 'corpus:wordfill' || pLower === 'wordfill:corpus') {
             return 'Pre-filled from Corpus (WordFill)';
         }
@@ -12164,22 +12170,24 @@ html, body {{
                             }
                         }
                     }
+                    var transTd = tr.querySelector('td[data-col="WordDestination"]') || (tds.length >= 3 ? tds[2] : null);
                     function applyCellProvenance(effectiveVal) {
-                        var existingProv = tds[2].getAttribute('data-provenance') || (tds[2].querySelector('.scrollable-cell') ? tds[2].querySelector('.scrollable-cell').getAttribute('data-provenance') : null);
+                        if (!transTd) return;
+                        var existingProv = transTd.getAttribute('data-provenance') || (transTd.querySelector('.scrollable-cell') ? transTd.querySelector('.scrollable-cell').getAttribute('data-provenance') : null);
                         var effProv = rowProv || existingProv || (effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1 ? 'cached:sqlite' : null);
                         if (effProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
-                            tds[2].setAttribute('data-provenance', effProv);
+                            transTd.setAttribute('data-provenance', effProv);
                             var pTitle = formatProvenanceTooltip(effProv);
-                            if (pTitle) tds[2].setAttribute('title', pTitle);
-                            var scrollDiv = tds[2].querySelector('.scrollable-cell');
+                            if (pTitle) transTd.setAttribute('title', pTitle);
+                            var scrollDiv = transTd.querySelector('.scrollable-cell');
                             if (scrollDiv) {
                                 scrollDiv.setAttribute('data-provenance', effProv);
                                 if (pTitle) scrollDiv.setAttribute('title', pTitle);
                             }
                         } else {
-                            tds[2].removeAttribute('data-provenance');
-                            tds[2].removeAttribute('title');
-                            var scrollDiv = tds[2].querySelector('.scrollable-cell');
+                            transTd.removeAttribute('data-provenance');
+                            transTd.removeAttribute('title');
+                            var scrollDiv = transTd.querySelector('.scrollable-cell');
                             if (scrollDiv) {
                                 scrollDiv.removeAttribute('data-provenance');
                                 scrollDiv.removeAttribute('title');

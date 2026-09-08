@@ -1799,6 +1799,7 @@ class SessionArbiter:
                 data_rows = [list(r) for r in sess.get("data_rows", [])]
                 headers = list(sess.get("headers", []))
                 role_fields = dict(sess.get("role_fields", {}))
+                sib_row_provs = dict(sess.get("row_provenances", {}))
 
             if not data_rows or not headers:
                 continue
@@ -1807,15 +1808,18 @@ class SessionArbiter:
             if col_lemma == -1:
                 continue
 
+            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+
             modified = False
-            for row in data_rows:
+            for row_id, row in enumerate(data_rows):
                 if len(row) <= col_lemma:
                     continue
                 lemma_val = row[col_lemma].strip()
                 if lemma_val in enriched_lemmas:
                     enrich_dict = enriched_lemmas[lemma_val]
+                    row_modified = False
                     for field_name, val in enrich_dict.items():
-                        if not val:
+                        if not val or field_name == "word_provenance":
                             continue
                         if field_name not in headers:
                             headers.append(field_name)
@@ -1826,7 +1830,18 @@ class SessionArbiter:
                             row.append("")
                         if not row[col_idx].strip() or 'skeleton-loader' in row[col_idx] or row[col_idx] == '[FAILED]':
                             row[col_idx] = str(val)
+                            row_modified = True
                             modified = True
+
+                    if row_modified:
+                        prov_val = enrich_dict.get("word_provenance", "live:intellifiller")
+                        sib_row_provs[row_id] = prov_val
+                        sib_row_provs[str(row_id)] = prov_val
+                        if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
+                            t_ord_str = str(row[col_token_order]).strip()
+                            sib_row_provs[t_ord_str] = prov_val
+                            if t_ord_str.isdigit():
+                                sib_row_provs[int(t_ord_str)] = prov_val
 
             if modified:
                 new_fp = compute_content_fingerprint(data_rows)
@@ -1835,6 +1850,7 @@ class SessionArbiter:
                         self.sessions[sib_zid]["data_rows"] = data_rows
                         self.sessions[sib_zid]["headers"] = headers
                         self.sessions[sib_zid]["fingerprint"] = new_fp
+                        self.sessions[sib_zid]["row_provenances"] = sib_row_provs
 
                 # Persist to TSV or SQLite
                 sib_tsv = find_working_tsv(results_dir, sib_zid, sess_lang, storage_adapter=storage_adapter)
@@ -1846,13 +1862,15 @@ class SessionArbiter:
                     except Exception as e:
                         logger.warning(f"Failed to save propagated sibling TSV {sib_zid}: {e}")
 
-                structured_rows = format_update_rows_dict(data_rows, headers, role_fields)
+                structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sib_row_provs)
                 self.emit_event(sib_zid, {
                     "type": "update",
                     "stage": "enrichment",
                     "status": "success",
                     "fingerprint": new_fp,
                     "rows": structured_rows,
+                    "row_provenances": sib_row_provs,
+                    "rowProvenances": sib_row_provs,
                 })
 
     def reword_session(
@@ -1884,10 +1902,31 @@ class SessionArbiter:
         mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
         # Enforce frequency sort parity so selected_rows match displayed UI table rows
         data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
+        existing_row_provs = {}
+        with self._lock:
+            if session_zid in self.sessions:
+                existing_row_provs = dict(self.sessions[session_zid].get("row_provenances", {}))
+
+        if not existing_row_provs and is_sqlite:
+            try:
+                db_words = storage_adapter.db.get_words_by_session(session_zid)
+                for w in db_words:
+                    w_prov = w.get("word_provenance")
+                    if w_prov:
+                        t_ord = str(w.get("token_order", ""))
+                        if t_ord:
+                            existing_row_provs[t_ord] = w_prov
+                            if t_ord.isdigit():
+                                existing_row_provs[int(t_ord)] = w_prov
+            except Exception:
+                pass
+
+        new_reword_provs = {}
         wordfill_cfg = getattr(self, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
         if wordfill_cfg and wordfill_cfg.get('enabled', False) and col_lemma != -1:
             target_quality = wordfill_cfg.get('target_quality', 'any')
@@ -1905,6 +1944,13 @@ class SessionArbiter:
                             tier = 2 if (has_ipa and has_morph) else (1 if (has_ipa or has_morph) else 0)
                             if tier >= target_quality_tier:
                                 apply_wordfill_to_rows([row], headers, match)
+                                new_reword_provs[row_id] = "corpus:wordfill"
+                                new_reword_provs[str(row_id)] = "corpus:wordfill"
+                                if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
+                                    t_ord_str = str(row[col_token_order]).strip()
+                                    new_reword_provs[t_ord_str] = "corpus:wordfill"
+                                    if t_ord_str.isdigit():
+                                        new_reword_provs[int(t_ord_str)] = "corpus:wordfill"
                                 logger.info(
                                     f"wordfill (reword_session): pre-filled quality tier {tier} for row {row_id} lemma '{lemma_val}' "
                                     f"from corpus; skipping IntelliFiller."
@@ -1916,6 +1962,19 @@ class SessionArbiter:
                 with storage_adapter.file_lock(tsv_path):
                     storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                 selected_rows = remaining_selected
+
+        for r_idx in selected_rows:
+            if 0 <= r_idx < len(data_rows):
+                row = data_rows[r_idx]
+                new_reword_provs[r_idx] = "live:intellifiller"
+                new_reword_provs[str(r_idx)] = "live:intellifiller"
+                if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
+                    t_ord_str = str(row[col_token_order]).strip()
+                    new_reword_provs[t_ord_str] = "live:intellifiller"
+                    if t_ord_str.isdigit():
+                        new_reword_provs[int(t_ord_str)] = "live:intellifiller"
+
+        existing_row_provs.update(new_reword_provs)
 
         enriched_lemma_map: Dict[str, Dict[str, str]] = {}
         if selected_rows:
@@ -1951,6 +2010,7 @@ class SessionArbiter:
                                 if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
                                     item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
                                 if item_enrich:
+                                    item_enrich["word_provenance"] = "live:intellifiller"
                                     self.enrichment_queue.set_cached(l_val, lang, item_enrich)
                                     enriched_lemma_map[l_val] = item_enrich
             else:
@@ -1965,6 +2025,8 @@ class SessionArbiter:
                             cached = self.enrichment_queue.get_cached(lemma_val, lang)
                             if cached:
                                 for k, v in cached.items():
+                                    if k == "word_provenance":
+                                        continue
                                     if k not in headers:
                                         headers.append(k)
                                         for dr in data_rows:
@@ -1973,7 +2035,9 @@ class SessionArbiter:
                                     while len(row) <= c_idx:
                                         row.append("")
                                     row[c_idx] = str(v)
-                                enriched_lemma_map[lemma_val] = cached
+                                cached_copy = dict(cached)
+                                cached_copy["word_provenance"] = "live:intellifiller"
+                                enriched_lemma_map[lemma_val] = cached_copy
                             else:
                                 rows_to_enrich.append(r_idx)
 
@@ -2006,6 +2070,7 @@ class SessionArbiter:
                                         if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
                                             item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
                                         if item_enrich:
+                                            item_enrich["word_provenance"] = "live:intellifiller"
                                             self.enrichment_queue.set_cached(l_val, lang, item_enrich)
                                             enriched_lemma_map[l_val] = item_enrich
                     else:
@@ -2026,6 +2091,7 @@ class SessionArbiter:
             if session_zid in self.sessions:
                 self.sessions[session_zid]["data_rows"] = data_rows
                 self.sessions[session_zid]["fingerprint"] = new_fp
+                self.sessions[session_zid]["row_provenances"] = existing_row_provs
 
         safe_write_update_js(
             tsv_path,
@@ -2035,17 +2101,20 @@ class SessionArbiter:
             stage="finished",
             status="success",
             zid=session_zid,
-            config=self.config
+            config=self.config,
+            row_provenances=existing_row_provs,
         )
 
-        structured_rows = format_update_rows_dict(data_rows, headers, role_fields)
+        structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=existing_row_provs)
 
         self.emit_event(session_zid, {
             "type": "update",
             "stage": "enrichment",
             "status": "success",
             "fingerprint": new_fp,
-            "rows": structured_rows
+            "rows": structured_rows,
+            "row_provenances": existing_row_provs,
+            "rowProvenances": existing_row_provs,
         })
 
         return {
@@ -2053,7 +2122,9 @@ class SessionArbiter:
             "session_zid": session_zid,
             "fingerprint": new_fp,
             "data_rows": data_rows,
-            "rows": structured_rows
+            "rows": structured_rows,
+            "row_provenances": existing_row_provs,
+            "rowProvenances": existing_row_provs,
         }
 
     def enqueue_progressive_translation(

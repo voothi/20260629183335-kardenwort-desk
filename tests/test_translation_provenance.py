@@ -27,6 +27,8 @@ class TestTranslationProvenance(unittest.TestCase):
         self.assertEqual(format_provenance_tooltip("live:google"), "Translated via Google")
         self.assertEqual(format_provenance_tooltip("live:deepl"), "Translated via DeepL")
         self.assertEqual(format_provenance_tooltip("live:lingva"), "Translated via Lingva")
+        self.assertEqual(format_provenance_tooltip("live:intellifiller"), "Translated via IntelliFiller (AI)")
+        self.assertEqual(format_provenance_tooltip("live:ai"), "Translated via IntelliFiller (AI)")
         self.assertEqual(format_provenance_tooltip("corpus:wordfill"), "Pre-filled from Corpus (WordFill)")
         self.assertEqual(format_provenance_tooltip("corpus:wordfill:20260101120000"), "Pre-filled from Corpus (ZID: 20260101120000)")
         self.assertEqual(format_provenance_tooltip("cached:sqlite"), "Loaded from session cache (SQLite)")
@@ -1459,6 +1461,156 @@ de_prompt=test
     # Provenance and tooltips from the cached session must be rendered immediately on the first render
     assert 'data-provenance="live:google"' in html
     assert 'title="Translated via Google"' in html
+
+
+def test_enrich_session_intellifiller_writes_word_provenance_sqlite(tmp_path):
+    """Test 2.1: enrich_session_intellifiller writes word_provenance='live:intellifiller' into SQLite words."""
+    db_path = tmp_path / "kardenwort.db"
+    migrations_dir = Path(__file__).resolve().parent.parent / "schemas" / "migrations"
+    db = KardenwortDB(str(db_path), migrations_dir=migrations_dir)
+    db.run_migrations()
+    sess_zid = "20260908120000"
+    db.insert_session({
+        "zid": sess_zid,
+        "source_language": "de",
+        "target_language": "ru",
+        "raw_text": "Haus",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": "Das Haus.",
+        "sentence_destination": "Дом.",
+    })
+    db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "token_order": 0,
+        "quotation": "Haus",
+        "lemma": "Haus",
+        "word_source": "Haus",
+        "word_destination": "дом",
+        "word_provenance": "live:google",
+    })
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+[storage]
+backend=sqlite
+sqlite_path={db_path.as_posix()}
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[languages]
+de_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    storage_adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
+
+    with patch("kardenwort_desk.run_headless_intellifiller") as mock_runner:
+        def fake_runner(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+            comments, headers, data_rows = kardenwort_desk.load_tsv_rows(tsv_path)
+            col_dest = headers.index("WordDestination")
+            data_rows[0][col_dest] = "здание (reworded)"
+            storage_adapter._tsv_fallback.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            return True
+        mock_runner.side_effect = fake_runner
+
+        ok = storage_adapter.enrich_session_intellifiller(
+            session_zid=sess_zid,
+            prompt_name="test",
+            selected_rows=[0],
+            reprocess=True,
+        )
+        assert ok is True
+
+    words = db.get_words_by_session(sess_zid)
+    assert len(words) == 1
+    assert words[0]["word_destination"] == "здание (reworded)"
+    assert words[0]["word_provenance"] == "live:intellifiller"
+
+
+def test_reword_session_returns_provenance_in_delta(tmp_path):
+    """Test 1.1, 1.2 & 3.1: SessionArbiter.reword_session returns row_provenances and provenance field in delta."""
+    from kardenwort_controller import SessionArbiter
+    config_path = tmp_path / "config.ini"
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text("[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n", encoding="utf-8")
+
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path.write_text(f"""[pipeline]
+text_base_provider=google
+[storage]
+backend=tsv
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[languages]
+de_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    sess_zid = "20260908123000"
+    tsv_file = results_dir / f"{sess_zid}.de.tsv"
+    tsv_file.write_text(
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
+        "0\tHaus\tдом\t1\n"
+        "1\tBaum\tдерево\t1\n",
+        encoding="utf-8"
+    )
+
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.sessions[sess_zid] = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "data_rows": [["0", "Haus", "дом", "1"], ["1", "Baum", "дерево", "1"]],
+        "headers": ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"],
+        "role_fields": {"lemma": "WordSource", "word_translation": "WordDestination", "sentence_index": "SentenceSourceIndex"},
+        "row_provenances": {0: "live:google", "0": "live:google", 1: "live:google", "1": "live:google"},
+    }
+
+    with patch("kardenwort_controller.run_headless_intellifiller") as mock_runner:
+        def fake_runner(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+            lines = tsv_path.read_text(encoding="utf-8").splitlines()
+            # row 0 reworded
+            new_lines = [
+                lines[0], lines[1],
+                "0\tHaus\tновое_здание\t1",
+                "1\tBaum\tдерево\t1",
+            ]
+            tsv_path.write_text("\n".join(new_lines) + "\n", encoding="utf-8")
+            return True
+        mock_runner.side_effect = fake_runner
+
+        res = arbiter.reword_session(
+            session_zid=sess_zid,
+            selected_rows=[0],
+            language="de",
+        )
+
+        assert res["status"] == "success"
+        assert "row_provenances" in res
+        assert res["row_provenances"].get(0) == "live:intellifiller" or res["row_provenances"].get("0") == "live:intellifiller"
+        # row 1 must retain existing provenance
+        assert res["row_provenances"].get(1) == "live:google" or res["row_provenances"].get("1") == "live:google"
+        # Check structured rows
+        assert "rows" in res
+        assert res["rows"][0]["provenance"] == "live:intellifiller"
+        assert res["rows"][1]["provenance"] == "live:google"
 
 
 if __name__ == "__main__":

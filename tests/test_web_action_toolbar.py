@@ -78,8 +78,13 @@ window.fetch = async function(url, options) {
                         ipa: '/haʊs/',
                         morph: '<b>N</b>; Nom, Sg',
                         token_order: '0',
-                        sentence_idx: '1'
+                        sentence_idx: '1',
+                        provenance: 'live:intellifiller'
                     }
+                },
+                row_provenances: {
+                    0: 'live:intellifiller',
+                    '0': 'live:intellifiller'
                 }
             })
         };
@@ -253,6 +258,11 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     assert page.evaluate("window.__reloads") == 0
     cell_trans = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     assert "новое_здание_reworded" in cell_trans.inner_text()
+    assert cell_trans.get_attribute("data-provenance") == "live:intellifiller"
+    assert cell_trans.get_attribute("title") == "Translated via IntelliFiller (AI)"
+    scroll_div = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] .scrollable-cell")
+    assert scroll_div.get_attribute("data-provenance") == "live:intellifiller"
+    assert scroll_div.get_attribute("title") == "Translated via IntelliFiller (AI)"
 
     # 3. Click Re-text -> dispatches /session/retext and in-place updates translation container without reload
     retext_btn = page.locator("#kw-btn-retext")
