@@ -1068,6 +1068,71 @@ def test_contraction_audio_order_were(page):
     assert play_calls[0]["arg"].endswith("en\\nwe are")
 
 
+def test_german_contraction_deduplicated_merged_row_audio_playback(page):
+    source_html = '<span class="word" data-word-idx="0" data-line-idx="0" data-lower-clean="beim">beim</span>'
+    manifest = [
+        {"text": "beim", "is_word": True, "visual_idx": 0, "lower_clean": "beim", "row_ids": [76, 74]},
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div class="section"><div class="source-text" id="source-container">{source_html}</div></div>
+  <div class="section">
+    <table id="lemma-table">
+      <tbody>
+        <tr data-row-id="0" data-all-row-ids="0, 11, 49, 74">
+          <td data-col="WordSource"><div class="scrollable-cell">der</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">am, im, beim, die</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">the</div></td>
+        </tr>
+        <tr data-row-id="76">
+          <td data-col="WordSource"><div class="scrollable-cell">bei</div></td>
+          <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">beim, bei</div></td>
+          <td data-col="WordDestination"><div class="scrollable-cell">at</div></td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="session-lang" type="text/plain">de</script>
+<script id="session-target-lang" type="text/plain">en</script>
+</body>
+</html>"""
+
+    # 1. lemma mode with joined chain: plays "bei der"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined"))
+    span = page.locator("span[data-lower-clean=\"beim\"]")
+    span.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nbei der")
+
+    # 2. lemma mode with separate chain: plays "bei ||| der"
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
+    page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="separate"))
+    span = page.locator("span[data-lower-clean=\"beim\"]")
+    span.click(button="left")
+    calls = page.evaluate("window.__ahkCalls")
+    play_calls = [c for c in calls if c.get("action") == "play"]
+    assert len(play_calls) == 1
+    assert play_calls[0]["arg"].endswith("de\\nbei ||| der")
+
+    # 3. verify raw row translations resolution via data-all-row-ids
+    trans = page.evaluate("""() => {
+        const s = document.querySelector("span[data-lower-clean='beim']");
+        return getRawRowTranslations(s);
+    }""")
+    assert "at" in trans
+    assert "the" in trans
+
+
 def test_render_flow_ordered_manifest_rows(tmp_path):
     import configparser
     import kardenwort_desk

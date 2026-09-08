@@ -12859,6 +12859,28 @@ html, body {{
             }
         }
 
+        function findTableRowById(rowId) {
+            if (rowId === undefined || rowId === null) return null;
+            var rIdStr = String(rowId);
+            var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
+                ? tableRows
+                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+            for (var k = 0; k < rows.length; k++) {
+                var tr = rows[k];
+                if (tr.getAttribute('data-row-id') === rIdStr) {
+                    return tr;
+                }
+                var allIds = tr.getAttribute('data-all-row-ids');
+                if (allIds) {
+                    var parts = allIds.split(',').map(function(s) { return s.trim(); });
+                    if (parts.indexOf(rIdStr) !== -1) {
+                        return tr;
+                    }
+                }
+            }
+            return null;
+        }
+
         function isCompoundDelimiterNode(node) {
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
@@ -12945,13 +12967,7 @@ html, body {{
             var translations = [];
             for (var j = 0; j < tokenData.row_ids.length; j++) {
                 var rowId = tokenData.row_ids[j];
-                var tr = null;
-                for (var k = 0; k < tableRows.length; k++) {
-                    if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                        tr = tableRows[k];
-                        break;
-                    }
-                }
+                var tr = findTableRowById(rowId);
                 if (tr) {
                     var tds = tr.getElementsByTagName('td');
                     for (var m = 0; m < tds.length; m++) {
@@ -13018,13 +13034,7 @@ html, body {{
 
             for (var j = 0; j < tokenData.row_ids.length; j++) {
                 var rowId = tokenData.row_ids[j];
-                var tr = null;
-                for (var k = 0; k < tableRows.length; k++) {
-                    if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                        tr = tableRows[k];
-                        break;
-                    }
-                }
+                var tr = findTableRowById(rowId);
                 if (!tr) continue;
 
                 var tds = tr.getElementsByTagName('td');
@@ -13314,13 +13324,7 @@ html, body {{
 
             for (var j = 0; j < tokenData.row_ids.length; j++) {
                 var rowId = tokenData.row_ids[j];
-                var tr = null;
-                for (var k = 0; k < tableRows.length; k++) {
-                    if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                        tr = tableRows[k];
-                        break;
-                    }
-                }
+                var tr = findTableRowById(rowId);
                 if (!tr) continue;
 
                 var tds = tr.getElementsByTagName('td');
@@ -13399,13 +13403,7 @@ html, body {{
                 var directMatchRows = [];
                 for (var j = 0; j < tokenData.row_ids.length; j++) {
                     var rowId = tokenData.row_ids[j];
-                    var tr = null;
-                    for (var k = 0; k < tableRows.length; k++) {
-                        if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                            tr = tableRows[k];
-                            break;
-                        }
-                    }
+                    var tr = findTableRowById(rowId);
                     if (!tr) continue;
                     
                     var tds = tr.getElementsByTagName('td');
@@ -13453,13 +13451,7 @@ html, body {{
                     if ((!group || group.length <= 1) && tokenData.row_ids.length > 0) {
                         for (var j = 0; j < tokenData.row_ids.length; j++) {
                             var rowId = tokenData.row_ids[j];
-                            var tr = null;
-                            for (var k = 0; k < tableRows.length; k++) {
-                                if (parseInt(tableRows[k].getAttribute('data-row-id')) === rowId) {
-                                    tr = tableRows[k];
-                                    break;
-                                }
-                            }
+                            var tr = findTableRowById(rowId);
                             if (!tr) continue;
                             var tds = tr.getElementsByTagName('td');
                             var lemma = "";
@@ -13515,6 +13507,12 @@ html, body {{
         function getWordInflectedForm(span) {
             return getSingleTokenWordsToPlay(span, 'inflection');
         }
+
+        window.findTableRowById = findTableRowById;
+        window.getRawRowTranslations = getRawRowTranslations;
+        window.getWordTranslation = getWordTranslation;
+        window.getWordLemma = getWordLemma;
+        window.getWordInflectedForm = getWordInflectedForm;
 
         for (var i = 0; i < tokenSpans.length; i++) {
             (function(span) {
