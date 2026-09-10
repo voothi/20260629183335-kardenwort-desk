@@ -9693,12 +9693,11 @@ html, body {{
                     filtered_cand_rows.append(r_idx)
             mapped_rows = filtered_cand_rows
             
-            filtered_rows = []
-            for r_idx in mapped_rows:
-                if r_idx in single_word_rows:
-                    filtered_rows.append(r_idx)
-                elif word_counter in anchored_positions.get(r_idx, set()):
-                    filtered_rows.append(r_idx)
+            paired_anchored = [r_idx for r_idx in mapped_rows if word_counter in anchored_positions.get(r_idx, set())]
+            if paired_anchored:
+                filtered_rows = paired_anchored
+            else:
+                filtered_rows = [r_idx for r_idx in mapped_rows if r_idx in single_word_rows]
             if filtered_rows:
                 if token_mappings and lower_clean:
                     norm_tok = lower_clean.replace('’', "'").replace('‘', "'").replace('`', "'").replace('´', "'").replace('ʼ', "'")
@@ -13394,10 +13393,34 @@ html, body {{
             var tokenData = findTokenData(s);
             var spanClean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || "").trim().toLowerCase();
             var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
+            var isPurpleConstruct = s.classList && s.classList.contains('highlight-purple');
             
             if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
                 var sanitized = sanitizeSpokenText(spanText);
                 if (sanitized) words.push(sanitized);
+            } else if (isPurpleConstruct) {
+                for (var j = 0; j < tokenData.row_ids.length; j++) {
+                    var rowId = tokenData.row_ids[j];
+                    var tr = findTableRowById(rowId);
+                    if (!tr) continue;
+                    var tds = tr.getElementsByTagName('td');
+                    var lemma = "";
+                    var inflected = "";
+                    for (var m = 0; m < tds.length; m++) {
+                        var col = tds[m].getAttribute('data-col');
+                        if (col === '{lemma_col_name}') {
+                            lemma = (tds[m].textContent || tds[m].innerText || "").trim();
+                        } else if (col === '{inflected_col_name}') {
+                            inflected = (tds[m].textContent || tds[m].innerText || "").trim();
+                        }
+                    }
+                    var term = (sourceMode === 'inflection' && inflected) ? inflected : lemma;
+                    if (!term) term = lemma || inflected || spanText;
+                    term = sanitizeSpokenText(term);
+                    if (term && (words.length === 0 || words[words.length - 1] !== term)) {
+                        words.push(term);
+                    }
+                }
             } else {
                 // Check for direct-match rows (e.g. contractions like "isn't" -> [be, not], or sub-token "camel" -> [camel])
                 var directMatchRows = [];

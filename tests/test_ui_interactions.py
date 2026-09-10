@@ -5622,6 +5622,64 @@ def test_separable_verb_multi_sentence_click_interaction(page, tmp_path, monkeyp
     assert "highlight-purple-active" not in (span_passt.get_attribute("class") or "")
     assert "highlight-purple-active" not in (span_an_part_s1.get_attribute("class") or "")
 
+    # Click on terminal particle 'an' in Sentence 1
+    span_an_part_s1.click(button="left")
+
+    # Table row 0 (anpassen) must be selected
+    selected_part = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_part == [0]
+
+    # Both constituent tokens receive active purple highlight
+    assert "highlight-purple-active" in (span_passt.get_attribute("class") or "")
+    assert "highlight-purple-active" in (span_an_part_s1.get_attribute("class") or "")
+
+    # Prepositions remain inactive
+    assert "highlight-purple-active" not in (span_an_prep_s1.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_an_prep_s1.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (span_an_prep_s2.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_an_prep_s2.get_attribute("class") or "")
+
+    # Click on terminal particle 'an' again to deselect
+    span_an_part_s1.click(button="left")
+    selected_after_part = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_after_part == []
+
+    # Click on preposition 'an' in Sentence 1
+    span_an_prep_s1.click(button="left")
+
+    # Table row 1 (an) must be selected
+    selected_prep = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_prep == [1]
+
+    # Preposition receives active orange highlight
+    assert "highlight-orange-active" in (span_an_prep_s1.get_attribute("class") or "")
+
+    # Separable verb constituents do NOT receive active purple highlight
+    assert "highlight-purple-active" not in (span_passt.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (span_an_part_s1.get_attribute("class") or "")
+
+    # Click on preposition 'an' again to deselect
+    span_an_prep_s1.click(button="left")
+    assert json.loads(page.evaluate("window.getSelectedRows()")) == []
+
+    # Verify Audio Spoken Words Resolution (Lemma & Inflection modes)
+    spoken_lemma_passt = page.evaluate("window.getWordLemma(document.querySelector(\"span[data-lower-clean='passt']\"))")
+    spoken_lemma_part_an = page.evaluate("window.getWordLemma(document.querySelectorAll(\"span[data-lower-clean='an']\")[1])")
+    spoken_lemma_prep_an = page.evaluate("window.getWordLemma(document.querySelectorAll(\"span[data-lower-clean='an']\")[0])")
+
+    assert spoken_lemma_passt == "anpassen"
+    assert spoken_lemma_part_an == "anpassen"
+    assert spoken_lemma_prep_an == "an"
+
+    spoken_inf_passt = page.evaluate("window.getWordInflectedForm(document.querySelector(\"span[data-lower-clean='passt']\"))")
+    spoken_inf_part_an = page.evaluate("window.getWordInflectedForm(document.querySelectorAll(\"span[data-lower-clean='an']\")[1])")
+    spoken_inf_prep_an = page.evaluate("window.getWordInflectedForm(document.querySelectorAll(\"span[data-lower-clean='an']\")[0])")
+
+    assert spoken_inf_passt == "passt an"
+    assert spoken_inf_part_an == "passt an"
+    assert spoken_inf_prep_an == "an"
+
+
 
 
 
