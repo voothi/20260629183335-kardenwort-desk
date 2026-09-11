@@ -1870,4 +1870,81 @@ def test_tab_switching_after_background_update_renders_fresh_translations_withou
     assert tr2.locator(".skeleton-loader").count() == 0
 
 
+def test_playwright_tab1_master_overview_multi_sentence_hover_and_rainbow(page, tmp_path):
+    """
+    Verifies that on Tab 1 (Master Overview) with multi-sentence text:
+    - Hovering words in Sentence 1 highlights words in Sentence 1 translation div (div 0).
+    - Hovering words in Sentence 2 highlights words in Sentence 2 translation div (div 1).
+    - Clicking/pinning words establishes rainbow bookmarks on both source and translation across sentences.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_tab1_hover.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260911000004"
+    text = "Das Haus ist gross. Die Katze schlaeft."
+    tsv_file = tmp_path / f"{unique_zid}-tab1-hover.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tHaus\tдом\t1\tДом большой.\t0\n"
+        "Katze\tKatze\tKatze\tкошка\t2\tКошка спит.\t0\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1  # Tab 1: Master Overview
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # On Tab 1 (Overview), all sentences are displayed
+    haus_token = page.locator('#source-container span.word', has_text='Haus')
+    katze_token = page.locator('#source-container span.word', has_text='Katze')
+    assert haus_token.count() == 1
+    assert katze_token.count() == 1
+
+    # 1. Hover "Haus" (Sentence 1) -> Highlight translation in div 0
+    haus_token.hover()
+    hovered_trans = page.locator('#translation-container span.word.hl-mvp-hover')
+    assert hovered_trans.count() >= 1
+    assert hovered_trans.first.evaluate("el => el.getAttribute('data-sentence-idx')") == "1"
+
+    # 2. Pin "Haus"
+    haus_token.click()
+    assert "hl-mvp-pin" in (haus_token.get_attribute("class") or "")
+    pinned_trans = page.locator('#translation-container span.word.hl-mvp-pin')
+    assert pinned_trans.count() >= 1
+    assert pinned_trans.first.evaluate("el => el.getAttribute('data-sentence-idx')") == "1"
+
+    # 3. Hover "Katze" (Sentence 2) -> Highlight translation in div 1
+    katze_token.hover()
+    hovered_trans2 = page.locator('#translation-container span.word.hl-mvp-hover')
+    assert hovered_trans2.count() >= 1
+    assert hovered_trans2.first.evaluate("el => el.getAttribute('data-sentence-idx')") == "2"
+
+    # 4. Pin "Katze" -> Both sentences now pinned with distinct slots
+    katze_token.click()
+    assert "hl-mvp-pin" in (katze_token.get_attribute("class") or "")
+    pinned_all = page.locator('#translation-container span.word.hl-mvp-pin')
+    assert pinned_all.count() >= 2
+
+
 

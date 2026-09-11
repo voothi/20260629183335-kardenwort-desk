@@ -11277,8 +11277,26 @@ html, body {{
         if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader') || tc.querySelector('.btn-retry-cell')) {
             return;
         }
+
+        var sc = document.getElementById('source-container');
+        var maxSourceSent = 1;
+        if (sc) {
+            var scChunks = sc.querySelectorAll('.kw-sentence-chunk, span.word[data-sentence-idx]');
+            for (var scIdx = 0; scIdx < scChunks.length; scIdx++) {
+                var sVal = parseInt(scChunks[scIdx].getAttribute('data-sentence-idx'), 10);
+                if (!isNaN(sVal) && sVal > maxSourceSent) maxSourceSent = sVal;
+            }
+        }
+        if (maxSourceSent === 1 && window._kwSentenceCards && window._kwSentenceCards.length > 1) {
+            maxSourceSent = window._kwSentenceCards.length - 1;
+        }
+        var isSingleChildTab = (tc.getAttribute('data-sentence-idx') && parseInt(tc.getAttribute('data-sentence-idx'), 10) > 0);
+        var hasMultiSent = (!isSingleChildTab && maxSourceSent > 1);
+
         var divs = tc.getElementsByTagName('div');
         if (divs.length === 0) {
+            var tcSentIdx = tc.getAttribute('data-sentence-idx') || '1';
+            var tcLineIdx = tc.getAttribute('data-line-idx') || '0';
             var firstChild = tc.firstChild;
             if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
                 if (!firstChild.classList.contains('hl-mvp')) {
@@ -11287,7 +11305,8 @@ html, body {{
                         var span = childSpans[j];
                         if (span.classList && span.classList.contains('word')) {
                             addClass(span, 'hl-mvp');
-                            span.setAttribute('data-line-idx', '0');
+                            if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', tcLineIdx);
+                            if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', tcSentIdx);
                         }
                     }
                 }
@@ -11295,30 +11314,70 @@ html, body {{
                 var text = tc.textContent || tc.innerText || '';
                 var parts = tokenizeText(text);
                 var html = '';
+                var curSent = hasMultiSent ? 1 : parseInt(tcSentIdx, 10) || 1;
                 for (var k = 0; k < parts.length; k++) {
                     var part = parts[k];
                     if (!part) continue;
                     if (k % 2 === 1) {
                         var lc = part.toLowerCase();
-                        html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="0">' + escapeHtml(part) + '</span>';
+                        html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + escapeHtml(tcLineIdx) + '" data-sentence-idx="' + curSent + '">' + escapeHtml(part) + '</span>';
                     } else {
+                        if (hasMultiSent && (/[.!?]/.test(part) || part.indexOf(String.fromCharCode(10)) !== -1 || part.indexOf(String.fromCharCode(13)) !== -1)) {
+                            if (curSent < maxSourceSent) curSent++;
+                        }
                         html += escapeHtml(part);
                     }
                 }
                 tc.innerHTML = html;
             }
+        } else if (divs.length === 1 && hasMultiSent) {
+            var div = divs[0];
+            var firstChild = div.firstChild;
+            if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
+                var childSpans = div.getElementsByTagName('span');
+                for (var j = 0; j < childSpans.length; j++) {
+                    var span = childSpans[j];
+                    if (span.classList && span.classList.contains('word')) {
+                        if (!span.classList.contains('hl-mvp')) addClass(span, 'hl-mvp');
+                        if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', '0');
+                        if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', '1');
+                    }
+                }
+            } else {
+                var text = div.textContent || div.innerText || '';
+                var parts = tokenizeText(text);
+                var html = '';
+                var curSent = 1;
+                for (var k = 0; k < parts.length; k++) {
+                    var part = parts[k];
+                    if (!part) continue;
+                    if (k % 2 === 1) {
+                        var lc = part.toLowerCase();
+                        html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="0" data-sentence-idx="' + curSent + '">' + escapeHtml(part) + '</span>';
+                    } else {
+                        if (hasMultiSent && (/[.!?]/.test(part) || part.indexOf(String.fromCharCode(10)) !== -1 || part.indexOf(String.fromCharCode(13)) !== -1)) {
+                            if (curSent < maxSourceSent) curSent++;
+                        }
+                        html += escapeHtml(part);
+                    }
+                }
+                div.innerHTML = html;
+            }
         } else {
             for (var i = 0; i < divs.length; i++) {
                 var div = divs[i];
+                var divSentIdx = div.getAttribute('data-sentence-idx') || String(i + 1);
+                div.setAttribute('data-sentence-idx', divSentIdx);
+                div.setAttribute('data-line-idx', String(i));
                 var firstChild = div.firstChild;
                 if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
-                    if (firstChild.classList.contains('hl-mvp')) continue;
                     var childSpans = div.getElementsByTagName('span');
                     for (var j = 0; j < childSpans.length; j++) {
                         var span = childSpans[j];
                         if (span.classList && span.classList.contains('word')) {
-                            addClass(span, 'hl-mvp');
-                            span.setAttribute('data-line-idx', String(i));
+                            if (!span.classList.contains('hl-mvp')) addClass(span, 'hl-mvp');
+                            if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', String(i));
+                            if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', divSentIdx);
                         }
                     }
                 } else {
@@ -11330,7 +11389,7 @@ html, body {{
                         if (!part) continue;
                         if (k % 2 === 1) {
                             var lc = part.toLowerCase();
-                            html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + i + '">' + escapeHtml(part) + '</span>';
+                            html += '<span class="word hl-mvp" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + i + '" data-sentence-idx="' + escapeHtml(divSentIdx) + '">' + escapeHtml(part) + '</span>';
                         } else {
                             html += escapeHtml(part);
                         }
@@ -11394,18 +11453,39 @@ html, body {{
                     }
                     span.setAttribute('data-mvp-idx', String(sourceSpansArray.length));
                     span.setAttribute('data-mvp-type', 'source');
+                    var sentIdx = span.getAttribute('data-sentence-idx');
+                    if (!sentIdx && chunk && chunk.getAttribute) {
+                        sentIdx = chunk.getAttribute('data-sentence-idx');
+                        if (sentIdx) span.setAttribute('data-sentence-idx', sentIdx);
+                    }
                     sourceSpansArray.push(span);
                 }
             }
         }
         var tc = document.getElementById('translation-container');
         if (tc) {
+            var tcSentIdx = tc.getAttribute('data-sentence-idx');
             var transSpans = tc.getElementsByTagName('span');
             for (var j = 0; j < transSpans.length; j++) {
                 var span = transSpans[j];
                 if (span.classList && span.classList.contains('hl-mvp')) {
+                    var chunk = span.closest ? span.closest('div') : span.parentElement;
+                    if (chunk && chunk.style && chunk.style.display === 'none') {
+                        continue;
+                    }
                     span.setAttribute('data-mvp-idx', String(transSpansArray.length));
                     span.setAttribute('data-mvp-type', 'trans');
+                    var spanSentIdx = span.getAttribute('data-sentence-idx');
+                    if (!spanSentIdx) {
+                        if (chunk && chunk.getAttribute && chunk.getAttribute('data-sentence-idx')) {
+                            spanSentIdx = chunk.getAttribute('data-sentence-idx');
+                        } else if (tcSentIdx) {
+                            spanSentIdx = tcSentIdx;
+                        }
+                        if (spanSentIdx) {
+                            span.setAttribute('data-sentence-idx', spanSentIdx);
+                        }
+                    }
                     transSpansArray.push(span);
                 }
             }
@@ -11415,34 +11495,107 @@ html, body {{
     function getTargetIdx(idx, isSource) {
         var sourceArray = isSource ? sourceSpansArray : transSpansArray;
         var targetArray = isSource ? transSpansArray : sourceSpansArray;
+        if (!targetArray || targetArray.length === 0) return -1;
         var span = sourceArray[idx];
         if (!span) return -1;
-        var lineIdx = span.getAttribute('data-line-idx');
-        if (!lineIdx) {
-            lineIdx = "0";
+
+        var spanSentIdx = span.getAttribute('data-sentence-idx');
+        var spanLineIdx = span.getAttribute('data-line-idx') || "0";
+
+        // Tier 1: Sentence Scope resolution
+        var sourceSentPool = [];
+        var targetSentPool = [];
+
+        if (spanSentIdx) {
+            for (var s = 0; s < sourceArray.length; s++) {
+                if (sourceArray[s].getAttribute('data-sentence-idx') === spanSentIdx) {
+                    sourceSentPool.push(s);
+                }
+            }
+            for (var t = 0; t < targetArray.length; t++) {
+                if (targetArray[t].getAttribute('data-sentence-idx') === spanSentIdx) {
+                    targetSentPool.push(t);
+                }
+            }
         }
-        var sourceLineSpans = [];
+
+        // If no matching sentence target pool exists (or child tab context isolation):
+        if (targetSentPool.length === 0) {
+            sourceSentPool = [];
+            for (var s2 = 0; s2 < sourceArray.length; s2++) {
+                sourceSentPool.push(s2);
+            }
+            targetSentPool = [];
+            for (var t2 = 0; t2 < targetArray.length; t2++) {
+                targetSentPool.push(t2);
+            }
+        }
+
+        // Tier 2: Line / Cue Scope resolution
+        var distinctSourceLines = {};
+        for (var i = 0; i < sourceSentPool.length; i++) {
+            var l = sourceArray[sourceSentPool[i]].getAttribute('data-line-idx') || "0";
+            distinctSourceLines[l] = true;
+        }
+        var distinctTargetLines = {};
+        for (var j = 0; j < targetSentPool.length; j++) {
+            var l2 = targetArray[targetSentPool[j]].getAttribute('data-line-idx') || "0";
+            distinctTargetLines[l2] = true;
+        }
+
+        var sourcePool = sourceSentPool;
+        var targetPool = targetSentPool;
+
+        var sourceLineCount = Object.keys(distinctSourceLines).length;
+        var targetLineCount = Object.keys(distinctTargetLines).length;
+
+        if (sourceLineCount > 1 && targetLineCount > 1) {
+            var subSourceLinePool = [];
+            var subTargetLinePool = [];
+            for (var si = 0; si < sourceSentPool.length; si++) {
+                var sIdx = sourceSentPool[si];
+                if ((sourceArray[sIdx].getAttribute('data-line-idx') || "0") === spanLineIdx) {
+                    subSourceLinePool.push(sIdx);
+                }
+            }
+            for (var ti = 0; ti < targetSentPool.length; ti++) {
+                var tIdx = targetSentPool[ti];
+                if ((targetArray[tIdx].getAttribute('data-line-idx') || "0") === spanLineIdx) {
+                    subTargetLinePool.push(tIdx);
+                }
+            }
+            if (subTargetLinePool.length > 0 && subSourceLinePool.length > 0) {
+                sourcePool = subSourceLinePool;
+                targetPool = subTargetLinePool;
+            }
+        }
+
+        // Tier 3: Positional ratio & Defensive fallback
+        if (targetPool.length === 0) {
+            targetPool = [];
+            for (var tf = 0; tf < targetArray.length; tf++) targetPool.push(tf);
+            sourcePool = [];
+            for (var sf = 0; sf < sourceArray.length; sf++) sourcePool.push(sf);
+        }
+
+        if (targetPool.length === 0) return -1;
+        if (sourcePool.length <= 1 || targetPool.length <= 1) return targetPool[0];
+
         var sourcePos = 0;
-        for (var i = 0; i < sourceArray.length; i++) {
-            var sLine = sourceArray[i].getAttribute('data-line-idx') || "0";
-            if (sLine === lineIdx) {
-                sourceLineSpans.push(i);
-                if (i === idx) sourcePos = sourceLineSpans.length - 1;
+        for (var k = 0; k < sourcePool.length; k++) {
+            if (sourcePool[k] === idx) {
+                sourcePos = k;
+                break;
             }
         }
-        var targetLineSpans = [];
-        for (var j = 0; j < targetArray.length; j++) {
-            var tLine = targetArray[j].getAttribute('data-line-idx') || "0";
-            if (tLine === lineIdx) {
-                targetLineSpans.push(j);
-            }
-        }
-        if (targetLineSpans.length === 0) return -1;
-        if (sourceLineSpans.length <= 1 || targetLineSpans.length <= 1) return targetLineSpans[0];
-        var ratio = sourcePos / (sourceLineSpans.length - 1);
-        var targetPos = Math.round(ratio * (targetLineSpans.length - 1));
-        return targetLineSpans[targetPos];
+
+        var ratio = sourcePos / (sourcePool.length - 1);
+        var targetPos = Math.round(ratio * (targetPool.length - 1));
+        if (targetPos < 0) targetPos = 0;
+        if (targetPos >= targetPool.length) targetPos = targetPool.length - 1;
+        return targetPool[targetPos];
     }
+    window.getTargetIdx = getTargetIdx;
 
     function wireMvpEvents() {
         if (!mvpHighlightEnabled) return;
@@ -11472,7 +11625,7 @@ html, body {{
                 var isSource = (this.getAttribute('data-mvp-type') === 'source');
                 var targetIdx = getTargetIdx(idx, isSource);
                 var targetSpan = isSource ? transSpansArray[targetIdx] : sourceSpansArray[targetIdx];
-                if (targetSpan && !targetSpan.classList.contains('hl-mvp-pin')) {
+                if (targetSpan) {
                     removeClass(targetSpan, 'hl-mvp-hover');
                 }
             }
@@ -11675,6 +11828,26 @@ html, body {{
         tokenizeTranslation();
         buildLcIndex();
         wireMvpEvents();
+        if (mvpBookmarks && mvpBookmarks.length > 0) {
+            for (var i = 0; i < mvpBookmarks.length; i++) {
+                var entry = mvpBookmarks[i];
+                var bKey = entry.idx;
+                if (!bKey) continue;
+                var prefix = bKey.charAt(0);
+                var idx, isSource;
+                if (prefix === 's' || prefix === 't') {
+                    idx = parseInt(bKey.substring(1), 10);
+                    isSource = (prefix === 's');
+                } else {
+                    idx = parseInt(bKey, 10);
+                    isSource = true;
+                }
+                var targetIdx = getTargetIdx(idx, isSource);
+                entry.srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
+                entry.transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
+            }
+            refreshBookmarkClasses();
+        }
     };
 
     var isInitialized = false;
@@ -16327,6 +16500,13 @@ html, body {{
                         if (tText && tText.trim()) {
                             transContainer.classList.remove('skeleton-loader');
                             transContainer.removeAttribute('data-pending');
+                        }
+                        if (activeSentenceIdx > 0) {
+                            transContainer.setAttribute('data-sentence-idx', String(activeSentenceIdx));
+                            transContainer.setAttribute('data-line-idx', '0');
+                        } else {
+                            transContainer.removeAttribute('data-sentence-idx');
+                            transContainer.removeAttribute('data-line-idx');
                         }
                         transContainer.innerHTML = getTranslationHtml(tText);
                         var tabProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || transContainer.getAttribute('data-provenance');
