@@ -349,3 +349,55 @@ def test_client_side_delta_updates_refresh_cell_tooltips(page, tmp_path):
 
     cls_cell = page.locator("#lemma-table tbody tr[data-row-id='0'] td.col-classification")
     assert cls_cell.get_attribute("title") == "Goethe: A1"
+
+
+def test_inflected_column_gray_color_styling(page, tmp_path):
+    """Verifies that INFLECTED column text is rendered in text_muted gray matching IPA and Morphology, while Lemma and Translation use main text color."""
+    import kardenwort_desk
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    zid = "20260913001500"
+    tsv_file = tmp_path / f"{zid}-colors.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\tDeskSelected\n"
+        "Häuser\tHaus\tHäuser\tдома\t[ˈhɔɪ̯zɐ]\tSubstantiv, Neutrum\t1\t1\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html_code = kardenwort_desk.run_render_flow(
+        text="Häuser",
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False
+    )
+    assert "#lemma-table th.col-inflected, #lemma-table td.col-inflected" in html_code
+
+    page.set_content(html_code)
+
+    inflected_cell = page.locator("#lemma-table tbody tr[data-row-id='0'] td.col-inflected")
+    ipa_cell = page.locator("#lemma-table tbody tr[data-row-id='0'] td.col-ipa")
+    lemma_cell = page.locator("#lemma-table tbody tr[data-row-id='0'] td.col-lemma")
+    trans_cell = page.locator("#lemma-table tbody tr[data-row-id='0'] td.col-translation")
+
+    assert inflected_cell.count() == 1
+    assert ipa_cell.count() == 1
+    assert lemma_cell.count() == 1
+    assert trans_cell.count() == 1
+
+    inf_color = inflected_cell.evaluate("el => window.getComputedStyle(el).color")
+    ipa_color = ipa_cell.evaluate("el => window.getComputedStyle(el).color")
+    lemma_color = lemma_cell.evaluate("el => window.getComputedStyle(el).color")
+    trans_color = trans_cell.evaluate("el => window.getComputedStyle(el).color")
+
+    # INFLECTED and IPA must have identical gray text color
+    assert inf_color == ipa_color
+
+    # LEMMA and TRANSLATE must have bright/main color distinct from gray
+    assert lemma_color == trans_color
+    assert inf_color != lemma_color
+

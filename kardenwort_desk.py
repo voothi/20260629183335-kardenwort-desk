@@ -9931,8 +9931,8 @@ html, body {{
 
         row_html_line = (
             f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
-            f'<td class="{inflected_class}" data-col="{inflected_col_name}"{inflected_title_attr}><div class="scrollable-cell">{inflected_val}</div></td>'
-            f'<td class="{lemma_class}" data-col="{lemma_col_name}"{lemma_title_attr}><div class="scrollable-cell">{lemma_val}</div></td>'
+            f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{inflected_title_attr}><div class="scrollable-cell">{inflected_val}</div></td>'
+            f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{lemma_title_attr}><div class="scrollable-cell">{lemma_val}</div></td>'
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
             f'<td class="col-ipa" data-col="{ipa_col_name}"{ipa_title_attr}><div class="scrollable-cell">{ipa_val}</div></td>'
             f'<td class="col-morphology" data-col="{morph_col_name}"{morph_title_attr}><div class="scrollable-cell">{morph_val}</div></td>'
@@ -10273,8 +10273,8 @@ html, body {{
                 ov_hl_class += " selected kw-row-selected"
             ov_row_html = (
                 f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
-                f'<td class="{inflected_class}" data-col="{inflected_col_name}"{ov_inf_title}><div class="scrollable-cell">{ov_inflected}</div></td>'
-                f'<td class="{lemma_class}" data-col="{lemma_col_name}"{ov_lemma_title}><div class="scrollable-cell">{ov_lemma}</div></td>'
+                f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{ov_inf_title}><div class="scrollable-cell">{ov_inflected}</div></td>'
+                f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{ov_lemma_title}><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
                 f'<td class="col-ipa" data-col="{ipa_col_name}"{ov_ipa_title}><div class="scrollable-cell">{ov_ipa}</div></td>'
                 f'<td class="col-morphology" data-col="{morph_col_name}"{ov_morph_title}><div class="scrollable-cell">{ov_morph}</div></td>'
@@ -10748,10 +10748,12 @@ html, body {{
     box-sizing: border-box;
     vertical-align: middle;
   }
-  #lemma-table th.col-inflected, #lemma-table td.col-inflected {
+  #lemma-table th.col-inflected, #lemma-table td.col-inflected,
+  #lemma-table td[data-col="WordSourceInflectedForm"] {
     width: 10%;
     text-align: left;
     padding-left: 0;
+    color: {text_muted};
   }
   #lemma-table th.col-lemma, #lemma-table td.col-lemma {
     width: 10%;
@@ -17240,8 +17242,8 @@ html, body {{
 
                         htmlParts.push(
                             '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
-                            '<td class="editable" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
-                            '<td class="editable" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
+                            '<td class="editable col-inflected" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
+                            '<td class="editable col-lemma" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
                             '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
                             '<td class="col-ipa" data-col="WordSourceIPA"' + ipaTitleAttr + '><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
                             '<td class="col-morphology" data-col="WordSourceMorphologyAI"' + morphTitleAttr + '><div class="scrollable-cell">' + (w.morphology || '') + '</div></td>' +
