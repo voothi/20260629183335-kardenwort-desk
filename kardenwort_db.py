@@ -1904,10 +1904,10 @@ class KardenwortDB:
         sql = """
             INSERT INTO words (
                 session_zid, sentence_index, token_order, quotation, inflected_form,
-                lemma, pos, morphology, ipa, word_destination, word_destination_inflected,
+                lemma, pos, gender, morphology, ipa, word_destination, word_destination_inflected,
                 selected, leitner_box, leitner_due, deck, classification_oxford,
                 classification_goethe, word_provenance, extra_fields
-            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
         """
         inserted_ids: List[int] = []
 
@@ -1924,6 +1924,7 @@ class KardenwortDB:
                         w.get("inflected_form"),
                         w["lemma"],
                         w.get("pos"),
+                        w.get("gender"),
                         w.get("morphology"),
                         w.get("ipa"),
                         w.get("word_destination"),
@@ -2103,7 +2104,7 @@ class KardenwortDB:
 
         allowed_cols = {
             "sentence_index", "token_order", "quotation", "inflected_form",
-            "lemma", "pos", "morphology", "ipa", "word_destination",
+            "lemma", "pos", "gender", "morphology", "ipa", "word_destination",
             "word_destination_inflected", "selected", "leitner_box", "leitner_due",
             "deck", "classification_oxford", "classification_goethe", "word_provenance",
             "extra_fields",
@@ -2178,8 +2179,11 @@ class KardenwortDB:
             "classificationoxford": "classification_oxford",
             "classification_oxford": "classification_oxford",
             "classificationgoethe": "classification_goethe",
-            "classificationgoethe": "classification_goethe",
+            "classification_goethe": "classification_goethe",
+            "wordsourcepos": "pos",
             "pos": "pos",
+            "wordsourcegender": "gender",
+            "gender": "gender",
             "word_provenance": "word_provenance",
             "wordprovenance": "word_provenance",
             "provenance": "word_provenance",
@@ -2348,10 +2352,10 @@ class KardenwortDB:
                 word_sql = """
                     INSERT INTO words (
                         session_zid, sentence_index, token_order, quotation, inflected_form,
-                        lemma, pos, morphology, ipa, word_destination, word_destination_inflected,
+                        lemma, pos, gender, morphology, ipa, word_destination, word_destination_inflected,
                         selected, leitner_box, leitner_due, deck, classification_oxford,
                         classification_goethe, word_provenance, extra_fields
-                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
+                    ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?);
                 """
                 word_records = [
                     (
@@ -2362,6 +2366,7 @@ class KardenwortDB:
                         w.get("inflected_form"),
                         w["lemma"],
                         w.get("pos"),
+                        w.get("gender"),
                         w.get("morphology"),
                         w.get("ipa"),
                         w.get("word_destination"),

@@ -397,3 +397,99 @@ def test_performance_tracing_records_local_ollama_provider(enrichment_env):
     assert trace_entry["extra"]["provider"] == "local_ollama"
     assert trace_entry["extra"]["model"] == "qwen2.5:3b"
 
+
+def test_sqlite_enrich_session_intellifiller_overrides_pos_and_gender(enrichment_env):
+    """
+    Verifies that IntelliFiller enrichment properly overrides initial POS and gender
+    heuristics in SQLite storage (e.g. compound noun gender override and verb gender clearing).
+    """
+    adapter = enrichment_env["adapter"]
+    db = enrichment_env["db"]
+    session_zid = "20260912180000"
+
+    # 1. Seed session with initial heuristic values
+    session = {
+        "zid": session_zid,
+        "slug": "override-test",
+        "source_language": "de",
+        "target_language": "ru",
+        "source_raw_text": "Das Wörterbuch steht hier. Wir stehen auf.",
+    }
+    sentences = [
+        {"session_zid": session_zid, "sentence_index": 1, "sentence_source": "Das Wörterbuch steht hier.", "sentence_destination": "Словарь стоит здесь."},
+        {"session_zid": session_zid, "sentence_index": 2, "sentence_source": "Wir stehen auf.", "sentence_destination": "Мы встаем."},
+    ]
+    words = [
+        {
+            "session_zid": session_zid,
+            "sentence_index": 1,
+            "token_order": 0,
+            "quotation": "Wörterbuch",
+            "lemma": "Wörterbuch",
+            "pos": "n.",
+            "gender": "m", # Initial incorrect heuristic
+            "selected": 1,
+        },
+        {
+            "session_zid": session_zid,
+            "sentence_index": 2,
+            "token_order": 1,
+            "quotation": "stehen",
+            "lemma": "aufstehen",
+            "pos": "v.",
+            "gender": "",
+            "selected": 1,
+        },
+    ]
+    db.save_session_bundle(session, sentences, words)
+
+    # 2. Mock headless intellifiller returning LLM JSON mapped values
+    def fake_ifiller_override(tsv_path, *args, **kwargs):
+        comments, headers, data_rows = load_tsv_rows(tsv_path)
+        for h in ["WordSourcePOS", "WordSourceGender", "WordDestination"]:
+            if h not in headers:
+                headers.append(h)
+                for r in data_rows:
+                    r.append("")
+        pos_idx = headers.index("WordSourcePOS")
+        gen_idx = headers.index("WordSourceGender")
+        dest_idx = headers.index("WordDestination")
+
+        # Row 0: Wörterbuch -> neuter override
+        data_rows[0][pos_idx] = "n."
+        data_rows[0][gen_idx] = "n"
+        data_rows[0][dest_idx] = "словарь"
+
+        # Row 1: aufstehen -> verb, empty gender
+        if len(data_rows) > 1:
+            data_rows[1][pos_idx] = "v."
+            data_rows[1][gen_idx] = ""
+            data_rows[1][dest_idx] = "вставать"
+
+        save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+        return True
+
+    with patch("kardenwort_desk._run_headless_intellifiller_impl", side_effect=fake_ifiller_override):
+        success = adapter.enrich_session_intellifiller(
+            session_zid=session_zid,
+            prompt_name="German Vocabulary Analysis and Translation (JSON)",
+            reprocess=True,
+            zid="20260912180001",
+        )
+        assert success is True
+
+    # 3. Verify values in SQLite DB
+    db_words = db.get_words_by_session(session_zid)
+    assert len(db_words) == 2
+
+    w_dict = db_words[0]
+    assert w_dict["lemma"] == "Wörterbuch"
+    assert w_dict["pos"] == "n."
+    assert w_dict["gender"] == "n" # Overridden from 'm' to 'n'!
+    assert w_dict["word_destination"] == "словарь"
+
+    w_verb = db_words[1]
+    assert w_verb["lemma"] == "aufstehen"
+    assert w_verb["pos"] == "v."
+    assert w_verb["gender"] in ("", None)
+

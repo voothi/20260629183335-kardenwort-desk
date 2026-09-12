@@ -2155,6 +2155,51 @@ def build_field_mapping(mapping, mode):
         field_mapping.update(dict(mapping['tts']))
     return field_mapping
 
+POS_NORMALIZATION_MAP = {
+    "NOUN": "n.",
+    "PROPN": "n.",
+    "VERB": "v.",
+    "AUX": "v.",
+    "ADJ": "adj.",
+    "ADV": "adv.",
+    "ADP": "prep.",
+    "PREP": "prep.",
+    "PRON": "pron.",
+    "CCONJ": "conj.",
+    "SCONJ": "conj.",
+    "CONJ": "conj.",
+    "NUM": "num.",
+    "DET": "art.",
+    "ART": "art.",
+    "PART": "part.",
+    "INTJ": "intj.",
+}
+
+def normalize_pos_tag(pos: Optional[str]) -> str:
+    if not pos:
+        return ""
+    pos_clean = str(pos).strip()
+    pos_upper = pos_clean.upper()
+    if pos_upper in POS_NORMALIZATION_MAP:
+        return POS_NORMALIZATION_MAP[pos_upper]
+    pos_lower = pos_clean.lower()
+    if pos_lower in ("n.", "v.", "adj.", "adv.", "prep.", "conj.", "pron.", "art.", "num.", "part.", "intj."):
+        return pos_lower
+    return pos_clean
+
+def format_pos_cell(pos_val: Optional[str]) -> str:
+    return normalize_pos_tag(pos_val)
+
+def format_gender_badge(gender_val: Optional[str]) -> str:
+    g = (str(gender_val) if gender_val is not None else "").strip().lower()
+    if g in ("m", "masc", "masculine"):
+        return '<span class="kw-gender kw-gender-m">m</span>'
+    elif g in ("f", "fem", "feminine"):
+        return '<span class="kw-gender kw-gender-f">f</span>'
+    elif g in ("n", "neut", "neuter"):
+        return '<span class="kw-gender kw-gender-n">n</span>'
+    return ""
+
 def get_role_fields(mapping, headers):
     role_fields = {}
     headers_lower = {h.lower(): h for h in headers}
@@ -2178,6 +2223,16 @@ def get_role_fields(mapping, headers):
         role_fields['morphology'] = headers_lower['wordsourcemorphologyai']
     if 'ipa' not in role_fields and 'wordsourceipa' in headers_lower:
         role_fields['ipa'] = headers_lower['wordsourceipa']
+    if 'pos' not in role_fields:
+        if 'wordsourcepos' in headers_lower:
+            role_fields['pos'] = headers_lower['wordsourcepos']
+        elif 'pos' in headers_lower:
+            role_fields['pos'] = headers_lower['pos']
+    if 'gender' not in role_fields:
+        if 'wordsourcegender' in headers_lower:
+            role_fields['gender'] = headers_lower['wordsourcegender']
+        elif 'gender' in headers_lower:
+            role_fields['gender'] = headers_lower['gender']
     if 'selected' not in role_fields and 'deskselected' in headers_lower:
         role_fields['selected'] = headers_lower['deskselected']
         
@@ -2890,6 +2945,7 @@ class SqliteStorageAdapter(StorageAdapter):
                 "worddestination", "worddestinationinflectedform",
                 "wordsourcemorphologyai", "wordsourceipa", "deskselected", "leitnerbox",
                 "leitnerdue", "deck", "classificationoxford", "classificationgoethe",
+                "wordsourcepos", "pos", "wordsourcegender", "gender",
                 "sentencesourceindex", "sentencesource", "sentencedestination",
                 "sentencedestination2", "sentencesourceipa", "sentencesourceaudio",
                 "sentencesourcecontextleft", "sentencesourcecontextright",
@@ -2988,6 +3044,8 @@ class SqliteStorageAdapter(StorageAdapter):
                 deck = get_col_val(row, "deck") or None
                 oxford = get_col_val(row, "classificationoxford") or None
                 goethe = get_col_val(row, "classificationgoethe") or None
+                pos_val = get_col_val(row, "wordsourcepos") or get_col_val(row, "pos") or None
+                gender_val = get_col_val(row, "wordsourcegender") or get_col_val(row, "gender") or None
 
                 # Collect extra fields
                 extra: Dict[str, Any] = {}
@@ -3029,7 +3087,8 @@ class SqliteStorageAdapter(StorageAdapter):
                     "quotation": quotation,
                     "inflected_form": inflected or existing_w.get("inflected_form") or None,
                     "lemma": lemma or existing_w.get("lemma"),
-                    "pos": None,
+                    "pos": pos_val or existing_w.get("pos") or None,
+                    "gender": gender_val or existing_w.get("gender") or None,
                     "morphology": morph or existing_w.get("morphology") or None,
                     "ipa": ipa or existing_w.get("ipa") or None,
                     "word_destination": effective_w_dest or None,
@@ -3337,6 +3396,10 @@ class SqliteStorageAdapter(StorageAdapter):
                         row_cells.append(str(word.get("classification_oxford") or ""))
                     elif h_lower in ("classificationgoethe", "classification_goethe"):
                         row_cells.append(str(word.get("classification_goethe") or ""))
+                    elif h_lower in ("wordsourcepos", "pos"):
+                        row_cells.append(str(word.get("pos") or ""))
+                    elif h_lower in ("wordsourcegender", "gender"):
+                        row_cells.append(str(word.get("gender") or ""))
                     elif h_lower == "sentencesourceindex":
                         row_cells.append(str(s_idx))
                     elif h_lower == "sentencesourcecontextleft":
@@ -3593,7 +3656,10 @@ class SqliteStorageAdapter(StorageAdapter):
             "classification_oxford": "classification_oxford",
             "classificationgoethe": "classification_goethe",
             "classification_goethe": "classification_goethe",
+            "wordsourcepos": "pos",
             "pos": "pos",
+            "wordsourcegender": "gender",
+            "gender": "gender",
         }
         f_norm = field.strip().lower().replace("_", "")
         db_col = field_mapping.get(f_norm)
@@ -9522,8 +9588,10 @@ html, body {{
     
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+    col_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else (headers.index('pos') if 'pos' in headers else -1))
+    col_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else (headers.index('gender') if 'gender' in headers else -1))
 
-    header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology"]
+    header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology", "POS", "G"]
     
     dynamic_roles = []
     desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
@@ -9558,6 +9626,10 @@ html, body {{
             th_elements.append(f'<th class="col-translation">{h}</th>')
         elif h_lower == "morphology":
             th_elements.append(f'<th class="col-morphology">{h}</th>')
+        elif h_lower == "pos":
+            th_elements.append(f'<th class="col-pos">{h}</th>')
+        elif h_lower == "g":
+            th_elements.append(f'<th class="col-gender">{h}</th>')
         else:
             th_elements.append(f'<th>{h}</th>')
     table_header_html = "<tr>" + "".join(th_elements) + "</tr>"
@@ -9568,6 +9640,8 @@ html, body {{
     inflected_col_name = role_fields.get('inflected', 'WordSourceInflectedForm')
     ipa_col_name = role_fields.get('ipa', 'WordSourceIPA')
     morph_col_name = role_fields.get('morphology', 'WordSourceMorphologyAI')
+    pos_col_name = role_fields.get('pos', 'WordSourcePOS')
+    gender_col_name = role_fields.get('gender', 'WordSourceGender')
     selected_col_name = role_fields.get('selected', 'DeskSelected')
 
     editable_cols = mapping.get('desk_editable', 'editable_columns', fallback='')
@@ -9592,6 +9666,10 @@ html, body {{
             trans_val = ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+        pos_raw = row[col_pos] if col_pos != -1 and len(row) > col_pos else ""
+        gender_raw = row[col_gender] if col_gender != -1 and len(row) > col_gender else ""
+        pos_val = format_pos_cell(pos_raw)
+        gender_badge = format_gender_badge(gender_raw)
         
         # Skeleton loaders for cells pending when a configured provider is expected to fill them:
         if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
@@ -9611,6 +9689,9 @@ html, body {{
 
         token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and row[col_token_order].strip() else str(row_id)
         sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and row[col_index].strip().isdigit() else "1"
+
+        pos_td = f'<td class="col-pos" data-col="{pos_col_name}"><div class="scrollable-cell">{pos_val}</div></td>'
+        gender_td = f'<td class="col-gender" data-col="{gender_col_name}"><div class="scrollable-cell">{gender_badge}</div></td>'
 
         dynamic_tds = ""
         for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
@@ -9645,6 +9726,8 @@ html, body {{
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
             f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ipa_val}</div></td>'
             f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{morph_val}</div></td>'
+            f'{pos_td}'
+            f'{gender_td}'
             f'{dynamic_tds}'
             f'</tr>'
         )
@@ -9658,6 +9741,8 @@ html, body {{
             "translation": trans_val,
             "ipa": ipa_val,
             "morphology": morph_val,
+            "pos": pos_val,
+            "gender": gender_raw,
             "selected": is_selected,
             "highlight_class": row_highlight_class,
             "provenance": prov_val or "",
@@ -9920,6 +10005,13 @@ html, body {{
             used_primary_ids.add(primary_id)
             all_ids_str = ",".join(str(x) for x in matched_ids)
 
+            ov_pos_raw = ov_r[col_pos] if col_pos != -1 and len(ov_r) > col_pos else ""
+            ov_gender_raw = ov_r[col_gender] if col_gender != -1 and len(ov_r) > col_gender else ""
+            ov_pos = format_pos_cell(ov_pos_raw)
+            ov_gender = format_gender_badge(ov_gender_raw)
+            ov_pos_td = f'<td class="col-pos" data-col="{pos_col_name}"><div class="scrollable-cell">{ov_pos}</div></td>'
+            ov_gender_td = f'<td class="col-gender" data-col="{gender_col_name}"><div class="scrollable-cell">{ov_gender}</div></td>'
+
             ov_dynamic_tds = ""
             for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
                 val = ov_r[d_idx] if d_idx != -1 and len(ov_r) > d_idx else ""
@@ -9956,6 +10048,8 @@ html, body {{
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
                 f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ov_ipa}</div></td>'
                 f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{ov_morph}</div></td>'
+                f'{ov_pos_td}'
+                f'{ov_gender_td}'
                 f'{ov_dynamic_tds}'
                 f'</tr>'
             )
@@ -9969,6 +10063,8 @@ html, body {{
                 "translation": ov_trans,
                 "ipa": ov_ipa,
                 "morphology": ov_morph,
+                "pos": ov_pos,
+                "gender": ov_gender_raw,
                 "selected": ov_is_sel,
                 "highlight_class": ov_hl_class,
                 "provenance": ov_prov_val or "",
@@ -10460,9 +10556,55 @@ html, body {{
   body:not(.maximized) #lemma-table td.col-morphology {
     width: 26%;
   }
-  body:not(.maximized) #lemma-table th.col-classification,
-  body:not(.maximized) #lemma-table td.col-classification {
-    width: 10%;
+  #lemma-table th.col-pos, #lemma-table td.col-pos {
+    width: 1%;
+    white-space: nowrap;
+    text-align: center !important;
+    padding-left: 2px !important;
+    padding-right: 6px !important;
+  }
+  #lemma-table th.col-gender, #lemma-table td.col-gender {
+    width: 1%;
+    white-space: nowrap;
+    text-align: center !important;
+    padding-left: 2px !important;
+    padding-right: 6px !important;
+  }
+  body:not(.maximized) #lemma-table th.col-pos,
+  body:not(.maximized) #lemma-table td.col-pos {
+    width: 5%;
+  }
+  body:not(.maximized) #lemma-table th.col-gender,
+  body:not(.maximized) #lemma-table td.col-gender {
+    width: 4%;
+  }
+  th.col-pos, td.col-pos,
+  th.col-gender, td.col-gender {
+    text-align: center !important;
+  }
+  .kw-gender {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    font-size: 11px;
+    line-height: 1.2;
+    text-transform: lowercase;
+  }
+  .kw-gender-m {
+    background-color: rgba(30, 144, 255, 0.15);
+    color: #3b82f6;
+    border: 1px solid rgba(59, 130, 246, 0.4);
+  }
+  .kw-gender-f {
+    background-color: rgba(239, 68, 68, 0.15);
+    color: #ef4444;
+    border: 1px solid rgba(239, 68, 68, 0.4);
+  }
+  .kw-gender-n {
+    background-color: rgba(234, 179, 8, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(234, 179, 8, 0.4);
   }
   th.col-classification,
   td.col-classification {
@@ -16431,6 +16573,8 @@ html, body {{
                             '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
                             '<td data-col="WordSourceIPA"><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
                             '<td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell">' + (w.morphology || '') + '</div></td>' +
+                            '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">' + (w.pos || '') + '</div></td>' +
+                            '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell">' + (w.gender ? (w.gender.indexOf('<span') !== -1 ? w.gender : ('<span class="kw-gender kw-gender-' + w.gender.toLowerCase() + '">' + w.gender + '</span>')) : '') + '</div></td>' +
                             (w.dynamic_tds || '') +
                             '</tr>'
                         );
@@ -17881,6 +18025,9 @@ def render_section(token, ctx):
             'lemma': role_fields.get('lemma') or ('WordSource' if 'WordSource' in ctx.get('headers', []) else None),
             'ipa': role_fields.get('ipa') or ('WordSourceIPA' if 'WordSourceIPA' in ctx.get('headers', []) else None),
             'morphology': role_fields.get('morphology') or ('WordSourceMorphologyAI' if 'WordSourceMorphologyAI' in ctx.get('headers', []) else None),
+            'pos': role_fields.get('pos') or ('WordSourcePOS' if 'WordSourcePOS' in ctx.get('headers', []) else ('pos' if 'pos' in ctx.get('headers', []) else None)),
+            'gender': role_fields.get('gender') or ('WordSourceGender' if 'WordSourceGender' in ctx.get('headers', []) else ('gender' if 'gender' in ctx.get('headers', []) else None)),
+            'g': role_fields.get('gender') or ('WordSourceGender' if 'WordSourceGender' in ctx.get('headers', []) else ('gender' if 'gender' in ctx.get('headers', []) else None)),
             'translation': role_fields.get('word_translation') or ('WordDestination' if 'WordDestination' in ctx.get('headers', []) else None)
         }
         COLUMN_TOKEN_MAP = {k: v for k, v in COLUMN_TOKEN_MAP.items() if v}
@@ -17897,11 +18044,16 @@ def render_section(token, ctx):
         if server_enabled:
             html_output += '<th class="kw-tag-header">★</th>'
         for col_token in ctx.get('column_tokens', []):
-            if col_token not in COLUMN_TOKEN_MAP:
+            if col_token.lower() not in COLUMN_TOKEN_MAP:
                 logger.warning(f"Unknown lemma_columns token: {col_token}")
                 continue
-            valid_tokens.append(col_token)
-            html_output += f'<th>{col_token.capitalize()}</th>'
+            valid_tokens.append(col_token.lower())
+            if col_token.lower() == "pos":
+                html_output += '<th class="col-pos">POS</th>'
+            elif col_token.lower() in ("gender", "g"):
+                html_output += '<th class="col-gender">G</th>'
+            else:
+                html_output += f'<th>{col_token.capitalize()}</th>'
         html_output += '</tr></thead>\n<tbody>\n'
 
         col_indices = {}
@@ -17924,7 +18076,14 @@ def render_section(token, ctx):
                 val = row[idx] if idx != -1 and len(row) > idx else ""
                 if isinstance(val, str):
                     val = val.replace('\r', '')
-                html_output += f'<td>{val}</td>'
+                if t == "pos":
+                    cell_val = format_pos_cell(val)
+                    html_output += f'<td class="col-pos">{cell_val}</td>'
+                elif t in ("gender", "g"):
+                    cell_val = format_gender_badge(val)
+                    html_output += f'<td class="col-gender">{cell_val}</td>'
+                else:
+                    html_output += f'<td>{val}</td>'
             html_output += '</tr>\n'
 
         html_output += '</tbody></table></div>\n'
@@ -18034,6 +18193,41 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         }
         .kw-lemmas-table tr.kw-row-selected {
             background-color: rgba(255, 225, 105, 0.4) !important;
+        }
+        .kw-lemmas-table th.col-pos, .kw-lemmas-table td.col-pos {
+            text-align: center;
+            width: 48px;
+            white-space: nowrap;
+        }
+        .kw-lemmas-table th.col-gender, .kw-lemmas-table td.col-gender {
+            text-align: center;
+            width: 32px;
+            white-space: nowrap;
+        }
+        .kw-gender {
+            display: inline-block;
+            padding: 1px 5px;
+            border-radius: 3px;
+            font-weight: 600;
+            font-size: 11px;
+            line-height: 1.2;
+            text-transform: lowercase;
+            text-align: center;
+        }
+        .kw-gender-m {
+            background-color: rgba(30, 144, 255, 0.15);
+            color: #1e90ff;
+            border: 1px solid rgba(30, 144, 255, 0.4);
+        }
+        .kw-gender-f {
+            background-color: rgba(255, 75, 75, 0.15);
+            color: #ff4b4b;
+            border: 1px solid rgba(255, 75, 75, 0.4);
+        }
+        .kw-gender-n {
+            background-color: rgba(255, 204, 0, 0.15);
+            color: #eab308;
+            border: 1px solid rgba(255, 204, 0, 0.4);
         }
         .kw-tag-header {
             width: 32px;
@@ -22611,6 +22805,7 @@ def parse_tsv_to_bundle(
         "sentencedestination2contextleft", "sentencedestination2contextright",
         "sentencesourcewordlist", "sentencesourcecloze",
         "wordsource2", "wordsourceinflectedform2",
+        "wordsourcepos", "pos", "wordsourcegender", "gender",
         "textsource", "textdestination", "textsourceurl", "source", "sourceurl",
         "separatoraudio", "note", "note id", "togglealwaysemptyfield",
     }
@@ -22668,6 +22863,8 @@ def parse_tsv_to_bundle(
         deck = get_col_val(row, "deck") or None
         oxford = get_col_val(row, "classificationoxford") or None
         goethe = get_col_val(row, "classificationgoethe") or None
+        pos_val = get_col_val(row, "wordsourcepos") or get_col_val(row, "pos") or None
+        gender_val = get_col_val(row, "wordsourcegender") or get_col_val(row, "gender") or None
 
         extra: Dict[str, Any] = {}
         for h_idx, h_name in enumerate(headers):
@@ -22683,7 +22880,8 @@ def parse_tsv_to_bundle(
             "quotation": quotation,
             "inflected_form": inflected or None,
             "lemma": lemma,
-            "pos": None,
+            "pos": pos_val,
+            "gender": gender_val,
             "morphology": morph or None,
             "ipa": ipa or None,
             "word_destination": w_dest or None,
@@ -22873,6 +23071,8 @@ def migrate_tsvs_to_db(results_dir: Path, config=None, resolved_paths=None, zid:
                 deck = get_col_val(row, "deck") or None
                 oxford = get_col_val(row, "classificationoxford") or None
                 goethe = get_col_val(row, "classificationgoethe") or None
+                pos_val = get_col_val(row, "wordsourcepos") or get_col_val(row, "pos") or None
+                gender_val = get_col_val(row, "wordsourcegender") or get_col_val(row, "gender") or None
 
                 extra: Dict[str, Any] = {}
                 for h_idx, h_name in enumerate(headers):
@@ -22888,7 +23088,8 @@ def migrate_tsvs_to_db(results_dir: Path, config=None, resolved_paths=None, zid:
                     "quotation": quotation,
                     "inflected_form": inflected or None,
                     "lemma": lemma,
-                    "pos": None,
+                    "pos": pos_val,
+                    "gender": gender_val,
                     "morphology": morph or None,
                     "ipa": ipa or None,
                     "word_destination": w_dest or None,

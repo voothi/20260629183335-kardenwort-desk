@@ -905,7 +905,7 @@ class EnrichmentQueue:
 
         if intellifiller_url:
             try:
-                batch_rows = [{"row_id": 0, "WordSource": norm_lemma, "WordDestination": "", "WordSourceIPA": "", "WordSourceMorphologyAI": ""}]
+                batch_rows = [{"row_id": 0, "WordSource": norm_lemma, "WordDestination": "", "WordSourceIPA": "", "WordSourceMorphologyAI": "", "WordSourcePOS": "", "WordSourceGender": ""}]
                 resp = query_intellifiller_server(
                     rows=batch_rows,
                     prompt=prompt,
@@ -925,7 +925,7 @@ class EnrichmentQueue:
                     if enriched:
                         item = enriched[0]
                         res = {}
-                        for k in ("WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"):
+                        for k in ("WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender"):
                             if k in item and item[k]:
                                 res[k] = str(item[k]).strip()
                         with self._lock:
@@ -938,8 +938,8 @@ class EnrichmentQueue:
         import tempfile
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_tsv = Path(temp_dir) / f"{zid or 'enrich'}-ephemeral.tsv"
-            headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
-            rows = [[norm_lemma, "", "", ""]]
+            headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender"]
+            rows = [[norm_lemma, "", "", "", "", ""]]
             save_tsv_rows_safely(temp_tsv, [f"# language={lang}"], headers, rows)
 
             success = run_headless_intellifiller(
@@ -958,7 +958,7 @@ class EnrichmentQueue:
                 if updated_rows:
                     urow = updated_rows[0]
                     res = {}
-                    for field in ("WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"):
+                    for field in ("WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender"):
                         if field in updated_headers:
                             c_idx = updated_headers.index(field)
                             if c_idx < len(urow) and urow[c_idx].strip():
@@ -2032,6 +2032,8 @@ class SessionArbiter:
                 col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
                 col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
                 col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+                col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
+                col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
                 for r_idx in selected_rows:
                     if 0 <= r_idx < len(data_rows):
                         r = data_rows[r_idx]
@@ -2045,6 +2047,10 @@ class SessionArbiter:
                                     item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
                                 if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
                                     item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
+                                if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
+                                    item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
+                                if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
+                                    item_enrich["WordSourceGender"] = r[col_w_gender].strip()
                                 if item_enrich:
                                     item_enrich["word_provenance"] = "live:intellifiller"
                                     self.enrichment_queue.set_cached(l_val, lang, item_enrich)
@@ -2092,6 +2098,8 @@ class SessionArbiter:
                         col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
                         col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
                         col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+                        col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
+                        col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
                         for r_idx in rows_to_enrich:
                             if 0 <= r_idx < len(data_rows):
                                 r = data_rows[r_idx]
@@ -2105,6 +2113,10 @@ class SessionArbiter:
                                             item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
                                         if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
                                             item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
+                                        if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
+                                            item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
+                                        if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
+                                            item_enrich["WordSourceGender"] = r[col_w_gender].strip()
                                         if item_enrich:
                                             item_enrich["word_provenance"] = "live:intellifiller"
                                             self.enrichment_queue.set_cached(l_val, lang, item_enrich)

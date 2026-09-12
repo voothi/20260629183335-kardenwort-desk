@@ -717,3 +717,195 @@ def test_get_worker_status_pre_migration_simulation(tmp_path):
     }
 
 
+def test_gender_and_pos_persistence_and_restore(temp_db):
+    """Verify pos and gender storage, retrieval, batch update, and session bundle round-trip."""
+    temp_db.run_migrations()
+
+    sess_zid = "20260912170000"
+    session_record = {
+        "zid": sess_zid,
+        "slug": "test-gender-pos",
+        "source_language": "de",
+        "target_language": "ru",
+        "source_raw_text": "Der Tisch ist schön. Die Tür geht auf.",
+    }
+    temp_db.insert_session(session_record)
+
+    temp_db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 0,
+        "sentence_source": "Der Tisch ist schön.",
+        "sentence_destination": "Стол красивый.",
+    })
+
+    # 1. Insert words with pos and gender
+    w1_id = temp_db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 0,
+        "token_order": 1,
+        "quotation": "Tisch",
+        "inflected_form": "Tisch",
+        "lemma": "Tisch",
+        "pos": "n.",
+        "gender": "m",
+    })
+    w2_id = temp_db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 0,
+        "token_order": 2,
+        "quotation": "ist",
+        "inflected_form": "ist",
+        "lemma": "sein",
+        "pos": "v.",
+        "gender": "",
+    })
+
+    # 2. Retrieve words and check pos/gender fields
+    w1 = temp_db.get_word(w1_id)
+    assert w1["pos"] == "n."
+    assert w1["gender"] == "m"
+
+    w2 = temp_db.get_word(w2_id)
+    assert w2["pos"] == "v."
+    assert w2["gender"] in ("", None)
+
+    # 3. Direct update_word
+    temp_db.update_word(w1_id, {"gender": "n"})
+    w1_upd = temp_db.get_word(w1_id)
+    assert w1_upd["gender"] == "n"
+
+    # 4. Batch update words with field mapping alias (e.g. wordsourcegender)
+    temp_db.batch_update_words(
+        session_zid=sess_zid,
+        updates_list=[
+            {"id": w1_id, "updates": {"wordsourcegender": "m", "wordsourcepos": "n."}},
+            {"id": w2_id, "updates": {"gender": None, "pos": "v."}},
+        ],
+    )
+    w1_batch = temp_db.get_word(w1_id)
+    assert w1_batch["gender"] == "m"
+    assert w1_batch["pos"] == "n."
+
+    # 5. Session bundle save & restore parity
+    bundle_sess_zid = "20260912170001"
+    temp_db.save_session_bundle(
+        session={
+            "zid": bundle_sess_zid,
+            "slug": "bundle-test",
+            "source_language": "de",
+            "target_language": "en",
+            "source_raw_text": "Das Haus",
+        },
+        sentences=[{
+            "session_zid": bundle_sess_zid,
+            "sentence_index": 0,
+            "sentence_source": "Das Haus",
+        }],
+        words=[{
+            "session_zid": bundle_sess_zid,
+            "sentence_index": 0,
+            "token_order": 1,
+            "quotation": "Haus",
+            "lemma": "Haus",
+            "pos": "n.",
+            "gender": "n",
+        }],
+    )
+
+    bundle = temp_db.get_session_bundle(bundle_sess_zid)
+    assert bundle is not None
+    assert len(bundle["words"]) == 1
+    assert bundle["words"][0]["lemma"] == "Haus"
+    assert bundle["words"][0]["pos"] == "n."
+    assert bundle["words"][0]["gender"] == "n"
+
+
+def test_gender_migration_on_legacy_db(tmp_path):
+    """Verify running migrations on a legacy database adds the gender column properly."""
+    import sqlite3
+    db_file = tmp_path / "legacy_migration.db"
+
+    # Create schema without gender column (baseline)
+    conn = sqlite3.connect(db_file)
+    conn.execute("""
+        CREATE TABLE _migrations (
+            filename TEXT PRIMARY KEY,
+            applied_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE sessions (
+            zid TEXT PRIMARY KEY,
+            slug TEXT NOT NULL,
+            source_language TEXT NOT NULL,
+            target_language TEXT NOT NULL DEFAULT '',
+            text_mode TEXT NOT NULL DEFAULT 'single',
+            source_raw_text TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            deleted_at TIMESTAMP DEFAULT NULL
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE sentences (
+            session_zid TEXT NOT NULL,
+            sentence_index INTEGER NOT NULL,
+            sentence_source TEXT NOT NULL,
+            sentence_destination TEXT,
+            sentence_destination2 TEXT,
+            sentence_source_ipa TEXT,
+            sentence_source_audio TEXT,
+            text_provenance TEXT,
+            PRIMARY KEY (session_zid, sentence_index)
+        );
+    """)
+    conn.execute("""
+        CREATE TABLE words (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            session_zid TEXT NOT NULL,
+            sentence_index INTEGER NOT NULL,
+            token_order INTEGER NOT NULL,
+            quotation TEXT NOT NULL COLLATE NOCASE,
+            inflected_form TEXT COLLATE NOCASE,
+            lemma TEXT NOT NULL COLLATE NOCASE,
+            pos TEXT,
+            morphology TEXT,
+            ipa TEXT,
+            word_destination TEXT,
+            word_destination_inflected TEXT,
+            selected INTEGER NOT NULL DEFAULT 0,
+            leitner_box INTEGER DEFAULT 1,
+            leitner_due TIMESTAMP,
+            deck TEXT,
+            classification_oxford TEXT,
+            classification_goethe TEXT,
+            word_provenance TEXT,
+            extra_fields TEXT
+        );
+    """)
+    prior_migrations = [
+        "20260820173633_initial_schema.sql",
+        "20260821203538_projects_and_soft_delete.sql",
+        "20260822093437_deduplicate_words_and_unique_index.sql",
+        "20260830224810_add_provenance_columns.sql",
+        "20260830224810_add_worker_status_columns.sql",
+        "20260907042302_overview_selections.sql",
+    ]
+    for m in prior_migrations:
+        conn.execute("INSERT INTO _migrations (filename) VALUES (?);", (m,))
+    conn.commit()
+    conn.close()
+
+    db = KardenwortDB(db_path=db_file)
+    applied = db.run_migrations()
+    assert "20260912174500_add_word_gender.sql" in applied["applied"]
+
+    # Verify column exists via PRAGMA table_info
+    with db.get_connection(read_only=True) as conn:
+        cursor = conn.cursor()
+        cursor.execute("PRAGMA table_info(words);")
+        columns = [row[1] for row in cursor.fetchall()]
+        assert "gender" in columns
+        assert "pos" in columns
+
+

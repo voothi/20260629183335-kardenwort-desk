@@ -961,6 +961,203 @@ def test_single_text_path_decomposition_inflected_rendering(tmp_path):
     assert 'data-lower-clean="goldens">goldens</span>' in html
 
 
+def test_pos_normalization_and_gender_formatting():
+    from kardenwort_desk import normalize_pos_tag, format_pos_cell, format_gender_badge
+
+    # Test POS normalization
+    assert normalize_pos_tag("NOUN") == "n."
+    assert normalize_pos_tag("PROPN") == "n."
+    assert normalize_pos_tag("VERB") == "v."
+    assert normalize_pos_tag("AUX") == "v."
+    assert normalize_pos_tag("ADJ") == "adj."
+    assert normalize_pos_tag("ADV") == "adv."
+    assert normalize_pos_tag("ADP") == "prep."
+    assert normalize_pos_tag("PRON") == "pron."
+    assert normalize_pos_tag("CCONJ") == "conj."
+    assert normalize_pos_tag("DET") == "art."
+    assert normalize_pos_tag("NUM") == "num."
+    assert normalize_pos_tag("PART") == "part."
+    assert normalize_pos_tag("INTJ") == "intj."
+    assert normalize_pos_tag("n.") == "n."
+    assert normalize_pos_tag("v.") == "v."
+    assert normalize_pos_tag("") == ""
+    assert normalize_pos_tag(None) == ""
+
+    assert format_pos_cell("NOUN") == "n."
+
+    # Test Gender badge formatting
+    assert format_gender_badge("m") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert format_gender_badge("MASC") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert format_gender_badge("masculine") == '<span class="kw-gender kw-gender-m">m</span>'
+
+    assert format_gender_badge("f") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert format_gender_badge("FEM") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert format_gender_badge("feminine") == '<span class="kw-gender kw-gender-f">f</span>'
+
+    assert format_gender_badge("n") == '<span class="kw-gender kw-gender-n">n</span>'
+    assert format_gender_badge("NEUT") == '<span class="kw-gender kw-gender-n">n</span>'
+    assert format_gender_badge("neuter") == '<span class="kw-gender kw-gender-n">n</span>'
+
+    assert format_gender_badge("") == ""
+    assert format_gender_badge(None) == ""
+    assert format_gender_badge("other") == ""
+    assert format_gender_badge("verb") == ""
+
+
+def test_render_section_lemmas_with_pos_and_gender():
+    ctx = {
+        'column_tokens': ['lemma', 'pos', 'g', 'translation'],
+        'headings': {'lemmas': 'Lemmas'},
+        'headers': ['WordSource', 'WordSourcePOS', 'WordSourceGender', 'WordDestination'],
+        'data_rows': [
+            ['Hund', 'NOUN', 'm', 'dog'],
+            ['Katze', 'NOUN', 'f', 'cat'],
+            ['Haus', 'NOUN', 'n', 'house'],
+            ['laufen', 'VERB', '', 'to run']
+        ]
+    }
+    html = render_section('lemmas', ctx)
+
+    assert '<th class="col-pos">POS</th>' in html
+    assert '<th class="col-gender">G</th>' in html
+    assert '<td class="col-pos">n.</td>' in html
+    assert '<td class="col-gender"><span class="kw-gender kw-gender-m">m</span></td>' in html
+    assert '<td class="col-gender"><span class="kw-gender kw-gender-f">f</span></td>' in html
+    assert '<td class="col-gender"><span class="kw-gender kw-gender-n">n</span></td>' in html
+    assert '<td class="col-pos">v.</td>' in html
+    assert '<td class="col-gender"></td>' in html
+
+
+def test_run_render_flow_pos_and_gender_column_sequence_and_badges(tmp_path):
+    import configparser
+    from kardenwort_desk import run_render_flow
+
+    config, resolved_paths = _create_render_test_env(tmp_path)
+
+    # Enable classification column (e.g. goethe) to verify sequence: POS, G before classification
+    config.set(SEC_CLASSIFICATION, 'enabled', 'true')
+
+    kw_config = configparser.ConfigParser()
+    kw_config.add_section(SEC_CLASSIFICATION)
+    kw_config.set(SEC_CLASSIFICATION, 'enabled', 'true')
+    kw_config.set(SEC_CLASSIFICATION, 'dictionaries_de', 'goethe=path/to/goethe.tsv')
+    with open(tmp_path / "config.ini", 'w', encoding='utf-8') as f:
+        kw_config.write(f)
+
+    # Update mapping with POS and Gender
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+    mapping.set('desk_columns', 'WordSourceIPA', 'ipa')
+    mapping.set('desk_columns', 'WordSourceMorphologyAI', 'morphology')
+    mapping.set('desk_columns', 'WordSourcePOS', 'pos')
+    mapping.set('desk_columns', 'WordSourceGender', 'gender')
+    mapping.set('desk_columns', 'goethe', 'goethe')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w', encoding='utf-8') as f:
+        mapping.write(f)
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_path = res_dir / "20260912180000-test-de.de.tsv"
+
+    tsv_header = "WordSource\tWordSourceInflectedForm\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tWordSourcePOS\tWordSourceGender\tgoethe\n"
+    tsv_rows = [
+        "Hund\tHunde\tсобака\thʊnt\tSubstantiv, maskulin\tNOUN\tm\tA1\n",
+        "Katze\tKatzen\tкошка\tˈkat͡sə\tSubstantiv, feminin\tNOUN\tf\tA1\n",
+        "Haus\tHäuser\tдом\thaʊ̯s\tSubstantiv, neutral\tNOUN\tn\tA1\n",
+        "laufen\tläuft\tбежать\tˈlaʊ̯fn̩\tVerb\tVERB\t\tA1\n",
+        "schnell\tschnell\tбыстрый\tʃnɛl\tAdjektiv\tADJ\t\tA1\n"
+    ]
+    tsv_path.write_text(tsv_header + "".join(tsv_rows), encoding='utf-8')
+
+    html = run_render_flow(
+        text="Die Hunde, Katzen und Häuser laufen schnell.",
+        language="de",
+        zid="20260912180000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    # 1. Verify CSS styles for columns and badges
+    assert '#lemma-table th.col-pos' in html
+    assert '#lemma-table th.col-gender' in html
+    assert '.kw-gender-m' in html
+    assert '.kw-gender-f' in html
+    assert '.kw-gender-n' in html
+
+    # 2. Verify Table Header Sequence: Inflected -> Lemma -> Translation -> IPA -> Morphology -> POS -> G -> Goethe
+    pos_th_idx = html.find('<th class="col-pos">POS</th>')
+    gender_th_idx = html.find('<th class="col-gender">G</th>')
+    goethe_th_idx = html.find('<th class="col-classification">Goethe</th>')
+
+    assert pos_th_idx != -1
+    assert gender_th_idx != -1
+    assert goethe_th_idx != -1
+    assert pos_th_idx < gender_th_idx < goethe_th_idx
+
+    # 3. Verify Table Rows render correct badges
+    assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"><span class="kw-gender kw-gender-m">m</span></div></td>' in html
+    assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"><span class="kw-gender kw-gender-f">f</span></div></td>' in html
+    assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"><span class="kw-gender kw-gender-n">n</span></div></td>' in html
+    assert '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">n.</div></td>' in html
+    assert '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">v.</div></td>' in html
+    assert '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">adj.</div></td>' in html
+
+    # 4. Verify verbs and adverbs do NOT render gender badges
+    assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"></div></td>' in html
+
+
+def test_render_lookup_html_pos_and_gender_integration(tmp_path):
+    from kardenwort_desk import render_lookup_html
+
+    goldendict = {
+        'sections': ['source', 'lemmas'],
+        'lemma_columns': ['inflected', 'lemma', 'pos', 'g', 'translation'],
+        'heading_source': '__default__',
+        'heading_lemmas': 'Lemmas',
+        'run_intellifiller': False
+    }
+
+    headers = ['WordSourceInflectedForm', 'WordSource', 'WordSourcePOS', 'WordSourceGender', 'WordDestination']
+    data_rows = [
+        ['Hunde', 'Hund', 'n.', 'm', 'dog'],
+        ['Katzen', 'Katze', 'n.', 'f', 'cat'],
+        ['läuft', 'laufen', 'v.', '', 'to run']
+    ]
+
+    html_out = render_lookup_html(
+        text="Hunde und Katzen",
+        language="de",
+        target_lang="en",
+        config=None,
+        resolved_paths=None,
+        zid="20260912180001",
+        goldendict=goldendict,
+        comments=[],
+        headers=headers,
+        data_rows=data_rows,
+        sentence_translation="Dogs and cats"
+    )
+
+    assert '<th class="col-pos">POS</th>' in html_out
+    assert '<th class="col-gender">G</th>' in html_out
+    assert '<span class="kw-gender kw-gender-m">m</span>' in html_out
+    assert '<span class="kw-gender kw-gender-f">f</span>' in html_out
+    assert '.kw-gender-m {' in html_out
+    assert '.kw-gender-f {' in html_out
+    assert '.kw-gender-n {' in html_out
+
+
+
 
 
 
