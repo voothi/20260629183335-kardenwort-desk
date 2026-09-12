@@ -300,7 +300,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
     assert tab_bar.evaluate("el => window.getComputedStyle(el).top") == "0px"
     assert tab_bar.evaluate("el => window.getComputedStyle(el).zIndex") == "1000"
     assert page.locator("body").evaluate("el => el.classList.contains('has-dock-top')") is True
-    assert container.evaluate("el => window.getComputedStyle(el).paddingTop") == "48px"
+    assert container.evaluate("el => window.getComputedStyle(el).paddingTop") == "58px"
 
     # 2. Bottom docking
     config.set("sentences_mode", "tab_bar_position", "bottom")

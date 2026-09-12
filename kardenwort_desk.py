@@ -10258,7 +10258,7 @@ html, body {{
     display: block;
   }
   body.has-dock-top .container {
-    padding-top: 48px;
+    padding-top: 58px;
   }
   body.has-dock-bottom .container {
     padding-bottom: 95px;
