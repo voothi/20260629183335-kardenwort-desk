@@ -10252,8 +10252,10 @@ html, body {{
   .container {
     padding: 16px;
     padding-bottom: 70px;
-    display: inline-block;
-    min-width: 100%;
+    width: 100%;
+    max-width: 100%;
+    box-sizing: border-box;
+    display: block;
   }
   body.has-dock-top .container {
     padding-top: 48px;
@@ -10270,9 +10272,12 @@ html, body {{
   .section {
     background: {section_bg};
     border: 1px solid {section_border};
-    border-radius: 2px;
+    border-radius: 4px;
     padding: 14px 16px;
     margin-bottom: 12px;
+    box-sizing: border-box;
+    width: 100%;
+    max-width: 100%;
   }
   .section-title {
     font-size: 12px;
@@ -10504,65 +10509,66 @@ html, body {{
   table {
     width: 100%;
     border-collapse: collapse;
-    margin-top: 8px;
+    margin-top: 0;
     table-layout: fixed;
   }
   #lemma-table {
     width: 100%;
     border-collapse: collapse;
-    margin-top: 8px;
+    margin-top: 0;
     table-layout: fixed;
   }
   #lemma-table th, #lemma-table td {
-    padding: 8px 10px;
+    padding: 8px 8px;
     box-sizing: border-box;
     vertical-align: middle;
   }
   #lemma-table th.col-inflected, #lemma-table td.col-inflected {
-    width: 16%;
+    width: 10%;
     text-align: left;
+    padding-left: 0;
   }
   #lemma-table th.col-lemma, #lemma-table td.col-lemma {
-    width: 15%;
+    width: 10%;
     text-align: left;
   }
   #lemma-table th.col-translation, #lemma-table td.col-translation {
-    width: 22%;
+    width: 16%;
     text-align: left;
   }
   #lemma-table th.col-ipa, #lemma-table td.col-ipa {
-    width: 8%;
+    width: 6%;
     text-align: left;
     color: {text_muted};
   }
   #lemma-table th.col-morphology, #lemma-table td.col-morphology {
-    width: 24%;
+    width: 50%;
     text-align: left;
     color: {text_muted};
   }
   #lemma-table th.col-pos, #lemma-table td.col-pos {
-    width: 4.5%;
+    width: 3%;
     text-align: center !important;
     padding-left: 2px !important;
     padding-right: 2px !important;
     white-space: nowrap;
   }
   #lemma-table th.col-gender, #lemma-table td.col-gender {
-    width: 4.5%;
+    width: 2%;
     text-align: center !important;
-    padding-left: 2px !important;
-    padding-right: 2px !important;
+    padding-left: 1px !important;
+    padding-right: 1px !important;
     white-space: nowrap;
   }
   #lemma-table th.col-classification, #lemma-table td.col-classification {
-    width: 6%;
+    width: 3%;
     text-align: center !important;
     padding-left: 2px !important;
-    padding-right: 6px !important;
+    padding-right: 0 !important;
     white-space: nowrap;
   }
   #lemma-table th:last-child, #lemma-table td:last-child {
-    padding-right: 8px;
+    padding-right: 0;
   }
   .scrollable-cell {
     width: 100%;
@@ -10592,9 +10598,12 @@ html, body {{
     display: block;
     width: 100%;
     max-width: 100%;
+    box-sizing: border-box;
   }
   body:not(.maximized) .section {
+    width: 100%;
     max-width: 100%;
+    box-sizing: border-box;
   }
   body:not(.maximized) #lemma-table {
     table-layout: fixed;
@@ -10602,35 +10611,37 @@ html, body {{
   }
   body:not(.maximized) #lemma-table th.col-inflected,
   body:not(.maximized) #lemma-table td.col-inflected {
-    width: 16%;
+    width: 10%;
+    padding-left: 0;
   }
   body:not(.maximized) #lemma-table th.col-lemma,
   body:not(.maximized) #lemma-table td.col-lemma {
-    width: 15%;
+    width: 10%;
   }
   body:not(.maximized) #lemma-table th.col-translation,
   body:not(.maximized) #lemma-table td.col-translation {
-    width: 22%;
+    width: 16%;
   }
   body:not(.maximized) #lemma-table th.col-ipa,
   body:not(.maximized) #lemma-table td.col-ipa {
-    width: 8%;
+    width: 6%;
   }
   body:not(.maximized) #lemma-table th.col-morphology,
   body:not(.maximized) #lemma-table td.col-morphology {
-    width: 24%;
+    width: 50%;
   }
   body:not(.maximized) #lemma-table th.col-pos,
   body:not(.maximized) #lemma-table td.col-pos {
-    width: 4.5%;
+    width: 3%;
   }
   body:not(.maximized) #lemma-table th.col-gender,
   body:not(.maximized) #lemma-table td.col-gender {
-    width: 4.5%;
+    width: 2%;
   }
   body:not(.maximized) #lemma-table th.col-classification,
   body:not(.maximized) #lemma-table td.col-classification {
-    width: 6%;
+    width: 3%;
+    padding-right: 0;
   }
   th.col-pos, td.col-pos,
   th.col-gender, td.col-gender,
@@ -10642,12 +10653,12 @@ html, body {{
     padding-right: 2px !important;
   }
   th.col-gender {
-    padding-left: 2px !important;
-    padding-right: 2px !important;
+    padding-left: 1px !important;
+    padding-right: 1px !important;
   }
   th.col-classification {
     padding-left: 2px !important;
-    padding-right: 6px !important;
+    padding-right: 0 !important;
   }
   td.col-pos {
     font-size: 12px;
