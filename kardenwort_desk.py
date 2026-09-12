@@ -10752,7 +10752,6 @@ html, body {{
   #lemma-table td[data-col="WordSourceInflectedForm"] {
     width: 10%;
     text-align: left;
-    padding-left: 0;
     color: {text_muted};
   }
   #lemma-table th.col-lemma, #lemma-table td.col-lemma {
@@ -10839,7 +10838,6 @@ html, body {{
   body:not(.maximized) #lemma-table th.col-inflected,
   body:not(.maximized) #lemma-table td.col-inflected {
     width: 10%;
-    padding-left: 0;
   }
   body:not(.maximized) #lemma-table th.col-lemma,
   body:not(.maximized) #lemma-table td.col-lemma {
