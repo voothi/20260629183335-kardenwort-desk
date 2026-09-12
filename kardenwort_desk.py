@@ -9622,8 +9622,14 @@ html, body {{
         h_lower = h.lower()
         if h_lower in [r.lower() for r in dynamic_roles]:
             th_elements.append(f'<th class="col-classification">{h}</th>')
+        elif h_lower == "inflected":
+            th_elements.append(f'<th class="col-inflected">{h}</th>')
+        elif h_lower == "lemma":
+            th_elements.append(f'<th class="col-lemma">{h}</th>')
         elif h_lower == "translation":
             th_elements.append(f'<th class="col-translation">{h}</th>')
+        elif h_lower == "ipa":
+            th_elements.append(f'<th class="col-ipa">{h}</th>')
         elif h_lower == "morphology":
             th_elements.append(f'<th class="col-morphology">{h}</th>')
         elif h_lower == "pos":
@@ -10499,32 +10505,83 @@ html, body {{
     width: 100%;
     border-collapse: collapse;
     margin-top: 8px;
-    table-layout: auto;
+    table-layout: fixed;
+  }
+  #lemma-table {
+    width: 100%;
+    border-collapse: collapse;
+    margin-top: 8px;
+    table-layout: fixed;
   }
   #lemma-table th, #lemma-table td {
-    width: 1%;
-    white-space: nowrap;
-    padding-right: 24px;
+    padding: 8px 10px;
+    box-sizing: border-box;
+    vertical-align: middle;
+  }
+  #lemma-table th.col-inflected, #lemma-table td.col-inflected {
+    width: 16%;
+    text-align: left;
+  }
+  #lemma-table th.col-lemma, #lemma-table td.col-lemma {
+    width: 15%;
+    text-align: left;
+  }
+  #lemma-table th.col-translation, #lemma-table td.col-translation {
+    width: 22%;
+    text-align: left;
+  }
+  #lemma-table th.col-ipa, #lemma-table td.col-ipa {
+    width: 8%;
+    text-align: left;
+    color: {text_muted};
   }
   #lemma-table th.col-morphology, #lemma-table td.col-morphology {
-    width: auto;
+    width: 24%;
+    text-align: left;
+    color: {text_muted};
+  }
+  #lemma-table th.col-pos, #lemma-table td.col-pos {
+    width: 4.5%;
+    text-align: center !important;
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+    white-space: nowrap;
+  }
+  #lemma-table th.col-gender, #lemma-table td.col-gender {
+    width: 4.5%;
+    text-align: center !important;
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+    white-space: nowrap;
+  }
+  #lemma-table th.col-classification, #lemma-table td.col-classification {
+    width: 6%;
+    text-align: center !important;
+    padding-left: 2px !important;
+    padding-right: 6px !important;
+    white-space: nowrap;
   }
   #lemma-table th:last-child, #lemma-table td:last-child {
-    width: auto;
-    padding-right: 12px;
-  }
-  #lemma-table th.col-classification:last-child, #lemma-table td.col-classification:last-child {
-    width: 1%;
-    padding-right: 12px;
+    padding-right: 8px;
   }
   .scrollable-cell {
     width: 100%;
     box-sizing: border-box;
     -ms-overflow-style: none;  /* IE and Edge */
     scrollbar-width: none;  /* Firefox */
+    overflow-x: auto;
+    white-space: nowrap;
   }
   .scrollable-cell::-webkit-scrollbar {
     display: none; /* Chrome, Safari and Opera */
+  }
+  td.col-pos .scrollable-cell,
+  td.col-gender .scrollable-cell,
+  td.col-classification .scrollable-cell {
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
   }
   /* When the window is NOT maximized (normally sized) */
   body:not(.maximized) {
@@ -10543,56 +10600,75 @@ html, body {{
     table-layout: fixed;
     width: 100%;
   }
-  body:not(.maximized) #lemma-table th,
-  body:not(.maximized) #lemma-table td {
+  body:not(.maximized) #lemma-table th.col-inflected,
+  body:not(.maximized) #lemma-table td.col-inflected {
+    width: 16%;
+  }
+  body:not(.maximized) #lemma-table th.col-lemma,
+  body:not(.maximized) #lemma-table td.col-lemma {
     width: 15%;
-    padding-right: 12px;
   }
   body:not(.maximized) #lemma-table th.col-translation,
   body:not(.maximized) #lemma-table td.col-translation {
-    width: 20%;
+    width: 22%;
+  }
+  body:not(.maximized) #lemma-table th.col-ipa,
+  body:not(.maximized) #lemma-table td.col-ipa {
+    width: 8%;
   }
   body:not(.maximized) #lemma-table th.col-morphology,
   body:not(.maximized) #lemma-table td.col-morphology {
-    width: 26%;
-  }
-  #lemma-table th.col-pos, #lemma-table td.col-pos {
-    width: 1%;
-    white-space: nowrap;
-    text-align: center !important;
-    padding-left: 2px !important;
-    padding-right: 6px !important;
-  }
-  #lemma-table th.col-gender, #lemma-table td.col-gender {
-    width: 1%;
-    white-space: nowrap;
-    text-align: center !important;
-    padding-left: 2px !important;
-    padding-right: 6px !important;
+    width: 24%;
   }
   body:not(.maximized) #lemma-table th.col-pos,
   body:not(.maximized) #lemma-table td.col-pos {
-    width: 5%;
+    width: 4.5%;
   }
   body:not(.maximized) #lemma-table th.col-gender,
   body:not(.maximized) #lemma-table td.col-gender {
-    width: 4%;
+    width: 4.5%;
+  }
+  body:not(.maximized) #lemma-table th.col-classification,
+  body:not(.maximized) #lemma-table td.col-classification {
+    width: 6%;
   }
   th.col-pos, td.col-pos,
-  th.col-gender, td.col-gender {
+  th.col-gender, td.col-gender,
+  th.col-classification, td.col-classification {
     text-align: center !important;
   }
+  th.col-pos {
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+  }
+  th.col-gender {
+    padding-left: 2px !important;
+    padding-right: 2px !important;
+  }
+  th.col-classification {
+    padding-left: 2px !important;
+    padding-right: 6px !important;
+  }
+  td.col-pos {
+    font-size: 12px;
+    color: {text_muted};
+  }
   .kw-gender {
-    display: inline-block;
-    padding: 1px 5px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 18px;
+    height: 18px;
+    padding: 0 4px;
     border-radius: 3px;
-    font-weight: 600;
+    font-weight: 700;
     font-size: 11px;
-    line-height: 1.2;
+    line-height: 1;
     text-transform: lowercase;
+    box-sizing: border-box;
   }
   .kw-gender-m {
-    background-color: rgba(30, 144, 255, 0.15);
+    background-color: rgba(59, 130, 246, 0.15);
     color: #3b82f6;
     border: 1px solid rgba(59, 130, 246, 0.4);
   }
@@ -10605,12 +10681,6 @@ html, body {{
     background-color: rgba(234, 179, 8, 0.15);
     color: #eab308;
     border: 1px solid rgba(234, 179, 8, 0.4);
-  }
-  th.col-classification,
-  td.col-classification {
-    text-align: center !important;
-    padding-left: 0px !important;
-    padding-right: 0px !important;
   }
   body:not(.maximized) .scrollable-cell {
     overflow-x: auto;
@@ -10625,8 +10695,8 @@ html, body {{
   }
   th {
     text-align: left;
-    padding: 10px 12px;
-    font-size: 12px;
+    padding: 8px 10px;
+    font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
     color: {text_muted};
@@ -10634,10 +10704,10 @@ html, body {{
     font-weight: 600;
   }
   td {
-    padding: 10px 12px;
+    padding: 8px 10px;
     border-bottom: 1px solid {table_border};
     color: {table_text};
-    vertical-align: top;
+    vertical-align: middle;
   }
   tr:hover td {
     background: {row_hover};
