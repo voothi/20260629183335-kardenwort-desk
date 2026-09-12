@@ -9730,7 +9730,7 @@ html, body {{
             f'<td class="{inflected_class}" data-col="{inflected_col_name}" title="{html.escape(inflected_val)}"><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{lemma_val}</div></td>'
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
-            f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ipa_val}</div></td>'
+            f'<td class="col-ipa" data-col="{ipa_col_name}"><div class="scrollable-cell">{ipa_val}</div></td>'
             f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{morph_val}</div></td>'
             f'{pos_td}'
             f'{gender_td}'
@@ -10052,7 +10052,7 @@ html, body {{
                 f'<td class="{inflected_class}" data-col="{inflected_col_name}" title="{html.escape(ov_inflected)}"><div class="scrollable-cell">{ov_inflected}</div></td>'
                 f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
-                f'<td data-col="{ipa_col_name}"><div class="scrollable-cell">{ov_ipa}</div></td>'
+                f'<td class="col-ipa" data-col="{ipa_col_name}"><div class="scrollable-cell">{ov_ipa}</div></td>'
                 f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{ov_morph}</div></td>'
                 f'{ov_pos_td}'
                 f'{ov_gender_td}'
@@ -10533,7 +10533,7 @@ html, body {{
     text-align: left;
   }
   #lemma-table th.col-translation, #lemma-table td.col-translation {
-    width: 16%;
+    width: 10%;
     text-align: left;
   }
   #lemma-table th.col-ipa, #lemma-table td.col-ipa {
@@ -10542,7 +10542,7 @@ html, body {{
     color: {text_muted};
   }
   #lemma-table th.col-morphology, #lemma-table td.col-morphology {
-    width: 50%;
+    width: 56%;
     text-align: left;
     color: {text_muted};
   }
@@ -10620,7 +10620,7 @@ html, body {{
   }
   body:not(.maximized) #lemma-table th.col-translation,
   body:not(.maximized) #lemma-table td.col-translation {
-    width: 16%;
+    width: 10%;
   }
   body:not(.maximized) #lemma-table th.col-ipa,
   body:not(.maximized) #lemma-table td.col-ipa {
@@ -10628,7 +10628,7 @@ html, body {{
   }
   body:not(.maximized) #lemma-table th.col-morphology,
   body:not(.maximized) #lemma-table td.col-morphology {
-    width: 50%;
+    width: 56%;
   }
   body:not(.maximized) #lemma-table th.col-pos,
   body:not(.maximized) #lemma-table td.col-pos {
@@ -16652,7 +16652,7 @@ html, body {{
                             '<td class="editable" data-col="WordSourceInflectedForm" title="' + escapeHtml(w.inflected || '') + '"><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
                             '<td class="editable" data-col="WordSource"><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
                             '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
-                            '<td data-col="WordSourceIPA"><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
+                            '<td class="col-ipa" data-col="WordSourceIPA"><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
                             '<td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell">' + (w.morphology || '') + '</div></td>' +
                             '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">' + (w.pos || '') + '</div></td>' +
                             '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell">' + (w.gender ? (w.gender.indexOf('<span') !== -1 ? w.gender : ('<span class="kw-gender kw-gender-' + w.gender.toLowerCase() + '">' + w.gender + '</span>')) : '') + '</div></td>' +
