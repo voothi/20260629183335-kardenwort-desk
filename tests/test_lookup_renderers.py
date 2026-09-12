@@ -535,8 +535,8 @@ def test_orthogonal_tsv_column_mapping(tmp_path, monkeypatch):
     assert "col === 'MyCustomInflection'" in html_out
     
     # Assert editable classes are properly resolved
-    assert 'class="editable" data-col="MyCustomLemma"' in html_out
-    assert 'class="editable" data-col="MyCustomInflection"' in html_out
+    assert 'class="editable col-lemma" data-col="MyCustomLemma"' in html_out
+    assert 'class="editable col-inflected" data-col="MyCustomInflection"' in html_out
 
 
 def test_render_flow_compound_identifier_snake_case(tmp_path, monkeypatch):

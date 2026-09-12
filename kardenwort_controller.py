@@ -75,6 +75,7 @@ from kardenwort_desk import (
     SEC_SERVICES,
     SEC_TRANSLATION,
     SEC_TIMEOUTS,
+    SEC_CLASSIFICATION,
     persist_default_language,
     spawn_ahk,
 )
@@ -1919,7 +1920,10 @@ class SessionArbiter:
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
+        target_lang = self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru') if self.config else 'ru'
         prompt_name = prompt or self.config.get(SEC_LANGUAGES, f"{lang}_prompt", fallback="")
+        provider = self.config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller') if self.config else 'intellifiller'
+        provider = (provider or 'intellifiller').strip().lower()
 
         storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
@@ -1939,6 +1943,11 @@ class SessionArbiter:
         role_fields = get_role_fields(mapping, headers)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+        col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+        col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+        col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
+        col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
 
         # Enforce frequency sort parity so selected_rows match displayed UI table rows
         data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
@@ -1962,123 +1971,251 @@ class SessionArbiter:
             except Exception:
                 pass
 
-        new_reword_provs = {}
-        for r_idx in selected_rows:
-            if 0 <= r_idx < len(data_rows):
-                row = data_rows[r_idx]
-                new_reword_provs[r_idx] = "live:intellifiller"
-                new_reword_provs[str(r_idx)] = "live:intellifiller"
-                if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
-                    t_ord_str = str(row[col_token_order]).strip()
-                    new_reword_provs[t_ord_str] = "live:intellifiller"
-                    if t_ord_str.isdigit():
-                        new_reword_provs[int(t_ord_str)] = "live:intellifiller"
+        if selected_rows and provider != 'none':
+            reword_prov_tag = f"live:{provider}"
+            new_reword_provs = {}
+            for r_idx in selected_rows:
+                if 0 <= r_idx < len(data_rows):
+                    row = data_rows[r_idx]
+                    new_reword_provs[r_idx] = reword_prov_tag
+                    new_reword_provs[str(r_idx)] = reword_prov_tag
+                    if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
+                        t_ord_str = str(row[col_token_order]).strip()
+                        new_reword_provs[t_ord_str] = reword_prov_tag
+                        if t_ord_str.isdigit():
+                            new_reword_provs[int(t_ord_str)] = reword_prov_tag
 
-        existing_row_provs.update(new_reword_provs)
+            existing_row_provs.update(new_reword_provs)
 
         enriched_lemma_map: Dict[str, Dict[str, str]] = {}
-        if selected_rows:
-            if is_sqlite:
-                try:
-                    storage_adapter.enrich_session_intellifiller(
-                        session_zid=session_zid,
-                        prompt_name=prompt_name,
-                        selected_rows=selected_rows,
-                        reprocess=True,
-                        zid=req_zid,
-                    )
-                except StructuredError:
-                    raise
-                except Exception as e:
-                    raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
-                comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
-                col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-                col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
-                col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
-                col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
-                col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
-                for r_idx in selected_rows:
-                    if 0 <= r_idx < len(data_rows):
-                        r = data_rows[r_idx]
-                        if col_lemma != -1 and len(r) > col_lemma:
-                            l_val = r[col_lemma].strip()
-                            if l_val:
-                                item_enrich = {}
-                                if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
-                                    item_enrich["WordDestination"] = r[col_w_dest].strip()
-                                if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
-                                    item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
-                                if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
-                                    item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
-                                if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
-                                    item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
-                                if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
-                                    item_enrich["WordSourceGender"] = r[col_w_gender].strip()
-                                if item_enrich:
-                                    item_enrich["word_provenance"] = "live:intellifiller"
-                                    self.enrichment_queue.set_cached(l_val, lang, item_enrich)
-                                    enriched_lemma_map[l_val] = item_enrich
-            else:
-                try:
-                    rows_to_enrich = []
-                    for r_idx in selected_rows:
-                        if 0 <= r_idx < len(data_rows):
-                            row = data_rows[r_idx]
-                            lemma_val = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ""
-                            if not lemma_val:
-                                continue
-                            rows_to_enrich.append(r_idx)
-
-                    if rows_to_enrich:
-                        run_headless_intellifiller(
-                            tsv_path,
-                            prompt_name,
-                            self.config,
-                            self.resolved_paths,
-                            selected_rows=rows_to_enrich,
+        if selected_rows and provider != 'none':
+            if provider == 'intellifiller':
+                if is_sqlite:
+                    try:
+                        storage_adapter.enrich_session_intellifiller(
+                            session_zid=session_zid,
+                            prompt_name=prompt_name,
+                            selected_rows=selected_rows,
                             reprocess=True,
                             zid=req_zid,
                         )
-                        comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                        data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
-                        col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-                        col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
-                        col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
-                        col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
-                        col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
-                        for r_idx in rows_to_enrich:
+                    except StructuredError:
+                        raise
+                    except Exception as e:
+                        raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
+                    comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                    data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                    col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+                    col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+                    col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+                    col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
+                    col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
+                    for r_idx in selected_rows:
+                        if 0 <= r_idx < len(data_rows):
+                            r = data_rows[r_idx]
+                            if col_lemma != -1 and len(r) > col_lemma:
+                                l_val = r[col_lemma].strip()
+                                if l_val:
+                                    item_enrich = {}
+                                    if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
+                                        item_enrich["WordDestination"] = r[col_w_dest].strip()
+                                    if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
+                                        item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
+                                    if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
+                                        item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
+                                    if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
+                                        item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
+                                    if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
+                                        item_enrich["WordSourceGender"] = r[col_w_gender].strip()
+                                    if item_enrich:
+                                        item_enrich["word_provenance"] = "live:intellifiller"
+                                        self.enrichment_queue.set_cached(l_val, lang, item_enrich)
+                                        enriched_lemma_map[l_val] = item_enrich
+                else:
+                    try:
+                        rows_to_enrich = []
+                        for r_idx in selected_rows:
                             if 0 <= r_idx < len(data_rows):
-                                r = data_rows[r_idx]
-                                if col_lemma != -1 and len(r) > col_lemma:
-                                    l_val = r[col_lemma].strip()
-                                    if l_val:
-                                        item_enrich = {}
-                                        if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
-                                            item_enrich["WordDestination"] = r[col_w_dest].strip()
-                                        if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
-                                            item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
-                                        if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
-                                            item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
-                                        if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
-                                            item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
-                                        if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
-                                            item_enrich["WordSourceGender"] = r[col_w_gender].strip()
-                                        if item_enrich:
-                                            item_enrich["word_provenance"] = "live:intellifiller"
-                                            self.enrichment_queue.set_cached(l_val, lang, item_enrich)
-                                            enriched_lemma_map[l_val] = item_enrich
-                    else:
-                        with storage_adapter.file_lock(tsv_path):
-                            storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                                row = data_rows[r_idx]
+                                lemma_val = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ""
+                                if not lemma_val:
+                                    continue
+                                rows_to_enrich.append(r_idx)
+
+                        if rows_to_enrich:
+                            run_headless_intellifiller(
+                                tsv_path,
+                                prompt_name,
+                                self.config,
+                                self.resolved_paths,
+                                selected_rows=rows_to_enrich,
+                                reprocess=True,
+                                zid=req_zid,
+                            )
+                            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
+                            data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                            col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
+                            col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+                            col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
+                            col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
+                            col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
+                            for r_idx in rows_to_enrich:
+                                if 0 <= r_idx < len(data_rows):
+                                    r = data_rows[r_idx]
+                                    if col_lemma != -1 and len(r) > col_lemma:
+                                        l_val = r[col_lemma].strip()
+                                        if l_val:
+                                            item_enrich = {}
+                                            if col_w_dest != -1 and len(r) > col_w_dest and r[col_w_dest].strip():
+                                                item_enrich["WordDestination"] = r[col_w_dest].strip()
+                                            if col_w_ipa != -1 and len(r) > col_w_ipa and r[col_w_ipa].strip():
+                                                item_enrich["WordSourceIPA"] = r[col_w_ipa].strip()
+                                            if col_w_morph != -1 and len(r) > col_w_morph and r[col_w_morph].strip():
+                                                item_enrich["WordSourceMorphologyAI"] = r[col_w_morph].strip()
+                                            if col_w_pos != -1 and len(r) > col_w_pos and r[col_w_pos].strip():
+                                                item_enrich["WordSourcePOS"] = r[col_w_pos].strip()
+                                            if col_w_gender != -1 and len(r) > col_w_gender and r[col_w_gender].strip():
+                                                item_enrich["WordSourceGender"] = r[col_w_gender].strip()
+                                            if item_enrich:
+                                                item_enrich["word_provenance"] = "live:intellifiller"
+                                                self.enrichment_queue.set_cached(l_val, lang, item_enrich)
+                                                enriched_lemma_map[l_val] = item_enrich
+                        else:
+                            with storage_adapter.file_lock(tsv_path):
+                                storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+                    except StructuredError:
+                        raise
+                    except Exception as e:
+                        raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
+
+                # Propagate newly enriched lemmas to open sibling sessions!
+                if enriched_lemma_map:
+                    self.propagate_enrichment_to_siblings(enriched_lemma_map, exclude_session_zid=session_zid, language=lang)
+            else:
+                # Fast-path machine translation (deepl, google, argos, combined, etc.)
+                try:
+                    lemmas_to_translate = []
+                    for r_idx in selected_rows:
+                        if 0 <= r_idx < len(data_rows):
+                            row = data_rows[r_idx]
+                            if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
+                                lemmas_to_translate.append(row[col_lemma].strip())
+
+                    translated_map: Dict[str, str] = {}
+                    if lemmas_to_translate:
+                        lemmas_unique = list(dict.fromkeys(lemmas_to_translate))
+                        provider_to_use = 'combined' if provider == 'combined' else provider
+                        chunk_size = 15
+                        if self.config and hasattr(self.config, 'getint'):
+                            chunk_size = self.config.getint(SEC_TRANSLATION, 'lemma_batch_size', fallback=15)
+                        chunks = [lemmas_unique[i:i + chunk_size] for i in range(0, len(lemmas_unique), chunk_size)]
+                        for chunk in chunks:
+                            chunk_trans = translate_lemmas_fast_path(
+                                chunk,
+                                source=lang,
+                                target=target_lang,
+                                config=self.config,
+                                resolved_paths=self.resolved_paths,
+                                provider=provider_to_use,
+                            )
+                            if chunk_trans:
+                                translated_map.update(chunk_trans)
+
+                        if translated_map:
+                            updates = []
+                            lemma_prov_tag = f"live:{provider}"
+                            for r_idx in selected_rows:
+                                if 0 <= r_idx < len(data_rows):
+                                    row = data_rows[r_idx]
+                                    if col_lemma != -1 and len(row) > col_lemma:
+                                        l_val = row[col_lemma].strip()
+                                        if l_val in translated_map and col_w_dest != -1:
+                                            t_val = translated_map[l_val]
+                                            while len(row) <= col_w_dest:
+                                                row.append("")
+                                            row[col_w_dest] = t_val
+                                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else r_idx
+                                            updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+                                            updates.append({"token_order": t_ord, "field": "word_provenance", "value": lemma_prov_tag})
+
+                            if is_sqlite:
+                                if updates:
+                                    storage_adapter.batch_update_words(session_zid=session_zid, updates_list=updates, zid=req_zid)
+                            else:
+                                with storage_adapter.file_lock(tsv_path):
+                                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+
+                            self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
                 except StructuredError:
                     raise
                 except Exception as e:
                     raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
 
-            # Propagate newly enriched lemmas to open sibling sessions!
-            if enriched_lemma_map:
-                self.propagate_enrichment_to_siblings(enriched_lemma_map, exclude_session_zid=session_zid, language=lang)
+        # Re-evaluate dictionary classifications if enabled
+        class_cols: List[Tuple[str, int]] = []
+        if selected_rows and provider != 'none':
+            try:
+                desk_classification_enabled = self.config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if self.config and self.config.has_section(SEC_CLASSIFICATION) else True
+                kardenwort_workspace = self.resolved_paths.get('kardenwort_workspace')
+                if kardenwort_workspace:
+                    kardenwort_workspace = Path(kardenwort_workspace)
+                    kw_config = load_kardenwort_config(kardenwort_workspace)
+                    if desk_classification_enabled and kw_config and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
+                        if str(kardenwort_workspace / "src") not in sys.path:
+                            sys.path.append(str(kardenwort_workspace / "src"))
+                        from kardenwort.core.kardenwort import load_classification_dictionaries
+
+                        if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{lang}'):
+                            dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{lang}', fallback='')
+                        else:
+                            dicts = kw_config.get(SEC_CLASSIFICATION, 'dictionaries', fallback='')
+                        classify_args = []
+                        if dicts:
+                            for d in dicts.split(','):
+                                d = d.strip()
+                                if d and '=' in d:
+                                    name, path_str = d.split('=', 1)
+                                    name = name.strip()
+                                    path_str = path_str.strip()
+
+                                    prefix = ""
+                                    if ":" in path_str:
+                                        parts = path_str.split(":", 1)
+                                        possible_prefix = parts[0].strip()
+                                        if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
+                                            prefix = possible_prefix + ":"
+                                            path_str = parts[1].strip()
+
+                                    resolved_path = (kardenwort_workspace / path_str).resolve()
+                                    classify_args.append(f"{name}={prefix}{resolved_path}")
+
+                        if classify_args:
+                            classifications = load_classification_dictionaries(classify_args)
+                            if classifications and col_lemma != -1:
+                                class_updates = []
+                                for name, c_dict in classifications.items():
+                                    if name in role_fields and role_fields[name] in headers:
+                                        col_idx = headers.index(role_fields[name])
+                                        if (name, col_idx) not in class_cols:
+                                            class_cols.append((name, col_idx))
+                                        for r_idx in selected_rows:
+                                            if 0 <= r_idx < len(data_rows):
+                                                lemma_val = data_rows[r_idx][col_lemma].strip().lower()
+                                                val = c_dict.get(lemma_val, "")
+                                                while len(data_rows[r_idx]) <= col_idx:
+                                                    data_rows[r_idx].append("")
+                                                data_rows[r_idx][col_idx] = val
+                                                t_ord = int(data_rows[r_idx][col_token_order]) if col_token_order != -1 and len(data_rows[r_idx]) > col_token_order and str(data_rows[r_idx][col_token_order]).isdigit() else r_idx
+                                                class_updates.append({"token_order": t_ord, "field": role_fields[name], "value": val})
+
+                                if is_sqlite:
+                                    if class_updates:
+                                        storage_adapter.batch_update_words(session_zid=session_zid, updates_list=class_updates, zid=req_zid)
+                                else:
+                                    with storage_adapter.file_lock(tsv_path):
+                                        storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+            except Exception as e_class:
+                logger.error(f"Failed to update classification fields during reword: {e_class}")
 
         new_fp = compute_content_fingerprint(data_rows)
 
@@ -2097,10 +2234,17 @@ class SessionArbiter:
             status="success",
             zid=session_zid,
             config=self.config,
+            class_cols=class_cols if class_cols else None,
             row_provenances=existing_row_provs,
         )
 
-        structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=existing_row_provs)
+        structured_rows = format_update_rows_dict(
+            data_rows,
+            headers,
+            role_fields,
+            class_cols=class_cols if class_cols else None,
+            row_provenances=existing_row_provs,
+        )
 
         self.emit_event(session_zid, {
             "type": "update",
