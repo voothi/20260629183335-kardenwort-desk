@@ -465,8 +465,7 @@ def test_run_render_flow_with_classification(tmp_path, monkeypatch):
         tsv_path=tsv_path
     )
     
-    assert '<th class="col-classification">Oxford</th>' in html
-    assert '<th class="col-classification">Cambridge</th>' in html
+    assert '<th class="col-classification">CEFR</th>' in html
     assert '<span class="level-3k">B2</span>' in html
     assert '<span class="level-5k">C1</span>' in html
 
@@ -1018,8 +1017,8 @@ def test_render_section_lemmas_with_pos_and_gender():
     }
     html = render_section('lemmas', ctx)
 
-    assert '<th class="col-pos">POS</th>' in html
-    assert '<th class="col-gender">G</th>' in html
+    assert '<th class="col-pos"></th>' in html
+    assert '<th class="col-gender"></th>' in html
     assert '<td class="col-pos">n.</td>' in html
     assert '<td class="col-gender"><span class="kw-gender kw-gender-m">m</span></td>' in html
     assert '<td class="col-gender"><span class="kw-gender kw-gender-f">f</span></td>' in html
@@ -1095,9 +1094,9 @@ def test_run_render_flow_pos_and_gender_column_sequence_and_badges(tmp_path):
     assert '.kw-gender-n' in html
 
     # 2. Verify Table Header Sequence: Inflected -> Lemma -> Translation -> IPA -> Morphology -> POS -> G -> Goethe
-    pos_th_idx = html.find('<th class="col-pos">POS</th>')
-    gender_th_idx = html.find('<th class="col-gender">G</th>')
-    goethe_th_idx = html.find('<th class="col-classification">Goethe</th>')
+    pos_th_idx = html.find('<th class="col-pos"></th>')
+    gender_th_idx = html.find('<th class="col-gender"></th>')
+    goethe_th_idx = html.find('<th class="col-classification">CEFR</th>')
 
     assert pos_th_idx != -1
     assert gender_th_idx != -1
@@ -1148,8 +1147,8 @@ def test_render_lookup_html_pos_and_gender_integration(tmp_path):
         sentence_translation="Dogs and cats"
     )
 
-    assert '<th class="col-pos">POS</th>' in html_out
-    assert '<th class="col-gender">G</th>' in html_out
+    assert '<th class="col-pos"></th>' in html_out
+    assert '<th class="col-gender"></th>' in html_out
     assert '<span class="kw-gender kw-gender-m">m</span>' in html_out
     assert '<span class="kw-gender kw-gender-f">f</span>' in html_out
     assert '.kw-gender-m {' in html_out

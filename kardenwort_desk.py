@@ -9621,7 +9621,7 @@ html, body {{
     for h in header_cols:
         h_lower = h.lower()
         if h_lower in [r.lower() for r in dynamic_roles]:
-            th_elements.append(f'<th class="col-classification">{h}</th>')
+            th_elements.append('<th class="col-classification">CEFR</th>')
         elif h_lower == "inflected":
             th_elements.append(f'<th class="col-inflected">{h}</th>')
         elif h_lower == "lemma":
@@ -9633,9 +9633,9 @@ html, body {{
         elif h_lower == "morphology":
             th_elements.append(f'<th class="col-morphology">{h}</th>')
         elif h_lower == "pos":
-            th_elements.append(f'<th class="col-pos">{h}</th>')
+            th_elements.append('<th class="col-pos"></th>')
         elif h_lower == "g":
-            th_elements.append(f'<th class="col-gender">{h}</th>')
+            th_elements.append('<th class="col-gender"></th>')
         else:
             th_elements.append(f'<th>{h}</th>')
     table_header_html = "<tr>" + "".join(th_elements) + "</tr>"
@@ -18130,9 +18130,11 @@ def render_section(token, ctx):
                 continue
             valid_tokens.append(col_token.lower())
             if col_token.lower() == "pos":
-                html_output += '<th class="col-pos">POS</th>'
+                html_output += '<th class="col-pos"></th>'
             elif col_token.lower() in ("gender", "g"):
-                html_output += '<th class="col-gender">G</th>'
+                html_output += '<th class="col-gender"></th>'
+            elif col_token.lower() in ("oxford", "cambridge", "goethe", "cefr", "classification"):
+                html_output += '<th class="col-classification">CEFR</th>'
             else:
                 html_output += f'<th>{col_token.capitalize()}</th>'
         html_output += '</tr></thead>\n<tbody>\n'
