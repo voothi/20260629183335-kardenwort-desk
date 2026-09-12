@@ -12296,6 +12296,10 @@ html, body {{
                                         if (matchingDelta.ipa) cw.ipa = matchingDelta.ipa;
                                         var mMorph = (matchingDelta.morph !== undefined && matchingDelta.morph !== "") ? matchingDelta.morph : ((matchingDelta.morphology !== undefined && matchingDelta.morphology !== "") ? matchingDelta.morphology : matchingDelta.WordSourceMorphologyAI);
                                         if (mMorph !== undefined && mMorph !== "") cw.morphology = mMorph;
+                                        if (matchingDelta.pos !== undefined) cw.pos = matchingDelta.pos;
+                                        else if (matchingDelta.WordSourcePOS !== undefined) cw.pos = matchingDelta.WordSourcePOS;
+                                        if (matchingDelta.gender !== undefined) cw.gender = matchingDelta.gender;
+                                        else if (matchingDelta.WordSourceGender !== undefined) cw.gender = matchingDelta.WordSourceGender;
                                         if (matchingDelta.provenance) cw.provenance = matchingDelta.provenance;
                                         cw.row_html = null;
                                     }
@@ -12768,6 +12772,68 @@ html, body {{
                                         updated = true;
                                     }
                                 }
+                            }
+                        }
+                    }
+                    var hasPosProp = rowData.hasOwnProperty('pos') || rowData.hasOwnProperty('WordSourcePOS');
+                    if (hasPosProp) {
+                        var posCell = tr.querySelector('td.col-pos, td[data-col="WordSourcePOS"]');
+                        if (posCell && !posCell.classList.contains('dirty')) {
+                            var div = posCell.querySelector('.scrollable-cell') || posCell;
+                            var rawPos = (rowData.pos !== undefined && rowData.pos !== null) ? rowData.pos : (rowData.WordSourcePOS || "");
+                            var normPos = rawPos;
+                            if (typeof rawPos === 'string') {
+                                var pClean = rawPos.trim();
+                                var pUpper = pClean.toUpperCase();
+                                var posMap = {
+                                    "NOUN": "n.", "PROPN": "n.", "VERB": "v.", "AUX": "v.", "ADJ": "adj.",
+                                    "ADV": "adv.", "ADP": "prep.", "PREP": "prep.", "PRON": "pron.",
+                                    "CCONJ": "conj.", "SCONJ": "conj.", "CONJ": "conj.", "NUM": "num.",
+                                    "DET": "art.", "ART": "art.", "PART": "part.", "INTJ": "intj."
+                                };
+                                if (posMap[pUpper]) {
+                                    normPos = posMap[pUpper];
+                                } else {
+                                    var pLower = pClean.toLowerCase();
+                                    if (pLower === "noun") normPos = "n.";
+                                    else if (pLower === "verb") normPos = "v.";
+                                    else if (["n.", "v.", "adj.", "adv.", "prep.", "conj.", "pron.", "art.", "num.", "part.", "intj."].indexOf(pLower) !== -1) normPos = pLower;
+                                    else normPos = pClean;
+                                }
+                            }
+                            var oldPosVal = (div.textContent || div.innerText || '').trim();
+                            if (oldPosVal !== normPos) {
+                                if (!posCell.classList.contains('editing')) setCellText(div, normPos);
+                                updated = true;
+                            }
+                        }
+                    }
+                    var hasGenderProp = rowData.hasOwnProperty('gender') || rowData.hasOwnProperty('WordSourceGender');
+                    if (hasGenderProp) {
+                        var genderCell = tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]');
+                        if (genderCell && !genderCell.classList.contains('dirty')) {
+                            var div = genderCell.querySelector('.scrollable-cell') || genderCell;
+                            var rawGender = (rowData.gender !== undefined && rowData.gender !== null) ? rowData.gender : (rowData.WordSourceGender || "");
+                            var targetGenderHtml = "";
+                            if (typeof rawGender === 'string') {
+                                var gTrim = rawGender.trim();
+                                if (gTrim.indexOf('<span') !== -1) {
+                                    targetGenderHtml = gTrim;
+                                } else {
+                                    var gLower = gTrim.toLowerCase();
+                                    if (gLower === 'm' || gLower === 'masc' || gLower === 'masculine') {
+                                        targetGenderHtml = '<span class="kw-gender kw-gender-m">m</span>';
+                                    } else if (gLower === 'f' || gLower === 'fem' || gLower === 'feminine') {
+                                        targetGenderHtml = '<span class="kw-gender kw-gender-f">f</span>';
+                                    } else if (gLower === 'n' || gLower === 'neut' || gLower === 'neuter') {
+                                        targetGenderHtml = '<span class="kw-gender kw-gender-n">n</span>';
+                                    }
+                                }
+                            }
+                            var oldGenderHtml = div.innerHTML;
+                            if (oldGenderHtml !== targetGenderHtml) {
+                                if (!genderCell.classList.contains('editing')) div.innerHTML = targetGenderHtml;
+                                updated = true;
                             }
                         }
                     }
@@ -16615,8 +16681,12 @@ html, body {{
                             if (appRow.ipa !== undefined && appRow.ipa !== "") w.ipa = appRow.ipa;
                             var updatedMorph = (appRow.morphology !== undefined && appRow.morphology !== "") ? appRow.morphology : ((appRow.morph !== undefined && appRow.morph !== "") ? appRow.morph : appRow.WordSourceMorphologyAI);
                             if (updatedMorph !== undefined && updatedMorph !== "") w.morphology = updatedMorph;
+                            var updatedPos = (appRow.pos !== undefined) ? appRow.pos : appRow.WordSourcePOS;
+                            if (updatedPos !== undefined) w.pos = updatedPos;
+                            var updatedGender = (appRow.gender !== undefined) ? appRow.gender : appRow.WordSourceGender;
+                            if (updatedGender !== undefined) w.gender = updatedGender;
                             if (appRow.provenance) w.provenance = appRow.provenance;
-                            if (updatedTrans || appRow.provenance || appRow.ipa || updatedMorph || appRow.lemma) {
+                            if (updatedTrans || appRow.provenance || appRow.ipa || updatedMorph || appRow.lemma || updatedPos !== undefined || updatedGender !== undefined) {
                                 w.row_html = null;
                             }
                         }
@@ -20087,6 +20157,8 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
+    col_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else (headers.index('pos') if 'pos' in headers else -1))
+    col_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else (headers.index('gender') if 'gender' in headers else -1))
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     
@@ -20098,6 +20170,10 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
+        pos_raw = row[col_pos] if col_pos != -1 and len(row) > col_pos else ""
+        gender_raw = row[col_gender] if col_gender != -1 and len(row) > col_gender else ""
+        pos_val = format_pos_cell(pos_raw)
+        gender_val = gender_raw.strip()
         token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
         sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
         row_obj = {
@@ -20107,6 +20183,10 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             "ipa": ipa_val,
             "morph": morph_val,
             "morphology": morph_val,
+            "pos": pos_val,
+            "gender": gender_val,
+            "WordSourcePOS": pos_val,
+            "WordSourceGender": gender_val,
             "token_order": token_order_val,
             "sentence_idx": sent_idx_val
         }

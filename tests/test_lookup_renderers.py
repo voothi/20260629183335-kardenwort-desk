@@ -1156,6 +1156,40 @@ def test_render_lookup_html_pos_and_gender_integration(tmp_path):
     assert '.kw-gender-n {' in html_out
 
 
+def test_format_update_rows_dict_pos_and_gender():
+    from kardenwort_desk import format_update_rows_dict
+
+    headers = ['TokenOrder', 'WordSource', 'WordDestination', 'WordSourcePOS', 'WordSourceGender', 'SentenceSourceIndex']
+    role_fields = {
+        'lemma': 'WordSource',
+        'word_translation': 'WordDestination',
+        'inflected': 'WordSource',
+        'morphology': 'WordSourceMorphology',
+        'ipa': 'WordSourceIPA',
+        'pos': 'WordSourcePOS',
+        'gender': 'WordSourceGender',
+        'sentence_index': 'SentenceSourceIndex'
+    }
+    data_rows = [
+        ['0', 'Arbeit', 'работа', 'NOUN', 'f', '1'],
+        ['1', 'laufen', 'бежать', 'VERB', '', '1'],
+        ['2', 'Buch', 'книга', 'n.', 'n', '1']
+    ]
+
+    res = format_update_rows_dict(data_rows, headers, role_fields)
+    assert res[0]['pos'] == 'n.'
+    assert res[0]['gender'] == 'f'
+    assert res[0]['WordSourcePOS'] == 'n.'
+    assert res[0]['WordSourceGender'] == 'f'
+
+    assert res[1]['pos'] == 'v.'
+    assert res[1]['gender'] == ''
+
+    assert res[2]['pos'] == 'n.'
+    assert res[2]['gender'] == 'n'
+
+
+
 
 
 

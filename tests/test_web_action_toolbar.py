@@ -77,6 +77,8 @@ window.fetch = async function(url, options) {
                         trans: 'новое_здание_reworded',
                         ipa: '/haʊs/',
                         morph: '<b>N</b>; Nom, Sg',
+                        pos: 'n.',
+                        gender: 'n',
                         token_order: '0',
                         sentence_idx: '1',
                         provenance: 'live:intellifiller'
@@ -263,6 +265,10 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     scroll_div = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] .scrollable-cell")
     assert scroll_div.get_attribute("data-provenance") == "live:intellifiller"
     assert scroll_div.get_attribute("title") == "Translated via IntelliFiller (AI)"
+    cell_pos = page.locator("tr[data-row-id='0'] td.col-pos")
+    assert cell_pos.inner_text() == "n."
+    cell_gender = page.locator("tr[data-row-id='0'] td.col-gender")
+    assert '<span class="kw-gender kw-gender-n">n</span>' in cell_gender.inner_html()
 
     # 3. Click Re-text -> dispatches /session/retext and in-place updates translation container without reload
     retext_btn = page.locator("#kw-btn-retext")
@@ -1227,6 +1233,76 @@ window.fetch = async function(url, options) {
     # Toast displayed
     toast = page.locator(".kw-toast-success")
     assert toast.count() >= 1
+
+
+def test_reword_pos_and_gender_badge_mutation(page, tmp_path):
+    mock_script = """<script>
+window.__fetches = [];
+window.__reloads = 0;
+window.fetch = async (url, options) => {
+    var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    window.__fetches.push({ url: url, options: options, body: bodyObj });
+    if (url === '/session/reword') {
+        var rowIds = bodyObj.row_ids || [];
+        var rowsData = {};
+        if (rowIds.indexOf(0) !== -1) {
+            rowsData[0] = {
+                lemma: 'Arbeit',
+                pos: 'n.',
+                gender: 'f',
+                token_order: '0'
+            };
+        }
+        if (rowIds.indexOf(1) !== -1) {
+            rowsData[1] = {
+                lemma: 'arbeiten',
+                pos: 'v.',
+                gender: '',
+                token_order: '1'
+            };
+        }
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                reprocess_started: true,
+                rows: rowsData
+            })
+        };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+};
+</script>"""
+
+    html = get_desk_page_html(tmp_path)
+    html = html.replace("<head>", f"<head>\n{mock_script}")
+    page.set_content(html)
+
+    # 1. Select row 0 and reword -> updates POS to n. and Gender to feminine badge
+    row0 = page.locator("tr[data-row-id='0']")
+    row0.click()
+    page.click("#kw-btn-reword")
+    page.wait_for_timeout(100)
+
+    cell_pos0 = page.locator("tr[data-row-id='0'] td.col-pos")
+    assert cell_pos0.inner_text() == "n."
+    cell_gender0 = page.locator("tr[data-row-id='0'] td.col-gender")
+    assert '<span class="kw-gender kw-gender-f">f</span>' in cell_gender0.inner_html()
+
+    # 2. Select row 1 and reword -> updates POS to v. and clears gender badge
+    row1 = page.locator("tr[data-row-id='1']")
+    row1.click()
+    page.click("#kw-btn-reword")
+    page.wait_for_timeout(100)
+
+    cell_pos1 = page.locator("tr[data-row-id='1'] td.col-pos")
+    assert cell_pos1.inner_text() == "v."
+    cell_gender1 = page.locator("tr[data-row-id='1'] td.col-gender")
+    assert cell_gender1.inner_text() == ""
+    assert '<span class="kw-gender' not in cell_gender1.inner_html()
+
 
 
 
