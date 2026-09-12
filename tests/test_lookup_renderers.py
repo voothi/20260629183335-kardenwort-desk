@@ -1019,11 +1019,11 @@ def test_render_section_lemmas_with_pos_and_gender():
 
     assert '<th class="col-pos"></th>' in html
     assert '<th class="col-gender"></th>' in html
-    assert '<td class="col-pos">n.</td>' in html
-    assert '<td class="col-gender"><span class="kw-gender kw-gender-m">m</span></td>' in html
-    assert '<td class="col-gender"><span class="kw-gender kw-gender-f">f</span></td>' in html
-    assert '<td class="col-gender"><span class="kw-gender kw-gender-n">n</span></td>' in html
-    assert '<td class="col-pos">v.</td>' in html
+    assert '<td class="col-pos" title="Noun">n.</td>' in html
+    assert '<td class="col-gender" title="Masculine"><span class="kw-gender kw-gender-m">m</span></td>' in html
+    assert '<td class="col-gender" title="Feminine"><span class="kw-gender kw-gender-f">f</span></td>' in html
+    assert '<td class="col-gender" title="Neuter"><span class="kw-gender kw-gender-n">n</span></td>' in html
+    assert '<td class="col-pos" title="Verb">v.</td>' in html
     assert '<td class="col-gender"></td>' in html
 
 
@@ -1103,13 +1103,13 @@ def test_run_render_flow_pos_and_gender_column_sequence_and_badges(tmp_path):
     assert goethe_th_idx != -1
     assert pos_th_idx < gender_th_idx < goethe_th_idx
 
-    # 3. Verify Table Rows render correct badges
-    assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"><span class="kw-gender kw-gender-m">m</span></div></td>' in html
-    assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"><span class="kw-gender kw-gender-f">f</span></div></td>' in html
-    assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"><span class="kw-gender kw-gender-n">n</span></div></td>' in html
-    assert '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">n.</div></td>' in html
-    assert '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">v.</div></td>' in html
-    assert '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">adj.</div></td>' in html
+    # 3. Verify Table Rows render correct badges with tooltips
+    assert '<td class="col-gender" data-col="WordSourceGender" title="Masculine"><div class="scrollable-cell"><span class="kw-gender kw-gender-m">m</span></div></td>' in html
+    assert '<td class="col-gender" data-col="WordSourceGender" title="Feminine"><div class="scrollable-cell"><span class="kw-gender kw-gender-f">f</span></div></td>' in html
+    assert '<td class="col-gender" data-col="WordSourceGender" title="Neuter"><div class="scrollable-cell"><span class="kw-gender kw-gender-n">n</span></div></td>' in html
+    assert '<td class="col-pos" data-col="WordSourcePOS" title="Noun"><div class="scrollable-cell">n.</div></td>' in html
+    assert '<td class="col-pos" data-col="WordSourcePOS" title="Verb"><div class="scrollable-cell">v.</div></td>' in html
+    assert '<td class="col-pos" data-col="WordSourcePOS" title="Adjective"><div class="scrollable-cell">adj.</div></td>' in html
 
     # 4. Verify verbs and adverbs do NOT render gender badges
     assert '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell"></div></td>' in html

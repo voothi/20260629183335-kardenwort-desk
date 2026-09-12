@@ -2190,6 +2190,180 @@ def normalize_pos_tag(pos: Optional[str]) -> str:
 def format_pos_cell(pos_val: Optional[str]) -> str:
     return normalize_pos_tag(pos_val)
 
+POS_FULL_NAME_MAP = {
+    "n.": "Noun",
+    "NOUN": "Noun",
+    "PROPN": "Noun",
+    "noun": "Noun",
+    "v.": "Verb",
+    "VERB": "Verb",
+    "AUX": "Verb",
+    "verb": "Verb",
+    "adj.": "Adjective",
+    "ADJ": "Adjective",
+    "adjective": "Adjective",
+    "adv.": "Adverb",
+    "ADV": "Adverb",
+    "adverb": "Adverb",
+    "prep.": "Preposition",
+    "ADP": "Preposition",
+    "PREP": "Preposition",
+    "preposition": "Preposition",
+    "art.": "Article",
+    "DET": "Article",
+    "ART": "Article",
+    "article": "Article",
+    "pron.": "Pronoun",
+    "PRON": "Pronoun",
+    "pronoun": "Pronoun",
+    "conj.": "Conjunction",
+    "CCONJ": "Conjunction",
+    "SCONJ": "Conjunction",
+    "CONJ": "Conjunction",
+    "conjunction": "Conjunction",
+    "num.": "Numeral",
+    "NUM": "Numeral",
+    "numeral": "Numeral",
+    "part.": "Particle",
+    "PART": "Particle",
+    "particle": "Particle",
+    "intj.": "Interjection",
+    "INTJ": "Interjection",
+    "interjection": "Interjection",
+}
+
+GENDER_FULL_NAME_MAP = {
+    "m": "Masculine",
+    "masc": "Masculine",
+    "masculine": "Masculine",
+    "f": "Feminine",
+    "fem": "Feminine",
+    "feminine": "Feminine",
+    "n": "Neuter",
+    "neut": "Neuter",
+    "neuter": "Neuter",
+}
+
+def to_unicode_bold(text: str) -> str:
+    if not text:
+        return ""
+    result = []
+    for ch in text:
+        code = ord(ch)
+        if 65 <= code <= 90:  # A-Z
+            result.append(chr(0x1D5D4 + code - 65))
+        elif 97 <= code <= 122:  # a-z
+            result.append(chr(0x1D5EE + code - 97))
+        elif 48 <= code <= 57:  # 0-9
+            result.append(chr(0x1D7EC + code - 48))
+        else:
+            result.append(ch)
+    return "".join(result)
+
+def format_inflected_sentence_tooltip(
+    sentence_text: Optional[str],
+    inflected_val: Optional[str],
+    token_order: Optional[Union[str, int]] = None
+) -> str:
+    if not sentence_text:
+        return (inflected_val or "").strip()
+    if not inflected_val:
+        return sentence_text.strip()
+    
+    target_indices = set()
+    if token_order is not None:
+        t_str = str(token_order).strip()
+        if "+" in t_str:
+            for p in t_str.split("+"):
+                p_clean = p.strip()
+                if p_clean.isdigit():
+                    target_indices.add(int(p_clean))
+    
+    target_words = set(re.findall(r'[\w]+', inflected_val.lower()))
+    
+    parts = re.split(r'(\w+)', sentence_text)
+    word_idx = 0
+    has_indices = bool(target_indices)
+    
+    for i, part in enumerate(parts):
+        if re.match(r'^\w+$', part):
+            should_bold = False
+            if has_indices and word_idx in target_indices:
+                should_bold = True
+            elif part.lower() in target_words:
+                should_bold = True
+            
+            if should_bold:
+                parts[i] = to_unicode_bold(part)
+            word_idx += 1
+            
+    return "".join(parts)
+
+def format_lemma_article_tooltip(
+    lemma: Optional[str],
+    gender: Optional[str] = None,
+    lang: str = "de"
+) -> str:
+    if not lemma:
+        return ""
+    clean_lemma = str(lemma).strip()
+    if not clean_lemma:
+        return ""
+    cur_lang = (lang or "de").strip().lower()
+    if cur_lang == "de":
+        lower_lemma = clean_lemma.lower()
+        if lower_lemma.startswith(("der ", "die ", "das ")):
+            return clean_lemma
+        g = (str(gender) if gender is not None else "").strip().lower()
+        if g in ("m", "masc", "masculine"):
+            return f"der {clean_lemma}"
+        elif g in ("f", "fem", "feminine"):
+            return f"die {clean_lemma}"
+        elif g in ("n", "neut", "neuter"):
+            return f"das {clean_lemma}"
+    return clean_lemma
+
+def format_pos_tooltip(pos_val: Optional[str]) -> str:
+    if not pos_val:
+        return ""
+    p_clean = str(pos_val).strip()
+    if not p_clean:
+        return ""
+    if p_clean in POS_FULL_NAME_MAP:
+        return POS_FULL_NAME_MAP[p_clean]
+    if p_clean.upper() in POS_FULL_NAME_MAP:
+        return POS_FULL_NAME_MAP[p_clean.upper()]
+    if p_clean.lower() in POS_FULL_NAME_MAP:
+        return POS_FULL_NAME_MAP[p_clean.lower()]
+    return p_clean
+
+def format_gender_tooltip(gender_val: Optional[str]) -> str:
+    if not gender_val:
+        return ""
+    g_clean = str(gender_val).strip().lower()
+    if g_clean in GENDER_FULL_NAME_MAP:
+        return GENDER_FULL_NAME_MAP[g_clean]
+    return ""
+
+def format_classification_tooltip(classification_val: Optional[str], role: str = "") -> str:
+    if not classification_val:
+        return ""
+    val_str = str(classification_val).strip()
+    if not val_str:
+        return ""
+    if ":" in val_str:
+        parts = val_str.split(":", 1)
+        prefix = parts[0].strip().capitalize()
+        level = parts[1].strip()
+        return f"{prefix}: {level}"
+    if role:
+        clean_role = role.strip()
+        if clean_role.lower().startswith("classification"):
+            clean_role = clean_role[len("classification"):].strip()
+        if clean_role:
+            return f"{clean_role.capitalize()}: {val_str}"
+    return val_str
+
 def format_gender_badge(gender_val: Optional[str]) -> str:
     g = (str(gender_val) if gender_val is not None else "").strip().lower()
     if g in ("m", "masc", "masculine"):
@@ -9590,6 +9764,7 @@ html, body {{
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
     col_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else (headers.index('pos') if 'pos' in headers else -1))
     col_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else (headers.index('gender') if 'gender' in headers else -1))
+    col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
 
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology", "POS", "G"]
     
@@ -9696,8 +9871,34 @@ html, body {{
         token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and row[col_token_order].strip() else str(row_id)
         sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and row[col_index].strip().isdigit() else "1"
 
-        pos_td = f'<td class="col-pos" data-col="{pos_col_name}"><div class="scrollable-cell">{pos_val}</div></td>'
-        gender_td = f'<td class="col-gender" data-col="{gender_col_name}"><div class="scrollable-cell">{gender_badge}</div></td>'
+        row_sentence = row[col_sentence_source] if col_sentence_source != -1 and len(row) > col_sentence_source and row[col_sentence_source].strip() else ""
+        if not row_sentence:
+            try:
+                s_num = int(sent_idx_val)
+                if 1 <= s_num <= len(source_sentences):
+                    row_sentence = source_sentences[s_num - 1]
+            except Exception:
+                pass
+        if not row_sentence:
+            row_sentence = text
+
+        inflected_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val)
+        inflected_title_attr = f' title="{html.escape(inflected_tooltip)}"' if inflected_tooltip else ''
+
+        lemma_tooltip = format_lemma_article_tooltip(lemma_val, gender_raw, lang=language)
+        lemma_title_attr = f' title="{html.escape(lemma_tooltip)}"' if lemma_tooltip else ''
+
+        ipa_title_attr = f' title="{html.escape(ipa_val)}"' if (ipa_val and "skeleton-loader" not in ipa_val) else ''
+        morph_title_attr = f' title="{html.escape(morph_val)}"' if (morph_val and "skeleton-loader" not in morph_val) else ''
+
+        pos_tooltip = format_pos_tooltip(pos_raw)
+        pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
+
+        gender_tooltip = format_gender_tooltip(gender_raw)
+        gender_title_attr = f' title="{html.escape(gender_tooltip)}"' if gender_tooltip else ''
+
+        pos_td = f'<td class="col-pos" data-col="{pos_col_name}"{pos_title_attr}><div class="scrollable-cell">{pos_val}</div></td>'
+        gender_td = f'<td class="col-gender" data-col="{gender_col_name}"{gender_title_attr}><div class="scrollable-cell">{gender_badge}</div></td>'
 
         dynamic_tds = ""
         for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
@@ -9715,7 +9916,10 @@ html, body {{
                 inner_html = f'<span class="{span_class}">{display_val}</span>'
             else:
                 inner_html = display_val
-            dynamic_tds += f'<td class="col-classification" data-col="{role}"><div class="scrollable-cell">{inner_html}</div></td>'
+            
+            cls_tooltip = format_classification_tooltip(val, role=role)
+            cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
+            dynamic_tds += f'<td class="col-classification" data-col="{role}"{cls_title_attr}><div class="scrollable-cell">{inner_html}</div></td>'
 
         prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
         prov_attr = ""
@@ -9727,11 +9931,11 @@ html, body {{
 
         row_html_line = (
             f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
-            f'<td class="{inflected_class}" data-col="{inflected_col_name}" title="{html.escape(inflected_val)}"><div class="scrollable-cell">{inflected_val}</div></td>'
-            f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{lemma_val}</div></td>'
+            f'<td class="{inflected_class}" data-col="{inflected_col_name}"{inflected_title_attr}><div class="scrollable-cell">{inflected_val}</div></td>'
+            f'<td class="{lemma_class}" data-col="{lemma_col_name}"{lemma_title_attr}><div class="scrollable-cell">{lemma_val}</div></td>'
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
-            f'<td class="col-ipa" data-col="{ipa_col_name}"><div class="scrollable-cell">{ipa_val}</div></td>'
-            f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{morph_val}</div></td>'
+            f'<td class="col-ipa" data-col="{ipa_col_name}"{ipa_title_attr}><div class="scrollable-cell">{ipa_val}</div></td>'
+            f'<td class="col-morphology" data-col="{morph_col_name}"{morph_title_attr}><div class="scrollable-cell">{morph_val}</div></td>'
             f'{pos_td}'
             f'{gender_td}'
             f'{dynamic_tds}'
@@ -9742,6 +9946,7 @@ html, body {{
             "row_id": str(row_id),
             "token_order": str(token_order_val),
             "sentence_idx": str(sent_idx_val),
+            "sentence_text": row_sentence,
             "inflected": inflected_val,
             "lemma": lemma_val,
             "translation": trans_val,
@@ -9952,20 +10157,20 @@ html, body {{
             )
         else:
             overview_rows = [list(r) for r in data_rows]
-
-        # Map each overview row to constituent data_rows indices
+        
         lemma_pos_to_row_ids = {}
-        for r_i, r in enumerate(data_rows):
-            r_lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
-            r_pos = r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(r) > col_pos_dedup else ""
-            k = (r_lem, r_pos) if col_pos_dedup != -1 else r_lem
+        for r_id, r in enumerate(data_rows):
+            lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
+            pos_val = r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(r) > col_pos_dedup else ""
+            k = (lem, pos_val) if col_pos_dedup != -1 else lem
             if k not in lemma_pos_to_row_ids:
                 lemma_pos_to_row_ids[k] = []
-            lemma_pos_to_row_ids[k].append(r_i)
-            if r_lem not in lemma_pos_to_row_ids:
-                lemma_pos_to_row_ids[r_lem] = []
-            if r_i not in lemma_pos_to_row_ids[r_lem]:
-                lemma_pos_to_row_ids[r_lem].append(r_i)
+            lemma_pos_to_row_ids[k].append(r_id)
+            if col_pos_dedup != -1:
+                if lem not in lemma_pos_to_row_ids:
+                    lemma_pos_to_row_ids[lem] = []
+                if r_id not in lemma_pos_to_row_ids[lem]:
+                    lemma_pos_to_row_ids[lem].append(r_id)
 
         is_container = (smc.delivery_mode == "container")
         saved_overview_selections = set()
@@ -10015,8 +10220,25 @@ html, body {{
             ov_gender_raw = ov_r[col_gender] if col_gender != -1 and len(ov_r) > col_gender else ""
             ov_pos = format_pos_cell(ov_pos_raw)
             ov_gender = format_gender_badge(ov_gender_raw)
-            ov_pos_td = f'<td class="col-pos" data-col="{pos_col_name}"><div class="scrollable-cell">{ov_pos}</div></td>'
-            ov_gender_td = f'<td class="col-gender" data-col="{gender_col_name}"><div class="scrollable-cell">{ov_gender}</div></td>'
+
+            ov_sentence = text
+            ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
+            ov_inf_title = f' title="{html.escape(ov_inf_tooltip)}"' if ov_inf_tooltip else ''
+
+            ov_lemma_tooltip = format_lemma_article_tooltip(ov_lemma, ov_gender_raw, lang=language)
+            ov_lemma_title = f' title="{html.escape(ov_lemma_tooltip)}"' if ov_lemma_tooltip else ''
+
+            ov_ipa_title = f' title="{html.escape(ov_ipa)}"' if (ov_ipa and "skeleton-loader" not in ov_ipa) else ''
+            ov_morph_title = f' title="{html.escape(ov_morph)}"' if (ov_morph and "skeleton-loader" not in ov_morph) else ''
+
+            ov_pos_tooltip = format_pos_tooltip(ov_pos_raw)
+            ov_pos_title = f' title="{html.escape(ov_pos_tooltip)}"' if ov_pos_tooltip else ''
+
+            ov_gender_tooltip = format_gender_tooltip(ov_gender_raw)
+            ov_gender_title = f' title="{html.escape(ov_gender_tooltip)}"' if ov_gender_tooltip else ''
+
+            ov_pos_td = f'<td class="col-pos" data-col="{pos_col_name}"{ov_pos_title}><div class="scrollable-cell">{ov_pos}</div></td>'
+            ov_gender_td = f'<td class="col-gender" data-col="{gender_col_name}"{ov_gender_title}><div class="scrollable-cell">{ov_gender}</div></td>'
 
             ov_dynamic_tds = ""
             for role, d_idx in zip(dynamic_roles, dynamic_cols_indices):
@@ -10033,7 +10255,9 @@ html, body {{
                     inner_html = f'<span class="{span_class}">{display_val}</span>'
                 else:
                     inner_html = display_val
-                ov_dynamic_tds += f'<td class="col-classification" data-col="{role}"><div class="scrollable-cell">{inner_html}</div></td>'
+                ov_cls_tooltip = format_classification_tooltip(val, role=role)
+                ov_cls_title = f' title="{html.escape(ov_cls_tooltip)}"' if ov_cls_tooltip else ''
+                ov_dynamic_tds += f'<td class="col-classification" data-col="{role}"{ov_cls_title}><div class="scrollable-cell">{inner_html}</div></td>'
 
             ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
             ov_prov_attr = ""
@@ -10049,11 +10273,11 @@ html, body {{
                 ov_hl_class += " selected kw-row-selected"
             ov_row_html = (
                 f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
-                f'<td class="{inflected_class}" data-col="{inflected_col_name}" title="{html.escape(ov_inflected)}"><div class="scrollable-cell">{ov_inflected}</div></td>'
-                f'<td class="{lemma_class}" data-col="{lemma_col_name}"><div class="scrollable-cell">{ov_lemma}</div></td>'
+                f'<td class="{inflected_class}" data-col="{inflected_col_name}"{ov_inf_title}><div class="scrollable-cell">{ov_inflected}</div></td>'
+                f'<td class="{lemma_class}" data-col="{lemma_col_name}"{ov_lemma_title}><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
-                f'<td class="col-ipa" data-col="{ipa_col_name}"><div class="scrollable-cell">{ov_ipa}</div></td>'
-                f'<td class="col-morphology" data-col="{morph_col_name}"><div class="scrollable-cell">{ov_morph}</div></td>'
+                f'<td class="col-ipa" data-col="{ipa_col_name}"{ov_ipa_title}><div class="scrollable-cell">{ov_ipa}</div></td>'
+                f'<td class="col-morphology" data-col="{morph_col_name}"{ov_morph_title}><div class="scrollable-cell">{ov_morph}</div></td>'
                 f'{ov_pos_td}'
                 f'{ov_gender_td}'
                 f'{ov_dynamic_tds}'
@@ -10064,6 +10288,7 @@ html, body {{
                 "all_row_ids": [str(x) for x in matched_ids],
                 "token_order": str(ov_token_order),
                 "sentence_idx": "0",
+                "sentence_text": ov_sentence,
                 "inflected": ov_inflected,
                 "lemma": ov_lemma,
                 "translation": ov_trans,
@@ -11428,6 +11653,163 @@ html, body {{
         return prov;
     }
 
+    function toUnicodeBold(text) {
+        if (!text) return "";
+        var res = "";
+        for (var i = 0; i < text.length; i++) {
+            var code = text.charCodeAt(i);
+            if (code >= 65 && code <= 90) {
+                res += String.fromCodePoint(0x1D5D4 + (code - 65));
+            } else if (code >= 97 && code <= 122) {
+                res += String.fromCodePoint(0x1D5EE + (code - 97));
+            } else if (code >= 48 && code <= 57) {
+                res += String.fromCodePoint(0x1D7EC + (code - 48));
+            } else {
+                res += text[i];
+            }
+        }
+        return res;
+    }
+
+    function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder) {
+        if (!sentenceText) return (inflectedVal || "").trim();
+        if (!inflectedVal) return sentenceText.trim();
+        var targetIndices = {};
+        if (tokenOrder !== undefined && tokenOrder !== null) {
+            var tStr = String(tokenOrder).trim();
+            if (tStr.indexOf('+') !== -1) {
+                var parts = tStr.split('+');
+                for (var i = 0; i < parts.length; i++) {
+                    var num = parseInt(parts[i].trim(), 10);
+                    if (!isNaN(num)) targetIndices[num] = true;
+                }
+            }
+        }
+        var targetWords = {};
+        var infWords = (inflectedVal.toLowerCase().match(/[\\p{L}\\p{N}]+/gu) || inflectedVal.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
+        for (var j = 0; j < infWords.length; j++) {
+            if (infWords[j]) targetWords[infWords[j]] = true;
+        }
+
+        var tokens = [];
+        try {
+            tokens = sentenceText.split(/([\\p{L}\\p{N}]+)/u);
+        } catch (e) {
+            tokens = sentenceText.split(/([a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+)/);
+        }
+        if (tokens.length === 1 && sentenceText.indexOf(' ') !== -1) {
+            tokens = sentenceText.split(/([a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+)/);
+        }
+        var wordIdx = 0;
+        var hasIndices = Object.keys(targetIndices).length > 0;
+        for (var k = 0; k < tokens.length; k++) {
+            var tok = tokens[k];
+            var isWord = false;
+            try {
+                isWord = /[\\p{L}\\p{N}]/u.test(tok);
+            } catch (e) {
+                isWord = /[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]/.test(tok);
+            }
+            if (isWord) {
+                var shouldBold = false;
+                if (hasIndices && targetIndices.hasOwnProperty(wordIdx)) {
+                    shouldBold = true;
+                } else if (targetWords.hasOwnProperty(tok.toLowerCase())) {
+                    shouldBold = true;
+                }
+                if (shouldBold) {
+                    tokens[k] = toUnicodeBold(tok);
+                }
+                wordIdx++;
+            }
+        }
+        return tokens.join('');
+    }
+
+    function formatLemmaTooltip(lemma, gender, lang) {
+        if (!lemma) return "";
+        var cleanLemma = String(lemma).trim();
+        if (!cleanLemma) return "";
+        var currentLang = (lang || (window.AppConfig ? window.AppConfig.language : 'de') || 'de').toLowerCase();
+        if (currentLang === 'de') {
+            var lowerLemma = cleanLemma.toLowerCase();
+            if (lowerLemma.indexOf('der ') === 0 || lowerLemma.indexOf('die ') === 0 || lowerLemma.indexOf('das ') === 0) {
+                return cleanLemma;
+            }
+            var g = (gender ? String(gender).trim().toLowerCase() : "");
+            if (g === 'm' || g === 'masc' || g === 'masculine') return 'der ' + cleanLemma;
+            if (g === 'f' || g === 'fem' || g === 'feminine') return 'die ' + cleanLemma;
+            if (g === 'n' || g === 'neut' || g === 'neuter') return 'das ' + cleanLemma;
+        }
+        return cleanLemma;
+    }
+
+    var POS_FULL_NAME_MAP_JS = {
+        "n.": "Noun", "noun": "Noun", "NOUN": "Noun", "PROPN": "Noun",
+        "v.": "Verb", "verb": "Verb", "VERB": "Verb", "AUX": "Verb",
+        "adj.": "Adjective", "adjective": "Adjective", "ADJ": "Adjective",
+        "adv.": "Adverb", "adverb": "Adverb", "ADV": "Adverb",
+        "prep.": "Preposition", "preposition": "Preposition", "ADP": "Preposition", "PREP": "Preposition",
+        "art.": "Article", "article": "Article", "DET": "Article", "ART": "Article",
+        "pron.": "Pronoun", "pronoun": "Pronoun", "PRON": "Pronoun",
+        "conj.": "Conjunction", "conjunction": "Conjunction", "CCONJ": "Conjunction", "SCONJ": "Conjunction", "CONJ": "Conjunction",
+        "num.": "Numeral", "numeral": "Numeral", "NUM": "Numeral",
+        "part.": "Particle", "particle": "Particle", "PART": "Particle",
+        "intj.": "Interjection", "interjection": "Interjection", "INTJ": "Interjection"
+    };
+
+    function formatPosTooltip(posVal) {
+        if (!posVal) return "";
+        var pClean = String(posVal).trim();
+        if (!pClean) return "";
+        if (POS_FULL_NAME_MAP_JS[pClean]) return POS_FULL_NAME_MAP_JS[pClean];
+        if (POS_FULL_NAME_MAP_JS[pClean.toUpperCase()]) return POS_FULL_NAME_MAP_JS[pClean.toUpperCase()];
+        if (POS_FULL_NAME_MAP_JS[pClean.toLowerCase()]) return POS_FULL_NAME_MAP_JS[pClean.toLowerCase()];
+        return pClean;
+    }
+
+    var GENDER_FULL_NAME_MAP_JS = {
+        "m": "Masculine", "masc": "Masculine", "masculine": "Masculine",
+        "f": "Feminine", "fem": "Feminine", "feminine": "Feminine",
+        "n": "Neuter", "neut": "Neuter", "neuter": "Neuter"
+    };
+
+    function formatGenderTooltip(genderVal) {
+        if (!genderVal) return "";
+        var gClean = String(genderVal).trim().toLowerCase();
+        if (GENDER_FULL_NAME_MAP_JS[gClean]) return GENDER_FULL_NAME_MAP_JS[gClean];
+        return "";
+    }
+
+    function formatClassificationTooltip(classVal, role) {
+        if (!classVal) return "";
+        var valStr = String(classVal).trim();
+        if (!valStr) return "";
+        if (valStr.indexOf(':') !== -1) {
+            var parts = valStr.split(':');
+            var prefix = parts[0].trim();
+            var level = parts.slice(1).join(':').trim();
+            return (prefix.charAt(0).toUpperCase() + prefix.slice(1)) + ': ' + level;
+        }
+        if (role) {
+            var r = String(role).trim();
+            if (r.toLowerCase().indexOf('classification') === 0) {
+                r = r.substring(14).trim();
+            }
+            if (r) {
+                return (r.charAt(0).toUpperCase() + r.slice(1)) + ': ' + valStr;
+            }
+        }
+        return valStr;
+    }
+
+    window.toUnicodeBold = toUnicodeBold;
+    window.formatInflectedTooltip = formatInflectedTooltip;
+    window.formatLemmaTooltip = formatLemmaTooltip;
+    window.formatPosTooltip = formatPosTooltip;
+    window.formatGenderTooltip = formatGenderTooltip;
+    window.formatClassificationTooltip = formatClassificationTooltip;
+
     function getTextBaseProvider() {
         var el = document.getElementById('text-base-provider');
         if (el) {
@@ -12610,6 +12992,12 @@ html, body {{
                             else if (!tds[0].classList.contains('editing')) setCellText(tds[0], val);
                             updated = true;
                         }
+                        var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? document.getElementById('source-container').textContent : "");
+                        var infTip = formatInflectedTooltip(sentText, val, rowData.token_order || rowId);
+                        if (infTip) {
+                            tds[0].setAttribute('title', infTip);
+                            if (div) div.setAttribute('title', infTip);
+                        }
                     }
                     if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
                         var div = tds[1].querySelector('.scrollable-cell');
@@ -12625,6 +13013,12 @@ html, body {{
                                 else if (!tds[1].classList.contains('editing')) setCellText(tds[1], val);
                                 updated = true;
                             }
+                        }
+                        var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                        var rawG = rowData.gender !== undefined ? rowData.gender : (rowData.WordSourceGender || "");
+                        var lemTip = formatLemmaTooltip(val, rawG, activeLang);
+                        if (lemTip) {
+                            tds[1].setAttribute('title', lemTip);
                         }
                     }
                     var hasTransProp = rowData.hasOwnProperty('trans') || rowData.hasOwnProperty('WordDestination') || rowData.hasOwnProperty('word_translation');
@@ -12720,11 +13114,17 @@ html, body {{
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
                             if (!tds[3].classList.contains('editing')) setCellText(div, val);
+                            if (val && val.indexOf('skeleton-loader') === -1) {
+                                tds[3].setAttribute('title', val);
+                            }
                             updated = true;
                         } else if (val !== "") {
                             var oldVal = tds[3].classList.contains('editing') ? null : (div.textContent || div.innerText);
                             if (oldVal !== val || hasSkeleton) {
                                 if (!tds[3].classList.contains('editing')) setCellText(div, val);
+                                if (val.indexOf('skeleton-loader') === -1) {
+                                    tds[3].setAttribute('title', val);
+                                }
                                 updated = true;
                             }
                         }
@@ -12738,11 +13138,17 @@ html, body {{
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
                             if (!tds[4].classList.contains('editing')) div.innerHTML = val;
+                            if (val && val.indexOf('skeleton-loader') === -1) {
+                                tds[4].setAttribute('title', val);
+                            }
                             updated = true;
                         } else if (val !== "") {
                             var oldVal = tds[4].classList.contains('editing') ? null : div.innerHTML;
                             if (oldVal !== val || hasSkeleton) {
                                 if (!tds[4].classList.contains('editing')) div.innerHTML = val;
+                                if (val.indexOf('skeleton-loader') === -1) {
+                                    tds[4].setAttribute('title', val);
+                                }
                                 updated = true;
                             }
                         }
@@ -12770,6 +13176,10 @@ html, body {{
                                         if (div) div.innerHTML = innerHtml;
                                         else cell.innerHTML = innerHtml;
                                         updated = true;
+                                    }
+                                    var clsTip = formatClassificationTooltip(val, class_name);
+                                    if (clsTip) {
+                                        cell.setAttribute('title', clsTip);
                                     }
                                 }
                             }
@@ -12806,6 +13216,10 @@ html, body {{
                                 if (!posCell.classList.contains('editing')) setCellText(div, normPos);
                                 updated = true;
                             }
+                            var posTip = formatPosTooltip(rawPos || normPos);
+                            if (posTip) {
+                                posCell.setAttribute('title', posTip);
+                            }
                         }
                     }
                     var hasGenderProp = rowData.hasOwnProperty('gender') || rowData.hasOwnProperty('WordSourceGender');
@@ -12834,6 +13248,12 @@ html, body {{
                             if (oldGenderHtml !== targetGenderHtml) {
                                 if (!genderCell.classList.contains('editing')) div.innerHTML = targetGenderHtml;
                                 updated = true;
+                            }
+                            var genTip = formatGenderTooltip(rawGender);
+                            if (genTip) {
+                                genderCell.setAttribute('title', genTip);
+                            } else {
+                                genderCell.removeAttribute('title');
                             }
                         }
                     }
@@ -16717,15 +17137,31 @@ html, body {{
                         if (isSel) hlClass += ' selected kw-row-selected';
                         var provAttr = w.provenance ? (' data-provenance="' + escapeHtml(w.provenance) + '" title="' + escapeHtml(formatProvenanceTooltip(w.provenance)) + '"') : '';
                         var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
+                        var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                        var cardSentenceText = (w.sentence_text || (window.AppState ? window.AppState.sourceText : '') || '');
+                        var infTooltip = formatInflectedTooltip(cardSentenceText, w.inflected || '', w.token_order || rIdStr);
+                        var lemTooltip = formatLemmaTooltip(w.lemma || '', w.gender || '', activeLang);
+                        var ipaTooltip = (w.ipa && w.ipa.indexOf('skeleton-loader') === -1) ? w.ipa : '';
+                        var morphTooltip = (w.morphology && w.morphology.indexOf('skeleton-loader') === -1) ? w.morphology : '';
+                        var posTooltip = formatPosTooltip(w.pos || '');
+                        var genTooltip = formatGenderTooltip(w.gender || '');
+
+                        var infTitleAttr = infTooltip ? (' title="' + escapeHtml(infTooltip) + '"') : '';
+                        var lemTitleAttr = lemTooltip ? (' title="' + escapeHtml(lemTooltip) + '"') : '';
+                        var ipaTitleAttr = ipaTooltip ? (' title="' + escapeHtml(ipaTooltip) + '"') : '';
+                        var morphTitleAttr = morphTooltip ? (' title="' + escapeHtml(morphTooltip) + '"') : '';
+                        var posTitleAttr = posTooltip ? (' title="' + escapeHtml(posTooltip) + '"') : '';
+                        var genTitleAttr = genTooltip ? (' title="' + escapeHtml(genTooltip) + '"') : '';
+
                         htmlParts.push(
                             '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
-                            '<td class="editable" data-col="WordSourceInflectedForm" title="' + escapeHtml(w.inflected || '') + '"><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
-                            '<td class="editable" data-col="WordSource"><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
+                            '<td class="editable" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
+                            '<td class="editable" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
                             '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
-                            '<td class="col-ipa" data-col="WordSourceIPA"><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
-                            '<td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell">' + (w.morphology || '') + '</div></td>' +
-                            '<td class="col-pos" data-col="WordSourcePOS"><div class="scrollable-cell">' + (w.pos || '') + '</div></td>' +
-                            '<td class="col-gender" data-col="WordSourceGender"><div class="scrollable-cell">' + (w.gender ? (w.gender.indexOf('<span') !== -1 ? w.gender : ('<span class="kw-gender kw-gender-' + w.gender.toLowerCase() + '">' + w.gender + '</span>')) : '') + '</div></td>' +
+                            '<td class="col-ipa" data-col="WordSourceIPA"' + ipaTitleAttr + '><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
+                            '<td class="col-morphology" data-col="WordSourceMorphologyAI"' + morphTitleAttr + '><div class="scrollable-cell">' + (w.morphology || '') + '</div></td>' +
+                            '<td class="col-pos" data-col="WordSourcePOS"' + posTitleAttr + '><div class="scrollable-cell">' + (w.pos || '') + '</div></td>' +
+                            '<td class="col-gender" data-col="WordSourceGender"' + genTitleAttr + '><div class="scrollable-cell">' + (w.gender ? (w.gender.indexOf('<span') !== -1 ? w.gender : ('<span class="kw-gender kw-gender-' + w.gender.toLowerCase() + '">' + w.gender + '</span>')) : '') + '</div></td>' +
                             (w.dynamic_tds || '') +
                             '</tr>'
                         );
@@ -18205,6 +18641,16 @@ def render_section(token, ctx):
                 html_output += '<th class="col-gender"></th>'
             elif col_token.lower() in ("oxford", "cambridge", "goethe", "cefr", "classification"):
                 html_output += '<th class="col-classification">CEFR</th>'
+            elif col_token.lower() == "inflected":
+                html_output += f'<th class="col-inflected">{col_token.capitalize()}</th>'
+            elif col_token.lower() == "lemma":
+                html_output += f'<th class="col-lemma">{col_token.capitalize()}</th>'
+            elif col_token.lower() == "translation":
+                html_output += f'<th class="col-translation">{col_token.capitalize()}</th>'
+            elif col_token.lower() == "ipa":
+                html_output += f'<th class="col-ipa">{col_token.capitalize()}</th>'
+            elif col_token.lower() == "morphology":
+                html_output += f'<th class="col-morphology">{col_token.capitalize()}</th>'
             else:
                 html_output += f'<th>{col_token.capitalize()}</th>'
         html_output += '</tr></thead>\n<tbody>\n'
@@ -18229,12 +18675,38 @@ def render_section(token, ctx):
                 val = row[idx] if idx != -1 and len(row) > idx else ""
                 if isinstance(val, str):
                     val = val.replace('\r', '')
-                if t == "pos":
+                if t == "inflected":
+                    inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val)
+                    inf_title_attr = f' title="{html.escape(inf_tooltip)}"' if inf_tooltip else ''
+                    html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
+                elif t == "lemma":
+                    gender_idx = col_indices.get('gender', col_indices.get('g', -1))
+                    g_val = row[gender_idx] if gender_idx != -1 and len(row) > gender_idx else ""
+                    lem_tooltip = format_lemma_article_tooltip(val, g_val, lang=ctx.get('language', 'de'))
+                    lem_title_attr = f' title="{html.escape(lem_tooltip)}"' if lem_tooltip else ''
+                    html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
+                elif t == "translation":
+                    html_output += f'<td class="col-translation">{val}</td>'
+                elif t == "ipa":
+                    ipa_title_attr = f' title="{html.escape(val)}"' if val else ''
+                    html_output += f'<td class="col-ipa"{ipa_title_attr}>{val}</td>'
+                elif t == "morphology":
+                    morph_title_attr = f' title="{html.escape(val)}"' if val else ''
+                    html_output += f'<td class="col-morphology"{morph_title_attr}>{val}</td>'
+                elif t == "pos":
                     cell_val = format_pos_cell(val)
-                    html_output += f'<td class="col-pos">{cell_val}</td>'
+                    pos_tooltip = format_pos_tooltip(val)
+                    pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
+                    html_output += f'<td class="col-pos"{pos_title_attr}>{cell_val}</td>'
                 elif t in ("gender", "g"):
                     cell_val = format_gender_badge(val)
-                    html_output += f'<td class="col-gender">{cell_val}</td>'
+                    g_tooltip = format_gender_tooltip(val)
+                    g_title_attr = f' title="{html.escape(g_tooltip)}"' if g_tooltip else ''
+                    html_output += f'<td class="col-gender"{g_title_attr}>{cell_val}</td>'
+                elif t in ("oxford", "cambridge", "goethe", "cefr", "classification"):
+                    cls_tooltip = format_classification_tooltip(val, role=t)
+                    cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
+                    html_output += f'<td class="col-classification"{cls_title_attr}>{val}</td>'
                 else:
                     html_output += f'<td>{val}</td>'
             html_output += '</tr>\n'
