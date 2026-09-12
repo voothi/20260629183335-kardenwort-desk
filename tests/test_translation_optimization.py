@@ -89,11 +89,11 @@ def test_concurrent_execution_overlap(tmp_path, monkeypatch):
     tsv_file.write_text("# comments\nWordSource\tWordDestination\tSentenceSource\tSentenceDestination\tSentenceSourceIndex\nhello\t\tHello world.\t\t1\n", encoding='utf-8')
     
     def mock_prepare_lookup(*args, **kwargs):
-        time.sleep(0.4)
+        time.sleep(0.3)
         return tsv_file
         
     def mock_translate(*args, **kwargs):
-        time.sleep(0.4)
+        time.sleep(0.3)
         return "Привет мир."
         
     monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup)
@@ -104,8 +104,8 @@ def test_concurrent_execution_overlap(tmp_path, monkeypatch):
     run_render_flow("Hello world.", "en", "20260819000000", "single", config, resolved_paths)
     elapsed = time.perf_counter() - start_time
     
-    # Sequential would be >= 0.8s. Parallel should be around ~0.4s-0.6s.
-    assert elapsed < 0.75, f"Execution was too slow ({elapsed:.3f}s), expected concurrent overlap (<0.75s)"
+    # Sequential would be >= 0.6s. Parallel should be around ~0.3s-0.45s.
+    assert elapsed < 0.55, f"Execution was too slow ({elapsed:.3f}s), expected concurrent overlap (<0.55s)"
 
 def test_parallel_thread_exception_safety_and_zid(tmp_path, monkeypatch, caplog):
     """Assert that exceptions in parallel workers capture the ZID and do not hang."""
