@@ -11138,7 +11138,10 @@ html, body {{
     border-color: #f0883e;
     color: #0d1117;
   }
-  #lemma-table.kw-filter-selected-only tbody tr[data-selected="0"] {
+  #lemma-table.kw-filter-selected-only:not(.kw-table-dragging) tbody tr[data-selected="0"] {
+    display: none !important;
+  }
+  #lemma-table.kw-filter-selected-only.kw-table-dragging tbody tr[data-filter-hidden="1"] {
     display: none !important;
   }
   /* Workspace Tab Bar */
@@ -14442,6 +14445,10 @@ html, body {{
                     e = e || window.event;
                     
                     if (e.button === 0) { // LMB
+                        var lt = document.getElementById('lemma-table');
+                        if (lt) {
+                            lt.classList.add('kw-table-dragging');
+                        }
                         var clickedTokenData = findTokenData(span);
                         if (!clickedTokenData) return;
 
@@ -14753,13 +14760,16 @@ html, body {{
             var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
 
             if (e.button === 0) { // LMB
+                if (lt) {
+                    lt.classList.add('kw-table-dragging');
+                }
+                isDragSelecting = true;
                 dragOccurred = false;
                 mousedownTargetRow = row;
                 isShiftClick = !!(e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null));
                 isCtrlKey = !!(e.ctrlKey || e.metaKey);
                 
                 if (e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null)) {
-                    isDragSelecting = true;
                     var sVisualIdx = (lastClickedVisualIdx !== -1) ? lastClickedVisualIdx : rowVisualIdx;
                     dragStartVisualIdx = sVisualIdx;
                     dragLastVisualIdx = rowVisualIdx;
@@ -14801,7 +14811,6 @@ html, body {{
                     var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) || 
                         constituentIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
                     dragSelectMode = !isCurrentlySelected;
-                    isDragSelecting = !isFilterActive || dragSelectMode;
                     
                     initialSelectedMap = {};
                     for (var key in selectedRowIdsMap) {
@@ -14846,13 +14855,16 @@ html, body {{
             e = e || window.event;
             var lt = document.getElementById('lemma-table');
             var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
-            if (isFilterActive && !dragSelectMode) return;
 
             if (isDragSelecting) {
                 if (e.buttons !== undefined && (e.buttons & 1) === 0) {
+                    if (lt) {
+                        lt.classList.remove('kw-table-dragging');
+                    }
                     isDragSelecting = false;
                     dragStartVisualIdx = -1;
                     dragLastVisualIdx = -1;
+                    updateRowStyles();
                     notifyAHKSelection();
                     return;
                 }
@@ -14888,7 +14900,7 @@ html, body {{
                 for (var rIdx = start; rIdx <= end; rIdx++) {
                     if (rIdx >= 0 && rIdx < tableRows.length) {
                         var tr = tableRows[rIdx];
-                        if (isFilterActive && !dragSelectMode && tr.getAttribute('data-selected') === '0') {
+                        if (isFilterActive && tr.getAttribute('data-filter-hidden') === '1') {
                             continue;
                         }
                         var trId = String(tr.getAttribute('data-row-id'));
@@ -14987,6 +14999,10 @@ html, body {{
     
     function handleMouseUp(e) {
             e = e || window.event;
+            var lt = document.getElementById('lemma-table');
+            if (lt) {
+                lt.classList.remove('kw-table-dragging');
+            }
             var isMouseUpCtrl = !!(e && (e.ctrlKey || e.metaKey));
             var activeCtrl = isCtrlKey || isMouseUpCtrl;
             var needNotify = false;
@@ -15146,6 +15162,8 @@ html, body {{
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
                 isRmbDragFlipping = false;
+                updateRowStyles();
+                updateBidirectionalHighlights();
                 needNotify = true;
             }
             mousedownTargetSpan = null;
@@ -15440,6 +15458,10 @@ html, body {{
                     row.classList.remove('selected');
                     row.classList.remove('kw-row-selected');
                     row.setAttribute('data-selected', '0');
+                }
+                var isAnyDragging = isDragSelecting || isTokenDragSelecting;
+                if (!isAnyDragging) {
+                    row.setAttribute('data-filter-hidden', isSel ? '0' : '1');
                 }
             }
             if (typeof updateToolbarState === 'function') {

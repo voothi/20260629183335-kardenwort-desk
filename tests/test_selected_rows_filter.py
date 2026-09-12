@@ -78,7 +78,7 @@ def test_selected_filter_css_rules(tmp_path):
     assert '.kw-action-toolbar button.btn-filter-active' in html
     assert 'background: #d29922;' in html
     assert 'color: #0d1117;' in html
-    assert '#lemma-table.kw-filter-selected-only tbody tr[data-selected="0"]' in html
+    assert '#lemma-table.kw-filter-selected-only:not(.kw-table-dragging) tbody tr[data-selected="0"]' in html
     assert 'display: none !important;' in html
 
 
@@ -292,4 +292,65 @@ def test_clicking_middle_selected_row_does_not_cascade_deselection(page, tmp_pat
         r_id = r['id']
         if r_id != mid_id:
             assert page.locator(f"#lemma-table tbody tr[data-row-id='{r_id}']").is_visible()
+
+
+def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
+    """Verifies that dragging across rows in Selected mode smoothly deselects the dragged range and hides them on mouseup."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    zid = "20260913000500"
+    tsv_file = tmp_path / f"{zid}-drag-filtered.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Baum\tBaum\tдерево\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Katze\tKatze\tкошка\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Hund\tHund\tсобака\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Vogel\tVogel\tптица\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="Haus Baum Katze Hund Vogel",
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False
+    )
+    html = inject_mock_fetch(html)
+    page.set_content(html)
+
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    filter_btn.click()
+    page.wait_for_timeout(50)
+
+    # Perform drag gesture across row 1 (Baum) to row 2 (Katze)
+    row1 = page.locator("#lemma-table tbody tr").nth(1)
+    row2 = page.locator("#lemma-table tbody tr").nth(2)
+
+    box1 = row1.bounding_box()
+    box2 = row2.bounding_box()
+    assert box1 is not None and box2 is not None
+
+    page.mouse.move(box1["x"] + 20, box1["y"] + box1["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box2["x"] + 20, box2["y"] + box2["height"] / 2, steps=5)
+    page.mouse.up()
+    page.wait_for_timeout(50)
+
+    # Rows 1 and 2 should now be deselected and hidden in filtered mode
+    # Rows 0, 3, 4 should remain selected and visible
+    row0_el = page.locator("#lemma-table tbody tr").nth(0)
+    row3_el = page.locator("#lemma-table tbody tr").nth(3)
+    row4_el = page.locator("#lemma-table tbody tr").nth(4)
+
+    assert row0_el.is_visible()
+    assert not row1.is_visible()
+    assert not row2.is_visible()
+    assert row3_el.is_visible()
+    assert row4_el.is_visible()
 
