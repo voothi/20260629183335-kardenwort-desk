@@ -11127,6 +11127,20 @@ html, body {{
     border-color: {flipped_border};
     color: {flipped_text};
   }
+  .kw-action-toolbar button.btn-filter-active {
+    background: #d29922;
+    border-color: #f0883e;
+    color: #0d1117;
+    font-weight: 600;
+  }
+  .kw-action-toolbar button.btn-filter-active:hover:not(:disabled) {
+    background: #bb8019;
+    border-color: #f0883e;
+    color: #0d1117;
+  }
+  #lemma-table.kw-filter-selected-only tbody tr[data-selected="0"] {
+    display: none !important;
+  }
   /* Workspace Tab Bar */
   .kw-workspace-tab-bar {
     display: flex;
@@ -11497,6 +11511,7 @@ html, body {{
   </div>
 </div>
 <div class="kw-action-toolbar" id="kw-action-toolbar">
+  <button type="button" id="kw-btn-filter-selected" title="Toggle view: show only selected words">Selected</button>
   <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
   <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
   <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
@@ -12519,6 +12534,7 @@ html, body {{
             textProvenance: null,
             stage: null,
             isFinished: false,
+            filterSelectedOnly: false,
             applyDeltas: function(data) {
                 if (!data) return;
                 
@@ -15220,16 +15236,50 @@ html, body {{
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (tableRows.length === 0) return;
                 
-                if (focusedRowId === null) {
-                    focusedRowId = 0;
-                } else {
-                    if (keyCode === 40) {
-                        focusedRowId = Math.min(focusedRowId + 1, tableRows.length - 1);
-                    } else {
-                        focusedRowId = Math.max(focusedRowId - 1, 0);
+                var visibleRows = [];
+                var lt = document.getElementById('lemma-table');
+                var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
+                for (var vr = 0; vr < tableRows.length; vr++) {
+                    var rEl = tableRows[vr];
+                    var isHidden = false;
+                    if (isFilterActive && rEl.getAttribute('data-selected') === '0') {
+                        isHidden = true;
+                    } else if (rEl.style.display === 'none') {
+                        isHidden = true;
+                    } else if (rEl.offsetParent === null) {
+                        isHidden = true;
+                    }
+                    if (!isHidden) {
+                        visibleRows.push(rEl);
                     }
                 }
-                updateRowFocus();
+                if (visibleRows.length === 0) return;
+
+                var currentVisIdx = -1;
+                for (var v = 0; v < visibleRows.length; v++) {
+                    var vRowId = parseInt(visibleRows[v].getAttribute('data-row-id'), 10);
+                    if (vRowId === focusedRowId) {
+                        currentVisIdx = v;
+                        break;
+                    }
+                }
+
+                var nextVisIdx = 0;
+                if (currentVisIdx === -1) {
+                    nextVisIdx = (keyCode === 38) ? (visibleRows.length - 1) : 0;
+                } else {
+                    if (keyCode === 40) {
+                        nextVisIdx = Math.min(currentVisIdx + 1, visibleRows.length - 1);
+                    } else {
+                        nextVisIdx = Math.max(currentVisIdx - 1, 0);
+                    }
+                }
+
+                var nextRow = visibleRows[nextVisIdx];
+                if (nextRow) {
+                    focusedRowId = parseInt(nextRow.getAttribute('data-row-id'), 10);
+                    updateRowFocus();
+                }
             } else if (keyCode === 46) { // Delete
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (window.deleteSelectedRows) {
@@ -15330,6 +15380,8 @@ html, body {{
             }
             updateRowStyles();
         }
+        window.toggleRowSelection = toggleRowSelection;
+        window.getFocusedRowId = function() { return focusedRowId; };
         
         function updateRowStyles() {
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
@@ -17168,6 +17220,10 @@ html, body {{
                     }
                 }
                 tbody.innerHTML = htmlParts.join('');
+                if (window.AppState && window.AppState.filterSelectedOnly) {
+                    var lt = document.getElementById('lemma-table');
+                    if (lt) addClass(lt, 'kw-filter-selected-only');
+                }
                 if (typeof window.rebindTableRows === 'function') {
                     window.rebindTableRows();
                 }
@@ -17430,6 +17486,12 @@ html, body {{
                 buildLcIndex();
                 updateBidirectionalHighlights();
                 updateRowStyles();
+                if (window.AppState && window.AppState.filterSelectedOnly) {
+                    var lt = document.getElementById('lemma-table');
+                    if (lt) addClass(lt, 'kw-filter-selected-only');
+                    var fb = document.getElementById('kw-btn-filter-selected');
+                    if (fb) addClass(fb, 'btn-filter-active');
+                }
                 updateFavicon(activeTabSeq);
                 updateTitle(targetCard);
                 if (typeof window.updateToolbarState === 'function') window.updateToolbarState();
@@ -17767,6 +17829,42 @@ html, body {{
             window.hideLanguageVerificationModal();
             window.showToast("Language verification cancelled.", "info");
         };
+
+        function setFilterSelectedOnly(active) {
+            if (window.AppState) {
+                window.AppState.filterSelectedOnly = !!active;
+            }
+            var lemmaTable = document.getElementById('lemma-table');
+            if (lemmaTable) {
+                if (active) {
+                    addClass(lemmaTable, 'kw-filter-selected-only');
+                } else {
+                    removeClass(lemmaTable, 'kw-filter-selected-only');
+                }
+            }
+            var filterBtn = document.getElementById('kw-btn-filter-selected');
+            if (filterBtn) {
+                if (active) {
+                    addClass(filterBtn, 'btn-filter-active');
+                } else {
+                    removeClass(filterBtn, 'btn-filter-active');
+                }
+            }
+        }
+        window.setFilterSelectedOnly = setFilterSelectedOnly;
+
+        function toggleFilterSelectedOnly() {
+            var cur = (window.AppState && window.AppState.filterSelectedOnly) ? true : false;
+            setFilterSelectedOnly(!cur);
+        }
+        window.toggleFilterSelectedOnly = toggleFilterSelectedOnly;
+
+        var btnFilterSelected = document.getElementById('kw-btn-filter-selected');
+        if (btnFilterSelected) {
+            addEvent(btnFilterSelected, 'click', function() {
+                toggleFilterSelectedOnly();
+            });
+        }
 
         var btnSave = document.getElementById('kw-btn-save');
         if (btnSave) addEvent(btnSave, 'click', function(e) {
