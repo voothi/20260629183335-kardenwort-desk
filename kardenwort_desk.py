@@ -10542,33 +10542,33 @@ html, body {{
     color: {text_muted};
   }
   #lemma-table th.col-morphology, #lemma-table td.col-morphology {
-    width: 56%;
+    width: 53%;
     text-align: left;
     color: {text_muted};
   }
   #lemma-table th.col-pos, #lemma-table td.col-pos {
-    width: 3%;
+    width: 4%;
     text-align: center !important;
-    padding-left: 2px !important;
-    padding-right: 2px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
     white-space: nowrap;
   }
   #lemma-table th.col-gender, #lemma-table td.col-gender {
-    width: 2%;
+    width: 3%;
     text-align: center !important;
-    padding-left: 1px !important;
-    padding-right: 1px !important;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
     white-space: nowrap;
   }
   #lemma-table th.col-classification, #lemma-table td.col-classification {
-    width: 3%;
+    width: 4%;
     text-align: center !important;
-    padding-left: 2px !important;
-    padding-right: 0 !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
     white-space: nowrap;
   }
   #lemma-table th:last-child, #lemma-table td:last-child {
-    padding-right: 0;
+    padding-right: 6px;
   }
   .scrollable-cell {
     width: 100%;
@@ -10628,20 +10628,20 @@ html, body {{
   }
   body:not(.maximized) #lemma-table th.col-morphology,
   body:not(.maximized) #lemma-table td.col-morphology {
-    width: 56%;
+    width: 53%;
   }
   body:not(.maximized) #lemma-table th.col-pos,
   body:not(.maximized) #lemma-table td.col-pos {
-    width: 3%;
+    width: 4%;
   }
   body:not(.maximized) #lemma-table th.col-gender,
   body:not(.maximized) #lemma-table td.col-gender {
-    width: 2%;
+    width: 3%;
   }
   body:not(.maximized) #lemma-table th.col-classification,
   body:not(.maximized) #lemma-table td.col-classification {
-    width: 3%;
-    padding-right: 0;
+    width: 4%;
+    padding-right: 6px;
   }
   th.col-pos, td.col-pos,
   th.col-gender, td.col-gender,
@@ -10649,16 +10649,16 @@ html, body {{
     text-align: center !important;
   }
   th.col-pos {
-    padding-left: 2px !important;
-    padding-right: 2px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
   }
   th.col-gender {
-    padding-left: 1px !important;
-    padding-right: 1px !important;
+    padding-left: 4px !important;
+    padding-right: 4px !important;
   }
   th.col-classification {
-    padding-left: 2px !important;
-    padding-right: 0 !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
   }
   td.col-pos {
     font-size: 12px;
