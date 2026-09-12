@@ -297,9 +297,9 @@ def test_reword_and_reprocess_prefill_and_filter_intellifiller(tmp_path, monkeyp
     arbiter = SessionArbiter(config, resolved_paths)
     arbiter.reword_session(session_zid=sess_zid, selected_rows=[0, 1], language='de')
 
-    # In reword_session, row 0 meets target_quality and is excluded; only row 1 is sent to intellifiller
+    # In reword_session, WordFill is bypassed; all selected rows [0, 1] are sent to intellifiller
     assert len(intellifiller_calls) == 1
-    assert intellifiller_calls[0] == [1]
+    assert intellifiller_calls[0] == [0, 1]
 
 
 def test_cmd_reprocess_worker_sqlite_mode_classification(tmp_path, monkeypatch):

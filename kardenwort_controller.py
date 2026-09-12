@@ -1963,42 +1963,6 @@ class SessionArbiter:
                 pass
 
         new_reword_provs = {}
-        wordfill_cfg = getattr(self, 'wordfill_cfg', None) or resolve_wordfill_config(self.config, self.resolved_paths)
-        if wordfill_cfg and wordfill_cfg.get('enabled', False) and col_lemma != -1:
-            target_quality = wordfill_cfg.get('target_quality', 'any')
-            target_quality_tier = {'any': 0, 'partial': 1, 'full': 2}.get(target_quality, 0)
-            remaining_selected = []
-            for row_id in selected_rows:
-                if 0 <= row_id < len(data_rows):
-                    row = data_rows[row_id]
-                    if len(row) > col_lemma and row[col_lemma].strip():
-                        lemma_val = row[col_lemma].strip()
-                        match = find_wordfill_match(lemma_val, lang, wordfill_cfg, exclude_path=tsv_path)
-                        if match:
-                            has_ipa = bool(match.get('WordSourceIPA', '').strip())
-                            has_morph = bool(match.get('WordSourceMorphologyAI', '').strip())
-                            tier = 2 if (has_ipa and has_morph) else (1 if (has_ipa or has_morph) else 0)
-                            if tier >= target_quality_tier:
-                                apply_wordfill_to_rows([row], headers, match)
-                                new_reword_provs[row_id] = "corpus:wordfill"
-                                new_reword_provs[str(row_id)] = "corpus:wordfill"
-                                if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
-                                    t_ord_str = str(row[col_token_order]).strip()
-                                    new_reword_provs[t_ord_str] = "corpus:wordfill"
-                                    if t_ord_str.isdigit():
-                                        new_reword_provs[int(t_ord_str)] = "corpus:wordfill"
-                                logger.info(
-                                    f"wordfill (reword_session): pre-filled quality tier {tier} for row {row_id} lemma '{lemma_val}' "
-                                    f"from corpus; skipping IntelliFiller."
-                                )
-                                continue
-                remaining_selected.append(row_id)
-
-            if len(remaining_selected) < len(selected_rows):
-                with storage_adapter.file_lock(tsv_path):
-                    storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                selected_rows = remaining_selected
-
         for r_idx in selected_rows:
             if 0 <= r_idx < len(data_rows):
                 row = data_rows[r_idx]
@@ -2064,24 +2028,7 @@ class SessionArbiter:
                             lemma_val = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ""
                             if not lemma_val:
                                 continue
-                            cached = self.enrichment_queue.get_cached(lemma_val, lang)
-                            if cached:
-                                for k, v in cached.items():
-                                    if k == "word_provenance":
-                                        continue
-                                    if k not in headers:
-                                        headers.append(k)
-                                        for dr in data_rows:
-                                            dr.append("")
-                                    c_idx = headers.index(k)
-                                    while len(row) <= c_idx:
-                                        row.append("")
-                                    row[c_idx] = str(v)
-                                cached_copy = dict(cached)
-                                cached_copy["word_provenance"] = "live:intellifiller"
-                                enriched_lemma_map[lemma_val] = cached_copy
-                            else:
-                                rows_to_enrich.append(r_idx)
+                            rows_to_enrich.append(r_idx)
 
                     if rows_to_enrich:
                         run_headless_intellifiller(
