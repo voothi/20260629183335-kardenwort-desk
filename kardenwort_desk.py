@@ -14749,14 +14749,17 @@ html, body {{
                 }
             }
             
+            var lt = document.getElementById('lemma-table');
+            var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
+
             if (e.button === 0) { // LMB
-                isDragSelecting = true;
                 dragOccurred = false;
                 mousedownTargetRow = row;
                 isShiftClick = !!(e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null));
                 isCtrlKey = !!(e.ctrlKey || e.metaKey);
                 
                 if (e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null)) {
+                    isDragSelecting = true;
                     var sVisualIdx = (lastClickedVisualIdx !== -1) ? lastClickedVisualIdx : rowVisualIdx;
                     dragStartVisualIdx = sVisualIdx;
                     dragLastVisualIdx = rowVisualIdx;
@@ -14798,6 +14801,7 @@ html, body {{
                     var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) || 
                         constituentIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
                     dragSelectMode = !isCurrentlySelected;
+                    isDragSelecting = !isFilterActive || dragSelectMode;
                     
                     initialSelectedMap = {};
                     for (var key in selectedRowIdsMap) {
@@ -14840,6 +14844,10 @@ html, body {{
         addEvent(row, 'mouseover', function(e) {
             if (window.__selectableTextMode) return;
             e = e || window.event;
+            var lt = document.getElementById('lemma-table');
+            var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
+            if (isFilterActive && !dragSelectMode) return;
+
             if (isDragSelecting) {
                 if (e.buttons !== undefined && (e.buttons & 1) === 0) {
                     isDragSelecting = false;
@@ -14876,10 +14884,13 @@ html, body {{
                 var eIdx = (currentVisualIdx !== -1) ? currentVisualIdx : sIdx;
                 var start = Math.min(sIdx, eIdx);
                 var end = Math.max(sIdx, eIdx);
-                
+
                 for (var rIdx = start; rIdx <= end; rIdx++) {
                     if (rIdx >= 0 && rIdx < tableRows.length) {
                         var tr = tableRows[rIdx];
+                        if (isFilterActive && !dragSelectMode && tr.getAttribute('data-selected') === '0') {
+                            continue;
+                        }
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isContainer = !!(window.WorkspaceTabs && window.WorkspaceTabs.getCards);
                         var pIds = [trId];

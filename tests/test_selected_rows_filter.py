@@ -236,3 +236,60 @@ def test_keyboard_arrow_navigation_skips_hidden_rows(page, tmp_path):
     page.wait_for_timeout(50)
     focused_id_3 = page.evaluate("window.getFocusedRowId()")
     assert focused_id_3 == 0
+
+
+def test_clicking_middle_selected_row_does_not_cascade_deselection(page, tmp_path):
+    """Verifies that clicking a selected row in the middle of a filtered table only deselects that single row, without cascading to remaining rows."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    zid = "20260912233600"
+    tsv_file = tmp_path / f"{zid}-cascade.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Baum\tBaum\tдерево\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Katze\tKatze\tкошка\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Hund\tHund\tсобака\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+        "Vogel\tVogel\tптица\t1\tHaus Baum Katze Hund Vogel\tДом дерево кошка собака птица\t1\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="Haus Baum Katze Hund Vogel",
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False
+    )
+    html = inject_mock_fetch(html)
+    page.set_content(html)
+
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    filter_btn.click()
+    page.wait_for_timeout(50)
+
+    # All rows initially selected and visible in filtered mode
+    row_info = page.evaluate("Array.from(document.querySelectorAll('#lemma-table tbody tr')).map(r => ({id: r.getAttribute('data-row-id'), sel: r.getAttribute('data-selected'), text: r.innerText}))")
+    assert len(row_info) >= 5, f"Expected 5 rows, got {row_info}"
+
+    for r in row_info:
+        r_id = r['id']
+        assert page.locator(f"#lemma-table tbody tr[data-row-id='{r_id}']").is_visible()
+
+    # Click on a middle row (e.g. 2nd element)
+    mid_id = row_info[2]['id']
+    mid_row = page.locator(f"#lemma-table tbody tr[data-row-id='{mid_id}']")
+    mid_row.locator("td").first.click()
+    page.wait_for_timeout(50)
+
+    # Only mid_id should be hidden; other rows MUST remain visible
+    assert not page.locator(f"#lemma-table tbody tr[data-row-id='{mid_id}']").is_visible()
+    for r in row_info:
+        r_id = r['id']
+        if r_id != mid_id:
+            assert page.locator(f"#lemma-table tbody tr[data-row-id='{r_id}']").is_visible()
+
