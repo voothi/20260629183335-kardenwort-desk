@@ -2471,3 +2471,171 @@ kardenwort_workspace={kw_workspace.as_posix()}
     assert word_map[(2, 0)]["lemma"] == "Buch"
     assert word_map[(2, 0)]["word_destination"] == "reworded_Buch"
     assert word_map[(2, 0)]["word_provenance"] == "live:deepl"
+
+
+def test_reword_session_multiple_consecutive_clicks_frequency_shift_sqlite(tmp_path, monkeypatch):
+    """
+    Regression test (20260913110729): Verifies that clicking 'Re-word' multiple consecutive times
+    on a row whose lemma changes (e.g. 'Arbeit' rank 1 -> 'arbeiten' rank 3) causing it to swap
+    relative frequency sort positions with an adjacent row ('Wie' rank 2) does NOT target or
+    corrupt the adjacent row on the 2nd or 3rd click.
+    """
+    from kardenwort_db import KardenwortDB
+
+    db_path = tmp_path / "kardenwort.db"
+    db = KardenwortDB(str(db_path))
+    db.run_migrations()
+
+    kw_workspace = tmp_path / "kw_ws"
+    kw_workspace.mkdir(parents=True, exist_ok=True)
+
+    # Frequency index where Arbeit is rank 1, Wie is rank 2, arbeiten is rank 3
+    idx_file = kw_workspace / "de_index.txt"
+    idx_file.write_text("Arbeit\nWie\narbeiten\n", encoding="utf-8")
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nipa=WordSourceIPA\nmorphology=WordSourceMorphologyAI\npos=WordSourcePOS\ngender=WordSourceGender\nsentence_index=SentenceSourceIndex\n"
+        "[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nWordSourceIPA=\nWordSourceMorphologyAI=\nWordSourcePOS=\nWordSourceGender=\nSentenceSourceIndex=\n",
+        encoding="utf-8"
+    )
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+lemma_reprocess_provider=intellifiller
+[storage]
+backend=sqlite
+db_path={db_path.as_posix()}
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={kw_workspace.as_posix()}
+[languages]
+de_prompt=test
+de_lemma_index={idx_file.as_posix()}
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    storage_adapter = kardenwort_desk.SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=db_path)
+
+    sess_zid = "20260913110729"
+    # Seed session: Token 0 = Arbeit (rank 1), Token 1 = Wie (rank 2)
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="multi-reword-test",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Arbeit wie",
+        sentences=[
+            {"sentence_index": 1, "sentence_source": "Arbeit wie", "sentence_destination": "Работа как"},
+        ],
+        words=[
+            {"sentence_index": 1, "token_order": 0, "quotation": "Arbeit", "lemma": "Arbeit", "word_destination": "работа", "word_provenance": "corpus:wordfill"},
+            {"sentence_index": 1, "token_order": 1, "quotation": "wie", "lemma": "Wie", "word_destination": "как", "word_provenance": "corpus:wordfill"},
+        ],
+        headers=["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"],
+        data_rows=[
+            ["0", "Arbeit", "работа", "1"],
+            ["1", "Wie", "как", "1"],
+        ],
+        comments=["# multi-reword test"],
+    )
+
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.storage_adapter = storage_adapter
+
+    # Active in-memory session pinned to initial display order:
+    # Row 0: TokenOrder 0 ("Arbeit")
+    # Row 1: TokenOrder 1 ("Wie")
+    arbiter.sessions[sess_zid] = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "data_rows": [
+            ["0", "Arbeit", "работа", "1"],
+            ["1", "Wie", "как", "1"],
+        ],
+        "headers": ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"],
+        "role_fields": {"lemma": "WordSource", "word_translation": "WordDestination", "sentence_index": "SentenceSourceIndex"},
+        "row_provenances": {"0": "corpus:wordfill", "1": "corpus:wordfill"},
+    }
+
+    call_count = 0
+    translations = ["работать", "трудиться", "вкалывать"]
+
+    def fake_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+        nonlocal call_count
+        c, h, rows = kardenwort_desk.load_tsv_rows(tsv_path)
+        t_ord_col = h.index("TokenOrder")
+        lemma_col = h.index("WordSource")
+        dest_col = h.index("WordDestination")
+
+        sel_set = {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows is not None else None
+        trans = translations[min(call_count, len(translations) - 1)]
+        call_count += 1
+
+        for i, row in enumerate(rows):
+            if sel_set is not None and i not in sel_set:
+                continue
+            if row[t_ord_col] == "0":
+                row[lemma_col] = "arbeiten"
+                row[dest_col] = trans
+
+        kardenwort_desk.save_tsv_rows_safely(tsv_path, c, h, rows)
+        return True
+
+    monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
+    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless)
+
+    # Click 1: Re-word on row 0 (TokenOrder 0: "Arbeit" -> "arbeiten", rank 1 -> rank 3)
+    res1 = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[0],
+        token_orders=[0],
+        language="de",
+    )
+    assert res1["status"] == "success"
+    assert res1["data_rows"][0][1] == "arbeiten"
+    assert res1["data_rows"][0][2] == "работать"
+    assert res1["data_rows"][1][1] == "Wie"
+    assert res1["data_rows"][1][2] == "как"
+
+    # Click 2: Re-word AGAIN on row 0 (TokenOrder 0: now rank 3, whereas row 1 "Wie" is rank 2)
+    # The frontend still sends row_ids=[0], token_orders=[0]
+    res2 = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[0],
+        token_orders=[0],
+        language="de",
+    )
+    assert res2["status"] == "success"
+    assert res2["data_rows"][0][1] == "arbeiten"
+    assert res2["data_rows"][0][2] == "трудиться"
+    # Row 1 ("Wie") MUST STILL BE UNTOUCHED!
+    assert res2["data_rows"][1][1] == "Wie"
+    assert res2["data_rows"][1][2] == "как"
+
+    # Click 3: Re-word a THIRD time on row 0
+    res3 = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[0],
+        token_orders=[0],
+        language="de",
+    )
+    assert res3["status"] == "success"
+    assert res3["data_rows"][0][1] == "arbeiten"
+    assert res3["data_rows"][0][2] == "вкалывать"
+    # Row 1 ("Wie") MUST STILL BE COMPLETELY UNTOUCHED!
+    assert res3["data_rows"][1][1] == "Wie"
+    assert res3["data_rows"][1][2] == "как"
+
+    # Verify SQLite DB directly
+    db_words = db.get_words_by_session(sess_zid)
+    word_map = {w["token_order"]: w for w in db_words}
+    assert word_map[0]["lemma"] == "arbeiten"
+    assert word_map[0]["word_destination"] == "вкалывать"
+    assert word_map[1]["lemma"] == "Wie"
+    assert word_map[1]["word_destination"] == "как"
+
