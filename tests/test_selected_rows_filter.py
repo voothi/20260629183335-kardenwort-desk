@@ -280,10 +280,10 @@ def test_clicking_middle_selected_row_does_not_cascade_deselection(page, tmp_pat
         r_id = r['id']
         assert page.locator(f"#lemma-table tbody tr[data-row-id='{r_id}']").is_visible()
 
-    # Click on a middle row (e.g. 2nd element)
+    # Click on a middle row (e.g. 2nd element) with Control modifier to toggle deselection
     mid_id = row_info[2]['id']
     mid_row = page.locator(f"#lemma-table tbody tr[data-row-id='{mid_id}']")
-    mid_row.locator("td").first.click()
+    mid_row.locator("td").first.click(modifiers=["Control"])
     page.wait_for_timeout(50)
 
     # Only mid_id should be hidden; other rows MUST remain visible
@@ -295,7 +295,7 @@ def test_clicking_middle_selected_row_does_not_cascade_deselection(page, tmp_pat
 
 
 def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
-    """Verifies that dragging across rows in Selected mode smoothly deselects the dragged range and hides them on mouseup."""
+    """Verifies that dragging across rows in Selected mode with Ctrl smoothly deselects the dragged range and hides them on mouseup."""
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     zid = "20260913000500"
     tsv_file = tmp_path / f"{zid}-drag-filtered.de.tsv"
@@ -328,7 +328,7 @@ def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
     filter_btn.click()
     page.wait_for_timeout(50)
 
-    # Perform drag gesture across row 1 (Baum) to row 2 (Katze)
+    # Perform drag gesture across row 1 (Baum) to row 2 (Katze) with Ctrl held
     row1 = page.locator("#lemma-table tbody tr").nth(1)
     row2 = page.locator("#lemma-table tbody tr").nth(2)
 
@@ -336,10 +336,12 @@ def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
     box2 = row2.bounding_box()
     assert box1 is not None and box2 is not None
 
+    page.keyboard.down("Control")
     page.mouse.move(box1["x"] + 20, box1["y"] + box1["height"] / 2)
     page.mouse.down()
     page.mouse.move(box2["x"] + 20, box2["y"] + box2["height"] / 2, steps=5)
     page.mouse.up()
+    page.keyboard.up("Control")
     page.wait_for_timeout(50)
 
     # Rows 1 and 2 should now be deselected and hidden in filtered mode

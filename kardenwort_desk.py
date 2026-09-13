@@ -12492,6 +12492,8 @@ html, body {{
         var lastClickedCell = null;
         var lastHoveredCell = null;
         var isDragSelecting = false;
+        var dragStartX = 0;
+        var dragStartY = 0;
         var dragStartRowId = null;
         var dragLastRowId = null;
         var dragStartVisualIdx = -1;
@@ -14765,11 +14767,13 @@ html, body {{
                 }
                 isDragSelecting = true;
                 dragOccurred = false;
+                dragStartX = (e && e.clientX !== undefined) ? e.clientX : 0;
+                dragStartY = (e && e.clientY !== undefined) ? e.clientY : 0;
                 mousedownTargetRow = row;
                 isShiftClick = !!(e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null));
                 isCtrlKey = !!(e.ctrlKey || e.metaKey);
                 
-                if (e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null)) {
+                if (isShiftClick) {
                     var sVisualIdx = (lastClickedVisualIdx !== -1) ? lastClickedVisualIdx : rowVisualIdx;
                     dragStartVisualIdx = sVisualIdx;
                     dragLastVisualIdx = rowVisualIdx;
@@ -14803,7 +14807,7 @@ html, body {{
                             }
                         }
                     }
-                } else {
+                } else if (isCtrlKey) {
                     dragStartVisualIdx = rowVisualIdx;
                     dragLastVisualIdx = rowVisualIdx;
                     dragStartRowId = rowId;
@@ -14826,6 +14830,20 @@ html, body {{
                         } else {
                             delete selectedRowIdsMap[cId];
                         }
+                    }
+                } else {
+                    dragStartVisualIdx = rowVisualIdx;
+                    dragLastVisualIdx = rowVisualIdx;
+                    dragStartRowId = rowId;
+                    dragLastRowId = rowId;
+                    dragSelectMode = true;
+                    
+                    selectedRowIdsMap = {};
+                    initialSelectedMap = {};
+                    for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
+                        var cId = constituentIds[cIdx];
+                        selectedRowIdsMap[cId] = true;
+                        initialSelectedMap[cId] = true;
                     }
                 }
                 
@@ -14868,7 +14886,16 @@ html, body {{
                     notifyAHKSelection();
                     return;
                 }
-                dragOccurred = true;
+                if (!dragOccurred) {
+                    var curX = (e && e.clientX !== undefined) ? e.clientX : 0;
+                    var curY = (e && e.clientY !== undefined) ? e.clientY : 0;
+                    var dx = curX - dragStartX;
+                    var dy = curY - dragStartY;
+                    if (Math.sqrt(dx * dx + dy * dy) < 5) {
+                        return;
+                    }
+                    dragOccurred = true;
+                }
                 var rowId = parseInt(row.getAttribute('data-row-id'), 10);
                 dragLastRowId = rowId;
                 
@@ -15168,6 +15195,8 @@ html, body {{
             }
             mousedownTargetSpan = null;
             mousedownTargetRow = null;
+            dragStartX = 0;
+            dragStartY = 0;
             dragStartRowId = null;
             dragLastRowId = null;
             dragStartVisualIdx = -1;

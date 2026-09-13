@@ -309,7 +309,7 @@ def test_send_to_anki_rest_dispatch(page, tmp_path):
 
     # 2. Select rows 0 and 1 -> dispatches /session/export
     page.locator("tr[data-row-id='0']").click()
-    page.locator("tr[data-row-id='1']").click()
+    page.locator("tr[data-row-id='1']").click(modifiers=["Control"])
     export_btn.click()
     page.wait_for_timeout(100)
 
@@ -1302,6 +1302,161 @@ window.fetch = async (url, options) => {
     cell_gender1 = page.locator("tr[data-row-id='1'] td.col-gender")
     assert cell_gender1.inner_text() == ""
     assert '<span class="kw-gender' not in cell_gender1.inner_html()
+
+
+def get_3row_desk_page_html(tmp_path, zid="20260913021333"):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    tsv_file = tmp_path / f"{zid}-3rows.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\tDas Haus\tДом\t\n"
+        "Baum\tBaum\tдерево\t1\tDas Haus\tДом\t\n"
+        "Garten\tGarten\tсад\t1\tDas Haus\tДом\t\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="Haus Baum Garten",
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False
+    )
+    return html
+
+
+def test_table_row_single_click_clears_prior_selection(page, tmp_path):
+    html = get_3row_desk_page_html(tmp_path)
+    page.set_content(html)
+
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+    row2 = page.locator("tr[data-row-id='2']")
+
+    # Click row 0 -> only row 0 is selected
+    row0.click()
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "0"
+    assert row2.get_attribute("data-selected") == "0"
+
+    # Click row 1 -> row 0 deselected, only row 1 is selected
+    row1.click()
+    assert row0.get_attribute("data-selected") == "0"
+    assert row1.get_attribute("data-selected") == "1"
+    assert row2.get_attribute("data-selected") == "0"
+
+    # Click row 2 -> row 1 deselected, only row 2 is selected
+    row2.click()
+    assert row0.get_attribute("data-selected") == "0"
+    assert row1.get_attribute("data-selected") == "0"
+    assert row2.get_attribute("data-selected") == "1"
+
+
+def test_table_row_ctrl_click_toggles_multi_selection(page, tmp_path):
+    html = get_3row_desk_page_html(tmp_path)
+    page.set_content(html)
+
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+    row2 = page.locator("tr[data-row-id='2']")
+
+    # Click row 0
+    row0.click()
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "0"
+
+    # Ctrl+click row 1 -> both row 0 and row 1 are selected
+    row1.click(modifiers=["Control"])
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "1"
+    assert row2.get_attribute("data-selected") == "0"
+
+    # Ctrl+click row 2 -> all three rows selected
+    row2.click(modifiers=["Control"])
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "1"
+    assert row2.get_attribute("data-selected") == "1"
+
+    # Ctrl+click row 1 -> row 1 toggled off, row 0 and 2 remain selected
+    row1.click(modifiers=["Control"])
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "0"
+    assert row2.get_attribute("data-selected") == "1"
+
+    # Plain click row 1 -> clears all and selects only row 1
+    row1.click()
+    assert row0.get_attribute("data-selected") == "0"
+    assert row1.get_attribute("data-selected") == "1"
+    assert row2.get_attribute("data-selected") == "0"
+
+
+def test_table_row_shift_click_range_selection(page, tmp_path):
+    html = get_3row_desk_page_html(tmp_path)
+    page.set_content(html)
+
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+    row2 = page.locator("tr[data-row-id='2']")
+
+    # Click row 0
+    row0.click()
+    assert row0.get_attribute("data-selected") == "1"
+
+    # Shift+click row 2 -> range 0..2 selected
+    row2.click(modifiers=["Shift"])
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "1"
+    assert row2.get_attribute("data-selected") == "1"
+
+    # Plain click row 0 -> clears multi-selection, only row 0 selected
+    row0.click()
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "0"
+    assert row2.get_attribute("data-selected") == "0"
+
+
+def test_table_row_drag_deadzone_and_range_drag(page, tmp_path):
+    html = get_3row_desk_page_html(tmp_path)
+    page.set_content(html)
+
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+
+    # Evaluate mouse drag with small jitter (< 5px)
+    page.evaluate("""() => {
+        var r0 = document.querySelector("tr[data-row-id='0']");
+        var r1 = document.querySelector("tr[data-row-id='1']");
+        
+        // Dispatch mousedown on row 0 at clientX=100, clientY=100
+        var md = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: 100, clientY: 100 });
+        r0.dispatchEvent(md);
+        
+        // Dispatch mouseover on row 1 with jitter only 2px away (clientX=101, clientY=101, dist ~ 1.41px < 5px)
+        var moSmall = new MouseEvent('mouseover', { bubbles: true, cancelable: true, buttons: 1, clientX: 101, clientY: 101 });
+        r1.dispatchEvent(moSmall);
+    }""")
+    # Jitter < 5px must not have triggered drag selection on row 1
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "0"
+
+    # Now dispatch mouseover with movement >= 5px
+    page.evaluate("""() => {
+        var r1 = document.querySelector("tr[data-row-id='1']");
+        var moBig = new MouseEvent('mouseover', { bubbles: true, cancelable: true, buttons: 1, clientX: 110, clientY: 110 });
+        r1.dispatchEvent(moBig);
+        
+        var mu = new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 });
+        document.dispatchEvent(mu);
+    }""")
+    # Movement >= 5px engages drag selection -> both row 0 and row 1 selected
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "1"
+
 
 
 
