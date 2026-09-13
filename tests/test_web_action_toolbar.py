@@ -1330,7 +1330,7 @@ def get_3row_desk_page_html(tmp_path, zid="20260913021333"):
     return html
 
 
-def test_table_row_single_click_clears_prior_selection(page, tmp_path):
+def test_table_row_single_click_toggles_selection(page, tmp_path):
     html = get_3row_desk_page_html(tmp_path)
     page.set_content(html)
 
@@ -1338,23 +1338,23 @@ def test_table_row_single_click_clears_prior_selection(page, tmp_path):
     row1 = page.locator("tr[data-row-id='1']")
     row2 = page.locator("tr[data-row-id='2']")
 
-    # Click row 0 -> only row 0 is selected
+    # Click row 0 -> row 0 selected
     row0.click()
     assert row0.get_attribute("data-selected") == "1"
     assert row1.get_attribute("data-selected") == "0"
     assert row2.get_attribute("data-selected") == "0"
 
-    # Click row 1 -> row 0 deselected, only row 1 is selected
+    # Click row 1 -> row 1 toggled on, row 0 remains selected
     row1.click()
-    assert row0.get_attribute("data-selected") == "0"
+    assert row0.get_attribute("data-selected") == "1"
     assert row1.get_attribute("data-selected") == "1"
     assert row2.get_attribute("data-selected") == "0"
 
-    # Click row 2 -> row 1 deselected, only row 2 is selected
-    row2.click()
+    # Click row 0 again -> row 0 toggled off, row 1 remains selected
+    row0.click()
     assert row0.get_attribute("data-selected") == "0"
-    assert row1.get_attribute("data-selected") == "0"
-    assert row2.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "1"
+    assert row2.get_attribute("data-selected") == "0"
 
 
 def test_table_row_ctrl_click_toggles_multi_selection(page, tmp_path):
@@ -1388,12 +1388,6 @@ def test_table_row_ctrl_click_toggles_multi_selection(page, tmp_path):
     assert row1.get_attribute("data-selected") == "0"
     assert row2.get_attribute("data-selected") == "1"
 
-    # Plain click row 1 -> clears all and selects only row 1
-    row1.click()
-    assert row0.get_attribute("data-selected") == "0"
-    assert row1.get_attribute("data-selected") == "1"
-    assert row2.get_attribute("data-selected") == "0"
-
 
 def test_table_row_shift_click_range_selection(page, tmp_path):
     html = get_3row_desk_page_html(tmp_path)
@@ -1413,11 +1407,11 @@ def test_table_row_shift_click_range_selection(page, tmp_path):
     assert row1.get_attribute("data-selected") == "1"
     assert row2.get_attribute("data-selected") == "1"
 
-    # Plain click row 0 -> clears multi-selection, only row 0 selected
+    # Click row 0 -> toggles row 0 off, rows 1 and 2 remain selected
     row0.click()
-    assert row0.get_attribute("data-selected") == "1"
-    assert row1.get_attribute("data-selected") == "0"
-    assert row2.get_attribute("data-selected") == "0"
+    assert row0.get_attribute("data-selected") == "0"
+    assert row1.get_attribute("data-selected") == "1"
+    assert row2.get_attribute("data-selected") == "1"
 
 
 def test_table_row_drag_deadzone_and_range_drag(page, tmp_path):

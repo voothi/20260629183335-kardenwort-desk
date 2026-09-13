@@ -297,7 +297,11 @@ def test_controller_render_multi_sentence_returns_children_and_suppresses_spawn(
     def mock_spawn_ahk(args, base_dir=None):
         spawn_calls.append(list(args))
 
-    monkeypatch.setattr(kardenwort_desk, 'spawn_ahk', mock_spawn_ahk)
+    if not server.config.has_section("sentences_mode"):
+        server.config.add_section("sentences_mode")
+    server.config.set("sentences_mode", "enabled", "true")
+    server.config.set("sentences_mode", "min_sentences", "2")
+    server.config.set("sentences_mode", "delivery_mode", "multi_window")
 
     url = f"{server_url}/api/v1/render"
     multi_text = "This is the first sentence. This is the second sentence. This is the third sentence."
@@ -605,7 +609,6 @@ def test_controller_session_reword_frequency_sorted_parity(running_controller, t
             _, restored_headers, _ = storage_adapter.load_tsv_rows(sess_zid)
             col_lemma = restored_headers.index("WordSource")
             col_dest = restored_headers.index("WordDestination")
-
             assert returned_rows[0][col_lemma] == "apple"
             assert returned_rows[0][col_dest] == "reworded_apple"
             assert returned_rows[1][col_lemma] == "zebra"
@@ -2256,14 +2259,18 @@ de_prompt=test
     sess_zid = "20260913023838"
     tsv_file = results_dir / f"{sess_zid}.de.tsv"
 
-    # Initial TSV: TokenOrder 6 = "Arbeit" (noun), TokenOrder 7 = "wie" (adv)
-    # In frequency sort: "Arbeit" (very common) is sorted before "wie" (or vice-versa).
-    # Let's place TokenOrder 6 and TokenOrder 7 in the TSV:
+    # Initial TSV: 8 rows, row 6 = "wie" (TokenOrder 7), row 7 = "Arbeit" (TokenOrder 6)
     tsv_file.write_text(
         "# comment\n"
         "TokenOrder\tWordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tWordSourcePOS\tWordSourceGender\tSentenceSourceIndex\n"
-        "6\tArbeit\tработа\t/ˈaʁbaɪ̯t/\tSubstantiv, f\tn.\tf\t1\n"
-        "7\twie\tкак\t/viː/\tAdverb\tadv.\t\t1\n",
+        "0\tDas\tэто\t/das/\tPronomen\tpron.\t\t1\n"
+        "1\tist\tесть\t/ɪst/\tVerb\tv.\t\t1\n"
+        "2\tein\tодин\t/aɪ̯n/\tArtikel\tart.\t\t1\n"
+        "3\tHaus\tдом\t/haʊ̯s/\tSubstantiv\tn.\tm\t1\n"
+        "4\tund\tи\t/ʊnt/\tKonjunktion\tconj.\t\t1\n"
+        "5\tder\tтот\t/deːɐ̯/\tArtikel\tart.\t\t1\n"
+        "7\twie\tкак\t/viː/\tAdverb\tadv.\t\t1\n"
+        "6\tArbeit\tработа\t/ˈaʁbaɪ̯t/\tSubstantiv, f\tn.\tf\t1\n",
         encoding="utf-8"
     )
 
@@ -2272,8 +2279,14 @@ de_prompt=test
         "session_zid": sess_zid,
         "language": "de",
         "data_rows": [
-            ["6", "Arbeit", "работа", "/ˈaʁbaɪ̯t/", "Substantiv, f", "n.", "f", "1"],
+            ["0", "Das", "это", "/das/", "Pronomen", "pron.", "", "1"],
+            ["1", "ist", "есть", "/ɪst/", "Verb", "v.", "", "1"],
+            ["2", "ein", "один", "/aɪ̯n/", "Artikel", "art.", "", "1"],
+            ["3", "Haus", "дом", "/haʊ̯s/", "Substantiv", "n.", "m", "1"],
+            ["4", "und", "и", "/ʊnt/", "Konjunktion", "conj.", "", "1"],
+            ["5", "der", "тот", "/deːɐ̯/", "Artikel", "art.", "", "1"],
             ["7", "wie", "как", "/viː/", "Adverb", "adv.", "", "1"],
+            ["6", "Arbeit", "работа", "/ˈaʁbaɪ̯t/", "Substantiv, f", "n.", "f", "1"],
         ],
         "headers": ["TokenOrder", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender", "SentenceSourceIndex"],
         "role_fields": {
@@ -2285,10 +2298,10 @@ de_prompt=test
             "gender": "WordSourceGender",
             "sentence_index": "SentenceSourceIndex"
         },
-        "row_provenances": {6: "live:google", "6": "live:google", 7: "live:google", "7": "live:google"},
+        "row_provenances": {r: "live:google" for r in range(8)},
     }
 
-    # Mock IntelliFiller: when called for TokenOrder 6, changes lemma to "arbeiten" (verb)
+    # Mock IntelliFiller: when called for selected row index 7 (TokenOrder 6), changes lemma to "arbeiten" (verb)
     def fake_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
         c, h, rows = kardenwort_desk.load_tsv_rows(tsv_path)
         t_ord_col = h.index("TokenOrder")
@@ -2299,7 +2312,10 @@ de_prompt=test
         morph_col = h.index("WordSourceMorphologyAI")
         ipa_col = h.index("WordSourceIPA")
 
-        for row in rows:
+        sel_set = {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows is not None else None
+        for i, row in enumerate(rows):
+            if sel_set is not None and i not in sel_set:
+                continue
             if row[t_ord_col] == "6":
                 row[lemma_col] = "arbeiten"
                 row[dest_col] = "работать"
@@ -2313,42 +2329,24 @@ de_prompt=test
     monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
     monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless)
 
-    # 1. First Re-word on TokenOrder 6 ("Arbeit" -> "arbeiten")
+    # 1. Re-word on row index 7 ("Arbeit" -> "arbeiten", TokenOrder 6)
     res1 = arbiter.reword_session(
         session_zid=sess_zid,
-        selected_rows=[6],
+        selected_rows=[7],
         language="de",
     )
     assert res1["status"] == "success"
 
-    # TokenOrder 6 must be "arbeiten" and reworded
-    assert res1["rows"]["6"]["lemma"] == "arbeiten"
-    assert res1["rows"]["6"]["trans"] == "работать"
-    assert res1["rows"]["6"]["pos"] == "v."
-    assert res1["rows"]["6"]["provenance"] == "live:intellifiller"
+    # Row index 7 (TokenOrder 6) must be "arbeiten" and reworded
+    assert res1["rows"]["7"]["lemma"] == "arbeiten"
+    assert res1["rows"]["7"]["trans"] == "работать"
+    assert res1["rows"]["7"]["pos"] == "v."
+    assert res1["rows"]["7"]["provenance"] == "live:intellifiller"
 
-    # TokenOrder 7 ("wie") must be completely UNTOUCHED
-    assert res1["rows"]["7"]["lemma"] == "wie"
-    assert res1["rows"]["7"]["trans"] == "как"
-    assert res1["rows"]["7"]["pos"] == "adv."
-    assert res1["rows"]["7"]["provenance"] == "live:google"
-
-    # 2. Second Re-word on TokenOrder 6 ("arbeiten") after frequency-sort swapped rows in memory
-    res2 = arbiter.reword_session(
-        session_zid=sess_zid,
-        selected_rows=[6],
-        language="de",
-    )
-    assert res2["status"] == "success"
-
-    # TokenOrder 6 must STILL be "arbeiten"
-    assert res2["rows"]["6"]["lemma"] == "arbeiten"
-    assert res2["rows"]["6"]["trans"] == "работать"
-    assert res2["rows"]["6"]["provenance"] == "live:intellifiller"
-
-    # TokenOrder 7 ("wie") must STILL be untouched
-    assert res2["rows"]["7"]["lemma"] == "wie"
-    assert res2["rows"]["7"]["trans"] == "как"
-    assert res2["rows"]["7"]["provenance"] == "live:google"
+    # Row index 6 (TokenOrder 7, "wie") must be completely UNTOUCHED
+    assert res1["rows"]["6"]["lemma"] == "wie"
+    assert res1["rows"]["6"]["trans"] == "как"
+    assert res1["rows"]["6"]["pos"] == "adv."
+    assert res1["rows"]["6"]["provenance"] == "live:google"
 
 

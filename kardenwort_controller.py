@@ -1975,32 +1975,26 @@ class SessionArbiter:
             except Exception:
                 pass
 
-        selected_rows_set = {str(r) for r in selected_rows} | {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows else set()
+        selected_row_indices = {int(r) for r in selected_rows if str(r).isdigit() and 0 <= int(r) < len(data_rows)} if selected_rows else set()
 
-        if selected_rows and provider != 'none':
+        if selected_row_indices and provider != 'none':
             reword_prov_tag = f"live:{provider}"
             new_reword_provs = {}
-            for r_idx, row in enumerate(data_rows):
-                t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
-                if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
-                    new_reword_provs[r_idx] = reword_prov_tag
-                    new_reword_provs[str(r_idx)] = reword_prov_tag
-                    if t_ord:
-                        new_reword_provs[t_ord] = reword_prov_tag
-                        if t_ord.isdigit():
-                            new_reword_provs[int(t_ord)] = reword_prov_tag
+            for r_idx in selected_row_indices:
+                new_reword_provs[r_idx] = reword_prov_tag
+                new_reword_provs[str(r_idx)] = reword_prov_tag
 
             existing_row_provs.update(new_reword_provs)
 
         enriched_lemma_map: Dict[str, Dict[str, str]] = {}
-        if selected_rows and provider != 'none':
+        if selected_row_indices and provider != 'none':
             if provider == 'intellifiller':
                 if is_sqlite:
                     try:
                         storage_adapter.enrich_session_intellifiller(
                             session_zid=session_zid,
                             prompt_name=prompt_name,
-                            selected_rows=selected_rows,
+                            selected_rows=list(selected_row_indices),
                             reprocess=True,
                             zid=req_zid,
                         )
@@ -2018,42 +2012,40 @@ class SessionArbiter:
                     col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                     col_quot = headers.index("Quotation") if "Quotation" in headers else -1
 
-                    loaded_map = {}
+                    loaded_token_map = {}
                     for lr in loaded_tsv_rows:
                         t_ord = str(lr[col_token_order]).strip() if col_token_order != -1 and len(lr) > col_token_order else ""
+                        sent = str(lr[col_sent]).strip() if col_sent != -1 and len(lr) > col_sent else "1"
                         if t_ord:
-                            loaded_map[f"to:{t_ord}"] = lr
-                        lem = lr[col_lemma].strip() if col_lemma != -1 and len(lr) > col_lemma else ""
-                        sent = lr[col_sent].strip() if col_sent != -1 and len(lr) > col_sent else ""
-                        quot = lr[col_quot].strip() if col_quot != -1 and len(lr) > col_quot else ""
-                        if lem:
-                            loaded_map[f"key:{quot}|{lem}|{sent}"] = lr
-                            loaded_map[f"lem:{lem}"] = lr
+                            loaded_token_map[(sent, t_ord)] = lr
+                        quot = str(lr[col_quot]).strip() if col_quot != -1 and len(lr) > col_quot else ""
+                        lem = str(lr[col_lemma]).strip() if col_lemma != -1 and len(lr) > col_lemma else ""
+                        if quot or lem:
+                            loaded_token_map[(sent, quot, lem)] = lr
 
-                    for r_idx, r in enumerate(data_rows):
-                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(r_idx)
-                        lem = r[col_lemma].strip() if col_lemma != -1 and len(r) > col_lemma else ""
-                        sent = r[col_sent].strip() if col_sent != -1 and len(r) > col_sent else ""
-                        quot = r[col_quot].strip() if col_quot != -1 and len(r) > col_quot else ""
+                    for r_idx in selected_row_indices:
+                        if r_idx < len(data_rows):
+                            r = data_rows[r_idx]
+                            t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else ""
+                            sent = str(r[col_sent]).strip() if col_sent != -1 and len(r) > col_sent else "1"
+                            quot = str(r[col_quot]).strip() if col_quot != -1 and len(r) > col_quot else ""
+                            lem = str(r[col_lemma]).strip() if col_lemma != -1 and len(r) > col_lemma else ""
 
-                        matched_lr = None
-                        if t_ord and f"to:{t_ord}" in loaded_map:
-                            matched_lr = loaded_map[f"to:{t_ord}"]
-                        elif f"key:{quot}|{lem}|{sent}" in loaded_map:
-                            matched_lr = loaded_map[f"key:{quot}|{lem}|{sent}"]
-                        elif lem and f"lem:{lem}" in loaded_map:
-                            matched_lr = loaded_map[f"lem:{lem}"]
-                        elif r_idx < len(loaded_tsv_rows):
-                            matched_lr = loaded_tsv_rows[r_idx]
+                            matched_lr = None
+                            if t_ord and (sent, t_ord) in loaded_token_map:
+                                matched_lr = loaded_token_map[(sent, t_ord)]
+                            elif (sent, quot, lem) in loaded_token_map:
+                                matched_lr = loaded_token_map[(sent, quot, lem)]
+                            elif r_idx < len(loaded_tsv_rows):
+                                matched_lr = loaded_tsv_rows[r_idx]
 
-                        if matched_lr:
-                            for c_idx in range(len(matched_lr)):
-                                if c_idx < len(r):
-                                    r[c_idx] = matched_lr[c_idx]
-                                else:
-                                    r.append(matched_lr[c_idx])
+                            if matched_lr:
+                                for c_idx in range(len(matched_lr)):
+                                    if c_idx < len(r):
+                                        r[c_idx] = matched_lr[c_idx]
+                                    else:
+                                        r.append(matched_lr[c_idx])
 
-                        if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                             if col_lemma != -1 and len(r) > col_lemma:
                                 l_val = r[col_lemma].strip()
                                 if l_val:
@@ -2075,9 +2067,9 @@ class SessionArbiter:
                 else:
                     try:
                         rows_to_enrich = []
-                        for r_idx, row in enumerate(data_rows):
-                            t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
-                            if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
+                        for r_idx in selected_row_indices:
+                            if r_idx < len(data_rows):
+                                row = data_rows[r_idx]
                                 lemma_val = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ""
                                 if not lemma_val:
                                     continue
@@ -2103,42 +2095,40 @@ class SessionArbiter:
                             col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                             col_quot = headers.index("Quotation") if "Quotation" in headers else -1
 
-                            loaded_map = {}
+                            loaded_token_map = {}
                             for lr in loaded_tsv_rows:
                                 t_ord = str(lr[col_token_order]).strip() if col_token_order != -1 and len(lr) > col_token_order else ""
+                                sent = str(lr[col_sent]).strip() if col_sent != -1 and len(lr) > col_sent else "1"
                                 if t_ord:
-                                    loaded_map[f"to:{t_ord}"] = lr
-                                lem = lr[col_lemma].strip() if col_lemma != -1 and len(lr) > col_lemma else ""
-                                sent = lr[col_sent].strip() if col_sent != -1 and len(lr) > col_sent else ""
-                                quot = lr[col_quot].strip() if col_quot != -1 and len(lr) > col_quot else ""
-                                if lem:
-                                    loaded_map[f"key:{quot}|{lem}|{sent}"] = lr
-                                    loaded_map[f"lem:{lem}"] = lr
+                                    loaded_token_map[(sent, t_ord)] = lr
+                                quot = str(lr[col_quot]).strip() if col_quot != -1 and len(lr) > col_quot else ""
+                                lem = str(lr[col_lemma]).strip() if col_lemma != -1 and len(lr) > col_lemma else ""
+                                if quot or lem:
+                                    loaded_token_map[(sent, quot, lem)] = lr
 
-                            for r_idx, r in enumerate(data_rows):
-                                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(r_idx)
-                                lem = r[col_lemma].strip() if col_lemma != -1 and len(r) > col_lemma else ""
-                                sent = r[col_sent].strip() if col_sent != -1 and len(r) > col_sent else ""
-                                quot = r[col_quot].strip() if col_quot != -1 and len(r) > col_quot else ""
+                            for r_idx in rows_to_enrich:
+                                if r_idx < len(data_rows):
+                                    r = data_rows[r_idx]
+                                    t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else ""
+                                    sent = str(r[col_sent]).strip() if col_sent != -1 and len(r) > col_sent else "1"
+                                    quot = str(r[col_quot]).strip() if col_quot != -1 and len(r) > col_quot else ""
+                                    lem = str(r[col_lemma]).strip() if col_lemma != -1 and len(r) > col_lemma else ""
 
-                                matched_lr = None
-                                if t_ord and f"to:{t_ord}" in loaded_map:
-                                    matched_lr = loaded_map[f"to:{t_ord}"]
-                                elif f"key:{quot}|{lem}|{sent}" in loaded_map:
-                                    matched_lr = loaded_map[f"key:{quot}|{lem}|{sent}"]
-                                elif lem and f"lem:{lem}" in loaded_map:
-                                    matched_lr = loaded_map[f"lem:{lem}"]
-                                elif r_idx < len(loaded_tsv_rows):
-                                    matched_lr = loaded_tsv_rows[r_idx]
+                                    matched_lr = None
+                                    if t_ord and (sent, t_ord) in loaded_token_map:
+                                        matched_lr = loaded_token_map[(sent, t_ord)]
+                                    elif (sent, quot, lem) in loaded_token_map:
+                                        matched_lr = loaded_token_map[(sent, quot, lem)]
+                                    elif r_idx < len(loaded_tsv_rows):
+                                        matched_lr = loaded_tsv_rows[r_idx]
 
-                                if matched_lr:
-                                    for c_idx in range(len(matched_lr)):
-                                        if c_idx < len(r):
-                                            r[c_idx] = matched_lr[c_idx]
-                                        else:
-                                            r.append(matched_lr[c_idx])
+                                    if matched_lr:
+                                        for c_idx in range(len(matched_lr)):
+                                            if c_idx < len(r):
+                                                r[c_idx] = matched_lr[c_idx]
+                                            else:
+                                                r.append(matched_lr[c_idx])
 
-                                if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                                     if col_lemma != -1 and len(r) > col_lemma:
                                         l_val = r[col_lemma].strip()
                                         if l_val:
@@ -2172,9 +2162,9 @@ class SessionArbiter:
                 # Fast-path machine translation (deepl, google, argos, combined, etc.)
                 try:
                     lemmas_to_translate = []
-                    for r_idx, row in enumerate(data_rows):
-                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
-                        if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
+                    for r_idx in selected_row_indices:
+                        if r_idx < len(data_rows):
+                            row = data_rows[r_idx]
                             if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                                 lemmas_to_translate.append(row[col_lemma].strip())
 
@@ -2201,9 +2191,10 @@ class SessionArbiter:
                         if translated_map:
                             updates = []
                             lemma_prov_tag = f"live:{provider}"
-                            for r_idx, row in enumerate(data_rows):
-                                t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
-                                if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
+                            for r_idx in selected_row_indices:
+                                if r_idx < len(data_rows):
+                                    row = data_rows[r_idx]
+                                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
                                     if col_lemma != -1 and len(row) > col_lemma:
                                         l_val = row[col_lemma].strip()
                                         if l_val in translated_map and col_w_dest != -1:
@@ -2230,7 +2221,7 @@ class SessionArbiter:
 
         # Re-evaluate dictionary classifications if enabled
         class_cols: List[Tuple[str, int]] = []
-        if selected_rows and provider != 'none':
+        if selected_row_indices and provider != 'none':
             try:
                 desk_classification_enabled = self.config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if self.config and self.config.has_section(SEC_CLASSIFICATION) else True
                 kardenwort_workspace = self.resolved_paths.get('kardenwort_workspace')
@@ -2275,9 +2266,10 @@ class SessionArbiter:
                                         col_idx = headers.index(role_fields[name])
                                         if (name, col_idx) not in class_cols:
                                             class_cols.append((name, col_idx))
-                                        for r_idx, row in enumerate(data_rows):
-                                            t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
-                                            if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
+                                        for r_idx in selected_row_indices:
+                                            if r_idx < len(data_rows):
+                                                row = data_rows[r_idx]
+                                                t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
                                                 lemma_val = row[col_lemma].strip().lower()
                                                 val = c_dict.get(lemma_val, "")
                                                 while len(row) <= col_idx:

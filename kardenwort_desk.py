@@ -4062,9 +4062,10 @@ class SqliteStorageAdapter(StorageAdapter):
 
             if success and temp_tsv_path.exists():
                 _, updated_headers, updated_rows = load_tsv_rows(temp_tsv_path)
+                selected_row_indices = {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows is not None else None
                 updates_list = []
                 for row_idx, r in enumerate(updated_rows):
-                    if selected_rows is not None and row_idx not in selected_rows:
+                    if selected_row_indices is not None and row_idx not in selected_row_indices:
                         continue
                     row_updates = {}
                     for col_idx, h in enumerate(updated_headers):
@@ -6860,17 +6861,12 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                 target_field = role_fields.get('word_translation', 'WordDestination')
                 col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
-                selected_rows_set = None
-                if selected_rows is not None:
-                    selected_rows_set = {str(r) for r in selected_rows} | {int(r) for r in selected_rows if str(r).isdigit()}
+                selected_row_indices = {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows is not None else None
 
                 target_indices = []
                 for i, row in enumerate(data_rows):
-                    if selected_rows_set is not None:
-                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(i)
-                        is_matched = (i in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set))
-                        if not is_matched:
-                            continue
+                    if selected_row_indices is not None and i not in selected_row_indices:
+                        continue
                     if not reprocess:
                         if target_field in headers:
                             idx = headers.index(target_field)
@@ -14844,14 +14840,24 @@ html, body {{
                     dragLastVisualIdx = rowVisualIdx;
                     dragStartRowId = rowId;
                     dragLastRowId = rowId;
-                    dragSelectMode = true;
+                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) || 
+                        constituentIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
+                    dragSelectMode = !isCurrentlySelected;
                     
-                    selectedRowIdsMap = {};
                     initialSelectedMap = {};
+                    for (var key in selectedRowIdsMap) {
+                        if (selectedRowIdsMap.hasOwnProperty(key)) {
+                            initialSelectedMap[key] = selectedRowIdsMap[key];
+                        }
+                    }
+                    
                     for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
                         var cId = constituentIds[cIdx];
-                        selectedRowIdsMap[cId] = true;
-                        initialSelectedMap[cId] = true;
+                        if (dragSelectMode) {
+                            selectedRowIdsMap[cId] = true;
+                        } else {
+                            delete selectedRowIdsMap[cId];
+                        }
                     }
                 }
                 
@@ -20837,14 +20843,14 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             "sentence_idx": sent_idx_val
         }
         if row_provenances:
-            if str(token_order_val) in row_provenances:
-                row_obj["provenance"] = row_provenances[str(token_order_val)]
-            elif token_order_val in row_provenances:
-                row_obj["provenance"] = row_provenances[token_order_val]
-            elif row_id in row_provenances:
+            if row_id in row_provenances:
                 row_obj["provenance"] = row_provenances[row_id]
             elif str(row_id) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(row_id)]
+            elif str(token_order_val) in row_provenances:
+                row_obj["provenance"] = row_provenances[str(token_order_val)]
+            elif token_order_val in row_provenances:
+                row_obj["provenance"] = row_provenances[token_order_val]
 
         if class_cols:
             class_vals = {}
