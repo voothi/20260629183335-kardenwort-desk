@@ -1,5 +1,6 @@
 import sys
 import os
+import csv
 import json
 import time
 import queue
@@ -9,6 +10,7 @@ import urllib.request
 import urllib.error
 import pytest
 from pathlib import Path
+import configparser
 from http.server import ThreadingHTTPServer
 
 import kardenwort_desk
@@ -2638,4 +2640,119 @@ de_lemma_index={idx_file.as_posix()}
     assert word_map[0]["word_destination"] == "вкалывать"
     assert word_map[1]["lemma"] == "Wie"
     assert word_map[1]["word_destination"] == "как"
+
+
+def test_reword_updates_gender_badge_for_lieferpartner_and_arbeiten(tmp_path, monkeypatch):
+    """
+    Verifies that Re-word flow synchronizes WordSourceGender and WordSourcePOS
+    for masculine compound nouns ('Lieferpartner') and verbs ('arbeiten').
+    """
+    config_path = tmp_path / "config.ini"
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nipa=WordSourceIPA\nmorphology=WordSourceMorphologyAI\npos=WordSourcePOS\ngender=WordSourceGender\nsentence_index=SentenceSourceIndex\n"
+        "[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nWordSourceIPA=\nWordSourceMorphologyAI=\nWordSourcePOS=\nWordSourceGender=\nSentenceSourceIndex=\n",
+        encoding="utf-8"
+    )
+    config = configparser.ConfigParser()
+    config.read_dict({
+        "app": {"data_dir": str(tmp_path)},
+        "mapping": {"mapping_file": str(mapping_path)},
+        "pipeline": {"provider": "google"},
+    })
+
+    sess_zid = "20260913175500"
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    tsv_path = results_dir / f"{sess_zid}.de.tsv"
+    resolved_paths = {
+        "session_tsv": str(tsv_path),
+        "results_dir": str(results_dir),
+        "session_sqlite": str(tmp_path / f"{sess_zid}.db"),
+        "mapping_ini": str(mapping_path),
+        "anki_mapping_file": str(mapping_path),
+        "config_ini": str(config_path),
+    }
+
+    # Write initial session TSV: Lieferpartner (row 0) and Arbeiten (row 1)
+    with open(tsv_path, "w", newline="", encoding="utf-8") as f:
+        writer = csv.writer(f, delimiter="\t")
+        writer.writerow(["TokenOrder", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender", "SentenceSourceIndex"])
+        writer.writerow(["0", "Lieferpartner", "", "", "", "n.", "m", "1"])
+        writer.writerow(["1", "arbeiten", "", "", "", "v.", "", "1"])
+
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.sessions[sess_zid] = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "data_rows": [
+            ["0", "Lieferpartner", "", "", "", "n.", "m", "1"],
+            ["1", "arbeiten", "", "", "", "v.", "", "1"],
+        ],
+        "headers": ["TokenOrder", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender", "SentenceSourceIndex"],
+        "role_fields": {
+            "lemma": "WordSource",
+            "word_translation": "WordDestination",
+            "ipa": "WordSourceIPA",
+            "morphology": "WordSourceMorphologyAI",
+            "pos": "WordSourcePOS",
+            "gender": "WordSourceGender",
+            "sentence_index": "SentenceSourceIndex"
+        },
+        "row_provenances": {0: "live:google", 1: "live:google"},
+    }
+
+    def fake_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+        c, h, rows = kardenwort_desk.load_tsv_rows(tsv_path)
+        dest_col = h.index("WordDestination")
+        ipa_col = h.index("WordSourceIPA")
+        pos_col = h.index("WordSourcePOS")
+        gender_col = h.index("WordSourceGender")
+        morph_col = h.index("WordSourceMorphologyAI")
+
+        for r in rows:
+            if r[1] == "Lieferpartner":
+                r[dest_col] = "партнер по доставке"
+                r[ipa_col] = "ˈliːfɐˌpaʁtnɐ"
+                r[pos_col] = "n."
+                r[gender_col] = "m"
+                r[morph_col] = "Liefer + Partner"
+            elif r[1] == "arbeiten":
+                r[dest_col] = "работать"
+                r[ipa_col] = "ˈaʁbaɪ̯tn̩"
+                r[pos_col] = "v."
+                r[gender_col] = ""
+                r[morph_col] = "Arbeit + -en"
+        kardenwort_desk.save_tsv_rows_safely(tsv_path, c, h, rows)
+        return True
+
+    monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
+    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless)
+
+    # Trigger Re-word for Lieferpartner
+    res_partner = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[0],
+        token_orders=[0],
+        language="de"
+    )
+    assert res_partner["status"] == "success"
+    partner_row = next(r for r in res_partner["data_rows"] if r[1] == "Lieferpartner")
+    assert partner_row[5] == "n."   # WordSourcePOS
+    assert partner_row[6] == "m"    # WordSourceGender
+    assert partner_row[2] == "партнер по доставке"
+
+    # Trigger Re-word for arbeiten
+    res_arbeiten = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[1],
+        token_orders=[1],
+        language="de"
+    )
+    assert res_arbeiten["status"] == "success"
+    arbeiten_row = next(r for r in res_arbeiten["data_rows"] if r[1] == "arbeiten")
+    assert arbeiten_row[5] == "v."  # WordSourcePOS
+    assert arbeiten_row[6] == ""    # WordSourceGender cleared for verbs
+    assert arbeiten_row[2] == "работать"
+
 
