@@ -2350,3 +2350,124 @@ de_prompt=test
     assert res1["rows"]["6"]["provenance"] == "live:google"
 
 
+def test_reword_session_multisentence_isolation_sqlite(tmp_path, monkeypatch):
+    """
+    Verifies that in multi-sentence sessions, reword_session with fast-path translation
+    updates words scoped strictly by (session_zid, sentence_index, token_order) and does
+    not overwrite words with matching token_order in other sentences.
+    """
+    from kardenwort_db import KardenwortDB
+
+    db_path = tmp_path / "kardenwort.db"
+    db = KardenwortDB(str(db_path))
+    db.run_migrations()
+
+    kw_workspace = tmp_path / "kw_ws"
+    kw_workspace.mkdir(parents=True, exist_ok=True)
+    results_dir = kw_workspace / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\n[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\n",
+        encoding="utf-8"
+    )
+
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[pipeline]
+lemma_reprocess_provider=deepl
+[storage]
+backend=sqlite
+sqlite_db_path={db_path.as_posix()}
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={kw_workspace.as_posix()}
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    storage_adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
+
+    sess_zid = "20260913101112"
+    storage_adapter.save_session(
+        session_zid=sess_zid,
+        slug="test-multi-sent",
+        source_language="de",
+        target_language="ru",
+        source_raw_text="Das Haus bauen. Ein Buch lesen.",
+        sentences=[
+            {"sentence_index": 1, "sentence_source": "Das Haus bauen.", "sentence_destination": "Дом строить."},
+            {"sentence_index": 2, "sentence_source": "Ein Buch lesen.", "sentence_destination": "Книгу читать."},
+        ],
+        words=[
+            {"sentence_index": 1, "token_order": 0, "quotation": "Das Haus", "lemma": "Haus", "word_destination": "дом", "word_provenance": "corpus:wordfill"},
+            {"sentence_index": 1, "token_order": 1, "quotation": "bauen", "lemma": "bauen", "word_destination": "строить", "word_provenance": "corpus:wordfill"},
+            {"sentence_index": 2, "token_order": 0, "quotation": "Ein Buch", "lemma": "Buch", "word_destination": "книга", "word_provenance": "corpus:wordfill"},
+            {"sentence_index": 2, "token_order": 1, "quotation": "lesen", "lemma": "lesen", "word_destination": "читать", "word_provenance": "corpus:wordfill"},
+        ],
+        headers=["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"],
+        data_rows=[
+            ["0", "Haus", "дом", "1"],
+            ["1", "bauen", "строить", "1"],
+            ["0", "Buch", "книга", "2"],
+            ["1", "lesen", "читать", "2"],
+        ],
+        comments=["# multi-sentence session"],
+    )
+
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.storage_adapter = storage_adapter
+
+    # In-memory session representation has 4 rows:
+    # Row 0: S1, T0 ("Haus")
+    # Row 1: S1, T1 ("bauen")
+    # Row 2: S2, T0 ("Buch")
+    # Row 3: S2, T1 ("lesen")
+    arbiter.sessions[sess_zid] = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "data_rows": [
+            ["0", "Haus", "дом", "1"],
+            ["1", "bauen", "строить", "1"],
+            ["0", "Buch", "книга", "2"],
+            ["1", "lesen", "читать", "2"],
+        ],
+        "headers": ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"],
+        "role_fields": {"lemma": "WordSource", "word_translation": "WordDestination", "sentence_index": "SentenceSourceIndex"},
+        "row_provenances": {},
+    }
+
+    # Mock fast-path MT to return updated translation for "Buch"
+    def fake_fast_path(lemmas, source, target, config, resolved_paths, provider):
+        return {l: f"reworded_{l}" for l in lemmas}
+    monkeypatch.setattr(kardenwort_controller, "translate_lemmas_fast_path", fake_fast_path)
+
+    # Reword ONLY row 2 (Sentence 2, TokenOrder 0: "Buch")
+    res = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[2],
+        language="de",
+    )
+
+    assert res["status"] == "success"
+    # Row 2 (Sentence 2, Token 0) updated
+    assert res["data_rows"][2][2] == "reworded_Buch"
+    # Row 0 (Sentence 1, Token 0) MUST REMAIN UNTOUCHED ("дом")
+    assert res["data_rows"][0][2] == "дом"
+
+    # Verify directly in SQLite DB
+    db_words = db.get_words_by_session(sess_zid)
+    word_map = {(w["sentence_index"], w["token_order"]): w for w in db_words}
+    
+    # Sentence 1, Token 0 must STILL be "дом"
+    assert word_map[(1, 0)]["lemma"] == "Haus"
+    assert word_map[(1, 0)]["word_destination"] == "дом"
+    assert word_map[(1, 0)]["word_provenance"] == "corpus:wordfill"
+
+    # Sentence 2, Token 0 must be "reworded_Buch"
+    assert word_map[(2, 0)]["lemma"] == "Buch"
+    assert word_map[(2, 0)]["word_destination"] == "reworded_Buch"
+    assert word_map[(2, 0)]["word_provenance"] == "live:deepl"

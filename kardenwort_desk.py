@@ -20843,14 +20843,14 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             "sentence_idx": sent_idx_val
         }
         if row_provenances:
-            if row_id in row_provenances:
-                row_obj["provenance"] = row_provenances[row_id]
-            elif str(row_id) in row_provenances:
-                row_obj["provenance"] = row_provenances[str(row_id)]
-            elif str(token_order_val) in row_provenances:
+            if str(token_order_val) in row_provenances:
                 row_obj["provenance"] = row_provenances[str(token_order_val)]
             elif token_order_val in row_provenances:
                 row_obj["provenance"] = row_provenances[token_order_val]
+            elif row_id in row_provenances:
+                row_obj["provenance"] = row_provenances[row_id]
+            elif str(row_id) in row_provenances:
+                row_obj["provenance"] = row_provenances[str(row_id)]
 
         if class_cols:
             class_vals = {}
@@ -20861,10 +20861,6 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
 
         rows_data[row_id] = row_obj
         rows_data[str(row_id)] = row_obj
-        if str(token_order_val) not in rows_data:
-            rows_data[str(token_order_val)] = row_obj
-        if str(token_order_val).isdigit() and int(token_order_val) not in rows_data:
-            rows_data[int(token_order_val)] = row_obj
 
     return rows_data
 

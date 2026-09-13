@@ -1189,6 +1189,47 @@ def test_format_update_rows_dict_pos_and_gender():
     assert res[2]['gender'] == 'n'
 
 
+def test_format_update_rows_dict_keys_and_multisentence_delta():
+    from kardenwort_desk import format_update_rows_dict
+
+    headers = ['TokenOrder', 'WordSource', 'WordDestination', 'SentenceSourceIndex']
+    role_fields = {
+        'lemma': 'WordSource',
+        'word_translation': 'WordDestination',
+        'inflected': 'WordSource',
+        'sentence_index': 'SentenceSourceIndex'
+    }
+    # Out of order token order / multi-sentence indices
+    data_rows = [
+        ['5', 'Baum', 'дерево', '2'],
+        ['0', 'Apfel', 'яблоко', '1'],
+    ]
+    row_provenances = {
+        "5": "live:deepl",
+        "0": "corpus:wordfill"
+    }
+
+    res = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=row_provenances)
+
+    # Top-level keys MUST only be 0, "0", 1, "1" (row IDs)
+    assert set(res.keys()) == {0, "0", 1, "1"}
+    assert 5 not in res
+    assert "5" not in res
+
+    # Row 0 properties
+    assert res[0]["lemma"] == "Baum"
+    assert res[0]["token_order"] == "5"
+    assert res[0]["sentence_idx"] == "2"
+    assert res[0]["provenance"] == "live:deepl"
+
+    # Row 1 properties
+    assert res[1]["lemma"] == "Apfel"
+    assert res[1]["token_order"] == "0"
+    assert res[1]["sentence_idx"] == "1"
+    assert res[1]["provenance"] == "corpus:wordfill"
+
+
+
 
 
 

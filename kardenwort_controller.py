@@ -1943,6 +1943,7 @@ class SessionArbiter:
         role_fields = get_role_fields(mapping, headers)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
         col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
         col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
         col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
@@ -1970,8 +1971,6 @@ class SessionArbiter:
                         t_ord = str(w.get("token_order", ""))
                         if t_ord:
                             existing_row_provs[t_ord] = w_prov
-                            if t_ord.isdigit():
-                                existing_row_provs[int(t_ord)] = w_prov
             except Exception:
                 pass
 
@@ -1982,7 +1981,11 @@ class SessionArbiter:
             new_reword_provs = {}
             for r_idx in selected_row_indices:
                 new_reword_provs[r_idx] = reword_prov_tag
-                new_reword_provs[str(r_idx)] = reword_prov_tag
+                if r_idx < len(data_rows):
+                    row = data_rows[r_idx]
+                    t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else ""
+                    if t_ord:
+                        new_reword_provs[t_ord] = reword_prov_tag
 
             existing_row_provs.update(new_reword_provs)
 
@@ -2195,6 +2198,7 @@ class SessionArbiter:
                                 if r_idx < len(data_rows):
                                     row = data_rows[r_idx]
                                     t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
+                                    sent_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
                                     if col_lemma != -1 and len(row) > col_lemma:
                                         l_val = row[col_lemma].strip()
                                         if l_val in translated_map and col_w_dest != -1:
@@ -2203,8 +2207,8 @@ class SessionArbiter:
                                                 row.append("")
                                             row[col_w_dest] = t_val
                                             t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
-                                            updates.append({"token_order": t_ord_val, "field": "word_destination", "value": t_val})
-                                            updates.append({"token_order": t_ord_val, "field": "word_provenance", "value": lemma_prov_tag})
+                                            updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_destination", "value": t_val})
+                                            updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_provenance", "value": lemma_prov_tag})
 
                             if is_sqlite:
                                 if updates:
@@ -2270,13 +2274,14 @@ class SessionArbiter:
                                             if r_idx < len(data_rows):
                                                 row = data_rows[r_idx]
                                                 t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
+                                                sent_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
                                                 lemma_val = row[col_lemma].strip().lower()
                                                 val = c_dict.get(lemma_val, "")
                                                 while len(row) <= col_idx:
                                                     row.append("")
                                                 row[col_idx] = val
                                                 t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
-                                                class_updates.append({"token_order": t_ord_val, "field": role_fields[name], "value": val})
+                                                class_updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": role_fields[name], "value": val})
 
                                 if is_sqlite:
                                     if class_updates:

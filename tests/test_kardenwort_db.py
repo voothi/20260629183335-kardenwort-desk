@@ -909,3 +909,58 @@ def test_gender_migration_on_legacy_db(tmp_path):
         assert "pos" in columns
 
 
+def test_batch_update_words_multisentence_coordinates(temp_db):
+    """
+    Verifies that KardenwortDB.batch_update_words accurately targets words using
+    composite coordinates (session_zid, sentence_index, token_order) without affecting
+    words in other sentences with the same token_order.
+    """
+    temp_db.run_migrations()
+    sess_zid = "20260913102030"
+    temp_db.insert_session({
+        "zid": sess_zid,
+        "language": "de",
+        "target_language": "ru",
+        "sentence_count": 2,
+    })
+    temp_db.insert_sentences([
+        {"session_zid": sess_zid, "sentence_index": 1, "sentence_source": "Satz eins."},
+        {"session_zid": sess_zid, "sentence_index": 2, "sentence_source": "Satz zwei."},
+    ])
+
+    temp_db.insert_words([
+        {"session_zid": sess_zid, "sentence_index": 1, "token_order": 0, "quotation": "Satz", "lemma": "Satz", "word_destination": "предложение_1"},
+        {"session_zid": sess_zid, "sentence_index": 1, "token_order": 1, "quotation": "eins", "lemma": "eins", "word_destination": "один"},
+        {"session_zid": sess_zid, "sentence_index": 2, "token_order": 0, "quotation": "Satz", "lemma": "Satz", "word_destination": "предложение_2"},
+        {"session_zid": sess_zid, "sentence_index": 2, "token_order": 1, "quotation": "zwei", "lemma": "zwei", "word_destination": "два"},
+    ])
+
+    # Update sentence 2, token 0 only
+    updates = [
+        {"sentence_index": 2, "token_order": 0, "field": "word_destination", "value": "фраза_2"},
+        {"sentence_index": 2, "token_order": 0, "field": "custom_tag", "value": "tag_val_2"},
+    ]
+    updated_cnt = temp_db.batch_update_words(sess_zid, updates)
+    assert updated_cnt >= 1
+
+    words = temp_db.get_words_by_session(sess_zid)
+    word_map = {(w["sentence_index"], w["token_order"]): w for w in words}
+
+    # Sentence 1, Token 0 must be UNCHANGED
+    assert word_map[(1, 0)]["word_destination"] == "предложение_1"
+    assert word_map[(1, 0)].get("extra_fields") is None or "custom_tag" not in (word_map[(1, 0)].get("extra_fields") or {})
+
+    # Sentence 2, Token 0 must be UPDATED
+    assert word_map[(2, 0)]["word_destination"] == "фраза_2"
+    ef = word_map[(2, 0)].get("extra_fields")
+    if isinstance(ef, str):
+        import json
+        ef = json.loads(ef)
+    assert ef.get("custom_tag") == "tag_val_2"
+
+    # Sentence 1, Token 1 and Sentence 2, Token 1 remain intact
+    assert word_map[(1, 1)]["word_destination"] == "один"
+    assert word_map[(2, 1)]["word_destination"] == "два"
+
+
+
