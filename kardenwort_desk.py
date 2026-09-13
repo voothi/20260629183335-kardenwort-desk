@@ -584,7 +584,10 @@ def query_translation_server(
     trace_id: Optional[str] = None,
     deepl_api_key: Optional[str] = None,
     timeout: float = 10.0,
-    connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
+    connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT,
+    chain: Optional[List[str]] = None,
+    strategy: Optional[str] = None,
+    auto_failover: Optional[bool] = None,
 ) -> Optional[dict]:
     """
     Queries the translation HTTP microservice with clean direct HTTP requests and fast-fail connection probes.
@@ -608,6 +611,12 @@ def query_translation_server(
     }
     if deepl_api_key:
         payload["deepl_api_key"] = deepl_api_key
+    if chain:
+        payload["chain"] = chain
+    if strategy:
+        payload["strategy"] = strategy
+    if auto_failover is not None:
+        payload["auto_failover"] = auto_failover
 
     try:
         data = json.dumps(payload).encode('utf-8')
@@ -5549,12 +5558,23 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
         elif config.has_section('services'):
             server_url = config.get('services', 'translation_server_url', fallback=None)
 
+    chain, strategy = resolve_provider_chain(config, task_type='text')
+    is_chained = len(chain) > 1 and strategy != 'strict'
+    default_call_timeout = 5.0 if is_chained else 15.0
+    call_timeout = config.getfloat(SEC_PIPELINE, 'provider_call_timeout', fallback=default_call_timeout) if config else default_call_timeout
+
     if server_url:
-        timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
-        resp = query_translation_server(text, source, target, provider="google", server_url=server_url, zid=zid, trace_id=trace_id, timeout=timeout)
+        deepl_key = get_deepl_key(config, resolved_paths['base_dir']) if (resolved_paths and 'base_dir' in resolved_paths and 'get_deepl_key' in globals()) else None
+        server_timeout = max(call_timeout + 3.0, 7.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
+        resp = query_translation_server(
+            text, source, target, provider="google", server_url=server_url, zid=zid, trace_id=trace_id,
+            deepl_api_key=deepl_key, timeout=server_timeout, chain=chain, strategy=strategy
+        )
         if resp:
             if resp.get("status") == "success":
-                return resp.get("translated_text", "")
+                res_text = resp.get("translated_text", "")
+                resolved_p = resp.get("provider_resolved") or resp.get("provider") or "google"
+                return ProvenanceString(res_text, provenance=f"live:{resolved_p}")
             elif resp.get("status") == "error":
                 results_dir = resolve_results_dir(resolved_paths, config)
                 if zid and results_dir:
@@ -5664,12 +5684,22 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
         elif config.has_section('services'):
             server_url = config.get('services', 'translation_server_url', fallback=None)
 
+    chain, strategy = resolve_provider_chain(config, task_type='text')
+    is_chained = len(chain) > 1 and strategy != 'strict'
+    default_call_timeout = 5.0 if is_chained else 15.0
+    call_timeout = config.getfloat(SEC_PIPELINE, 'provider_call_timeout', fallback=default_call_timeout) if config else default_call_timeout
+
     if server_url:
-        timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
-        resp = query_translation_server(text, source, target, provider="deepl", server_url=server_url, zid=zid, trace_id=trace_id, deepl_api_key=deepl_key, timeout=timeout)
+        server_timeout = max(call_timeout + 3.0, 7.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
+        resp = query_translation_server(
+            text, source, target, provider="deepl", server_url=server_url, zid=zid, trace_id=trace_id,
+            deepl_api_key=deepl_key, timeout=server_timeout, chain=chain, strategy=strategy
+        )
         if resp:
             if resp.get("status") == "success":
-                return resp.get("translated_text", "")
+                res_text = resp.get("translated_text", "")
+                resolved_p = resp.get("provider_resolved") or resp.get("provider") or "deepl"
+                return ProvenanceString(res_text, provenance=f"live:{resolved_p}")
             elif resp.get("status") == "error":
                 results_dir = resolve_results_dir(resolved_paths, config)
                 if zid and results_dir:
@@ -5891,14 +5921,23 @@ def resolve_provider_chain(config, task_type: str = 'text') -> Tuple[List[str], 
 
     if task_type == 'lemma':
         chain_str = config.get(SEC_PIPELINE, 'lemma_provider_chain', fallback=None) if config.has_section(SEC_PIPELINE) else None
+        base_override = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback=None) if config.has_section(SEC_PIPELINE) else None
         if not chain_str:
-            chain_str = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if config.has_section(SEC_PIPELINE) else 'google'
+            chain_str = base_override or 'google'
     else:
         chain_str = config.get(SEC_PIPELINE, 'text_provider_chain', fallback=None) if config.has_section(SEC_PIPELINE) else None
+        base_override = config.get(SEC_PIPELINE, 'text_base_provider', fallback=None) if config.has_section(SEC_PIPELINE) else None
         if not chain_str:
-            chain_str = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if config.has_section(SEC_PIPELINE) else 'google'
+            chain_str = base_override or 'google'
 
     providers = [p.strip().lower() for p in chain_str.split(',') if p.strip()] if chain_str else []
+    if base_override and base_override.strip():
+        b_norm = base_override.strip().lower()
+        if not providers:
+            providers = [b_norm]
+        elif b_norm != providers[0]:
+            providers = [b_norm] + [p for p in providers if p != b_norm]
+
     if not providers:
         providers = ['google']
 

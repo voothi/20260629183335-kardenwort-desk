@@ -42,6 +42,7 @@ from kardenwort_desk import (
     tokenize_text_with_fallback,
     translate_lemmas_fast_path,
     translate_source_text,
+    resolve_provider_chain,
     run_headless_intellifiller,
     StructuredError,
     ErrorCode,
@@ -752,7 +753,8 @@ class EnrichmentQueue:
                     time.sleep(self.translation_delay - elapsed)
                 self._last_request_time = time.time()
 
-        prov = provider or (self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google')
+        lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
+        prov = provider or (lemma_chain[0] if lemma_chain else 'google')
         res_dict = translate_lemmas_fast_path(
             [norm_lemma],
             norm_src,
@@ -1132,7 +1134,8 @@ class EnrichmentQueue:
                     pass
 
             if not sentence_translated and run_text == 'auto' and text:
-                main_text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
+                text_chain, _ = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
+                main_text_provider = text_chain[0] if text_chain else 'google'
                 try:
                     sentence_translations_raw = translate_source_text(
                         text, sess_lang, sess_target, text_mode, self.config, self.resolved_paths, main_text_provider, zid=req_zid, trace_id=eff_trace_id
@@ -1274,11 +1277,13 @@ class EnrichmentQueue:
 
                 translated_map: Dict[str, str] = {}
                 if lemmas_to_translate:
-                    lemma_provider = self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google'
+                    lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
+                    lemma_provider = lemma_chain[0] if lemma_chain else 'google'
                     chunk_size = 15
                     if self.config and hasattr(self.config, 'getint'):
                         chunk_size = self.config.getint(SEC_TRANSLATION, 'lemma_batch_size', fallback=15)
                     chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
+                    lemma_prov_tag = f"live:{lemma_provider}"
                     for chunk in chunks:
                         if is_sqlite and hasattr(storage_adapter, 'db'):
                             try:
@@ -1294,11 +1299,13 @@ class EnrichmentQueue:
                             provider=lemma_provider,
                         )
                         if chunk_trans:
+                            chunk_prov = getattr(chunk_trans, 'provenance', None)
+                            if chunk_prov:
+                                lemma_prov_tag = chunk_prov
                             translated_map.update(chunk_trans)
 
                     if translated_map:
                         updates = []
-                        lemma_prov_tag = f"live:{lemma_provider}"
                         for row_idx, row in enumerate(data_rows):
                             if col_lemma != -1 and len(row) > col_lemma:
                                 l_val = row[col_lemma].strip()
@@ -1333,7 +1340,6 @@ class EnrichmentQueue:
                         sess_row_provs = arbiter.sessions[session_zid].get("row_provenances", {})
 
                 if translated_map:
-                    lemma_prov_tag = f"live:{lemma_provider}"
                     for row_idx, row in enumerate(data_rows):
                         if col_lemma != -1 and len(row) > col_lemma:
                             l_val = row[col_lemma].strip()
@@ -1574,7 +1580,8 @@ class SessionArbiter:
             except Exception:
                 pass
         if not init_text_prov and res.get("sentence_translation"):
-            main_text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
+            text_chain, _ = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
+            main_text_provider = text_chain[0] if text_chain else 'google'
             init_text_prov = f"live:{main_text_provider}"
 
         with self._lock:
@@ -2592,7 +2599,8 @@ class SessionArbiter:
         translated_map = {}
         fast_prov = None
         if lemmas_to_retry:
-            provider = self.config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google') if self.config else 'google'
+            lemma_chain, _ = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
+            provider = lemma_chain[0] if lemma_chain else 'google'
             try:
                 translated_map = translate_lemmas_fast_path(
                     lemmas_to_retry,
@@ -2664,7 +2672,8 @@ class SessionArbiter:
                     need_sentence_trans = True
 
             if need_sentence_trans and source_raw_text:
-                text_provider = self.config.get(SEC_PIPELINE, 'text_base_provider', fallback='google') if self.config else 'google'
+                text_chain, _ = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
+                text_provider = text_chain[0] if text_chain else 'google'
                 try:
                     sentence_translations_raw = translate_source_text(
                         source_raw_text, lang, target_l, text_mode, self.config, self.resolved_paths, text_provider, zid=req_zid, trace_id=eff_trace_id
