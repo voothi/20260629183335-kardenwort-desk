@@ -1949,8 +1949,12 @@ class SessionArbiter:
         col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
         col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
 
-        # Enforce frequency sort parity so selected_rows match displayed UI table rows
-        data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+        # If session is active in-memory, preserve its exact data_rows order; otherwise sort initial load
+        with self._lock:
+            if session_zid in self.sessions and self.sessions[session_zid].get("data_rows"):
+                data_rows = [list(r) for r in self.sessions[session_zid]["data_rows"]]
+            else:
+                data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
         existing_row_provs = {}
         with self._lock:
@@ -1971,19 +1975,20 @@ class SessionArbiter:
             except Exception:
                 pass
 
+        selected_rows_set = {str(r) for r in selected_rows} | {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows else set()
+
         if selected_rows and provider != 'none':
             reword_prov_tag = f"live:{provider}"
             new_reword_provs = {}
-            for r_idx in selected_rows:
-                if 0 <= r_idx < len(data_rows):
-                    row = data_rows[r_idx]
+            for r_idx, row in enumerate(data_rows):
+                t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
+                if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                     new_reword_provs[r_idx] = reword_prov_tag
                     new_reword_provs[str(r_idx)] = reword_prov_tag
-                    if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip():
-                        t_ord_str = str(row[col_token_order]).strip()
-                        new_reword_provs[t_ord_str] = reword_prov_tag
-                        if t_ord_str.isdigit():
-                            new_reword_provs[int(t_ord_str)] = reword_prov_tag
+                    if t_ord:
+                        new_reword_provs[t_ord] = reword_prov_tag
+                        if t_ord.isdigit():
+                            new_reword_provs[int(t_ord)] = reword_prov_tag
 
             existing_row_provs.update(new_reword_provs)
 
@@ -2003,16 +2008,52 @@ class SessionArbiter:
                         raise
                     except Exception as e:
                         raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
-                    comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                    data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                    comments, headers, loaded_tsv_rows = storage_adapter.load_tsv_rows(tsv_path)
                     col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
                     col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
                     col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
                     col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
                     col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
-                    for r_idx in selected_rows:
-                        if 0 <= r_idx < len(data_rows):
-                            r = data_rows[r_idx]
+                    col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+                    col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+                    col_quot = headers.index("Quotation") if "Quotation" in headers else -1
+
+                    loaded_map = {}
+                    for lr in loaded_tsv_rows:
+                        t_ord = str(lr[col_token_order]).strip() if col_token_order != -1 and len(lr) > col_token_order else ""
+                        if t_ord:
+                            loaded_map[f"to:{t_ord}"] = lr
+                        lem = lr[col_lemma].strip() if col_lemma != -1 and len(lr) > col_lemma else ""
+                        sent = lr[col_sent].strip() if col_sent != -1 and len(lr) > col_sent else ""
+                        quot = lr[col_quot].strip() if col_quot != -1 and len(lr) > col_quot else ""
+                        if lem:
+                            loaded_map[f"key:{quot}|{lem}|{sent}"] = lr
+                            loaded_map[f"lem:{lem}"] = lr
+
+                    for r_idx, r in enumerate(data_rows):
+                        t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(r_idx)
+                        lem = r[col_lemma].strip() if col_lemma != -1 and len(r) > col_lemma else ""
+                        sent = r[col_sent].strip() if col_sent != -1 and len(r) > col_sent else ""
+                        quot = r[col_quot].strip() if col_quot != -1 and len(r) > col_quot else ""
+
+                        matched_lr = None
+                        if t_ord and f"to:{t_ord}" in loaded_map:
+                            matched_lr = loaded_map[f"to:{t_ord}"]
+                        elif f"key:{quot}|{lem}|{sent}" in loaded_map:
+                            matched_lr = loaded_map[f"key:{quot}|{lem}|{sent}"]
+                        elif lem and f"lem:{lem}" in loaded_map:
+                            matched_lr = loaded_map[f"lem:{lem}"]
+                        elif r_idx < len(loaded_tsv_rows):
+                            matched_lr = loaded_tsv_rows[r_idx]
+
+                        if matched_lr:
+                            for c_idx in range(len(matched_lr)):
+                                if c_idx < len(r):
+                                    r[c_idx] = matched_lr[c_idx]
+                                else:
+                                    r.append(matched_lr[c_idx])
+
+                        if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                             if col_lemma != -1 and len(r) > col_lemma:
                                 l_val = r[col_lemma].strip()
                                 if l_val:
@@ -2034,9 +2075,9 @@ class SessionArbiter:
                 else:
                     try:
                         rows_to_enrich = []
-                        for r_idx in selected_rows:
-                            if 0 <= r_idx < len(data_rows):
-                                row = data_rows[r_idx]
+                        for r_idx, row in enumerate(data_rows):
+                            t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
+                            if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                                 lemma_val = row[col_lemma].strip() if col_lemma != -1 and len(row) > col_lemma else ""
                                 if not lemma_val:
                                     continue
@@ -2052,16 +2093,52 @@ class SessionArbiter:
                                 reprocess=True,
                                 zid=req_zid,
                             )
-                            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-                            data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+                            comments, headers, loaded_tsv_rows = storage_adapter.load_tsv_rows(tsv_path)
                             col_w_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
                             col_w_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
                             col_w_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
                             col_w_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else -1)
                             col_w_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else -1)
-                            for r_idx in rows_to_enrich:
-                                if 0 <= r_idx < len(data_rows):
-                                    r = data_rows[r_idx]
+                            col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+                            col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+                            col_quot = headers.index("Quotation") if "Quotation" in headers else -1
+
+                            loaded_map = {}
+                            for lr in loaded_tsv_rows:
+                                t_ord = str(lr[col_token_order]).strip() if col_token_order != -1 and len(lr) > col_token_order else ""
+                                if t_ord:
+                                    loaded_map[f"to:{t_ord}"] = lr
+                                lem = lr[col_lemma].strip() if col_lemma != -1 and len(lr) > col_lemma else ""
+                                sent = lr[col_sent].strip() if col_sent != -1 and len(lr) > col_sent else ""
+                                quot = lr[col_quot].strip() if col_quot != -1 and len(lr) > col_quot else ""
+                                if lem:
+                                    loaded_map[f"key:{quot}|{lem}|{sent}"] = lr
+                                    loaded_map[f"lem:{lem}"] = lr
+
+                            for r_idx, r in enumerate(data_rows):
+                                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(r_idx)
+                                lem = r[col_lemma].strip() if col_lemma != -1 and len(r) > col_lemma else ""
+                                sent = r[col_sent].strip() if col_sent != -1 and len(r) > col_sent else ""
+                                quot = r[col_quot].strip() if col_quot != -1 and len(r) > col_quot else ""
+
+                                matched_lr = None
+                                if t_ord and f"to:{t_ord}" in loaded_map:
+                                    matched_lr = loaded_map[f"to:{t_ord}"]
+                                elif f"key:{quot}|{lem}|{sent}" in loaded_map:
+                                    matched_lr = loaded_map[f"key:{quot}|{lem}|{sent}"]
+                                elif lem and f"lem:{lem}" in loaded_map:
+                                    matched_lr = loaded_map[f"lem:{lem}"]
+                                elif r_idx < len(loaded_tsv_rows):
+                                    matched_lr = loaded_tsv_rows[r_idx]
+
+                                if matched_lr:
+                                    for c_idx in range(len(matched_lr)):
+                                        if c_idx < len(r):
+                                            r[c_idx] = matched_lr[c_idx]
+                                        else:
+                                            r.append(matched_lr[c_idx])
+
+                                if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                                     if col_lemma != -1 and len(r) > col_lemma:
                                         l_val = r[col_lemma].strip()
                                         if l_val:
@@ -2095,9 +2172,9 @@ class SessionArbiter:
                 # Fast-path machine translation (deepl, google, argos, combined, etc.)
                 try:
                     lemmas_to_translate = []
-                    for r_idx in selected_rows:
-                        if 0 <= r_idx < len(data_rows):
-                            row = data_rows[r_idx]
+                    for r_idx, row in enumerate(data_rows):
+                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
+                        if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                             if col_lemma != -1 and len(row) > col_lemma and row[col_lemma].strip():
                                 lemmas_to_translate.append(row[col_lemma].strip())
 
@@ -2124,9 +2201,9 @@ class SessionArbiter:
                         if translated_map:
                             updates = []
                             lemma_prov_tag = f"live:{provider}"
-                            for r_idx in selected_rows:
-                                if 0 <= r_idx < len(data_rows):
-                                    row = data_rows[r_idx]
+                            for r_idx, row in enumerate(data_rows):
+                                t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
+                                if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
                                     if col_lemma != -1 and len(row) > col_lemma:
                                         l_val = row[col_lemma].strip()
                                         if l_val in translated_map and col_w_dest != -1:
@@ -2134,9 +2211,9 @@ class SessionArbiter:
                                             while len(row) <= col_w_dest:
                                                 row.append("")
                                             row[col_w_dest] = t_val
-                                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else r_idx
-                                            updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
-                                            updates.append({"token_order": t_ord, "field": "word_provenance", "value": lemma_prov_tag})
+                                            t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
+                                            updates.append({"token_order": t_ord_val, "field": "word_destination", "value": t_val})
+                                            updates.append({"token_order": t_ord_val, "field": "word_provenance", "value": lemma_prov_tag})
 
                             if is_sqlite:
                                 if updates:
@@ -2198,15 +2275,16 @@ class SessionArbiter:
                                         col_idx = headers.index(role_fields[name])
                                         if (name, col_idx) not in class_cols:
                                             class_cols.append((name, col_idx))
-                                        for r_idx in selected_rows:
-                                            if 0 <= r_idx < len(data_rows):
-                                                lemma_val = data_rows[r_idx][col_lemma].strip().lower()
+                                        for r_idx, row in enumerate(data_rows):
+                                            t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(r_idx)
+                                            if r_idx in selected_rows_set or t_ord in selected_rows_set or (t_ord.isdigit() and int(t_ord) in selected_rows_set):
+                                                lemma_val = row[col_lemma].strip().lower()
                                                 val = c_dict.get(lemma_val, "")
-                                                while len(data_rows[r_idx]) <= col_idx:
-                                                    data_rows[r_idx].append("")
-                                                data_rows[r_idx][col_idx] = val
-                                                t_ord = int(data_rows[r_idx][col_token_order]) if col_token_order != -1 and len(data_rows[r_idx]) > col_token_order and str(data_rows[r_idx][col_token_order]).isdigit() else r_idx
-                                                class_updates.append({"token_order": t_ord, "field": role_fields[name], "value": val})
+                                                while len(row) <= col_idx:
+                                                    row.append("")
+                                                row[col_idx] = val
+                                                t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
+                                                class_updates.append({"token_order": t_ord_val, "field": role_fields[name], "value": val})
 
                                 if is_sqlite:
                                     if class_updates:
@@ -2437,7 +2515,11 @@ class SessionArbiter:
 
         target_indices = []
         if row_ids is not None and len(row_ids) > 0:
-            target_indices = [idx for idx in row_ids if 0 <= idx < len(data_rows)]
+            row_ids_set = {str(r) for r in row_ids} | {int(r) for r in row_ids if str(r).isdigit()}
+            for idx, r in enumerate(data_rows):
+                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
+                if idx in row_ids_set or t_ord in row_ids_set or (t_ord.isdigit() and int(t_ord) in row_ids_set):
+                    target_indices.append(idx)
         else:
             for idx, r in enumerate(data_rows):
                 if len(r) > col_lemma and r[col_lemma].strip():

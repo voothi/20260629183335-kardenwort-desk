@@ -2220,3 +2220,135 @@ kardenwort_workspace={kw_workspace.as_posix()}
     assert doc_word["word_destination"] == "перевод_doctor"
     assert doc_word["word_provenance"] == "live:google"
 
+
+def test_reword_session_with_lemma_frequency_shift_preserves_target_row_and_neighbors(tmp_path, monkeypatch):
+    """
+    Regression test (20260913025000): Verifies that when a Re-word operation changes a lemma
+    (e.g., 'Arbeit' -> 'arbeiten') causing its frequency sort position to swap with an adjacent word ('wie'),
+    subsequent row resolution and enriched field mapping strictly target the selected word by TokenOrder
+    and leave neighboring words ('wie') untouched.
+    """
+    config_path = tmp_path / "config.ini"
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nipa=WordSourceIPA\nmorphology=WordSourceMorphologyAI\npos=WordSourcePOS\ngender=WordSourceGender\nsentence_index=SentenceSourceIndex\n"
+        "[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nWordSourceIPA=\nWordSourceMorphologyAI=\nWordSourcePOS=\nWordSourceGender=\nSentenceSourceIndex=\n",
+        encoding="utf-8"
+    )
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path.write_text(f"""[pipeline]
+lemma_reprocess_provider=intellifiller
+[storage]
+backend=tsv
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[languages]
+de_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    sess_zid = "20260913023838"
+    tsv_file = results_dir / f"{sess_zid}.de.tsv"
+
+    # Initial TSV: TokenOrder 6 = "Arbeit" (noun), TokenOrder 7 = "wie" (adv)
+    # In frequency sort: "Arbeit" (very common) is sorted before "wie" (or vice-versa).
+    # Let's place TokenOrder 6 and TokenOrder 7 in the TSV:
+    tsv_file.write_text(
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tWordSourcePOS\tWordSourceGender\tSentenceSourceIndex\n"
+        "6\tArbeit\tработа\t/ˈaʁbaɪ̯t/\tSubstantiv, f\tn.\tf\t1\n"
+        "7\twie\tкак\t/viː/\tAdverb\tadv.\t\t1\n",
+        encoding="utf-8"
+    )
+
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.sessions[sess_zid] = {
+        "session_zid": sess_zid,
+        "language": "de",
+        "data_rows": [
+            ["6", "Arbeit", "работа", "/ˈaʁbaɪ̯t/", "Substantiv, f", "n.", "f", "1"],
+            ["7", "wie", "как", "/viː/", "Adverb", "adv.", "", "1"],
+        ],
+        "headers": ["TokenOrder", "WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender", "SentenceSourceIndex"],
+        "role_fields": {
+            "lemma": "WordSource",
+            "word_translation": "WordDestination",
+            "ipa": "WordSourceIPA",
+            "morphology": "WordSourceMorphologyAI",
+            "pos": "WordSourcePOS",
+            "gender": "WordSourceGender",
+            "sentence_index": "SentenceSourceIndex"
+        },
+        "row_provenances": {6: "live:google", "6": "live:google", 7: "live:google", "7": "live:google"},
+    }
+
+    # Mock IntelliFiller: when called for TokenOrder 6, changes lemma to "arbeiten" (verb)
+    def fake_headless(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, reprocess=False, zid=None, trace_id=None):
+        c, h, rows = kardenwort_desk.load_tsv_rows(tsv_path)
+        t_ord_col = h.index("TokenOrder")
+        lemma_col = h.index("WordSource")
+        dest_col = h.index("WordDestination")
+        pos_col = h.index("WordSourcePOS")
+        gender_col = h.index("WordSourceGender")
+        morph_col = h.index("WordSourceMorphologyAI")
+        ipa_col = h.index("WordSourceIPA")
+
+        for row in rows:
+            if row[t_ord_col] == "6":
+                row[lemma_col] = "arbeiten"
+                row[dest_col] = "работать"
+                row[pos_col] = "v."
+                row[gender_col] = ""
+                row[morph_col] = "Verb"
+                row[ipa_col] = "/ˈaʁbaɪ̯tn̩/"
+        kardenwort_desk.save_tsv_rows_safely(tsv_path, c, h, rows)
+        return True
+
+    monkeypatch.setattr(kardenwort_controller, "run_headless_intellifiller", fake_headless)
+    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", fake_headless)
+
+    # 1. First Re-word on TokenOrder 6 ("Arbeit" -> "arbeiten")
+    res1 = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[6],
+        language="de",
+    )
+    assert res1["status"] == "success"
+
+    # TokenOrder 6 must be "arbeiten" and reworded
+    assert res1["rows"]["6"]["lemma"] == "arbeiten"
+    assert res1["rows"]["6"]["trans"] == "работать"
+    assert res1["rows"]["6"]["pos"] == "v."
+    assert res1["rows"]["6"]["provenance"] == "live:intellifiller"
+
+    # TokenOrder 7 ("wie") must be completely UNTOUCHED
+    assert res1["rows"]["7"]["lemma"] == "wie"
+    assert res1["rows"]["7"]["trans"] == "как"
+    assert res1["rows"]["7"]["pos"] == "adv."
+    assert res1["rows"]["7"]["provenance"] == "live:google"
+
+    # 2. Second Re-word on TokenOrder 6 ("arbeiten") after frequency-sort swapped rows in memory
+    res2 = arbiter.reword_session(
+        session_zid=sess_zid,
+        selected_rows=[6],
+        language="de",
+    )
+    assert res2["status"] == "success"
+
+    # TokenOrder 6 must STILL be "arbeiten"
+    assert res2["rows"]["6"]["lemma"] == "arbeiten"
+    assert res2["rows"]["6"]["trans"] == "работать"
+    assert res2["rows"]["6"]["provenance"] == "live:intellifiller"
+
+    # TokenOrder 7 ("wie") must STILL be untouched
+    assert res2["rows"]["7"]["lemma"] == "wie"
+    assert res2["rows"]["7"]["trans"] == "как"
+    assert res2["rows"]["7"]["provenance"] == "live:google"
+
+

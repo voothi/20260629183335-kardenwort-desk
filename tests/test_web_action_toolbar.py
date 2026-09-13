@@ -1458,6 +1458,74 @@ def test_table_row_drag_deadzone_and_range_drag(page, tmp_path):
     assert row1.get_attribute("data-selected") == "1"
 
 
+def test_reword_with_frequency_shift_does_not_mutate_neighboring_rows(page, tmp_path):
+    """
+    Regression test (20260913025000): In the Web UI, selecting row 0 and clicking
+    Re-word must update row 0 and must not mutate adjacent row 1.
+    """
+    mock_script = """<script>
+window.__fetches = [];
+window.fetch = async (url, options) => {
+    var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    window.__fetches.push({ url: url, options: options, body: bodyObj });
+    if (url === '/session/reword') {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+                ok: true,
+                status: 'success',
+                reprocess_started: true,
+                rows: {
+                    0: {
+                        lemma: 'Haus',
+                        trans: 'здание_reworded',
+                        pos: 'n.',
+                        gender: 'n',
+                        token_order: '0'
+                    },
+                    1: {
+                        lemma: 'Baum',
+                        trans: 'дерево',
+                        pos: 'n.',
+                        gender: 'm',
+                        token_order: '1'
+                    }
+                }
+            })
+        };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+};
+</script>"""
+
+    html = get_desk_page_html(tmp_path, zid="20260913025000")
+    html = html.replace("<head>", f"<head>\n{mock_script}")
+    page.set_content(html)
+
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+
+    # Click row 0 to select it
+    row0.click()
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "0"
+
+    # Click Re-word button
+    page.click("#kw-btn-reword")
+    page.wait_for_timeout(100)
+
+    # Verify row 0 received the updated translation
+    cell0_trans = page.locator("tr[data-row-id='0'] td.col-translation")
+    assert "здание_reworded" in cell0_trans.inner_text()
+
+    # Verify row 1 ('Baum' -> 'дерево') remained completely untouched
+    cell1_trans = page.locator("tr[data-row-id='1'] td.col-translation")
+    assert "дерево" in cell1_trans.inner_text()
+
+
+
+
 
 
 
