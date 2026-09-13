@@ -5680,6 +5680,153 @@ def test_separable_verb_multi_sentence_click_interaction(page, tmp_path, monkeyp
     assert spoken_inf_prep_an == "an"
 
 
+def test_watchdog_hard_ceiling_enforcement_and_skeleton_cleanup(page):
+    """
+    Verify that when total active elapsed time reaches hardCeilingMs (35s),
+    watchdog extensions are rejected even if stage: 'translating',
+    skeletons are cleaned up, and inline Retry buttons are rendered.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260913123000">
+<div id="kw-toast-container"></div>
+<div class="container">
+  <div class="section">
+    <div class="source-text" id="source-container">Das Haus</div>
+  </div>
+  <div class="section">
+    <div class="translation-text" id="translation-container"><span class="skeleton-loader" data-pending="true">Loading...</span></div>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSource">Haus</td>
+        <td data-col="WordDestination" class="editable"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" style="width:60px;"></span></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.EventSource = undefined;
+        window.__pollCount = 0;
+        window.fetch = function(url, options) {
+            window.__pollCount++;
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() {
+                    return Promise.resolve({
+                        status: "success",
+                        data: {
+                            is_finished: false,
+                            stage: "translating",
+                            zid: "20260913123000"
+                        }
+                    });
+                }
+            });
+        };
+    """)
+    page.evaluate(extract_desk_js())
+
+    # Verify hard ceiling is exposed and configured to 35000ms
+    hard_ceiling = page.evaluate("window._kwWatchdogHardCeilingMs")
+    assert hard_ceiling == 35000
+
+    # Skeletons present initially
+    assert page.locator(".skeleton-loader").count() >= 1
+
+    # Simulate elapsed time reaching the hard ceiling (>= 35000ms)
+    page.evaluate("""
+        window._kwGetActiveElapsedMs = function() { return 36000; };
+        if (window.cleanupOrphanSkeletons) {
+            window.cleanupOrphanSkeletons();
+        }
+    """)
+
+    # Wait for skeletons to be purged
+    page.wait_for_function("() => document.querySelectorAll('.skeleton-loader').length === 0", timeout=5000)
+    assert page.locator(".skeleton-loader").count() == 0
+    assert page.locator("[data-pending='true']").count() == 0
+
+    # Verify inline retry buttons rendered in translation container and table
+    retry_buttons = page.locator(".btn-retry-cell")
+    assert retry_buttons.count() >= 1
+
+    # Warning toast displayed
+    toast = page.locator(".kw-toast-warning")
+    assert toast.is_visible()
+    assert "Background loading timed out" in toast.inner_text()
+
+
+def test_watchdog_busy_within_ceiling_extends_budget(page):
+    """
+    Verify that when stage: 'translating' and elapsed < hardCeilingMs,
+    cleanupOrphanSkeletons extends budget and preserves skeleton loading.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260913123001">
+<div class="container">
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSource">Haus</td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" style="width:60px;"></span></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+
+    page.evaluate("""
+        window.EventSource = undefined;
+        window.fetch = function(url, options) {
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() {
+                    return Promise.resolve({
+                        status: "success",
+                        data: {
+                            is_finished: false,
+                            stage: "translating",
+                            zid: "20260913123001"
+                        }
+                    });
+                }
+            });
+        };
+    """)
+    page.evaluate(extract_desk_js())
+
+    initial_budget = page.evaluate("window._kwWatchdogMaxBudgetMs")
+    assert initial_budget == 30000
+
+    # Simulate trigger at 20s (under ceiling of 35s)
+    page.evaluate("""
+        window._kwGetActiveElapsedMs = function() { return 20000; };
+        if (window.cleanupOrphanSkeletons) {
+            window.cleanupOrphanSkeletons();
+        }
+    """)
+
+    # Budget should extend up to 35000ms
+    page.wait_for_function("() => window._kwWatchdogMaxBudgetMs === 35000", timeout=5000)
+    # Skeletons still present (not converted to retry buttons yet)
+    assert page.locator(".skeleton-loader").count() >= 1
+    assert page.locator(".btn-retry-cell").count() == 0
+
+
+
 
 
 

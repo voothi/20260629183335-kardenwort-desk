@@ -70,3 +70,26 @@ def isolate_microservice_sidecars(monkeypatch):
 
     monkeypatch.setattr(urllib.request, "urlopen", sandboxed_urlopen)
 
+
+@pytest.fixture(autouse=True)
+def reset_provider_cooldowns():
+    """
+    Ensures that provider circuit breaker cooldown states do not leak across tests.
+    """
+    try:
+        import kardenwort_desk
+        kardenwort_desk.clear_provider_cooldowns()
+    except (ImportError, AttributeError):
+        pass
+    yield
+    try:
+        import kardenwort_desk
+        kardenwort_desk.clear_provider_cooldowns()
+        for h in list(getattr(kardenwort_desk.logger, "handlers", [])):
+            stream = getattr(h, "stream", None)
+            if stream is not None and getattr(stream, "closed", False):
+                kardenwort_desk.logger.removeHandler(h)
+    except (ImportError, AttributeError):
+        pass
+
+

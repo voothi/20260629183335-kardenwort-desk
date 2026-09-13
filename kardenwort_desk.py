@@ -1738,6 +1738,11 @@ def _migrate_config(config):
             lemma_chain = 'google'
     config.set(SEC_PIPELINE, 'lemma_provider_chain', lemma_chain)
 
+    # Resolve provider_cooldown_seconds
+    cooldown_sec = config.get(SEC_PIPELINE, 'provider_cooldown_seconds', fallback=None)
+    if cooldown_sec is None:
+        config.set(SEC_PIPELINE, 'provider_cooldown_seconds', '300.0')
+
     # Read legacy triggers
     legacy_lazy = config.get(SEC_SETTINGS, 'lazy_processing', fallback=None) if config.has_section(SEC_SETTINGS) else None
 
@@ -2526,8 +2531,57 @@ class TranslationException(Exception):
         self.message = message
         self.details = self.envelope.get("details", {})
 
+class DynamicStreamHandler(logging.StreamHandler):
+    """
+    A StreamHandler that dynamically targets the current sys.stderr (preventing
+    stale references to closed pytest captured streams across test suites) and
+    safely suppresses I/O errors on closed streams during runner teardown.
+    """
+    def __init__(self, stream=None):
+        super().__init__(stream)
+        self._use_current_stderr = (stream is None or stream is sys.stderr)
+
+    @property
+    def target_stream(self):
+        return sys.stderr if self._use_current_stderr else self.stream
+
+    def emit(self, record):
+        try:
+            stream = self.target_stream
+            if stream is None or getattr(stream, "closed", False):
+                return
+            msg = self.format(record)
+            stream.write(msg + self.terminator)
+            self.flush()
+        except (ValueError, OSError):
+            pass
+        except Exception:
+            self.handleError(record)
+
+    def flush(self):
+        try:
+            stream = self.target_stream
+            if stream is not None and not getattr(stream, "closed", False):
+                stream.flush()
+        except (ValueError, OSError):
+            pass
+        except Exception:
+            pass
+
+    def handleError(self, record):
+        _, exc, _ = sys.exc_info()
+        if isinstance(exc, (ValueError, OSError)) and "closed" in str(exc).lower():
+            return
+        try:
+            super().handleError(record)
+        except Exception:
+            pass
+
 def setup_logging(verbose=False, debug=False):
-    handler = logging.StreamHandler(sys.stderr)
+    for h in list(logger.handlers):
+        if isinstance(h, logging.StreamHandler) and not isinstance(h, logging.FileHandler):
+            logger.removeHandler(h)
+    handler = DynamicStreamHandler(sys.stderr)
     handler.setFormatter(JSONFormatter())
     logger.addHandler(handler)
     if debug:
@@ -5731,24 +5785,123 @@ def resolve_provider_chain(config, task_type: str = 'text') -> Tuple[List[str], 
 
     return (providers, strategy)
 
+DEFAULT_PROVIDER_COOLDOWN_SECONDS = 300.0
+_provider_cooldowns: Dict[str, float] = {}
+_cooldown_lock = threading.Lock()
+
+def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_COOLDOWN_SECONDS, config = None) -> None:
+    """Record that a translation provider is in cooldown until time.time() + duration."""
+    if not provider:
+        return
+    p_norm = provider.strip().lower()
+    eff_duration = float(duration)
+    if config and config.has_section(SEC_PIPELINE):
+        try:
+            eff_duration = config.getfloat(SEC_PIPELINE, 'provider_cooldown_seconds', fallback=eff_duration)
+        except Exception:
+            pass
+    with _cooldown_lock:
+        _provider_cooldowns[p_norm] = time.time() + eff_duration
+    logger.warning(f"Provider '{p_norm}' placed in cooldown for {eff_duration:.1f}s due to rate limit/quota.")
+
+def is_provider_cooled_down(provider: str) -> bool:
+    """Check whether a provider is currently cooled down. Cleans up expired entries."""
+    if not provider:
+        return False
+    p_norm = provider.strip().lower()
+    now = time.time()
+    with _cooldown_lock:
+        expire_at = _provider_cooldowns.get(p_norm)
+        if expire_at is None:
+            return False
+        if now < expire_at:
+            return True
+        del _provider_cooldowns[p_norm]
+        return False
+
+def clear_provider_cooldowns() -> None:
+    """Clear all active provider cooldowns."""
+    with _cooldown_lock:
+        _provider_cooldowns.clear()
+
+def get_provider_cooldown_remaining(provider: str) -> float:
+    """Get remaining cooldown duration in seconds, or 0.0 if not cooled down."""
+    if not provider:
+        return 0.0
+    p_norm = provider.strip().lower()
+    now = time.time()
+    with _cooldown_lock:
+        expire_at = _provider_cooldowns.get(p_norm)
+        if expire_at is None:
+            return 0.0
+        remaining = expire_at - now
+        if remaining > 0:
+            return remaining
+        del _provider_cooldowns[p_norm]
+        return 0.0
+
+def is_rate_limit_exception(exc: Exception) -> bool:
+    if exc is None:
+        return False
+    code = getattr(exc, 'code', None)
+    envelope = getattr(exc, 'envelope', None) or {}
+    details = getattr(exc, 'details', None) or envelope.get('details', {}) or {}
+
+    rate_limit_codes = {
+        "ERR_GOOGLE_RATE_LIMIT",
+        "ERR_DEEPL_QUOTA",
+        "ERR_RATE_LIMIT",
+        "ERR_QUOTA_EXCEEDED",
+        "ERR_TOO_MANY_REQUESTS",
+    }
+    if code in rate_limit_codes or envelope.get("code") in rate_limit_codes:
+        return True
+
+    http_code = details.get("http_code") or envelope.get("http_code") or getattr(exc, 'status_code', None) or getattr(exc, 'http_status', None)
+    if http_code in (429, 456):
+        return True
+
+    msg = str(exc).lower()
+    if any(term in msg for term in ("429", "too many requests", "rate limit", "quota exceeded", "err_google_rate_limit", "err_deepl_quota")):
+        return True
+
+    return False
+
 def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None):
     """Executes translation using a single explicit provider without failover branching."""
     p_norm = (provider_name or "").strip().lower()
-    if p_norm == 'google':
-        return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-    elif p_norm == 'deepl':
-        return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-    elif p_norm == 'argos':
-        return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-    elif p_norm == 'mock':
-        time.sleep(0.01)
-        return f"[MOCK] {text}"
-    elif p_norm in ('combined', 'intellifiller'):
-        return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
-    elif p_norm == 'none':
-        return ""
-    else:
-        raise Exception(f"Unsupported translation provider: {provider_name}")
+    if is_provider_cooled_down(p_norm):
+        cooldown_msg = f"Provider '{p_norm}' is currently cooled down due to rate limiting"
+        raise TranslationException(
+            cooldown_msg,
+            envelope={
+                "status": "error",
+                "code": "ERR_PROVIDER_COOLDOWN",
+                "message": cooldown_msg,
+                "provider": p_norm,
+                "details": {"cooled_down": True}
+            }
+        )
+    try:
+        if p_norm == 'google':
+            return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+        elif p_norm == 'deepl':
+            return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+        elif p_norm == 'argos':
+            return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+        elif p_norm == 'mock':
+            time.sleep(0.01)
+            return f"[MOCK] {text}"
+        elif p_norm in ('combined', 'intellifiller'):
+            return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+        elif p_norm == 'none':
+            return ""
+        else:
+            raise Exception(f"Unsupported translation provider: {provider_name}")
+    except Exception as exc:
+        if is_rate_limit_exception(exc):
+            record_provider_cooldown(p_norm, config=config)
+        raise
 
 def translate_text(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None):
     with TraceTimer("translate_text", zid or "unknown", config, resolved_paths):
@@ -5796,6 +5949,21 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
     last_exception = None
     for idx, current_provider in enumerate(providers_to_try):
         is_last = (idx == len(providers_to_try) - 1)
+        if is_provider_cooled_down(current_provider):
+            logger.warning(f"Provider '{current_provider}' is currently cooled down. Bypassing...")
+            if is_last:
+                if last_exception:
+                    raise last_exception
+                cooldown_msg = f"Provider '{current_provider}' is cooled down and no fallback providers remain"
+                raise TranslationException(cooldown_msg, envelope={
+                    "status": "error",
+                    "code": "ERR_PROVIDER_COOLDOWN",
+                    "message": cooldown_msg,
+                    "provider": current_provider,
+                    "details": {"cooled_down": True}
+                })
+            continue
+
         try:
             res = dispatch_single_provider(current_provider, text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
             if res is not None:
@@ -5803,12 +5971,18 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             return res
         except Exception as e:
             last_exception = e
+            if is_rate_limit_exception(e):
+                record_provider_cooldown(current_provider, config=config)
+
             if strategy == 'strict':
                 logger.warning(f"Provider '{current_provider}' failed under strict strategy: {e}. Aborting failover.")
                 raise e
             
             if strategy == 'offline_fallback':
                 if current_provider != 'argos' and 'argos' in providers_to_try:
+                    if is_rate_limit_exception(e):
+                        logger.warning(f"Primary provider '{current_provider}' rate-limited: {e}. Falling back to Argos...")
+                        continue
                     if check_ips and not is_network_online_multi(hosts=check_ips):
                         logger.warning(f"Primary provider '{current_provider}' failed: {e}. Network offline. Falling back to Argos...")
                         continue
@@ -5919,7 +6093,22 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     """
     import concurrent.futures
 
-    prov_tag = f"live:{provider}" if provider else "live:unknown"
+    chain, strategy = resolve_provider_chain(config, task_type='lemma')
+    norm_p = (provider or "").strip().lower()
+    if norm_p:
+        candidates = [norm_p] + [p for p in chain if p != norm_p]
+    else:
+        candidates = list(chain)
+
+    active_provider = provider
+    if norm_p and is_provider_cooled_down(norm_p) and strategy != 'strict':
+        for cand in candidates:
+            if not is_provider_cooled_down(cand):
+                logger.warning(f"Lemma provider '{norm_p}' is in cooldown. Switching fast-path to '{cand}'...")
+                active_provider = cand
+                break
+
+    prov_tag = f"live:{active_provider}" if active_provider else "live:unknown"
     if not lemmas:
         return ProvenanceDict({}, provenance=prov_tag)
 
@@ -5937,7 +6126,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         chunks = [lemmas[i:i + batch_size] for i in range(0, len(lemmas), batch_size)]
         chunk_prov = prov_tag
         for chunk in chunks:
-            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, provider)
+            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider)
             if hasattr(chunk_result, 'provenance') and chunk_result.provenance:
                 chunk_prov = chunk_result.provenance
             translations.update(chunk_result)
@@ -5945,10 +6134,12 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
 
     def _translate_single(lemma):
         try:
-            val = translate_text(lemma, source, target, config, resolved_paths, provider)
+            val = translate_text(lemma, source, target, config, resolved_paths, active_provider)
             p = getattr(val, 'provenance', prov_tag)
             return lemma, val.strip() if val else "", p
         except Exception as exc:
+            if is_rate_limit_exception(exc):
+                record_provider_cooldown(active_provider, config=config)
             logger.warning(f"Individual lemma translate failed for '{lemma}': {exc}")
             return lemma, "", prov_tag
 
@@ -5958,7 +6149,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     # --- Tier 0: Semicolon join (fastest, works for providers that preserve punctuation) ---
     try:
         semicolon_input = "; ".join(lemmas)
-        translated_sc = translate_text(semicolon_input, source, target, config, resolved_paths, provider)
+        translated_sc = translate_text(semicolon_input, source, target, config, resolved_paths, active_provider)
         sc_parts = [p.strip() for p in translated_sc.split(';') if p.strip()]
         if len(sc_parts) != n:
             # Try secondary delimiters from the semicolon response before giving up on Tier 0
@@ -5980,11 +6171,22 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             logger.debug(f"Fast-path semicolon alignment failed ({n} lemmas), trying numbered prefix.")
     except Exception as e:
         logger.warning(f"Fast-path semicolon batch failed: {e}")
+        if is_rate_limit_exception(e):
+            record_provider_cooldown(active_provider, config=config)
+            fallback_provider = None
+            if strategy != 'strict':
+                for cand in candidates:
+                    if cand != active_provider and not is_provider_cooled_down(cand):
+                        fallback_provider = cand
+                        break
+            if fallback_provider:
+                logger.warning(f"Fast-path Tier 0 rate-limited for '{active_provider}'. Short-circuiting directly to fallback provider '{fallback_provider}'...")
+                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider)
 
     # --- Tier 1: Numbered prefix batch (robust against Argos semicolon mutations) ---
     try:
         numbered_input = "\n".join(f"{i + 1}. {lemma}" for i, lemma in enumerate(lemmas))
-        translated_numbered = translate_text(numbered_input, source, target, config, resolved_paths, provider)
+        translated_numbered = translate_text(numbered_input, source, target, config, resolved_paths, active_provider)
         parsed = _parse_numbered_response(translated_numbered, n)
         if parsed is not None:
             # Echo guard: if every translation is identical to its source lemma, the engine echoed the input.
@@ -6004,11 +6206,22 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             logger.debug(f"Fast-path numbered alignment failed ({n} lemmas), trying newline join.")
     except Exception as e:
         logger.warning(f"Fast-path numbered batch failed: {e}")
+        if is_rate_limit_exception(e):
+            record_provider_cooldown(active_provider, config=config)
+            fallback_provider = None
+            if strategy != 'strict':
+                for cand in candidates:
+                    if cand != active_provider and not is_provider_cooled_down(cand):
+                        fallback_provider = cand
+                        break
+            if fallback_provider:
+                logger.warning(f"Fast-path numbered tier rate-limited for '{active_provider}'. Short-circuiting to '{fallback_provider}'...")
+                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider)
 
     # --- Tier 2: Plain newline join ---
     try:
         newline_input = "\n".join(lemmas)
-        translated_newline = translate_text(newline_input, source, target, config, resolved_paths, provider)
+        translated_newline = translate_text(newline_input, source, target, config, resolved_paths, active_provider)
         parts = [p.strip() for p in translated_newline.splitlines() if p.strip()]
         if len(parts) == n:
             # Echo guard: if every translation is identical to its source lemma, the engine echoed the input.
@@ -6028,6 +6241,17 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             logger.debug(f"Fast-path newline alignment failed (got {len(parts)} parts for {n} lemmas), falling back to concurrent individual calls.")
     except Exception as e:
         logger.warning(f"Fast-path newline batch failed: {e}")
+        if is_rate_limit_exception(e):
+            record_provider_cooldown(active_provider, config=config)
+            fallback_provider = None
+            if strategy != 'strict':
+                for cand in candidates:
+                    if cand != active_provider and not is_provider_cooled_down(cand):
+                        fallback_provider = cand
+                        break
+            if fallback_provider:
+                logger.warning(f"Fast-path newline tier rate-limited for '{active_provider}'. Short-circuiting to '{fallback_provider}'...")
+                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider)
 
     # --- Tier 3: Concurrent individual calls (bounded pool, max 4 workers) ---
     logger.warning(f"Fast-path alignment failed for all batch strategies ({n} lemmas). Using concurrent individual calls.")
@@ -13406,24 +13630,33 @@ html, body {{
             var hasSkeletons = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0;
 
             if (isWebMode && curZid && hasSkeletons) {
-                var maxBudgetMs = 30000; // 30-second safety budget
-                var activeElapsedMs = 0;
+                var maxBudgetMs = 30000; // 30-second initial safety budget
+                var hardCeilingMs = 35000; // 35-second absolute ceiling
+                var totalActiveElapsedMs = 0;
                 var lastVisibleTime = (!document.hidden) ? Date.now() : null;
                 var pollIntervalMs = 1000;
                 var isPolling = false;
                 var resolved = false;
 
                 var getActiveElapsedMs = function() {
-                    var elapsed = activeElapsedMs;
+                    if (typeof window._kwGetActiveElapsedMs === 'function' && window._kwGetActiveElapsedMs !== getActiveElapsedMs) {
+                        return window._kwGetActiveElapsedMs();
+                    }
+                    var elapsed = totalActiveElapsedMs;
                     if (!document.hidden && lastVisibleTime) {
                         elapsed += (Date.now() - lastVisibleTime);
                     }
                     return elapsed;
                 };
 
+                window._kwWatchdogMaxBudgetMs = maxBudgetMs;
+                window._kwWatchdogHardCeilingMs = hardCeilingMs;
+                window._kwGetActiveElapsedMs = getActiveElapsedMs;
+                window._kwAdvanceActiveElapsedMs = function(ms) { totalActiveElapsedMs += ms; };
+
                 var pauseWatchdogTimer = function() {
                     if (lastVisibleTime) {
-                        activeElapsedMs += (Date.now() - lastVisibleTime);
+                        totalActiveElapsedMs += (Date.now() - lastVisibleTime);
                         lastVisibleTime = null;
                     }
                     if (window._kwWatchdogMaxTimer) {
@@ -13442,7 +13675,9 @@ html, body {{
                         clearTimeout(window._kwWatchdogMaxTimer);
                         window._kwWatchdogMaxTimer = null;
                     }
-                    var remaining = maxBudgetMs - getActiveElapsedMs();
+                    var currentElapsed = getActiveElapsedMs();
+                    var effectiveBudget = Math.min(maxBudgetMs, hardCeilingMs);
+                    var remaining = effectiveBudget - currentElapsed;
                     if (remaining <= 0) {
                         closeEvtSource();
                         stopPolling();
@@ -13557,12 +13792,12 @@ html, body {{
                                 if (resolved) return;
                                 var sData = (resObj && resObj.data) ? resObj.data : resObj;
                                 var isBusy = sData ? (sData.is_finished === false || sData.stage === 'translating' || (sData.status && (sData.status.is_finished === false || sData.status.stage === 'translating'))) : false;
-                                if (isBusy) {
-                                    // Backend is actively translating (e.g. Argos ML translation in progress):
-                                    // Suppress Retry, reset watchdog budget, and continue polling.
-                                    activeElapsedMs = 0;
-                                    lastVisibleTime = Date.now();
-                                    maxBudgetMs += 15000;
+                                var currentElapsed = getActiveElapsedMs();
+                                if (isBusy && currentElapsed < hardCeilingMs) {
+                                    // Backend is actively translating and hard ceiling is not yet reached:
+                                    // Suppress Retry, extend watchdog budget up to the hard ceiling, and continue polling.
+                                    maxBudgetMs = Math.min(maxBudgetMs + 15000, hardCeilingMs);
+                                    window._kwWatchdogMaxBudgetMs = maxBudgetMs;
                                     resumeWatchdogTimer();
                                     startWatchdogPolling();
                                     return;
@@ -13623,7 +13858,9 @@ html, body {{
                         stopPolling();
                         return;
                     }
-                    if (getActiveElapsedMs() >= maxBudgetMs) {
+                    var currentElapsed = getActiveElapsedMs();
+                    var effectiveBudget = Math.min(maxBudgetMs, hardCeilingMs);
+                    if (currentElapsed >= hardCeilingMs || currentElapsed >= effectiveBudget) {
                         stopPolling();
                         cleanupOrphanSkeletons();
                         return;
@@ -13642,9 +13879,9 @@ html, body {{
                             var data = (resObj && resObj.data) ? resObj.data : resObj;
                             if (data) {
                                 var isBusy = (data.is_finished === false || data.stage === 'translating' || (data.status && (data.status.is_finished === false || data.status.stage === 'translating')));
-                                if (isBusy) {
-                                    activeElapsedMs = 0;
-                                    lastVisibleTime = Date.now();
+                                if (isBusy && getActiveElapsedMs() < hardCeilingMs) {
+                                    maxBudgetMs = Math.min(maxBudgetMs + 5000, hardCeilingMs);
+                                    window._kwWatchdogMaxBudgetMs = maxBudgetMs;
                                 }
                             }
                             if (data && (data.rows || data.translatedText || data.translated_text || data.sentences || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
@@ -14943,9 +15180,14 @@ html, body {{
                 if (!dragOccurred) {
                     var curX = (e && e.clientX !== undefined) ? e.clientX : 0;
                     var curY = (e && e.clientY !== undefined) ? e.clientY : 0;
-                    var dx = curX - dragStartX;
-                    var dy = curY - dragStartY;
-                    if (Math.sqrt(dx * dx + dy * dy) < 5) {
+                    var hasCoords = (dragStartX !== 0 || dragStartY !== 0 || curX !== 0 || curY !== 0);
+                    if (hasCoords) {
+                        var dx = curX - dragStartX;
+                        var dy = curY - dragStartY;
+                        if (Math.sqrt(dx * dx + dy * dy) < 5) {
+                            return;
+                        }
+                    } else if (row === mousedownTargetRow) {
                         return;
                     }
                     dragOccurred = true;
