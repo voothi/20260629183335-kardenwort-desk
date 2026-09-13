@@ -5579,10 +5579,36 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
     if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
-    timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60)
+    chain, strategy = resolve_provider_chain(config, task_type='text')
+    is_chained = len(chain) > 1 and strategy != 'strict'
+    default_call_timeout = 5.0 if is_chained else 15.0
+    call_timeout = config.getfloat(SEC_PIPELINE, 'provider_call_timeout', fallback=default_call_timeout) if config else default_call_timeout
+    if call_timeout and call_timeout > 0:
+        cmd.extend(["--max-total-time", str(call_timeout), "--timeout", str(max(1.0, call_timeout - 1.0))])
+        subproc_timeout = max(call_timeout + 3.0, 7.0)
+    else:
+        subproc_timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
+
     logger.info(f"Running Google translation command: {' '.join(cmd)}")
     
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=subproc_timeout)
+    except subprocess.TimeoutExpired:
+        err_envelope = {
+            "status": "error",
+            "zid": zid,
+            "trace_id": trace_id,
+            "code": "ERR_NETWORK_UNREACHABLE",
+            "message": f"Google translation timed out after {subproc_timeout}s",
+            "provider": "google",
+            "details": {"timeout": subproc_timeout}
+        }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"[{err_envelope.get('code')}] {err_envelope.get('message')}")
+        raise TranslationException(err_envelope.get("message"), envelope=err_envelope)
+
     if res.returncode == 0:
         return res.stdout.strip()
     else:
@@ -5669,7 +5695,15 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
     if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
         
-    timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60)
+    chain, strategy = resolve_provider_chain(config, task_type='text')
+    is_chained = len(chain) > 1 and strategy != 'strict'
+    default_call_timeout = 5.0 if is_chained else 15.0
+    call_timeout = config.getfloat(SEC_PIPELINE, 'provider_call_timeout', fallback=default_call_timeout) if config else default_call_timeout
+    if call_timeout and call_timeout > 0:
+        cmd.extend(["--max-total-time", str(call_timeout), "--timeout", str(max(1.0, call_timeout - 1.0))])
+        subproc_timeout = max(call_timeout + 3.0, 7.0)
+    else:
+        subproc_timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
     
     logged_cmd = cmd[:]
     if "--deepl-api-key" in logged_cmd:
@@ -5678,7 +5712,24 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
             logged_cmd[idx + 1] = "********"
     logger.info(f"Running DeepL translation command: {' '.join(logged_cmd)}")
     
-    res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
+    try:
+        res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=subproc_timeout)
+    except subprocess.TimeoutExpired:
+        err_envelope = {
+            "status": "error",
+            "zid": zid,
+            "trace_id": trace_id,
+            "code": "ERR_NETWORK_UNREACHABLE",
+            "message": f"DeepL translation timed out after {subproc_timeout}s",
+            "provider": "deepl",
+            "details": {"timeout": subproc_timeout}
+        }
+        results_dir = resolve_results_dir(resolved_paths, config)
+        if zid and results_dir:
+            sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
+            sess_logger.error(f"[{err_envelope.get('code')}] {err_envelope.get('message')}")
+        raise TranslationException(err_envelope.get("message"), envelope=err_envelope)
+
     if res.returncode == 0:
         return res.stdout.strip()
     else:
@@ -5859,9 +5910,41 @@ def resolve_provider_chain(config, task_type: str = 'text') -> Tuple[List[str], 
 DEFAULT_PROVIDER_COOLDOWN_SECONDS = 300.0
 _provider_cooldowns: Dict[str, float] = {}
 _cooldown_lock = threading.Lock()
+_COOLDOWN_FILE_NAME = "provider_cooldowns.json"
 
-def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_COOLDOWN_SECONDS, config = None) -> None:
-    """Record that a translation provider is in cooldown until time.time() + duration."""
+def _get_shared_cooldown_file_path(config=None, resolved_paths=None) -> Path:
+    results_dir = resolve_results_dir(resolved_paths, config) if 'resolve_results_dir' in globals() else Path('results').resolve()
+    try:
+        results_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        pass
+    return results_dir / _COOLDOWN_FILE_NAME
+
+def _load_shared_cooldowns(config=None, resolved_paths=None) -> Dict[str, float]:
+    p = _get_shared_cooldown_file_path(config, resolved_paths)
+    if not p.exists():
+        return {}
+    try:
+        with open(p, 'r', encoding='utf-8') as f:
+            data = json.load(f)
+            if isinstance(data, dict):
+                return {str(k).strip().lower(): float(v) for k, v in data.items()}
+    except Exception:
+        pass
+    return {}
+
+def _save_shared_cooldowns(cooldowns: Dict[str, float], config=None, resolved_paths=None) -> None:
+    p = _get_shared_cooldown_file_path(config, resolved_paths)
+    try:
+        temp_p = p.with_suffix(f".tmp.{os.getpid()}")
+        with open(temp_p, 'w', encoding='utf-8') as f:
+            json.dump(cooldowns, f)
+        temp_p.replace(p)
+    except Exception:
+        pass
+
+def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_COOLDOWN_SECONDS, config = None, resolved_paths = None) -> None:
+    """Record that a translation provider is in cooldown until time.time() + duration, synced across processes."""
     if not provider:
         return
     p_norm = provider.strip().lower()
@@ -5871,12 +5954,21 @@ def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_C
             eff_duration = config.getfloat(SEC_PIPELINE, 'provider_cooldown_seconds', fallback=eff_duration)
         except Exception:
             pass
+    expire_at = time.time() + eff_duration
     with _cooldown_lock:
-        _provider_cooldowns[p_norm] = time.time() + eff_duration
+        _provider_cooldowns[p_norm] = expire_at
+        try:
+            shared = _load_shared_cooldowns(config, resolved_paths)
+            shared[p_norm] = expire_at
+            now = time.time()
+            clean_shared = {k: v for k, v in shared.items() if v > now}
+            _save_shared_cooldowns(clean_shared, config, resolved_paths)
+        except Exception:
+            pass
     logger.warning(f"Provider '{p_norm}' placed in cooldown for {eff_duration:.1f}s due to rate limit/quota.")
 
-def is_provider_cooled_down(provider: str) -> bool:
-    """Check whether a provider is currently cooled down. Cleans up expired entries."""
+def is_provider_cooled_down(provider: str, config=None, resolved_paths=None) -> bool:
+    """Check whether a provider is currently cooled down, checking in-memory and shared process store."""
     if not provider:
         return False
     p_norm = provider.strip().lower()
@@ -5884,18 +5976,31 @@ def is_provider_cooled_down(provider: str) -> bool:
     with _cooldown_lock:
         expire_at = _provider_cooldowns.get(p_norm)
         if expire_at is None:
+            try:
+                shared = _load_shared_cooldowns(config, resolved_paths)
+                for k, exp in shared.items():
+                    if exp > now:
+                        _provider_cooldowns[k] = exp
+                expire_at = _provider_cooldowns.get(p_norm)
+            except Exception:
+                pass
+        if expire_at is None:
             return False
         if now < expire_at:
             return True
         del _provider_cooldowns[p_norm]
         return False
 
-def clear_provider_cooldowns() -> None:
-    """Clear all active provider cooldowns."""
+def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
+    """Clear all active provider cooldowns both in memory and in shared store."""
     with _cooldown_lock:
         _provider_cooldowns.clear()
+        try:
+            _save_shared_cooldowns({}, config, resolved_paths)
+        except Exception:
+            pass
 
-def get_provider_cooldown_remaining(provider: str) -> float:
+def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=None) -> float:
     """Get remaining cooldown duration in seconds, or 0.0 if not cooled down."""
     if not provider:
         return 0.0
@@ -5903,6 +6008,15 @@ def get_provider_cooldown_remaining(provider: str) -> float:
     now = time.time()
     with _cooldown_lock:
         expire_at = _provider_cooldowns.get(p_norm)
+        if expire_at is None:
+            try:
+                shared = _load_shared_cooldowns(config, resolved_paths)
+                for k, exp in shared.items():
+                    if exp > now:
+                        _provider_cooldowns[k] = exp
+                expire_at = _provider_cooldowns.get(p_norm)
+            except Exception:
+                pass
         if expire_at is None:
             return 0.0
         remaining = expire_at - now

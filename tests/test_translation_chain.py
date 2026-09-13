@@ -169,3 +169,51 @@ def test_chain_override_prefers_explicit_provider(tmp_path):
         assert result == "DeepL translation"
         mock_deepl.assert_called_once()
         mock_argos.assert_not_called()
+
+
+def test_chained_google_translation_uses_fast_fail_timeout(tmp_path):
+    config = make_config(chain="google, deepl, argos", strategy="chain")
+    resolved_paths = {
+        "results_dir": tmp_path,
+        "base_dir": tmp_path,
+        "deep_translator_python": "python",
+        "translate_google_script": "dummy_google.py"
+    }
+
+    mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="Привет\n"))
+    with patch("subprocess.run", mock_run):
+        res = kardenwort_desk.run_google_translation("Hello", "en", "ru", config, resolved_paths)
+        assert res == "Привет"
+        assert mock_run.called
+        cmd_args = mock_run.call_args[0][0]
+        assert "--max-total-time" in cmd_args
+        assert "--timeout" in cmd_args
+        # Subprocess timeout must be bounded (not 60s)
+        timeout_arg = mock_run.call_args[1].get("timeout")
+        assert timeout_arg is not None
+        assert timeout_arg <= 15.0
+
+
+def test_provider_cooldown_cross_process_persistence(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl", strategy="chain")
+
+    # Clear before test
+    kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
+    assert not kardenwort_desk.is_provider_cooled_down("google", config=config, resolved_paths=resolved_paths)
+
+    # Record cooldown
+    kardenwort_desk.record_provider_cooldown("google", duration=60.0, config=config, resolved_paths=resolved_paths)
+    assert kardenwort_desk.is_provider_cooled_down("google", config=config, resolved_paths=resolved_paths)
+
+    # Clear in-memory dictionary to simulate a separate process starting with empty memory
+    kardenwort_desk._provider_cooldowns.clear()
+    assert len(kardenwort_desk._provider_cooldowns) == 0
+
+    # Cross-process check should load the shared cooldown file and recognize Google as cooled down
+    assert kardenwort_desk.is_provider_cooled_down("google", config=config, resolved_paths=resolved_paths)
+    assert kardenwort_desk.get_provider_cooldown_remaining("google", config=config, resolved_paths=resolved_paths) > 0.0
+
+    # Cleanup
+    kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
+    assert not kardenwort_desk.is_provider_cooled_down("google", config=config, resolved_paths=resolved_paths)
