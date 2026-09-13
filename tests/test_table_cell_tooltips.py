@@ -105,6 +105,7 @@ def test_format_pos_tooltip():
 
 
 def test_format_gender_tooltip():
+    # Backward compatibility: single-argument calls
     assert format_gender_tooltip("m") == "Masculine"
     assert format_gender_tooltip("MASC") == "Masculine"
     assert format_gender_tooltip("masculine") == "Masculine"
@@ -117,6 +118,40 @@ def test_format_gender_tooltip():
     assert format_gender_tooltip("") == ""
     assert format_gender_tooltip(None) == ""
     assert format_gender_tooltip("other") == ""
+
+    # Dual provenance (AI + suffix)
+    assert format_gender_tooltip("m", "Lieferpartner", "live:intellifiller") == "Masculine (AI: IntelliFiller · Suffix: -partner)"
+    assert format_gender_tooltip("f", "Freundschaft", "ai:intellifiller") == "Feminine (AI: IntelliFiller · Suffix: -schaft)"
+    assert format_gender_tooltip("n", "Dokument", "live:intellifiller") == "Neuter (AI: IntelliFiller · Suffix: -ment)"
+    assert format_gender_tooltip("MASC", "lieferpartner", "LIVE:INTELLIFILLER") == "Masculine (AI: IntelliFiller · Suffix: -partner)"
+
+    # Suffix only
+    assert format_gender_tooltip("f", "Möglichkeit") == "Feminine (Suffix: -keit)"
+    assert format_gender_tooltip("f", "Freiheit") == "Feminine (Suffix: -heit)"
+    assert format_gender_tooltip("f", "Zeitung") == "Feminine (Suffix: -ung)"
+    assert format_gender_tooltip("m", "Fachmann") == "Masculine (Suffix: -mann)"
+    assert format_gender_tooltip("m", "Optimismus") == "Masculine (Suffix: -ismus)"
+    assert format_gender_tooltip("m", "Frühling") == "Masculine (Suffix: -ling)"
+    assert format_gender_tooltip("n", "Mädchen") == "Neuter (Suffix: -chen)"
+    assert format_gender_tooltip("n", "Büchlein") == "Neuter (Suffix: -lein)"
+    assert format_gender_tooltip("n", "Museum") == "Neuter (Suffix: -um)"
+
+    # AI only (no suffix match)
+    assert format_gender_tooltip("n", "Auto", "live:intellifiller") == "Neuter (AI: IntelliFiller)"
+    assert format_gender_tooltip("m", "Hund", "ai:intellifiller") == "Masculine (AI: IntelliFiller)"
+    assert format_gender_tooltip("f", "Katze", "live:ai") == "Feminine (AI: IntelliFiller)"
+
+    # Default / fallback (neither AI nor matching suffix)
+    assert format_gender_tooltip("m", "Tisch") == "Masculine"
+    assert format_gender_tooltip("m", "Tisch", "live:argos") == "Masculine"
+    assert format_gender_tooltip("f", "Tür", "corpus:dict") == "Feminine"
+    assert format_gender_tooltip("n", "Buch", "cached:sqlite") == "Neuter"
+
+    # Feminine -in guard and exclusions
+    assert format_gender_tooltip("f", "Lehrerin") == "Feminine (Suffix: -in)"
+    assert format_gender_tooltip("f", "Kinn") == "Feminine"
+    assert format_gender_tooltip("f", "Sinn") == "Feminine"
+    assert format_gender_tooltip("f", "Benzin") == "Feminine"
 
 
 def test_format_classification_tooltip():
@@ -256,6 +291,12 @@ def test_client_side_js_helpers_parity(page, tmp_path):
     assert page.evaluate("window.formatGenderTooltip('f')") == "Feminine"
     assert page.evaluate("window.formatGenderTooltip('n')") == "Neuter"
     assert page.evaluate("window.formatGenderTooltip('other')") == ""
+    assert page.evaluate("window.formatGenderTooltip('m', 'Lieferpartner', 'live:intellifiller')") == "Masculine (AI: IntelliFiller · Suffix: -partner)"
+    assert page.evaluate("window.formatGenderTooltip('f', 'Möglichkeit')") == "Feminine (Suffix: -keit)"
+    assert page.evaluate("window.formatGenderTooltip('n', 'Auto', 'live:intellifiller')") == "Neuter (AI: IntelliFiller)"
+    assert page.evaluate("window.formatGenderTooltip('m', 'Tisch')") == "Masculine"
+    assert page.evaluate("window.formatGenderTooltip('f', 'Lehrerin')") == "Feminine (Suffix: -in)"
+    assert page.evaluate("window.formatGenderTooltip('f', 'Kinn')") == "Feminine"
 
     # 6. Test window.formatClassificationTooltip
     assert page.evaluate("window.formatClassificationTooltip('A1', 'goethe')") == "Goethe: A1"

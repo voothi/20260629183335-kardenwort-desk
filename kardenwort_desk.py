@@ -2342,13 +2342,82 @@ def format_pos_tooltip(pos_val: Optional[str]) -> str:
         return POS_FULL_NAME_MAP[p_clean.lower()]
     return p_clean
 
-def format_gender_tooltip(gender_val: Optional[str]) -> str:
+# German gender derivational and compound noun suffixes for lightweight morphological derivation:
+# Suffix lists sorted by length descending so longer suffixes match first
+GERMAN_GENDER_SUFFIXES_MASCULINE = (
+    "partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"
+)
+GERMAN_GENDER_SUFFIXES_FEMININE = (
+    "schaft", "heit", "keit", "ung", "ion", "tät", "enz", "anz", "ik", "ei", "in"
+)
+GERMAN_GENDER_SUFFIXES_NEUTER = (
+    "chen", "lein", "ment", "tum", "um"
+)
+
+GERMAN_SUFFIX_EXCLUDED_IN = {
+    "kinn", "sinn", "benzin", "ruin", "urin", "rubin", "cousin", "magazin", "berlin", "dublin"
+}
+
+def detect_german_gender_suffix(lemma: Optional[str], gender_code: str) -> Optional[str]:
+    if not lemma:
+        return None
+    w = str(lemma).strip().lower()
+    if not w:
+        return None
+
+    if gender_code == "m":
+        for suf in GERMAN_GENDER_SUFFIXES_MASCULINE:
+            min_len = 4 if suf in ("mann", "or") else (7 if suf == "partner" else (6 if suf == "ismus" else 5))
+            if len(w) >= min_len and w.endswith(suf):
+                return f"-{suf}"
+    elif gender_code == "f":
+        for suf in GERMAN_GENDER_SUFFIXES_FEMININE:
+            if suf == "in":
+                if len(w) > 4 and w not in GERMAN_SUFFIX_EXCLUDED_IN and w.endswith("in"):
+                    return "-in"
+            else:
+                min_len = 4 if suf in ("ik", "ei") else (6 if suf == "schaft" else 5)
+                if len(w) >= min_len and w.endswith(suf):
+                    return f"-{suf}"
+    elif gender_code == "n":
+        for suf in GERMAN_GENDER_SUFFIXES_NEUTER:
+            min_len = 4 if suf in ("tum", "um") else 5
+            if len(w) >= min_len and w.endswith(suf):
+                return f"-{suf}"
+    return None
+
+def is_ai_provenance(provenance: Optional[str]) -> bool:
+    if not provenance:
+        return False
+    p_str = str(provenance).strip().lower()
+    return "intellifiller" in p_str or p_str in ("ai", "live:ai")
+
+def format_gender_tooltip(gender_val: Optional[str], lemma: Optional[str] = None, provenance: Optional[str] = None) -> str:
     if not gender_val:
         return ""
     g_clean = str(gender_val).strip().lower()
-    if g_clean in GENDER_FULL_NAME_MAP:
-        return GENDER_FULL_NAME_MAP[g_clean]
-    return ""
+    if g_clean not in GENDER_FULL_NAME_MAP:
+        return ""
+    gender_name = GENDER_FULL_NAME_MAP[g_clean]
+
+    g_code = ""
+    if g_clean in ("m", "masc", "masculine"):
+        g_code = "m"
+    elif g_clean in ("f", "fem", "feminine"):
+        g_code = "f"
+    elif g_clean in ("n", "neut", "neuter"):
+        g_code = "n"
+
+    ai_flag = is_ai_provenance(provenance)
+    suffix = detect_german_gender_suffix(lemma, g_code)
+
+    if ai_flag and suffix:
+        return f"{gender_name} (AI: IntelliFiller · Suffix: {suffix})"
+    elif suffix:
+        return f"{gender_name} (Suffix: {suffix})"
+    elif ai_flag:
+        return f"{gender_name} (AI: IntelliFiller)"
+    return gender_name
 
 def format_classification_tooltip(classification_val: Optional[str], role: str = "") -> str:
     if not classification_val:
@@ -10033,6 +10102,7 @@ html, body {{
     col_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else (headers.index('pos') if 'pos' in headers else -1))
     col_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else (headers.index('gender') if 'gender' in headers else -1))
     col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+    col_provenance = headers.index(role_fields['provenance']) if 'provenance' in role_fields and role_fields['provenance'] in headers else (headers.index('Provenance') if 'Provenance' in headers else (headers.index('provenance') if 'provenance' in headers else -1))
 
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology", "POS", "G"]
     
@@ -10162,7 +10232,11 @@ html, body {{
         pos_tooltip = format_pos_tooltip(pos_raw)
         pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
 
-        gender_tooltip = format_gender_tooltip(gender_raw)
+        prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
+        if not prov_val and col_provenance != -1 and len(row) > col_provenance:
+            prov_val = row[col_provenance]
+
+        gender_tooltip = format_gender_tooltip(gender_raw, lemma=lemma_val, provenance=prov_val)
         gender_title_attr = f' title="{html.escape(gender_tooltip)}"' if gender_tooltip else ''
 
         pos_td = f'<td class="col-pos" data-col="{pos_col_name}"{pos_title_attr}><div class="scrollable-cell">{pos_val}</div></td>'
@@ -10189,7 +10263,6 @@ html, body {{
             cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
             dynamic_tds += f'<td class="col-classification" data-col="{role}"{cls_title_attr}><div class="scrollable-cell">{inner_html}</div></td>'
 
-        prov_val = row_provenances.get(row_id) or row_provenances.get(token_order_val) or row_provenances.get(str(token_order_val))
         prov_attr = ""
         if prov_val and trans_val and "skeleton-loader" not in trans_val and "btn-retry-cell" not in trans_val:
             prov_title = format_provenance_tooltip(prov_val)
@@ -10502,7 +10575,11 @@ html, body {{
             ov_pos_tooltip = format_pos_tooltip(ov_pos_raw)
             ov_pos_title = f' title="{html.escape(ov_pos_tooltip)}"' if ov_pos_tooltip else ''
 
-            ov_gender_tooltip = format_gender_tooltip(ov_gender_raw)
+            ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
+            if not ov_prov_val and col_provenance != -1 and len(ov_r) > col_provenance:
+                ov_prov_val = ov_r[col_provenance]
+
+            ov_gender_tooltip = format_gender_tooltip(ov_gender_raw, lemma=ov_lemma, provenance=ov_prov_val)
             ov_gender_title = f' title="{html.escape(ov_gender_tooltip)}"' if ov_gender_tooltip else ''
 
             ov_pos_td = f'<td class="col-pos" data-col="{pos_col_name}"{ov_pos_title}><div class="scrollable-cell">{ov_pos}</div></td>'
@@ -10527,7 +10604,6 @@ html, body {{
                 ov_cls_title = f' title="{html.escape(ov_cls_tooltip)}"' if ov_cls_tooltip else ''
                 ov_dynamic_tds += f'<td class="col-classification" data-col="{role}"{ov_cls_title}><div class="scrollable-cell">{inner_html}</div></td>'
 
-            ov_prov_val = row_provenances.get(ov_id) or row_provenances.get(ov_token_order) or row_provenances.get(str(ov_token_order))
             ov_prov_attr = ""
             if ov_prov_val and ov_trans and "skeleton-loader" not in ov_trans and "btn-retry-cell" not in ov_trans:
                 p_title = format_provenance_tooltip(ov_prov_val)
@@ -12060,11 +12136,81 @@ html, body {{
         "n": "Neuter", "neut": "Neuter", "neuter": "Neuter"
     };
 
-    function formatGenderTooltip(genderVal) {
+    var GERMAN_GENDER_SUFFIXES_MASCULINE_JS = ["partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"];
+    var GERMAN_GENDER_SUFFIXES_FEMININE_JS = ["schaft", "heit", "keit", "ung", "ion", "tät", "enz", "anz", "ik", "ei", "in"];
+    var GERMAN_GENDER_SUFFIXES_NEUTER_JS = ["chen", "lein", "ment", "tum", "um"];
+    var GERMAN_SUFFIX_EXCLUDED_IN_JS = {
+        "kinn": true, "sinn": true, "benzin": true, "ruin": true, "urin": true,
+        "rubin": true, "cousin": true, "magazin": true, "berlin": true, "dublin": true
+    };
+
+    function detectGermanGenderSuffix(lemma, genderCode) {
+        if (!lemma) return null;
+        var w = String(lemma).trim().toLowerCase();
+        if (!w) return null;
+
+        if (genderCode === 'm') {
+            for (var i = 0; i < GERMAN_GENDER_SUFFIXES_MASCULINE_JS.length; i++) {
+                var suf = GERMAN_GENDER_SUFFIXES_MASCULINE_JS[i];
+                var minLen = (suf === 'mann' || suf === 'or') ? 4 : (suf === 'partner' ? 7 : (suf === 'ismus' ? 6 : 5));
+                if (w.length >= minLen && w.endsWith(suf)) {
+                    return '-' + suf;
+                }
+            }
+        } else if (genderCode === 'f') {
+            for (var j = 0; j < GERMAN_GENDER_SUFFIXES_FEMININE_JS.length; j++) {
+                var sufF = GERMAN_GENDER_SUFFIXES_FEMININE_JS[j];
+                if (sufF === 'in') {
+                    if (w.length > 4 && !GERMAN_SUFFIX_EXCLUDED_IN_JS[w] && w.endsWith('in')) {
+                        return '-in';
+                    }
+                } else {
+                    var minLenF = (sufF === 'ik' || sufF === 'ei') ? 4 : (sufF === 'schaft' ? 6 : 5);
+                    if (w.length >= minLenF && w.endsWith(sufF)) {
+                        return '-' + sufF;
+                    }
+                }
+            }
+        } else if (genderCode === 'n') {
+            for (var k = 0; k < GERMAN_GENDER_SUFFIXES_NEUTER_JS.length; k++) {
+                var sufN = GERMAN_GENDER_SUFFIXES_NEUTER_JS[k];
+                var minLenN = (sufN === 'tum' || sufN === 'um') ? 4 : 5;
+                if (w.length >= minLenN && w.endsWith(sufN)) {
+                    return '-' + sufN;
+                }
+            }
+        }
+        return null;
+    }
+
+    function isAiProvenance(provenance) {
+        if (!provenance) return false;
+        var pStr = String(provenance).trim().toLowerCase();
+        return pStr.indexOf('intellifiller') !== -1 || pStr === 'ai' || pStr === 'live:ai';
+    }
+
+    function formatGenderTooltip(genderVal, lemma, provenance) {
         if (!genderVal) return "";
         var gClean = String(genderVal).trim().toLowerCase();
-        if (GENDER_FULL_NAME_MAP_JS[gClean]) return GENDER_FULL_NAME_MAP_JS[gClean];
-        return "";
+        if (!GENDER_FULL_NAME_MAP_JS[gClean]) return "";
+        var genderName = GENDER_FULL_NAME_MAP_JS[gClean];
+
+        var gCode = "";
+        if (gClean === 'm' || gClean === 'masc' || gClean === 'masculine') gCode = 'm';
+        else if (gClean === 'f' || gClean === 'fem' || gClean === 'feminine') gCode = 'f';
+        else if (gClean === 'n' || gClean === 'neut' || gClean === 'neuter') gCode = 'n';
+
+        var aiFlag = isAiProvenance(provenance);
+        var suffix = detectGermanGenderSuffix(lemma, gCode);
+
+        if (aiFlag && suffix) {
+            return genderName + " (AI: IntelliFiller · Suffix: " + suffix + ")";
+        } else if (suffix) {
+            return genderName + " (Suffix: " + suffix + ")";
+        } else if (aiFlag) {
+            return genderName + " (AI: IntelliFiller)";
+        }
+        return genderName;
     }
 
     function formatClassificationTooltip(classVal, role) {
@@ -13309,6 +13455,18 @@ html, body {{
                         if (lemTip) {
                             tds[1].setAttribute('title', lemTip);
                         }
+                        var curGenderCell = tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]');
+                        if (curGenderCell) {
+                            var curGenVal = rawG || (curGenderCell.textContent || curGenderCell.innerText || "").trim();
+                            var curProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
+                            if (!curProv) {
+                                var curTransCell = tr.querySelector('td.col-translation, td[data-col="WordDestination"]');
+                                if (curTransCell) curProv = curTransCell.getAttribute('data-provenance');
+                            }
+                            var updatedGenTip = formatGenderTooltip(curGenVal, val, curProv);
+                            if (updatedGenTip) curGenderCell.setAttribute('title', updatedGenTip);
+                            else curGenderCell.removeAttribute('title');
+                        }
                     }
                     var hasTransProp = rowData.hasOwnProperty('trans') || rowData.hasOwnProperty('WordDestination') || rowData.hasOwnProperty('word_translation');
                     var rowProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
@@ -13538,7 +13696,32 @@ html, body {{
                                 if (!genderCell.classList.contains('editing')) div.innerHTML = targetGenderHtml;
                                 updated = true;
                             }
-                            var genTip = formatGenderTooltip(rawGender);
+                            var rowLemma = (rowData.lemma !== undefined && rowData.lemma !== null) ? rowData.lemma : (rowData.WordSource || "");
+                            if (!rowLemma) {
+                                var lemmaCell = tr.querySelector('td.col-lemma, td[data-col="WordSource"]');
+                                if (lemmaCell) {
+                                    var lemDiv = lemmaCell.querySelector('.scrollable-cell') || lemmaCell;
+                                    rowLemma = (lemDiv.textContent || lemDiv.innerText || '').trim();
+                                }
+                            }
+                            var effProv = rowData.provenance || rowData._provenance || rowData.transProvenance;
+                            if (!effProv) {
+                                var transCell = tr.querySelector('td.col-translation, td[data-col="WordDestination"]');
+                                if (transCell) {
+                                    effProv = transCell.getAttribute('data-provenance') || (transCell.querySelector('[data-provenance]') ? transCell.querySelector('[data-provenance]').getAttribute('data-provenance') : null);
+                                }
+                            }
+                            if (!effProv && rowData.token_order !== undefined && rowData.token_order !== null && window.AppState && window.AppState.rows) {
+                                for (var rk in window.AppState.rows) {
+                                    if (window.AppState.rows[rk] && String(window.AppState.rows[rk].token_order) === String(rowData.token_order)) {
+                                        if (window.AppState.rows[rk].provenance) {
+                                            effProv = window.AppState.rows[rk].provenance;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            var genTip = formatGenderTooltip(rawGender, rowLemma, effProv);
                             if (genTip) {
                                 genderCell.setAttribute('title', genTip);
                             } else {
@@ -17594,7 +17777,7 @@ html, body {{
                         var ipaTooltip = (w.ipa && w.ipa.indexOf('skeleton-loader') === -1) ? w.ipa : '';
                         var morphTooltip = (w.morphology && w.morphology.indexOf('skeleton-loader') === -1) ? w.morphology : '';
                         var posTooltip = formatPosTooltip(w.pos || '');
-                        var genTooltip = formatGenderTooltip(w.gender || '');
+                        var genTooltip = formatGenderTooltip(w.gender || '', w.lemma || '', w.provenance || '');
 
                         var infTitleAttr = infTooltip ? (' title="' + escapeHtml(infTooltip) + '"') : '';
                         var lemTitleAttr = lemTooltip ? (' title="' + escapeHtml(lemTooltip) + '"') : '';
@@ -19157,6 +19340,8 @@ def render_section(token, ctx):
             col_indices[t] = headers.index(field) if field in headers else -1
 
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        lookup_col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else (headers.index('lemma') if 'lemma' in headers else -1))
+        lookup_col_prov = headers.index(role_fields['provenance']) if 'provenance' in role_fields and role_fields['provenance'] in headers else (headers.index('Provenance') if 'Provenance' in headers else (headers.index('provenance') if 'provenance' in headers else -1))
         for row_id, row in enumerate(data_rows):
             sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
             is_checked_bool = str(sel_val).strip() in ("1", "true", "True")
@@ -19196,7 +19381,9 @@ def render_section(token, ctx):
                     html_output += f'<td class="col-pos"{pos_title_attr}>{cell_val}</td>'
                 elif t in ("gender", "g"):
                     cell_val = format_gender_badge(val)
-                    g_tooltip = format_gender_tooltip(val)
+                    lem_val_for_g = row[lookup_col_lemma] if lookup_col_lemma != -1 and len(row) > lookup_col_lemma else ""
+                    prov_val_for_g = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else None
+                    g_tooltip = format_gender_tooltip(val, lemma=lem_val_for_g, provenance=prov_val_for_g)
                     g_title_attr = f' title="{html.escape(g_tooltip)}"' if g_tooltip else ''
                     html_output += f'<td class="col-gender"{g_title_attr}>{cell_val}</td>'
                 elif t in ("oxford", "cambridge", "goethe", "cefr", "classification"):
