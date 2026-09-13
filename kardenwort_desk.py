@@ -5981,7 +5981,7 @@ def translate_text(text, source, target, config, resolved_paths, provider=None, 
 def _translate_text_impl(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None):
     configured_chain, configured_strategy = resolve_provider_chain(config, task_type='text')
     
-    if provider and provider != 'default':
+    if provider and provider != 'default' and (not configured_chain or provider.strip().lower() != configured_chain[0]):
         if ',' in provider:
             providers_to_try = [p.strip().lower() for p in provider.split(',') if p.strip()]
             strategy = configured_strategy
@@ -5995,8 +5995,6 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             else:
                 # strategy == 'chain'
                 providers_to_try = [p_norm] + [p for p in configured_chain if p != p_norm]
-                if p_norm == 'deepl' and 'google' not in providers_to_try:
-                    providers_to_try.append('google')
     else:
         providers_to_try = list(configured_chain)
         strategy = configured_strategy
@@ -6166,16 +6164,17 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
 
     chain, strategy = resolve_provider_chain(config, task_type='lemma')
     norm_p = (provider or "").strip().lower()
-    if norm_p:
-        candidates = [norm_p] + [p for p in chain if p != norm_p]
-    else:
+    if not norm_p or norm_p == 'default' or (chain and norm_p == chain[0]):
         candidates = list(chain)
+        active_provider = chain[0] if chain else 'google'
+    else:
+        candidates = [norm_p] + [p for p in chain if p != norm_p]
+        active_provider = provider
 
-    active_provider = provider
-    if norm_p and is_provider_cooled_down(norm_p) and strategy != 'strict':
+    if is_provider_cooled_down(active_provider) and strategy != 'strict':
         for cand in candidates:
             if not is_provider_cooled_down(cand):
-                logger.warning(f"Lemma provider '{norm_p}' is in cooldown. Switching fast-path to '{cand}'...")
+                logger.warning(f"Lemma provider '{active_provider}' is in cooldown. Switching fast-path to '{cand}'...")
                 active_provider = cand
                 break
 
@@ -8680,7 +8679,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
     translation_fast_failed = False
 
     if will_split:
-        main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
+        text_chain, _ = resolve_provider_chain(config, task_type='text')
+        main_text_provider = text_chain[0] if text_chain else config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
         master_slug = generate_slug(text)
         master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
         
@@ -9219,9 +9219,11 @@ html, body {{
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    text_base_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
-    main_text_provider = text_base_provider
-    lemma_base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+    text_chain, _ = resolve_provider_chain(config, task_type='text')
+    main_text_provider = text_chain[0] if text_chain else config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
+    text_base_provider = main_text_provider
+    lemma_chain, _ = resolve_provider_chain(config, task_type='lemma')
+    lemma_base_provider = lemma_chain[0] if lemma_chain else config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
     role_fields = get_role_fields(mapping, headers)
     col_lemma_check = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     if col_lemma_check != -1:
@@ -9364,7 +9366,7 @@ html, body {{
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
     run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
-    base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+    base_provider = lemma_base_provider
     enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
     
     storage_adapter = get_storage_adapter(config, resolved_paths)
@@ -21673,7 +21675,8 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                 text = restored.get("source_raw_text") or restored.get("source_text", "")
 
             if text:
-                main_text_provider = config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
+                text_chain, _ = resolve_provider_chain(config, task_type='text')
+                main_text_provider = text_chain[0] if text_chain else config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
                 col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
                 try:
@@ -21831,7 +21834,8 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
             if translation_order == 'bottom_to_top':
                 lemmas_to_translate = list(reversed(lemmas_to_translate))
             if lemmas_to_translate:
-                provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+                lemma_chain, _ = resolve_provider_chain(config, task_type='lemma')
+                provider = getattr(args, 'provider', None) or (lemma_chain[0] if lemma_chain else config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
                 if provider == 'intellifiller':
                     selected_rows_to_enrich = []
                     col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
@@ -22612,7 +22616,8 @@ def cmd_progressive_worker(args):
             # Write initial source stage immediately so UI renders without delay
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances)
                 
-            base_provider = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+            lemma_chain, _ = resolve_provider_chain(config, task_type='lemma')
+            base_provider = getattr(args, 'provider', None) or (lemma_chain[0] if lemma_chain else config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
             sibling_timeout = config.getfloat(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) if hasattr(config, 'getfloat') else float(config.get(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) or 0.0)
             has_siblings = bool(get_batch_sibling_tsvs(tsv_path)) or getattr(args, 'text_mode', 'single') == 'multi' or is_sqlite
             if has_siblings:

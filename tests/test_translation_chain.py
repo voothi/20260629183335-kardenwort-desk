@@ -9,7 +9,9 @@ from kardenwort_desk import (
     resolve_provider_chain,
     translate_text,
     _translate_text_impl,
+    translate_lemmas_fast_path,
     _migrate_config,
+    format_provider_skeleton_label,
     TranslationException,
     SEC_PIPELINE,
 )
@@ -110,3 +112,60 @@ def test_offline_fallback_strategy_probes(tmp_path):
         assert result == "Offline translated text"
         mock_google.assert_not_called()
         mock_argos.assert_called_once()
+
+
+def test_chain_head_determines_base_provider_and_skeleton_label():
+    config = make_config(chain="argos, deepl, google", lemma_chain="argos, deepl, google", strategy="chain")
+    _migrate_config(config)
+    assert config.get(SEC_PIPELINE, "text_base_provider") == "argos"
+    assert config.get(SEC_PIPELINE, "lemma_base_provider") == "argos"
+    assert format_provider_skeleton_label(config.get(SEC_PIPELINE, "text_base_provider")) == "Argos..."
+    assert format_provider_skeleton_label(config.get(SEC_PIPELINE, "lemma_base_provider")) == "Argos..."
+
+
+def test_chain_head_initiates_argos_translation(tmp_path):
+    config = make_config(chain="argos, deepl, google", strategy="chain")
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+
+    mock_argos = MagicMock(return_value="Argos translated sentence")
+    mock_deepl = MagicMock(return_value="DeepL translated sentence")
+    mock_google = MagicMock(return_value="Google translated sentence")
+
+    with patch("kardenwort_desk.run_argos_translation", mock_argos), \
+         patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
+         patch("kardenwort_desk.run_google_translation", mock_google):
+        result = _translate_text_impl("Hello world", "en", "de", config, resolved_paths)
+        assert result == "Argos translated sentence"
+        mock_argos.assert_called_once()
+        mock_deepl.assert_not_called()
+        mock_google.assert_not_called()
+
+
+def test_chain_head_preserves_order_when_primary_provider_passed(tmp_path):
+    config = make_config(chain="argos, deepl, google", strategy="chain")
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+
+    mock_argos = MagicMock(return_value="Argos translation")
+    mock_google = MagicMock(return_value="Google translation")
+
+    with patch("kardenwort_desk.run_argos_translation", mock_argos), \
+         patch("kardenwort_desk.run_google_translation", mock_google):
+        result = _translate_text_impl("Hello", "en", "de", config, resolved_paths, provider="argos")
+        assert result == "Argos translation"
+        mock_argos.assert_called_once()
+        mock_google.assert_not_called()
+
+
+def test_chain_override_prefers_explicit_provider(tmp_path):
+    config = make_config(chain="argos, deepl, google", strategy="chain")
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+
+    mock_argos = MagicMock(return_value="Argos translation")
+    mock_deepl = MagicMock(return_value="DeepL translation")
+
+    with patch("kardenwort_desk.run_argos_translation", mock_argos), \
+         patch("kardenwort_desk.run_deepl_translation", mock_deepl):
+        result = _translate_text_impl("Hello", "en", "de", config, resolved_paths, provider="deepl")
+        assert result == "DeepL translation"
+        mock_deepl.assert_called_once()
+        mock_argos.assert_not_called()
