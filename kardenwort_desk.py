@@ -15641,7 +15641,10 @@ html, body {{
             }
         }
         
-        function getSelectedRowsArray() {
+        function getSelectedRowsArray(extractTokenOrders) {
+            if (extractTokenOrders) {
+                return getSelectedTokenOrdersArray();
+            }
             var arr = [];
             for (var k in selectedRowIdsMap) {
                 if (selectedRowIdsMap.hasOwnProperty(k)) {
@@ -15650,6 +15653,28 @@ html, body {{
             }
             return arr;
         }
+
+        function getSelectedTokenOrdersArray() {
+            var arr = [];
+            for (var k in selectedRowIdsMap) {
+                if (selectedRowIdsMap.hasOwnProperty(k)) {
+                    var tr = document.querySelector('tr[data-row-id="' + k + '"]');
+                    if (tr) {
+                        var tOrd = tr.getAttribute('data-token-order');
+                        if (tOrd !== null && tOrd !== undefined && tOrd !== '') {
+                            var parsed = parseInt(tOrd, 10);
+                            arr.push(!isNaN(parsed) ? parsed : tOrd);
+                            continue;
+                        }
+                    }
+                    var kNum = parseInt(k, 10);
+                    arr.push(!isNaN(kNum) ? kNum : k);
+                }
+            }
+            return arr;
+        }
+        window.getSelectedRowsArray = getSelectedRowsArray;
+        window.getSelectedTokenOrdersArray = getSelectedTokenOrdersArray;
         
         function notifyAHKSelection() {
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
@@ -16420,13 +16445,23 @@ html, body {{
             };
             if (token) headers['X-API-Token'] = token;
 
+            var retryPayload = {
+                session_zid: curZid,
+                row_ids: [parseInt(rowId, 10)]
+            };
+            var trElem = document.querySelector('tr[data-row-id="' + rowId + '"]');
+            if (trElem) {
+                var tOrdAttr = trElem.getAttribute('data-token-order');
+                if (tOrdAttr !== null && tOrdAttr !== undefined && tOrdAttr !== '') {
+                    var parsedTOrd = parseInt(tOrdAttr, 10);
+                    retryPayload.token_orders = [!isNaN(parsedTOrd) ? parsedTOrd : tOrdAttr];
+                }
+            }
+
             fetch('/session/retry', {
                 method: 'POST',
                 headers: headers,
-                body: JSON.stringify({
-                    session_zid: curZid,
-                    row_ids: [parseInt(rowId, 10)]
-                })
+                body: JSON.stringify(retryPayload)
             })
             .then(function(res) {
                 if (!res.ok) throw new Error("Retry failed with status " + res.status);
@@ -16770,7 +16805,8 @@ html, body {{
         window.onRewordClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
             var rows = getSelectedRowsArray();
-            if (!rows.length) {
+            var tokenOrders = (typeof getSelectedTokenOrdersArray === 'function') ? getSelectedTokenOrdersArray() : [];
+            if (!rows.length && !tokenOrders.length) {
                 window.showToast("Please select rows to re-word.", "warning");
                 return;
             }
@@ -16786,13 +16822,14 @@ html, body {{
             var rewordBtn = document.getElementById('kw-btn-reword');
             setButtonLoading(rewordBtn, true, "Rewording...", "Re-word");
 
-            window.showToast("Re-wording " + rows.length + " rows...", "info");
+            window.showToast("Re-wording " + (tokenOrders.length || rows.length) + " rows...", "info");
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
             var bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
+                token_orders: tokenOrders,
                 language: getSessionLang()
             };
             if (tok) bodyPayload.token = tok;
@@ -16824,11 +16861,13 @@ html, body {{
                 window.showToast("Re-word error: " + formatErrorWithTrace(err, "Network error"), "error");
             });
         };
+        window.onSelectedClick = window.onRewordClick;
 
         window.onSendToAnkiClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
             var rows = getSelectedRowsArray();
-            if (!rows.length) {
+            var tokenOrders = (typeof getSelectedTokenOrdersArray === 'function') ? getSelectedTokenOrdersArray() : [];
+            if (!rows.length && !tokenOrders.length) {
                 window.showToast("Please select rows to export.", "warning");
                 return;
             }
@@ -16851,6 +16890,7 @@ html, body {{
             var bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
+                token_orders: tokenOrders,
                 language: getSessionLang()
             };
             if (tok) bodyPayload.token = tok;

@@ -2722,12 +2722,19 @@ class SessionArbiter:
                         self.sessions[session_zid]["row_provenances"] = {}
                     self.sessions[session_zid]["row_provenances"].update(retried_row_provenances)
 
-        sorted_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
-        structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=retried_row_provenances)
+        with self._lock:
+            is_active_session = (session_zid in self.sessions)
+
+        if is_active_session or (row_ids is not None and len(row_ids) > 0) or (token_orders is not None and len(token_orders) > 0):
+            display_rows = data_rows
+        else:
+            display_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+
+        structured_rows = format_update_rows_dict(display_rows, headers, role_fields, row_provenances=retried_row_provenances)
         effective_text_prov = f"live:{text_provider}" if (need_sentence_trans and translated_text_res) else None
 
         if not is_sqlite and tsv_path:
-            safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances)
+            safe_write_update_js(tsv_path, display_rows, headers, role_fields, stage="translated", status="success", translated_text=translated_text_res, text_provenance=effective_text_prov, zid=session_zid, trace_id=eff_trace_id, row_provenances=retried_row_provenances)
 
         event_payload = {
             "type": "update",
