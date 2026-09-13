@@ -4007,6 +4007,7 @@ class SqliteStorageAdapter(StorageAdapter):
         reprocess: bool = False,
         zid: Optional[str] = None,
         trace_id: Optional[str] = None,
+        token_orders: Optional[List[Any]] = None,
     ) -> bool:
         """
         Enriches a SQLite session using IntelliFiller via ephemeral scratch payload,
@@ -4035,6 +4036,9 @@ class SqliteStorageAdapter(StorageAdapter):
                 mapping = load_anki_mapping(Path(raw_mp))
         role_fields = get_role_fields(mapping, headers) if mapping else {}
 
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+
         # Frequency sort data_rows and align db_words in lockstep to ensure selected_rows parity
         headers_with_idx = list(headers) + ["__temp_sort_idx__"]
         data_rows_with_idx = [list(r) + [str(i)] for i, r in enumerate(data_rows)]
@@ -4043,7 +4047,20 @@ class SqliteStorageAdapter(StorageAdapter):
         )
         sorted_indices = [int(r[-1]) for r in sorted_rows_with_idx]
         data_rows = [r[:-1] for r in sorted_rows_with_idx]
-        db_words = [db_words[idx] if idx < len(db_words) else {} for idx in sorted_indices]
+        db_words_sorted = [db_words[idx] if idx < len(db_words) else {} for idx in sorted_indices]
+
+        # Determine target row indices in the scratch TSV
+        target_scratch_indices: Optional[List[int]] = None
+        if token_orders is not None and len(token_orders) > 0:
+            token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
+            matched_indices = []
+            for row_idx, r in enumerate(data_rows):
+                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(row_idx)
+                if t_ord in token_orders_set:
+                    matched_indices.append(row_idx)
+            target_scratch_indices = matched_indices
+        elif selected_rows is not None:
+            target_scratch_indices = [int(r) for r in selected_rows if str(r).isdigit() and 0 <= int(r) < len(data_rows)]
 
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_tsv_path = Path(temp_dir) / f"{session_zid}-ephemeral.tsv"
@@ -4054,7 +4071,7 @@ class SqliteStorageAdapter(StorageAdapter):
                 prompt_name=prompt_name,
                 config=self.config,
                 resolved_paths=self.resolved_paths,
-                selected_rows=selected_rows,
+                selected_rows=target_scratch_indices,
                 reprocess=reprocess,
                 zid=zid,
                 trace_id=trace_id,
@@ -4062,10 +4079,25 @@ class SqliteStorageAdapter(StorageAdapter):
 
             if success and temp_tsv_path.exists():
                 _, updated_headers, updated_rows = load_tsv_rows(temp_tsv_path)
-                selected_row_indices = {int(r) for r in selected_rows if str(r).isdigit()} if selected_rows is not None else None
+                selected_set = set(target_scratch_indices) if target_scratch_indices is not None else None
+                upd_col_tord = updated_headers.index("TokenOrder") if "TokenOrder" in updated_headers else col_token_order
+                upd_col_sent = updated_headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in updated_headers else col_sent
+
+                # Build token_order lookup for db_words
+                words_by_token = {
+                    (int(w.get("sentence_index", 1)), str(w.get("token_order", ""))): w
+                    for w in db_words
+                    if w.get("token_order") is not None
+                }
+                words_by_tord = {
+                    str(w.get("token_order", "")): w
+                    for w in db_words
+                    if w.get("token_order") is not None
+                }
+
                 updates_list = []
                 for row_idx, r in enumerate(updated_rows):
-                    if selected_row_indices is not None and row_idx not in selected_row_indices:
+                    if selected_set is not None and row_idx not in selected_set:
                         continue
                     row_updates = {}
                     for col_idx, h in enumerate(updated_headers):
@@ -4073,17 +4105,25 @@ class SqliteStorageAdapter(StorageAdapter):
                             row_updates[h] = r[col_idx]
                     row_updates["word_provenance"] = "live:intellifiller"
 
-                    if row_idx < len(db_words):
-                        w_id = db_words[row_idx].get("id")
+                    t_ord = str(r[upd_col_tord]).strip() if upd_col_tord != -1 and len(r) > upd_col_tord else ""
+                    sent_idx = int(r[upd_col_sent]) if upd_col_sent != -1 and len(r) > upd_col_sent and str(r[upd_col_sent]).isdigit() else 1
+
+                    matched_word = words_by_token.get((sent_idx, t_ord)) or (words_by_tord.get(t_ord) if t_ord else None)
+                    if not matched_word and row_idx < len(db_words_sorted):
+                        matched_word = db_words_sorted[row_idx]
+
+                    if matched_word:
+                        w_id = matched_word.get("id")
                         updates_list.append({
                             "id": w_id,
-                            "token_order": db_words[row_idx].get("token_order", row_idx),
-                            "sentence_index": db_words[row_idx].get("sentence_index", 1),
+                            "token_order": matched_word.get("token_order", int(t_ord) if t_ord.isdigit() else row_idx),
+                            "sentence_index": matched_word.get("sentence_index", sent_idx),
                             "updates": row_updates,
                         })
                     else:
                         updates_list.append({
-                            "token_order": row_idx,
+                            "token_order": int(t_ord) if t_ord.isdigit() else row_idx,
+                            "sentence_index": sent_idx,
                             "updates": row_updates,
                         })
 
@@ -20563,6 +20603,10 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
 
     if is_sqlite:
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
+        col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+        worker_token_orders = None
+        if col_token_order != -1 and selected_rows is not None:
+            worker_token_orders = [data_rows[r][col_token_order] for r in selected_rows if 0 <= r < len(data_rows)]
         storage_adapter.enrich_session_intellifiller(
             session_zid=zid,
             prompt_name=prompt_val,
@@ -20570,6 +20614,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
             reprocess=True,
             zid=zid,
             trace_id=trace_id,
+            token_orders=worker_token_orders,
         )
         comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
         sorted_rows = sort_session_data_rows(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)

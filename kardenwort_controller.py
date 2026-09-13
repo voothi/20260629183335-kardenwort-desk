@@ -1913,10 +1913,11 @@ class SessionArbiter:
     def reword_session(
         self,
         session_zid: str,
-        selected_rows: List[int],
+        selected_rows: Optional[List[int]] = None,
         prompt: Optional[str] = None,
         language: Optional[str] = None,
-        zid: Optional[str] = None
+        zid: Optional[str] = None,
+        token_orders: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -1974,7 +1975,35 @@ class SessionArbiter:
             except Exception:
                 pass
 
-        selected_row_indices = {int(r) for r in selected_rows if str(r).isdigit() and 0 <= int(r) < len(data_rows)} if selected_rows else set()
+        target_row_indices = []
+        target_token_orders = []
+
+        if token_orders is not None and len(token_orders) > 0:
+            token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
+            for idx, r in enumerate(data_rows):
+                t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
+                if t_ord in token_orders_set:
+                    target_row_indices.append(idx)
+                    target_token_orders.append(t_ord)
+        elif selected_rows:
+            for r in selected_rows:
+                if str(r).isdigit() and 0 <= int(r) < len(data_rows):
+                    idx = int(r)
+                    target_row_indices.append(idx)
+                    t_ord = str(data_rows[idx][col_token_order]).strip() if col_token_order != -1 and len(data_rows[idx]) > col_token_order else str(idx)
+                    target_token_orders.append(t_ord)
+                else:
+                    r_str = str(r).strip()
+                    for idx, row in enumerate(data_rows):
+                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(idx)
+                        if t_ord == r_str:
+                            target_row_indices.append(idx)
+                            target_token_orders.append(t_ord)
+
+        # Deduplicate while preserving order
+        target_row_indices = list(dict.fromkeys(target_row_indices))
+        target_token_orders = list(dict.fromkeys(target_token_orders))
+        selected_row_indices = set(target_row_indices)
 
         if selected_row_indices and provider != 'none':
             reword_prov_tag = f"live:{provider}"
@@ -2000,6 +2029,7 @@ class SessionArbiter:
                             selected_rows=list(selected_row_indices),
                             reprocess=True,
                             zid=req_zid,
+                            token_orders=target_token_orders if target_token_orders else None,
                         )
                     except StructuredError:
                         raise
@@ -2021,6 +2051,7 @@ class SessionArbiter:
                         sent = str(lr[col_sent]).strip() if col_sent != -1 and len(lr) > col_sent else "1"
                         if t_ord:
                             loaded_token_map[(sent, t_ord)] = lr
+                            loaded_token_map[t_ord] = lr
                         quot = str(lr[col_quot]).strip() if col_quot != -1 and len(lr) > col_quot else ""
                         lem = str(lr[col_lemma]).strip() if col_lemma != -1 and len(lr) > col_lemma else ""
                         if quot or lem:
@@ -2037,10 +2068,16 @@ class SessionArbiter:
                             matched_lr = None
                             if t_ord and (sent, t_ord) in loaded_token_map:
                                 matched_lr = loaded_token_map[(sent, t_ord)]
+                            elif t_ord and t_ord in loaded_token_map:
+                                matched_lr = loaded_token_map[t_ord]
                             elif (sent, quot, lem) in loaded_token_map:
                                 matched_lr = loaded_token_map[(sent, quot, lem)]
-                            elif r_idx < len(loaded_tsv_rows):
-                                matched_lr = loaded_tsv_rows[r_idx]
+                            elif not is_sqlite and r_idx < len(loaded_tsv_rows):
+                                if col_token_order != -1 and len(loaded_tsv_rows[r_idx]) > col_token_order:
+                                    if str(loaded_tsv_rows[r_idx][col_token_order]).strip() == t_ord:
+                                        matched_lr = loaded_tsv_rows[r_idx]
+                                else:
+                                    matched_lr = loaded_tsv_rows[r_idx]
 
                             if matched_lr:
                                 for c_idx in range(len(matched_lr)):
@@ -2464,6 +2501,7 @@ class SessionArbiter:
         target_lang: Optional[str] = None,
         zid: Optional[str] = None,
         trace_id: Optional[str] = None,
+        token_orders: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
         eff_trace_id = trace_id or f"{session_zid}:retry"
@@ -2505,24 +2543,41 @@ class SessionArbiter:
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else (headers.index('WordDestination') if 'WordDestination' in headers else -1)
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
 
-        data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
+        # If session is active in-memory, preserve its exact data_rows order; otherwise sort initial load
+        with self._lock:
+            if session_zid in self.sessions and self.sessions[session_zid].get("data_rows"):
+                data_rows = [list(r) for r in self.sessions[session_zid]["data_rows"]]
+            else:
+                data_rows = sort_session_data_rows(data_rows, headers, lang, self.config, self.resolved_paths, role_fields=role_fields)
 
         if col_lemma == -1:
             raise StructuredError(ErrorCode.DESK_FAILED, f"Lemma column not found for session {session_zid}")
 
         target_indices = []
-        if row_ids is not None and len(row_ids) > 0:
-            row_ids_set = {str(r) for r in row_ids} | {int(r) for r in row_ids if str(r).isdigit()}
+        if token_orders is not None and len(token_orders) > 0:
+            token_orders_set = {str(to).strip() for to in token_orders if to is not None and str(to).strip() != ""}
             for idx, r in enumerate(data_rows):
                 t_ord = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order else str(idx)
-                if idx in row_ids_set or t_ord in row_ids_set or (t_ord.isdigit() and int(t_ord) in row_ids_set):
+                if t_ord in token_orders_set:
                     target_indices.append(idx)
+        elif row_ids is not None and len(row_ids) > 0:
+            for r in row_ids:
+                if str(r).isdigit() and 0 <= int(r) < len(data_rows):
+                    target_indices.append(int(r))
+                else:
+                    r_str = str(r).strip()
+                    for idx, row in enumerate(data_rows):
+                        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(idx)
+                        if t_ord == r_str:
+                            target_indices.append(idx)
         else:
             for idx, r in enumerate(data_rows):
                 if len(r) > col_lemma and r[col_lemma].strip():
                     dest_val = r[col_word_dest].strip() if col_word_dest != -1 and len(r) > col_word_dest else ""
                     if not dest_val or 'skeleton-loader' in dest_val or dest_val == '[FAILED]':
                         target_indices.append(idx)
+
+        target_indices = list(dict.fromkeys(target_indices))
 
         lemmas_to_retry = []
         seen = set()
@@ -3041,6 +3096,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             session_zid = body.get('session_zid')
             selected_rows = body.get('row_ids') or body.get('selected_rows') or []
+            token_orders = body.get('token_orders')
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
 
@@ -3049,7 +3105,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 selected_rows=selected_rows,
                 prompt=body.get('prompt'),
                 language=body.get('language'),
-                zid=body.get('zid')
+                zid=body.get('zid'),
+                token_orders=token_orders,
             )
             self._send_json(200, res)
             return
@@ -3070,6 +3127,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             elif not isinstance(row_ids, list):
                 row_ids = []
             row_ids = [int(r) for r in row_ids if str(r).isdigit() or isinstance(r, int)]
+            token_orders = body.get('token_orders')
 
             res = self.server.arbiter.retry_session_rows(
                 session_zid=session_zid,
@@ -3078,6 +3136,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 target_lang=body.get('target_lang'),
                 zid=body.get('zid'),
                 trace_id=body.get('trace_id'),
+                token_orders=token_orders,
             )
             self._send_json(200, res)
             return
