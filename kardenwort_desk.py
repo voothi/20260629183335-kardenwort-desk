@@ -1660,17 +1660,37 @@ def _migrate_config(config):
     legacy_main = config.get(SEC_TRANSLATION_PROVIDERS, 'main_text_translation', fallback=None) if config.has_section(SEC_TRANSLATION_PROVIDERS) else None
     legacy_lemmas = config.get(SEC_TRANSLATION_PROVIDERS, 'lemmas_translation', fallback=None) if config.has_section(SEC_TRANSLATION_PROVIDERS) else None
 
-    # Resolve text_base_provider (migrated from main_text_provider or legacy_main)
-    text_base = config.get(SEC_PIPELINE, 'text_base_provider', fallback=None)
-    old_main_text = config.get(SEC_PIPELINE, 'main_text_provider', fallback=None)
-    if text_base is None:
-        if old_main_text is not None:
-            text_base = old_main_text
-        elif legacy_main is not None:
-            text_base = legacy_main
+    # Resolve failover_strategy
+    failover_strategy = config.get(SEC_PIPELINE, 'failover_strategy', fallback=None)
+    if failover_strategy is None:
+        auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=False)
+        failover_strategy = 'offline_fallback' if auto_fallback else 'chain'
+    config.set(SEC_PIPELINE, 'failover_strategy', failover_strategy.strip().lower())
+
+    # Resolve text_provider_chain and text_base_provider:
+    # Single source of truth: text_provider_chain defines the sequence, and chain[0] defines text_base_provider.
+    raw_text_chain = config.get(SEC_PIPELINE, 'text_provider_chain', fallback=None)
+    if raw_text_chain is not None and raw_text_chain.strip():
+        text_chain = raw_text_chain.strip()
+        chain_items = [p.strip().lower() for p in text_chain.split(',') if p.strip()]
+        text_base = chain_items[0] if chain_items else 'google'
+    else:
+        # Backward-compatibility fallback when text_provider_chain is omitted from legacy configs:
+        text_base = config.get(SEC_PIPELINE, 'text_base_provider', fallback=None)
+        old_main_text = config.get(SEC_PIPELINE, 'main_text_provider', fallback=None)
+        if text_base is None:
+            if old_main_text is not None:
+                text_base = old_main_text
+            elif legacy_main is not None:
+                text_base = legacy_main
+            else:
+                text_base = 'google'
+        if failover_strategy == 'offline_fallback' and text_base != 'argos':
+            text_chain = f"{text_base}, argos"
         else:
-            text_base = 'google'
+            text_chain = text_base
     config.set(SEC_PIPELINE, 'text_base_provider', text_base)
+    config.set(SEC_PIPELINE, 'text_provider_chain', text_chain)
 
     # Resolve text_reprocess_provider
     text_reprocess = config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback=None)
@@ -1678,20 +1698,30 @@ def _migrate_config(config):
         text_reprocess = 'deepl'
     config.set(SEC_PIPELINE, 'text_reprocess_provider', text_reprocess)
 
-    # Resolve lemma_base_provider (migrated from base_provider)
-    lemma_base = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback=None)
-    old_base = config.get(SEC_PIPELINE, 'base_provider', fallback=None)
-    if lemma_base is None:
-        if old_base is not None:
-            lemma_base = old_base
-        else:
-            if legacy_main is not None or legacy_lemmas is not None:
-                _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
-            if legacy_main == 'deepl':
-                lemma_base = 'deepl'
+    # Resolve lemma_provider_chain and lemma_base_provider:
+    # Single source of truth: lemma_provider_chain defines the sequence, and chain[0] defines lemma_base_provider.
+    raw_lemma_chain = config.get(SEC_PIPELINE, 'lemma_provider_chain', fallback=None)
+    if raw_lemma_chain is not None and raw_lemma_chain.strip():
+        lemma_chain = raw_lemma_chain.strip()
+        chain_items = [p.strip().lower() for p in lemma_chain.split(',') if p.strip()]
+        lemma_base = chain_items[0] if chain_items else 'google'
+    else:
+        # Backward-compatibility fallback when lemma_provider_chain is omitted from legacy configs:
+        lemma_base = config.get(SEC_PIPELINE, 'lemma_base_provider', fallback=None)
+        old_base = config.get(SEC_PIPELINE, 'base_provider', fallback=None)
+        if lemma_base is None:
+            if old_base is not None:
+                lemma_base = old_base
             else:
-                lemma_base = 'google'
+                if legacy_main is not None or legacy_lemmas is not None:
+                    _warn_deprecated('translation_providers', "Section [translation_providers] is deprecated; map its settings to [pipeline].")
+                if legacy_main == 'deepl':
+                    lemma_base = 'deepl'
+                else:
+                    lemma_base = 'google'
+        lemma_chain = lemma_base
     config.set(SEC_PIPELINE, 'lemma_base_provider', lemma_base)
+    config.set(SEC_PIPELINE, 'lemma_provider_chain', lemma_chain)
 
     # Resolve lemma_reprocess_provider (migrated from enrichment_provider)
     lemma_reprocess = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback=None)
@@ -1709,34 +1739,6 @@ def _migrate_config(config):
             else:
                 lemma_reprocess = 'intellifiller'
     config.set(SEC_PIPELINE, 'lemma_reprocess_provider', lemma_reprocess)
-
-    # Resolve failover_strategy
-    failover_strategy = config.get(SEC_PIPELINE, 'failover_strategy', fallback=None)
-    if failover_strategy is None:
-        auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=False)
-        failover_strategy = 'offline_fallback' if auto_fallback else 'chain'
-    config.set(SEC_PIPELINE, 'failover_strategy', failover_strategy.strip().lower())
-
-    # Resolve text_provider_chain (migrated from text_base_provider)
-    text_chain = config.get(SEC_PIPELINE, 'text_provider_chain', fallback=None)
-    if text_chain is None:
-        if text_base:
-            if failover_strategy == 'offline_fallback' and text_base != 'argos':
-                text_chain = f"{text_base}, argos"
-            else:
-                text_chain = text_base
-        else:
-            text_chain = 'google'
-    config.set(SEC_PIPELINE, 'text_provider_chain', text_chain)
-
-    # Resolve lemma_provider_chain (migrated from lemma_base_provider)
-    lemma_chain = config.get(SEC_PIPELINE, 'lemma_provider_chain', fallback=None)
-    if lemma_chain is None:
-        if lemma_base:
-            lemma_chain = lemma_base
-        else:
-            lemma_chain = 'google'
-    config.set(SEC_PIPELINE, 'lemma_provider_chain', lemma_chain)
 
     # Resolve provider_cooldown_seconds
     cooldown_sec = config.get(SEC_PIPELINE, 'provider_cooldown_seconds', fallback=None)
