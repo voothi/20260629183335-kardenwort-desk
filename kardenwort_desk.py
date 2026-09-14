@@ -16091,12 +16091,23 @@ html, body {{
         window.getFocusedRowId = function() { return focusedRowId; };
 
         function updateEmptySelectionState() {
+            var isAnyDragging = (typeof isDragSelecting !== 'undefined' && isDragSelecting) ||
+                                (typeof isTokenDragSelecting !== 'undefined' && isTokenDragSelecting);
             var lt = document.getElementById('lemma-table');
+            var isDragging = isAnyDragging || (lt && lt.classList.contains('kw-table-dragging'));
+            var emptyRow = document.getElementById('kw-empty-selection-row');
+
+            if (isDragging) {
+                if (emptyRow && emptyRow.parentNode) {
+                    emptyRow.parentNode.removeChild(emptyRow);
+                }
+                return;
+            }
+
             if (!lt) return;
             var tbody = lt.querySelector('tbody');
             if (!tbody) return;
 
-            var emptyRow = document.getElementById('kw-empty-selection-row');
             var isFilterActive = !!(window.AppState && window.AppState.filterSelectedOnly);
 
             if (!isFilterActive) {

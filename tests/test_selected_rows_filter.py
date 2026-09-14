@@ -426,3 +426,38 @@ def test_empty_selection_placeholder_reactivity_on_selecting_word(page, tmp_path
     assert empty_row.is_visible()
 
 
+def test_empty_selection_placeholder_not_shown_during_active_drag(page, tmp_path):
+    """Verifies that while dragging across rows (holding LMB down), the empty selection placeholder is NOT displayed."""
+    html = inject_mock_fetch(get_desk_page_html(tmp_path, text_mode="single"))
+    page.set_content(html)
+
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    filter_btn.click()
+    page.wait_for_timeout(50)
+
+    # Initially row 0 is selected and visible
+    row0 = page.locator("#lemma-table tbody tr[data-row-id='0']")
+    assert row0.is_visible()
+    box0 = row0.bounding_box()
+    assert box0 is not None
+
+    # Hold down Ctrl + LMB down on row 0 to start deselecting drag gesture
+    page.keyboard.down("Control")
+    page.mouse.move(box0["x"] + 20, box0["y"] + box0["height"] / 2)
+    page.mouse.down()
+    page.mouse.move(box0["x"] + 30, box0["y"] + box0["height"] / 2 + 10, steps=3)
+    page.wait_for_timeout(50)
+
+    # While LMB is still down: row 0 is deselected, but placeholder MUST NOT be visible
+    assert page.locator("#kw-empty-selection-row").count() == 0
+
+    # Release mouse
+    page.mouse.up()
+    page.keyboard.up("Control")
+    page.wait_for_timeout(50)
+
+    # Now that drag is finished and all rows are deselected/hidden, placeholder appears
+    assert page.locator("#kw-empty-selection-row").is_visible()
+
+
+
