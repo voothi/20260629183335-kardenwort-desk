@@ -428,7 +428,7 @@ def test_progressive_and_terminal_provenance_playwright(page, tmp_path):
     }""")
 
     assert page.locator("td.col-translation").get_attribute("data-provenance") == "live:argos"
-    assert page.locator("td.col-translation").get_attribute("title") == "Translated via Argos (offline)"
+    assert page.locator("td.col-translation").get_attribute("title") == "новое_слово (Translated via Argos (offline))"
     assert page.locator("td.col-translation .scrollable-cell").text_content() == "новое_слово"
 
     # 3. Terminal finished event preserves provenance and tooltip
@@ -440,7 +440,7 @@ def test_progressive_and_terminal_provenance_playwright(page, tmp_path):
     }""")
 
     assert page.locator("td.col-translation").get_attribute("data-provenance") == "live:argos"
-    assert page.locator("td.col-translation").get_attribute("title") == "Translated via Argos (offline)"
+    assert page.locator("td.col-translation").get_attribute("title") == "новое_слово (Translated via Argos (offline))"
 
 def test_translation_container_word_spans_and_skeleton_proportions(page, tmp_path):
     tsv_path = tmp_path / "20260830180001-sample.en.tsv"
@@ -557,10 +557,10 @@ def test_single_sentence_tokenization_and_retry_tooltips(page, tmp_path):
         });
     }""")
 
-    # Check that retried table cell receives live:argos tooltip
+    # Check that retried table cell receives live:argos tooltip with cell content
     cell = page.locator("td.col-translation")
     assert cell.get_attribute("data-provenance") == "live:argos"
-    assert cell.get_attribute("title") == "Translated via Argos (offline)"
+    assert cell.get_attribute("title") == "яблоко (Translated via Argos (offline))"
 
     # Check that single-sentence span.word elements receive tooltip
     tc = page.locator("#translation-container")
@@ -655,7 +655,7 @@ def test_sqlite_cached_lemma_provenance_tooltips(page, tmp_path):
     cells = page.locator("td.col-translation").all()
     assert len(cells) == 2
     assert cells[0].get_attribute("data-provenance") == "live:argos"
-    assert cells[0].get_attribute("title") == "Translated via Argos (offline)"
+    assert cells[0].get_attribute("title") == "бег (Translated via Argos (offline))"
 
     # When progressive delta arrives with explicit live:argos
     page.evaluate("""() => {
@@ -673,7 +673,7 @@ def test_sqlite_cached_lemma_provenance_tooltips(page, tmp_path):
     }""")
 
     assert cells[0].get_attribute("data-provenance") == "live:argos"
-    assert cells[0].get_attribute("title") == "Translated via Argos (offline)"
+    assert cells[0].get_attribute("title") == "бег (Translated via Argos (offline))"
 
 
 def test_progressive_worker_stores_and_reloads_live_provenance(tmp_path):
@@ -1279,7 +1279,7 @@ de_prompt=test
     )
 
     assert 'data-provenance="cached:sqlite"' in html
-    assert 'title="Loaded from session cache (SQLite)"' in html
+    assert 'title="собака (Loaded from session cache (SQLite))"' in html
 
 
 def test_sqlite_cached_session_frequency_sorted_preserves_provenance_tooltip(tmp_path):
@@ -1363,9 +1363,11 @@ de_prompt=test
         return_children=False,
     )
 
-    # Both rows must receive the data-provenance attribute and tooltip title
+    # Both rows must receive the data-provenance attribute and tooltip title with translation content
     assert html.count('data-provenance="cached:sqlite"') >= 2
-    assert html.count('title="Loaded from session cache (SQLite)"') >= 2
+    assert html.count('(Loaded from session cache (SQLite))') >= 2
+    assert 'title="дом (Loaded from session cache (SQLite))"' in html
+    assert 'title="собака (Loaded from session cache (SQLite))"' in html
 
 
 def test_sqlite_cached_session_new_zid_re_render_restores_provenance_tooltips(tmp_path):
@@ -1460,7 +1462,7 @@ de_prompt=test
 
     # Provenance and tooltips from the cached session must be rendered immediately on the first render
     assert 'data-provenance="live:google"' in html
-    assert 'title="Translated via Google"' in html
+    assert 'title="строка (Translated via Google)"' in html
 
 
 def test_enrich_session_intellifiller_writes_word_provenance_sqlite(tmp_path):

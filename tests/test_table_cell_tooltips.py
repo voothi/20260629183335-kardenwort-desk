@@ -243,6 +243,11 @@ def test_table_cell_tooltips_in_rendered_html(tmp_path):
     assert 'title="hʊnt"' in html_out
     assert 'title="Substantiv, maskulin"' in html_out
 
+    # 7. Verify Translation column titles contain cell content
+    assert 'title="собака"' in html_out
+    assert 'title="кошка"' in html_out
+    assert 'title="дом"' in html_out
+
 
 def test_client_side_js_helpers_parity(page, tmp_path):
     import configparser

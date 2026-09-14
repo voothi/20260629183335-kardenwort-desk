@@ -6299,6 +6299,15 @@ def format_provenance_tooltip(prov, zid=None):
         return f"Translated via fallback ({p})"
     return prov_str
 
+def format_translation_cell_tooltip(translation: Optional[str], provenance: Optional[str] = None, zid: Optional[str] = None) -> str:
+    clean_trans = re.sub(r'<[^>]+>', '', str(translation or "")).strip()
+    if not clean_trans or "skeleton-loader" in clean_trans:
+        return ""
+    p_title = format_provenance_tooltip(provenance, zid=zid)
+    if p_title:
+        return f"{clean_trans} ({p_title})"
+    return clean_trans
+
 def _parse_numbered_response(response_text, n):
     """
     Extract n translations from a numbered response like:
@@ -10467,11 +10476,11 @@ html, body {{
             dynamic_tds += f'<td class="col-classification" data-col="{role}"{cls_title_attr}><div class="scrollable-cell">{inner_html}</div></td>'
 
         prov_attr = ""
-        if prov_val and trans_val and "skeleton-loader" not in trans_val:
-            prov_title = format_provenance_tooltip(prov_val)
-            prov_attr = f' data-provenance="{prov_val}"'
-            if prov_title:
-                prov_attr += f' title="{prov_title}"'
+        if trans_val and "skeleton-loader" not in trans_val:
+            tooltip_title = format_translation_cell_tooltip(trans_val, prov_val)
+            prov_data = f' data-provenance="{prov_val}"' if prov_val else ''
+            prov_title = f' title="{html.escape(tooltip_title)}"' if tooltip_title else ''
+            prov_attr = f'{prov_data}{prov_title}'
 
         row_html_line = (
             f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
@@ -10827,11 +10836,11 @@ html, body {{
                 ov_dynamic_tds += f'<td class="col-classification" data-col="{role}"{ov_cls_title}><div class="scrollable-cell">{inner_html}</div></td>'
 
             ov_prov_attr = ""
-            if ov_prov_val and ov_trans and "skeleton-loader" not in ov_trans:
-                p_title = format_provenance_tooltip(ov_prov_val)
-                ov_prov_attr = f' data-provenance="{ov_prov_val}"'
-                if p_title:
-                    ov_prov_attr += f' title="{p_title}"'
+            if ov_trans and "skeleton-loader" not in ov_trans:
+                ov_tooltip_title = format_translation_cell_tooltip(ov_trans, ov_prov_val)
+                ov_prov_data = f' data-provenance="{ov_prov_val}"' if ov_prov_val else ''
+                ov_prov_title = f' title="{html.escape(ov_tooltip_title)}"' if ov_tooltip_title else ''
+                ov_prov_attr = f'{ov_prov_data}{ov_prov_title}'
 
             all_ids_attr = f' data-all-row-ids="{all_ids_str}"' if all_ids_str else ""
             ov_hl_class = "highlight-orange"
@@ -12239,6 +12248,18 @@ html, body {{
         return prov;
     }
 
+    function formatTranslationCellTooltip(translation, provenance) {
+        var cleanTrans = (translation || '').replace(/<[^>]+>/g, '').trim();
+        if (!cleanTrans || cleanTrans.indexOf('skeleton-loader') !== -1) {
+            return '';
+        }
+        var pTitle = formatProvenanceTooltip(provenance);
+        if (pTitle) {
+            return cleanTrans + ' (' + pTitle + ')';
+        }
+        return cleanTrans;
+    }
+
     function toUnicodeBold(text) {
         if (!text) return "";
         var res = "";
@@ -13450,6 +13471,18 @@ html, body {{
                                     if (!transTd.classList.contains('editing')) {
                                         if (typeof setCellText === 'function') setCellText(transDiv, rTrans);
                                         else transDiv.textContent = rTrans;
+                                        var rProv = rState ? (rState.provenance || rState._provenance || rState.transProvenance) : null;
+                                        if (rProv) {
+                                            transTd.setAttribute('data-provenance', rProv);
+                                            var pTitle = formatTranslationCellTooltip(rTrans, rProv);
+                                            if (pTitle) {
+                                                transTd.setAttribute('title', pTitle);
+                                                if (transDiv !== transTd) {
+                                                    transDiv.setAttribute('data-provenance', rProv);
+                                                    transDiv.setAttribute('title', pTitle);
+                                                }
+                                            }
+                                        }
                                     }
                                 } else {
                                     if (!transTd.classList.contains('editing')) {
@@ -13463,11 +13496,13 @@ html, body {{
                                 if (rProv && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
                                     if (!transDiv.querySelector('.skeleton-loader')) {
                                         transTd.setAttribute('data-provenance', rProv);
-                                        var pTitle = formatProvenanceTooltip(rProv);
-                                        if (pTitle) transTd.setAttribute('title', pTitle);
-                                        if (transDiv !== transTd) {
-                                            transDiv.setAttribute('data-provenance', rProv);
-                                            if (pTitle) transDiv.setAttribute('title', pTitle);
+                                        var pTitle = formatTranslationCellTooltip(transDiv.textContent || transTd.textContent, rProv);
+                                        if (pTitle) {
+                                            transTd.setAttribute('title', pTitle);
+                                            if (transDiv !== transTd) {
+                                                transDiv.setAttribute('data-provenance', rProv);
+                                                transDiv.setAttribute('title', pTitle);
+                                            }
                                         }
                                     }
                                 }
@@ -13729,14 +13764,24 @@ html, body {{
                         if (!transTd) return;
                         var existingProv = transTd.getAttribute('data-provenance') || (transTd.querySelector('.scrollable-cell') ? transTd.querySelector('.scrollable-cell').getAttribute('data-provenance') : null);
                         var effProv = rowProv || existingProv || (effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1 ? 'cached:sqlite' : null);
+                        var transTip = formatTranslationCellTooltip(effectiveVal, effProv);
                         if (effProv && effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1) {
                             transTd.setAttribute('data-provenance', effProv);
-                            var pTitle = formatProvenanceTooltip(effProv);
-                            if (pTitle) transTd.setAttribute('title', pTitle);
+                            if (transTip) transTd.setAttribute('title', transTip);
+                            else transTd.removeAttribute('title');
                             var scrollDiv = transTd.querySelector('.scrollable-cell');
                             if (scrollDiv) {
                                 scrollDiv.setAttribute('data-provenance', effProv);
-                                if (pTitle) scrollDiv.setAttribute('title', pTitle);
+                                if (transTip) scrollDiv.setAttribute('title', transTip);
+                                else scrollDiv.removeAttribute('title');
+                            }
+                        } else if (transTip) {
+                            transTd.removeAttribute('data-provenance');
+                            transTd.setAttribute('title', transTip);
+                            var scrollDiv = transTd.querySelector('.scrollable-cell');
+                            if (scrollDiv) {
+                                scrollDiv.removeAttribute('data-provenance');
+                                scrollDiv.setAttribute('title', transTip);
                             }
                         } else {
                             transTd.removeAttribute('data-provenance');
@@ -16392,6 +16437,17 @@ html, body {{
                 var div = document.createElement('div');
                 div.className = 'scrollable-cell';
                 div.appendChild(document.createTextNode(originalValue));
+                if (colName === 'WordDestination' || cell.classList.contains('col-translation')) {
+                    var curProv = cell.getAttribute('data-provenance');
+                    var origTip = formatTranslationCellTooltip(originalValue, curProv);
+                    if (origTip) {
+                        cell.setAttribute('title', origTip);
+                        div.setAttribute('title', origTip);
+                    } else {
+                        cell.removeAttribute('title');
+                        div.removeAttribute('title');
+                    }
+                }
                 cell.appendChild(div);
                 cell.classList.remove('editing');
                 if (window.forceRepaint) window.forceRepaint();
@@ -16405,6 +16461,17 @@ html, body {{
                 var div = document.createElement('div');
                 div.className = 'scrollable-cell';
                 div.appendChild(document.createTextNode(newValue));
+                if (colName === 'WordDestination' || cell.classList.contains('col-translation')) {
+                    var curProv = cell.getAttribute('data-provenance');
+                    var newTip = formatTranslationCellTooltip(newValue, curProv);
+                    if (newTip) {
+                        cell.setAttribute('title', newTip);
+                        div.setAttribute('title', newTip);
+                    } else {
+                        cell.removeAttribute('title');
+                        div.removeAttribute('title');
+                    }
+                }
                 cell.appendChild(div);
                 cell.classList.remove('editing');
                 if (newValue !== originalValue) {
@@ -17979,7 +18046,11 @@ html, body {{
                         if (effectiveProv && !w.provenance) {
                             w.provenance = effectiveProv;
                         }
-                        var provAttr = effectiveProv ? (' data-provenance="' + escapeHtml(effectiveProv) + '" title="' + escapeHtml(formatProvenanceTooltip(effectiveProv)) + '"') : '';
+                        var transClean = (w.translation || '').replace(/<[^>]+>/g, '').trim();
+                        var transTooltip = (w.translation && w.translation.indexOf('skeleton-loader') === -1) ? formatTranslationCellTooltip(transClean, effectiveProv) : '';
+                        var provData = effectiveProv ? (' data-provenance="' + escapeHtml(effectiveProv) + '"') : '';
+                        var provTitle = transTooltip ? (' title="' + escapeHtml(transTooltip) + '"') : '';
+                        var provAttr = provData + provTitle;
                         var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                         var cardSentenceText = (w.sentence_text || (window.AppState ? window.AppState.sourceText : '') || '');
@@ -19598,7 +19669,10 @@ def render_section(token, ctx):
                     lem_title_attr = f' title="{html.escape(lem_tooltip)}"' if lem_tooltip else ''
                     html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
                 elif t == "translation":
-                    html_output += f'<td class="col-translation">{val}</td>'
+                    prov_val = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else ""
+                    trans_tooltip = format_translation_cell_tooltip(val, prov_val)
+                    trans_title_attr = f' title="{html.escape(trans_tooltip)}"' if trans_tooltip else ''
+                    html_output += f'<td class="col-translation"{trans_title_attr}>{val}</td>'
                 elif t == "ipa":
                     ipa_title_attr = f' title="{html.escape(val)}"' if val else ''
                     html_output += f'<td class="col-ipa"{ipa_title_attr}>{val}</td>'
