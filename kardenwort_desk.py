@@ -11334,26 +11334,26 @@ html, body {{
     color: {text_muted};
   }
   #lemma-table th.col-morphology, #lemma-table td.col-morphology {
-    width: 47%;
+    width: 43%;
     text-align: left;
     color: {text_muted};
   }
   #lemma-table th.col-pos, #lemma-table td.col-pos {
-    width: 5%;
+    width: 7%;
     text-align: center !important;
     padding-left: 6px !important;
     padding-right: 6px !important;
     white-space: nowrap;
   }
   #lemma-table th.col-gender, #lemma-table td.col-gender {
-    width: 4%;
+    width: 7%;
     text-align: center !important;
-    padding-left: 4px !important;
-    padding-right: 4px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
     white-space: nowrap;
   }
   #lemma-table th.col-classification, #lemma-table td.col-classification {
-    width: 8%;
+    width: 7%;
     text-align: center !important;
     padding-left: 6px !important;
     padding-right: 6px !important;
@@ -11419,19 +11419,19 @@ html, body {{
   }
   body:not(.maximized) #lemma-table th.col-morphology,
   body:not(.maximized) #lemma-table td.col-morphology {
-    width: 47%;
+    width: 43%;
   }
   body:not(.maximized) #lemma-table th.col-pos,
   body:not(.maximized) #lemma-table td.col-pos {
-    width: 5%;
+    width: 7%;
   }
   body:not(.maximized) #lemma-table th.col-gender,
   body:not(.maximized) #lemma-table td.col-gender {
-    width: 4%;
+    width: 7%;
   }
   body:not(.maximized) #lemma-table th.col-classification,
   body:not(.maximized) #lemma-table td.col-classification {
-    width: 8%;
+    width: 7%;
     padding-right: 6px;
   }
   th.col-pos, td.col-pos,
@@ -11444,8 +11444,8 @@ html, body {{
     padding-right: 6px !important;
   }
   th.col-gender {
-    padding-left: 4px !important;
-    padding-right: 4px !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
   }
   th.col-classification {
     padding-left: 6px !important;
@@ -19629,17 +19629,17 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         }
         .kw-lemmas-table th.col-pos, .kw-lemmas-table td.col-pos {
             text-align: center;
-            width: 52px;
+            width: 54px;
             white-space: nowrap;
         }
         .kw-lemmas-table th.col-gender, .kw-lemmas-table td.col-gender {
             text-align: center;
-            width: 36px;
+            width: 54px;
             white-space: nowrap;
         }
         .kw-lemmas-table th.col-classification, .kw-lemmas-table td.col-classification {
             text-align: center;
-            width: 68px;
+            width: 54px;
             white-space: nowrap;
         }
         .kw-gender {
