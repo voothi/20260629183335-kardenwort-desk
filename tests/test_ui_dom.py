@@ -820,7 +820,7 @@ def test_progressive_lemma_update_replaces_skeleton_and_sets_provenance(page, tm
     # Verify skeleton is cleared and translated text is displayed in td
     assert "яблоко" in td_trans.inner_text()
     assert td_trans.locator(".skeleton-loader").count() == 0
-    assert td_trans.get_attribute("title") == "Translated via Argos (offline)"
+    assert td_trans.get_attribute("title") == "яблоко (Translated via Argos (offline))"
 
     # Verify translation-container has provenance tooltip and child spans retain it
     tc = page.locator("#translation-container")

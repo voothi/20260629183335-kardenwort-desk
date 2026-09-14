@@ -261,10 +261,10 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     cell_trans = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     assert "новое_здание_reworded" in cell_trans.inner_text()
     assert cell_trans.get_attribute("data-provenance") == "live:intellifiller"
-    assert cell_trans.get_attribute("title") == "Translated via IntelliFiller (AI)"
+    assert cell_trans.get_attribute("title") == "новое_здание_reworded (Translated via IntelliFiller (AI))"
     scroll_div = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] .scrollable-cell")
     assert scroll_div.get_attribute("data-provenance") == "live:intellifiller"
-    assert scroll_div.get_attribute("title") == "Translated via IntelliFiller (AI)"
+    assert scroll_div.get_attribute("title") == "новое_здание_reworded (Translated via IntelliFiller (AI))"
     cell_pos = page.locator("tr[data-row-id='0'] td.col-pos")
     assert cell_pos.inner_text() == "n."
     cell_gender = page.locator("tr[data-row-id='0'] td.col-gender")
