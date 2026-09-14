@@ -446,5 +446,161 @@ def test_sqlite_sentence_card_local_vocabulary_and_inflection_isolation(tmp_path
     assert card2["SentenceDestination"] == "Мальчики здесь."
 
 
+def test_sqlite_update_sentence_translation_rejects_non_positive_and_non_int_indices(tmp_path):
+    db_path = tmp_path / "kardenwort.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_path))
+
+    resolved_paths = {
+        "sqlite_db_path": str(db_path),
+        "kardenwort_workspace": str(tmp_path),
+        "anki_mapping_file": str(tmp_path / "anki-mapping.ini"),
+    }
+
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths)
+    session_zid = "20260914163919"
+
+    # Setup initial sentence at index 1
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-rejection",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Sentence one.",
+        headers=["WordSource", "SentenceSourceIndex", "SentenceDestination"],
+        data_rows=[["word", "1", ""]],
+        sentences=[{"session_zid": session_zid, "sentence_index": 1, "sentence_source": "Sentence one.", "sentence_destination": "Предложение один."}],
+        zid=session_zid,
+    )
+
+    # Attempt invalid updates
+    assert not adapter.update_sentence_translation(session_zid, sentence_index=0, text="Invalid")
+    assert not adapter.update_sentence_translation(session_zid, sentence_index=-1, text="Invalid")
+    assert not adapter.update_sentence_translation(session_zid, sentence_index="1", text="Invalid")  # type: ignore
+    assert not adapter.update_sentence_translation(session_zid, sentence_index="FULL_TEXT", text="Invalid")  # type: ignore
+
+    # Verify sentence 1 is unchanged
+    sents = db.get_sentences_by_session(session_zid)
+    assert sents[0]["sentence_destination"] == "Предложение один."
 
 
+def test_progressive_translation_filters_full_text_from_overwriting_sentence_1(tmp_path, monkeypatch):
+    import threading
+    from unittest.mock import MagicMock
+    from kardenwort_controller import EnrichmentQueue
+
+    db_path = tmp_path / "kardenwort.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.set("storage", "sqlite_db_path", str(db_path))
+    cfg.add_section("pipeline")
+    cfg.set("pipeline", "text_base_provider", "google")
+    cfg.add_section("triggers")
+    cfg.set("triggers", "run_text_translation", "auto")
+
+    resolved_paths = {
+        "sqlite_db_path": str(db_path),
+        "kardenwort_workspace": str(tmp_path),
+        "anki_mapping_file": str(tmp_path / "anki-mapping.ini"),
+        "results_dir": str(tmp_path / "results"),
+    }
+    (tmp_path / "results").mkdir(exist_ok=True)
+
+    db = KardenwortDB(db_path=db_path)
+    db.run_migrations()
+
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths)
+    session_zid = "20260914162929"
+
+    # Multi-sentence session: 3 sentences replicating session 20260914162929
+    s1 = "I get so many Amazon packages delivered during a year and I never think of the actual process that gets my packages to my house."
+    s2 = "Thank you and to every delivery drivers who do this!"
+    s3 = "Y'all are not having it easy but the packages are always pristine and I extremely respect that."
+    full_text = f"{s1} {s2} {s3}"
+
+    trans_s1 = "За год я получаю столько посылок с Amazon, но никогда не задумываюсь о том, как именно они доставляются ко мне домой."
+    trans_s2 = "Спасибо вам и всем курьерам, которые этим занимаются!"
+    trans_s3 = "Вам нелегко приходится, но посылки всегда приходят в идеальном состоянии, и я очень это ценю."
+    trans_full = f"{trans_s1} {trans_s2} {trans_s3}"
+
+    headers = ["WordSource", "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "WordDestination"]
+    data_rows = [
+        ["package", "1", s1, "", ""],
+        ["driver", "2", s2, "", ""],
+        ["pristine", "3", s3, "", ""],
+    ]
+    initial_sentences = [
+        {"session_zid": session_zid, "sentence_index": 1, "sentence_source": s1, "sentence_destination": None},
+        {"session_zid": session_zid, "sentence_index": 2, "sentence_source": s2, "sentence_destination": None},
+        {"session_zid": session_zid, "sentence_index": 3, "sentence_source": s3, "sentence_destination": None},
+    ]
+
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="amazon-packages",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text=full_text,
+        headers=headers,
+        data_rows=data_rows,
+        sentences=initial_sentences,
+        zid=session_zid,
+    )
+
+    # Mock translate_source_text to return dict containing individual numeric keys AND FULL_TEXT metadata
+    mock_payload = {
+        0: trans_s1,
+        1: trans_s2,
+        2: trans_s3,
+        "FULL_TEXT": trans_full,
+        "PADDED": {"0": trans_s1, "1": trans_s2, "2": trans_s3},
+    }
+    monkeypatch.setattr("kardenwort_controller.translate_source_text", lambda *a, **kw: mock_payload)
+
+    # Arbiter mock
+    arbiter = MagicMock()
+    arbiter._lock = threading.Lock()
+    arbiter.storage_adapter = adapter
+    arbiter.config = cfg
+    arbiter.resolved_paths = resolved_paths
+    arbiter.sessions = {
+        session_zid: {
+            "text": full_text,
+            "comments": [],
+            "headers": headers,
+            "data_rows": data_rows,
+            "language": "en",
+            "target_lang": "ru",
+            "text_mode": "single",
+            "tsv_path": str(tmp_path / "results" / f"{session_zid}-test.tsv"),
+        }
+    }
+
+    queue = EnrichmentQueue(config=cfg, resolved_paths=resolved_paths)
+    queue._execute_progressive_task(
+        session_zid=session_zid,
+        arbiter=arbiter,
+        language="en",
+        target_lang="ru",
+        text_mode="single",
+        skip_intellifiller=True,
+    )
+
+    # Verify SQLite sentences table
+    db_sents = db.get_sentences_by_session(session_zid)
+    assert len(db_sents) == 3
+    sents_by_idx = {s["sentence_index"]: s["sentence_destination"] for s in db_sents}
+
+    # Sentence 1 MUST retain only its clean single-sentence translation
+    assert sents_by_idx[1] == trans_s1
+    assert sents_by_idx[1] != trans_full
+    assert sents_by_idx[2] == trans_s2
+    assert sents_by_idx[3] == trans_s3

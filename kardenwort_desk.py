@@ -4115,6 +4115,8 @@ class SqliteStorageAdapter(StorageAdapter):
         """
         Pinpoint atomic SQL update for a sentence translation in the sentences table.
         """
+        if not isinstance(sentence_index, int) or sentence_index <= 0:
+            return False
         allowed_cols = {
             "sentence_destination", "sentence_destination2", "sentence_source_ipa", "sentence_source_audio", "sentence_source"
         }
@@ -19086,8 +19088,10 @@ def run_lookup_flow(
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
     if is_sqlite and isinstance(sentence_translations, dict):
         for s_idx_raw, trans in sentence_translations.items():
+            if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
+                continue
             if trans and isinstance(trans, str):
-                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                s_idx = int(s_idx_raw) + 1
                 try:
                     storage_adapter.update_sentence_translation(zid, s_idx, trans, zid=zid)
                 except Exception:
@@ -21808,10 +21812,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
                         padded_dict = sentence_translations_raw.get('PADDED') or {}
                         for s_idx_raw, trans in sentence_translations_raw.items():
-                            if s_idx_raw in ('FULL_TEXT', 'PADDED'):
+                            if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
                                 continue
                             if trans and isinstance(trans, str):
-                                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                                s_idx = int(s_idx_raw) + 1
                                 try:
                                     storage_adapter.update_sentence_translation(zid, s_idx, trans, target_field="sentence_destination", zid=zid, provenance=active_text_prov)
                                 except Exception:

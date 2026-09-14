@@ -1142,9 +1142,12 @@ class EnrichmentQueue:
                     )
                     active_text_prov = getattr(sentence_translations_raw, "provenance", f"live:{main_text_provider}")
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
+                        padded_dict = sentence_translations_raw.get('PADDED') or {}
                         for s_idx_raw, trans in sentence_translations_raw.items():
+                            if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
+                                continue
                             if trans and isinstance(trans, str):
-                                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                                s_idx = int(s_idx_raw) + 1
                                 try:
                                     storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid, provenance=active_text_prov)
                                 except Exception:
@@ -1152,6 +1155,16 @@ class EnrichmentQueue:
                                         storage_adapter.update_sentence_translation(session_zid, s_idx, trans, zid=req_zid)
                                     except Exception:
                                         pass
+                                if padded_dict:
+                                    padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
+                                    if padded_trans and isinstance(padded_trans, str):
+                                        try:
+                                            storage_adapter.update_sentence_translation(session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=active_text_prov)
+                                        except Exception:
+                                            try:
+                                                storage_adapter.update_sentence_translation(session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid)
+                                            except Exception:
+                                                pass
 
                     resolve_translations(
                         text, text_mode, data_rows, col_sentence_idx, col_sentence_dest,
@@ -1173,8 +1186,12 @@ class EnrichmentQueue:
                         except Exception:
                             pass
                     if not sentences_list and isinstance(sentence_translations_raw, dict):
-                        for s_idx_raw, trans_val in sorted(sentence_translations_raw.items(), key=lambda x: int(x[0]) if (isinstance(x[0], int) or str(x[0]).isdigit()) else 1):
-                            s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                        valid_items = [
+                            (k, v) for k, v in sentence_translations_raw.items()
+                            if k not in ('FULL_TEXT', 'PADDED') and (isinstance(k, int) or str(k).isdigit())
+                        ]
+                        for s_idx_raw, trans_val in sorted(valid_items, key=lambda x: int(x[0])):
+                            s_idx = int(s_idx_raw) + 1
                             sentences_list.append({
                                 "sentence_index": s_idx,
                                 "sentence_source": "",
@@ -2681,10 +2698,10 @@ class SessionArbiter:
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
                         padded_dict = sentence_translations_raw.get('PADDED') or {}
                         for s_idx_raw, trans in sentence_translations_raw.items():
-                            if s_idx_raw in ('FULL_TEXT', 'PADDED'):
+                            if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
                                 continue
                             if trans and isinstance(trans, str):
-                                s_idx = (int(s_idx_raw) + 1) if (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()) else 1
+                                s_idx = int(s_idx_raw) + 1
                                 try:
                                     storage_adapter.update_sentence_translation(session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid)
                                 except Exception:
