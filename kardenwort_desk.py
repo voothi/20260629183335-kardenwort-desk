@@ -973,6 +973,8 @@ class RuntimeTokenConfig:
     apostrophe_chars: str = DEFAULT_APOSTROPHE_CHARS
     token_mappings_enabled: bool = True
     lemmatize_mapped_tokens: bool = True
+    deduplicate_pos_aware: bool = True
+    unify_article_pronoun_lemmas: bool = True
 
     @property
     def combine_source_words_order(self) -> str:
@@ -992,11 +994,15 @@ class RuntimeTokenConfig:
             combine_source_words = config.getboolean(SEC_SETTINGS, "combine_source_words", fallback=False)
             token_mappings_enabled = config.getboolean(SEC_TOKEN_MAPPINGS, "enabled", fallback=True)
             lemmatize_mapped_tokens = config.getboolean(SEC_TOKEN_MAPPINGS, "lemmatize_mapped_tokens", fallback=True)
+            deduplicate_pos_aware = config.getboolean(SEC_SETTINGS, "deduplicate_pos_aware", fallback=True)
+            unify_article_pronoun_lemmas = config.getboolean(SEC_SETTINGS, "unify_article_pronoun_lemmas", fallback=True)
         else:
             filter_by_window = True
             combine_source_words = False
             token_mappings_enabled = True
             lemmatize_mapped_tokens = True
+            deduplicate_pos_aware = True
+            unify_article_pronoun_lemmas = True
 
         if config and hasattr(config, "get"):
             combine_order = config.get(
@@ -1030,6 +1036,8 @@ class RuntimeTokenConfig:
             apostrophe_chars=apostrophe_chars,
             token_mappings_enabled=token_mappings_enabled,
             lemmatize_mapped_tokens=lemmatize_mapped_tokens,
+            deduplicate_pos_aware=deduplicate_pos_aware,
+            unify_article_pronoun_lemmas=unify_article_pronoun_lemmas,
         )
 
 
@@ -8153,6 +8161,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
     prefer_lowercase_cfg = token_config.prefer_lowercase
     filter_by_window = token_config.filter_by_window
+    deduplicate_pos_aware = token_config.deduplicate_pos_aware
+    unify_article_pronoun_lemmas = token_config.unify_article_pronoun_lemmas
 
     is_filtering_window = False
     window_words_exact = set()
@@ -8199,11 +8209,21 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                 if not inf_val or inf_val in POSSESSIVE_DISCARD_TOKENS or inf_val == "s" or quot_val in POSSESSIVE_DISCARD_TOKENS:
                     continue
             pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
-            if not combine_source_words:
-                inf_form_lower = row[col_inflected].strip().lower() if col_inflected != -1 and len(row) > col_inflected else ""
-                key = (w, pos, inf_form_lower)
+            is_unified_der = unify_article_pronoun_lemmas and w == "der"
+            if not deduplicate_pos_aware:
+                effective_pos = ""
+            elif is_unified_der and pos in ("art.", "pron.", "det.", "prep."):
+                effective_pos = "art."
             else:
-                key = (w, pos)
+                effective_pos = pos
+
+            if is_unified_der or not deduplicate_pos_aware:
+                key = (w, effective_pos)
+            elif not combine_source_words:
+                inf_form_lower = row[col_inflected].strip().lower() if col_inflected != -1 and len(row) > col_inflected else ""
+                key = (w, effective_pos, inf_form_lower)
+            else:
+                key = (w, effective_pos)
 
             row_inf_candidates = []
             if col_inflected != -1 and len(row) > col_inflected:
@@ -8237,6 +8257,17 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                                 final_parts.append(p)
                         existing_parts = final_parts
                     deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
+
+                if col_pos != -1 and len(deduped_rows[existing_row_idx]) > col_pos:
+                    if is_unified_der and pos == "art.":
+                        deduped_rows[existing_row_idx][col_pos] = "art."
+                    elif not deduplicate_pos_aware and not deduped_rows[existing_row_idx][col_pos].strip() and pos:
+                        deduped_rows[existing_row_idx][col_pos] = pos
+
+                for c in range(min(len(deduped_rows[existing_row_idx]), len(row))):
+                    if c not in (col_inflected, col_quotation):
+                        if not str(deduped_rows[existing_row_idx][c]).strip() and str(row[c]).strip():
+                            deduped_rows[existing_row_idx][c] = row[c]
                 continue
             if w:
                 seen_words[key] = len(deduped_rows)
@@ -10656,11 +10687,21 @@ html, body {{
         else:
             overview_rows = [list(r) for r in data_rows]
         
+        token_config = RuntimeTokenConfig.from_config(config)
         lemma_pos_to_row_ids = {}
         for r_id, r in enumerate(data_rows):
             lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
             pos_val = r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(r) > col_pos_dedup else ""
-            k = (lem, pos_val) if col_pos_dedup != -1 else lem
+
+            is_unified_der = token_config.unify_article_pronoun_lemmas and lem == "der"
+            if not token_config.deduplicate_pos_aware:
+                eff_pos = ""
+            elif is_unified_der and pos_val in ("art.", "pron.", "det.", "prep."):
+                eff_pos = "art."
+            else:
+                eff_pos = pos_val
+
+            k = (lem, eff_pos) if col_pos_dedup != -1 else lem
             if k not in lemma_pos_to_row_ids:
                 lemma_pos_to_row_ids[k] = []
             lemma_pos_to_row_ids[k].append(r_id)
@@ -10708,7 +10749,16 @@ html, body {{
             
             ov_lem_clean = ov_lemma.strip().lower()
             ov_pos_clean = ov_r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(ov_r) > col_pos_dedup else ""
-            ov_k = (ov_lem_clean, ov_pos_clean) if col_pos_dedup != -1 else ov_lem_clean
+
+            is_ov_unified_der = token_config.unify_article_pronoun_lemmas and ov_lem_clean == "der"
+            if not token_config.deduplicate_pos_aware:
+                ov_eff_pos = ""
+            elif is_ov_unified_der and ov_pos_clean in ("art.", "pron.", "det.", "prep."):
+                ov_eff_pos = "art."
+            else:
+                ov_eff_pos = ov_pos_clean
+
+            ov_k = (ov_lem_clean, ov_eff_pos) if col_pos_dedup != -1 else ov_lem_clean
             matched_ids = lemma_pos_to_row_ids.get(ov_k) or lemma_pos_to_row_ids.get(ov_lem_clean) or [ov_id]
             primary_id = next((mid for mid in matched_ids if mid not in used_primary_ids), matched_ids[0])
             used_primary_ids.add(primary_id)

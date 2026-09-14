@@ -1809,6 +1809,9 @@ def test_runtime_token_config_initialization_and_immutability():
     assert cfg.filter_by_window is True
     assert cfg.apostrophe_chars == DEFAULT_APOSTROPHE_CHARS
     assert cfg.token_mappings_enabled is True
+    assert cfg.lemmatize_mapped_tokens is True
+    assert cfg.deduplicate_pos_aware is True
+    assert cfg.unify_article_pronoun_lemmas is True
     assert cfg.combine_source_words_order == DEFAULT_COMBINE_ORDER
     assert cfg.combine_source_words_prefer_lowercase is True
 
@@ -1823,9 +1826,13 @@ def test_runtime_token_config_initialization_and_immutability():
     cp.add_section(SEC_SETTINGS)
     cp.set(SEC_SETTINGS, "combine_source_words", "true")
     cp.set(SEC_SETTINGS, "combine_source_words_order", "settings_order")
+    cp.set(SEC_SETTINGS, "deduplicate_pos_aware", "false")
+    cp.set(SEC_SETTINGS, "unify_article_pronoun_lemmas", "false")
     cfg_from_settings = RuntimeTokenConfig.from_config(cp)
     assert cfg_from_settings.combine_source_words is True
     assert cfg_from_settings.combine_order == "settings_order"
+    assert cfg_from_settings.deduplicate_pos_aware is False
+    assert cfg_from_settings.unify_article_pronoun_lemmas is False
 
     cp.add_section(SEC_TOKEN_MAPPINGS)
     cp.set(SEC_TOKEN_MAPPINGS, "combine_source_words_order", "mappings_order")
@@ -1834,6 +1841,64 @@ def test_runtime_token_config_initialization_and_immutability():
 
     # Test that passing a RuntimeTokenConfig instance to from_config returns it directly
     assert RuntimeTokenConfig.from_config(cfg) is cfg
+
+
+def test_deduplicate_rows_unify_article_pronoun_lemmas():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'deduplicate_pos_aware', 'true')
+    config.set(SEC_SETTINGS, 'unify_article_pronoun_lemmas', 'true')
+    config.set(SEC_SETTINGS, 'combine_source_words', 'false')
+    config.set(SEC_SETTINGS, 'filter_inflected_by_window', 'false')
+
+    data_rows = [
+        ["die", "der", "pron."],
+        ["den, zur", "der", "art."],
+    ]
+
+    deduped = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config)
+
+    assert len(deduped) == 1
+    assert deduped[0][1] == "der"
+    assert deduped[0][2] == "art."
+    # Combined inflected forms cleanly merged and sorted
+    assert "die" in deduped[0][0]
+    assert "den" in deduped[0][0]
+    assert "zur" in deduped[0][0]
+
+
+def test_deduplicate_rows_pos_aware_toggle():
+    import kardenwort_desk as desk
+    import configparser
+
+    config_strict = configparser.ConfigParser()
+    config_strict.add_section(SEC_SETTINGS)
+    config_strict.set(SEC_SETTINGS, 'deduplicate_pos_aware', 'true')
+    config_strict.set(SEC_SETTINGS, 'unify_article_pronoun_lemmas', 'false')
+    config_strict.set(SEC_SETTINGS, 'combine_source_words', 'true')
+    config_strict.set(SEC_SETTINGS, 'filter_inflected_by_window', 'false')
+
+    data_rows = [
+        ["run", "run", "v."],
+        ["runs", "run", "n."],
+    ]
+
+    deduped_strict = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config_strict)
+    assert len(deduped_strict) == 2
+
+    config_unified = configparser.ConfigParser()
+    config_unified.add_section(SEC_SETTINGS)
+    config_unified.set(SEC_SETTINGS, 'deduplicate_pos_aware', 'false')
+    config_unified.set(SEC_SETTINGS, 'unify_article_pronoun_lemmas', 'false')
+    config_unified.set(SEC_SETTINGS, 'combine_source_words', 'true')
+    config_unified.set(SEC_SETTINGS, 'filter_inflected_by_window', 'false')
+
+    deduped_unified = desk.deduplicate_rows(data_rows, col_word_source=1, col_pos=2, col_inflected=0, config=config_unified)
+    assert len(deduped_unified) == 1
+    assert deduped_unified[0][1] == "run"
 
 
 def test_batch_merge_config_initialization_and_immutability():

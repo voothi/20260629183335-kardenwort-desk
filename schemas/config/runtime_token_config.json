@@ -39,6 +39,16 @@
       "type": "boolean",
       "default": true,
       "description": "Whether tokens resolved via mapping rules undergo further lemmatization."
+    },
+    "deduplicate_pos_aware": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether table row deduplication segregates rows strictly by (lemma, pos)."
+    },
+    "unify_article_pronoun_lemmas": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether German article and pronoun variants sharing base lemma 'der' are consolidated into a single row."
     }
   },
   "required": [
@@ -48,7 +58,9 @@
     "filter_by_window",
     "apostrophe_chars",
     "token_mappings_enabled",
-    "lemmatize_mapped_tokens"
+    "lemmatize_mapped_tokens",
+    "deduplicate_pos_aware",
+    "unify_article_pronoun_lemmas"
   ],
   "additionalProperties": false
 }
