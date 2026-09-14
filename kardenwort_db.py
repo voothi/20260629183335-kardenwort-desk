@@ -2061,7 +2061,7 @@ class KardenwortDB:
             WHERE (w.lemma = ? OR w.quotation = ? OR w.inflected_form = ?)
               AND s.deleted_at IS NULL
               AND (
-                  (w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%' AND w.word_destination NOT LIKE '%btn-retry-cell%')
+                  (w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%')
                   OR (w.ipa IS NOT NULL AND trim(w.ipa) != '' AND w.ipa NOT LIKE '%skeleton-loader%')
                   OR (w.morphology IS NOT NULL AND trim(w.morphology) != '' AND w.morphology NOT LIKE '%skeleton-loader%')
               )
@@ -2077,7 +2077,7 @@ class KardenwortDB:
             params.append(exclude_zid)
 
         sql += """ ORDER BY 
-            (CASE WHEN w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%' AND w.word_destination NOT LIKE '%btn-retry-cell%' THEN 1 ELSE 0 END) DESC,
+            (CASE WHEN w.word_destination IS NOT NULL AND trim(w.word_destination) != '' AND w.word_destination NOT LIKE '%skeleton-loader%' THEN 1 ELSE 0 END) DESC,
             s.created_at DESC LIMIT ?;"""
         params.append(limit)
 

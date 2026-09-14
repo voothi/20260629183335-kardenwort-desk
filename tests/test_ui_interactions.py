@@ -4525,10 +4525,10 @@ def test_source_text_token_range_lmb_audio_interactions(page):
     assert play_calls[0]["arg"].endswith("de\\nHaus")
 
 
-def test_render_row_unresolved_terminal_renders_retry_badge(page):
+def test_render_row_unresolved_terminal_clears_skeleton_without_retry_badge(page):
     """
-    Verify AppState.renderRow renders .btn-retry-cell badge for unresolved cell
-    when globalStage is finished or lastError is present.
+    Verify AppState.renderRow cleanly clears skeleton for unresolved cell
+    when globalStage is finished or lastError is present without rendering .btn-retry-cell.
     """
     html = """<!DOCTYPE html>
 <html>
@@ -4565,16 +4565,16 @@ def test_render_row_unresolved_terminal_renders_retry_badge(page):
         });
     """)
 
-    # Verify that .btn-retry-cell is rendered
-    retry_btn = page.locator(".btn-retry-cell")
-    assert retry_btn.count() == 1
-    assert retry_btn.get_attribute("data-row-id") == "0"
-    assert "Retry" in retry_btn.inner_text()
+    # Verify that skeleton is removed and NO .btn-retry-cell is rendered
+    assert page.locator(".skeleton-loader").count() == 0
+    assert page.locator(".btn-retry-cell").count() == 0
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] .scrollable-cell")
+    assert cell.inner_text().strip() == ""
 
 
-def test_retry_cell_click_dispatches_retry_endpoint_and_resolves_inplace(page):
+def test_retry_row_programmatic_dispatches_retry_endpoint_and_resolves_inplace(page):
     """
-    Verify that clicking .btn-retry-cell transitions cell to skeleton loader,
+    Verify that programmatic window.retryRow transitions cell to skeleton loader,
     dispatches POST /session/retry with row_ids: [0], and updates text in-place.
     """
     html = """<!DOCTYPE html>
@@ -4588,7 +4588,7 @@ def test_retry_cell_click_dispatches_retry_endpoint_and_resolves_inplace(page):
       <tr data-row-id="0">
         <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Häuser</div></td>
         <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
-        <td data-col="WordDestination"><div class="scrollable-cell"><button class="btn-retry-cell" data-row-id="0">Retry</button></div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"></div></td>
         <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
         <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
       </tr>
@@ -4625,11 +4625,8 @@ def test_retry_cell_click_dispatches_retry_endpoint_and_resolves_inplace(page):
     """)
     page.evaluate(extract_desk_js())
 
-    retry_btn = page.locator(".btn-retry-cell")
-    assert retry_btn.count() == 1
-
-    # Click the retry button
-    retry_btn.click()
+    # Call retryRow programmatically
+    page.evaluate("window.retryRow('0')")
 
     page.wait_for_function("() => window.__retryCalls && window.__retryCalls.length > 0", timeout=3000)
     calls = page.evaluate("window.__retryCalls")
@@ -4644,10 +4641,10 @@ def test_retry_cell_click_dispatches_retry_endpoint_and_resolves_inplace(page):
     assert page.locator(".btn-retry-cell").count() == 0
 
 
-def test_retry_session_toast_triggers_batch_retry(page):
+def test_watchdog_cleanup_clears_skeletons_and_shows_toast(page):
     """
-    Verify that watchdog timeout renders retry badges and clicking the toast
-    triggers batch retry for the session.
+    Verify that watchdog timeout cleans up skeleton loaders and displays warning toast
+    without injecting retry buttons.
     """
     html = """<!DOCTYPE html>
 <html>
@@ -4673,25 +4670,7 @@ def test_retry_session_toast_triggers_batch_retry(page):
     page.set_content(html)
 
     page.evaluate("""
-        window.__retryCalls = [];
         window.fetch = function(url, options) {
-            if (options && options.method === 'POST' && String(url).indexOf('/session/retry') !== -1) {
-                window.__retryCalls.push({
-                    url: String(url),
-                    method: options.method,
-                    body: options.body ? JSON.parse(options.body) : null
-                });
-                return Promise.resolve({
-                    ok: true,
-                    status: 200,
-                    json: function() {
-                        return Promise.resolve({
-                            status: "success",
-                            rows: { "0": { "trans": "House" } }
-                        });
-                    }
-                });
-            }
             return Promise.resolve({
                 ok: true,
                 status: 200,
@@ -4704,23 +4683,14 @@ def test_retry_session_toast_triggers_batch_retry(page):
     # Trigger watchdog cleanup
     page.evaluate("window.cleanupOrphanSkeletons()")
 
-    # Skeletons converted to retry buttons
+    # Skeletons removed cleanly without retry buttons
     assert page.locator(".skeleton-loader").count() == 0
-    assert page.locator(".btn-retry-cell").count() == 1
+    assert page.locator(".btn-retry-cell").count() == 0
 
     # Toast displayed
     toast = page.locator(".kw-toast-warning")
     assert toast.is_visible()
-    assert "Some translations timed out. Click to retry." in toast.inner_text()
-
-    # Click toast to trigger batch retry
-    toast.click()
-
-    page.wait_for_function("() => window.__retryCalls && window.__retryCalls.length > 0", timeout=3000)
-    calls = page.evaluate("window.__retryCalls")
-    assert len(calls) == 1
-    assert calls[0]["url"] == "/session/retry"
-    assert calls[0]["body"]["session_zid"] == "20260828120000"
+    assert "Background loading timed out. Restored table editing." in toast.inner_text()
 
 
 def test_workspace_tabs_switching_and_filtering(page):
@@ -5065,7 +5035,7 @@ def test_immediate_translation_retry_rendering_on_text_stage_failure(page):
     """
     Verify that when text translation fails during progressive execution (stage="translated_text",
     textTranslationStatus="failed" or textTranslationFailed=true), #translation-container immediately
-    renders the interactive Retry button (.btn-retry-cell) while lemma translation is still pending (isFinished=false).
+    cleans up the skeleton without rendering a retry button while lemma translation is still pending (isFinished=false).
     """
     html = """<!DOCTYPE html>
 <html>
@@ -5115,21 +5085,19 @@ def test_immediate_translation_retry_rendering_on_text_stage_failure(page):
     assert is_finished is False
     assert text_failed is True
 
-    # Verify that #translation-container immediately renders the Retry button without waiting for isFinished
+    # Verify that #translation-container immediately cleans up skeleton without waiting for isFinished
     assert tc.locator(".skeleton-loader").count() == 0
-    retry_btn = tc.locator(".btn-retry-cell")
-    assert retry_btn.count() == 1
-    assert "Retry" in retry_btn.inner_text()
-    assert retry_btn.get_attribute("data-action") == "retry-text"
+    assert tc.locator(".btn-retry-cell").count() == 0
+    assert tc.inner_text().strip() == ""
 
     # Lemma cell should still have its skeleton loader since lemmas are still pending
     assert page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] .skeleton-loader").count() == 1
 
 
-def test_watchdog_timeout_converts_translation_container_to_retry_badge(page):
+def test_watchdog_timeout_cleans_translation_container_without_retry_badge(page):
     """
-    Verify that cleanupOrphanSkeletons converts pending translation container
-    into an interactive .btn-retry-cell retry badge.
+    Verify that cleanupOrphanSkeletons cleanly strips skeleton from translation container
+    without inserting a retry badge.
     """
     html = """<!DOCTYPE html>
 <html>
@@ -5152,17 +5120,14 @@ def test_watchdog_timeout_converts_translation_container_to_retry_badge(page):
     # Call cleanupOrphanSkeletons (simulating watchdog timeout)
     page.evaluate("window.cleanupOrphanSkeletons()")
 
-    # Skeletons removed, retry button in container
+    # Skeletons removed, NO retry button in container
     assert tc.locator(".skeleton-loader").count() == 0
-    retry_btn = tc.locator(".btn-retry-cell")
-    assert retry_btn.count() == 1
-    assert "Retry" in retry_btn.inner_text()
+    assert tc.locator(".btn-retry-cell").count() == 0
 
 
-def test_unified_batch_retry_from_container_retry_badge(page):
+def test_batch_retry_session_endpoint_populates_results(page):
     """
-    Verify that clicking .btn-retry-cell in #translation-container switches
-    all retry badges on the page to skeletons and executes batch retry POST.
+    Verify that window.retrySession executes batch retry POST and populates results.
     """
     html = """<!DOCTYPE html>
 <html>
@@ -5170,15 +5135,13 @@ def test_unified_batch_retry_from_container_retry_badge(page):
 <body data-web-mode="true" data-zid="20260829100000">
 <div class="container">
   <div id="session-zid">20260829100000</div>
-  <div class="translation-text" id="translation-container">
-    <button class="btn-retry-cell" data-action="retry-text">Retry</button>
-  </div>
+  <div class="translation-text" id="translation-container"></div>
   <table id="lemma-table">
     <tbody>
       <tr data-row-id="0">
         <td data-col="WordSourceInflectedForm"><div class="scrollable-cell">Haus</div></td>
         <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
-        <td data-col="WordDestination"><div class="scrollable-cell"><button class="btn-retry-cell" data-row-id="0">Retry</button></div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"></div></td>
         <td data-col="WordSourceIPA"><div class="scrollable-cell">[haʊ̯s]</div></td>
         <td data-col="WordSourceMorphologyAI"><div class="scrollable-cell">noun</div></td>
       </tr>
@@ -5220,12 +5183,8 @@ def test_unified_batch_retry_from_container_retry_badge(page):
     """)
     page.evaluate(extract_desk_js())
 
-    container_retry_btn = page.locator("#translation-container .btn-retry-cell")
-    assert container_retry_btn.count() == 1
-    assert page.locator(".btn-retry-cell").count() == 2
-
-    # Click the container retry button
-    container_retry_btn.click()
+    # Call retrySession
+    page.evaluate("window.retrySession('20260829100000')")
 
     page.wait_for_function("() => window.__retryCalls && window.__retryCalls.length > 0", timeout=3000)
     calls = page.evaluate("window.__retryCalls")
@@ -5239,8 +5198,8 @@ def test_unified_batch_retry_from_container_retry_badge(page):
     assert page.locator(".btn-retry-cell").count() == 0
 
 
-def test_render_row_preserves_retry_badge_on_empty_trans_update(page):
-    """Verifies that renderRow never overwrites an existing .btn-retry-cell with an empty string when empty deltas arrive."""
+def test_render_row_preserves_existing_text_on_empty_trans_update(page):
+    """Verifies that renderRow preserves existing text when empty deltas arrive."""
     html = """
     <div id="session-zid">20260829100000</div>
     <div id="kw-toast-container"></div>
@@ -5249,7 +5208,7 @@ def test_render_row_preserves_retry_badge_on_empty_trans_update(page):
       <tr data-row-id="0">
         <td><div class="scrollable-cell">Haus</div></td>
         <td><div class="scrollable-cell">Haus</div></td>
-        <td><div class="scrollable-cell"><button class="btn-retry-cell" data-row-id="0" title="Retry translation">Retry</button></div></td>
+        <td><div class="scrollable-cell">House</div></td>
         <td><div class="scrollable-cell"></div></td>
         <td><div class="scrollable-cell"></div></td>
       </tr>
@@ -5258,7 +5217,7 @@ def test_render_row_preserves_retry_badge_on_empty_trans_update(page):
     page.set_content(html)
     page.evaluate(extract_desk_js())
 
-    assert page.locator("tr[data-row-id='0'] .btn-retry-cell").count() == 1
+    assert page.locator("tr[data-row-id='0'] td:nth-child(3)").inner_text() == "House"
 
     # Simulate intermediate delta update with empty trans
     page.evaluate("""
@@ -5268,12 +5227,12 @@ def test_render_row_preserves_retry_badge_on_empty_trans_update(page):
         });
     """)
 
-    # Verify retry button was NOT erased to blank empty string
-    assert page.locator("tr[data-row-id='0'] .btn-retry-cell").count() == 1
+    # Verify text was preserved
+    assert page.locator("tr[data-row-id='0'] td:nth-child(3)").inner_text() == "House"
 
 
-def test_is_finished_populates_all_blank_cells_with_retry_badges(page):
-    """Verifies that on isFinished, all blank/untranslated table cells and translation container receive retry badges."""
+def test_is_finished_cleans_all_blank_cells_without_retry_badges(page):
+    """Verifies that on isFinished, untranslated table cells and translation container remain clean empty cells."""
     html = """
     <div id="session-zid">20260829100000</div>
     <div id="kw-toast-container"></div>
@@ -5282,14 +5241,14 @@ def test_is_finished_populates_all_blank_cells_with_retry_badges(page):
       <tr data-row-id="0">
         <td><div class="scrollable-cell">in</div></td>
         <td><div class="scrollable-cell">in</div></td>
-        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true">...</span></div></td>
         <td><div class="scrollable-cell"></div></td>
         <td><div class="scrollable-cell"></div></td>
       </tr>
       <tr data-row-id="1">
         <td><div class="scrollable-cell">pass</div></td>
         <td><div class="scrollable-cell">pass</div></td>
-        <td><div class="scrollable-cell"></div></td>
+        <td><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true">...</span></div></td>
         <td><div class="scrollable-cell"></div></td>
         <td><div class="scrollable-cell"></div></td>
       </tr>
@@ -5298,8 +5257,9 @@ def test_is_finished_populates_all_blank_cells_with_retry_badges(page):
     page.set_content(html)
     page.evaluate(extract_desk_js())
 
-    # Initially 0 retry buttons
+    # Initially 0 retry buttons, 2 skeletons
     assert page.locator(".btn-retry-cell").count() == 0
+    assert page.locator(".skeleton-loader").count() == 2
 
     # Simulate terminal finish from worker where translations remained empty
     page.evaluate("""
@@ -5315,16 +5275,12 @@ def test_is_finished_populates_all_blank_cells_with_retry_badges(page):
         });
     """)
 
-    # Verify both rows and translation container received retry badges
-    assert page.locator("#translation-container .btn-retry-cell").count() == 1
-    assert page.locator("tr[data-row-id='0'] .btn-retry-cell").count() == 1
-    assert page.locator("tr[data-row-id='1'] .btn-retry-cell").count() == 1
-    assert page.locator(".btn-retry-cell").count() == 3
-
-    # Verify warning toast is shown
-    toast = page.locator(".kw-toast-warning")
-    assert toast.is_visible()
-    assert "Some translations could not be retrieved" in toast.inner_text()
+    # Verify both rows and translation container are clean without retry badges or skeletons
+    assert page.locator("#translation-container .btn-retry-cell").count() == 0
+    assert page.locator("tr[data-row-id='0'] .btn-retry-cell").count() == 0
+    assert page.locator("tr[data-row-id='1'] .btn-retry-cell").count() == 0
+    assert page.locator(".btn-retry-cell").count() == 0
+    assert page.locator(".skeleton-loader").count() == 0
 
 
 def test_workspace_tabs_dynamic_translation_and_render_translated_text(page):
@@ -5680,11 +5636,10 @@ def test_separable_verb_multi_sentence_click_interaction(page, tmp_path, monkeyp
     assert spoken_inf_prep_an == "an"
 
 
-def test_watchdog_hard_ceiling_enforcement_and_skeleton_cleanup(page):
+def test_watchdog_timeout_skeleton_cleanup_without_retry_buttons(page):
     """
-    Verify that when total active elapsed time reaches hardCeilingMs (35s),
-    watchdog extensions are rejected even if stage: 'translating',
-    skeletons are cleaned up, and inline Retry buttons are rendered.
+    Verify that when total active elapsed time reaches safety budget and worker is not busy,
+    skeletons are cleaned up without rendering inline Retry buttons.
     """
     html = """<!DOCTYPE html>
 <html>
@@ -5724,7 +5679,7 @@ def test_watchdog_hard_ceiling_enforcement_and_skeleton_cleanup(page):
                         status: "success",
                         data: {
                             is_finished: false,
-                            stage: "translating",
+                            stage: "idle",
                             zid: "20260913123000"
                         }
                     });
@@ -5734,16 +5689,15 @@ def test_watchdog_hard_ceiling_enforcement_and_skeleton_cleanup(page):
     """)
     page.evaluate(extract_desk_js())
 
-    # Verify hard ceiling is exposed and configured to 35000ms
-    hard_ceiling = page.evaluate("window._kwWatchdogHardCeilingMs")
-    assert hard_ceiling == 35000
+    # Verify hard ceiling is not exposed
+    assert page.evaluate("window._kwWatchdogHardCeilingMs") is None
 
     # Skeletons present initially
     assert page.locator(".skeleton-loader").count() >= 1
 
-    # Simulate elapsed time reaching the hard ceiling (>= 35000ms)
+    # Simulate elapsed time reaching timeout
     page.evaluate("""
-        window._kwGetActiveElapsedMs = function() { return 36000; };
+        window._kwGetActiveElapsedMs = function() { return 31000; };
         if (window.cleanupOrphanSkeletons) {
             window.cleanupOrphanSkeletons();
         }
@@ -5754,9 +5708,8 @@ def test_watchdog_hard_ceiling_enforcement_and_skeleton_cleanup(page):
     assert page.locator(".skeleton-loader").count() == 0
     assert page.locator("[data-pending='true']").count() == 0
 
-    # Verify inline retry buttons rendered in translation container and table
-    retry_buttons = page.locator(".btn-retry-cell")
-    assert retry_buttons.count() >= 1
+    # Verify NO inline retry buttons rendered
+    assert page.locator(".btn-retry-cell").count() == 0
 
     # Warning toast displayed
     toast = page.locator(".kw-toast-warning")
@@ -5764,10 +5717,10 @@ def test_watchdog_hard_ceiling_enforcement_and_skeleton_cleanup(page):
     assert "Background loading timed out" in toast.inner_text()
 
 
-def test_watchdog_busy_within_ceiling_extends_budget(page):
+def test_watchdog_busy_extends_budget_without_hard_ceiling(page):
     """
-    Verify that when stage: 'translating' and elapsed < hardCeilingMs,
-    cleanupOrphanSkeletons extends budget and preserves skeleton loading.
+    Verify that when stage: 'translating', cleanupOrphanSkeletons extends budget
+    and preserves skeleton loading without an artificial hard ceiling.
     """
     html = """<!DOCTYPE html>
 <html>
@@ -5811,17 +5764,17 @@ def test_watchdog_busy_within_ceiling_extends_budget(page):
     initial_budget = page.evaluate("window._kwWatchdogMaxBudgetMs")
     assert initial_budget == 30000
 
-    # Simulate trigger at 20s (under ceiling of 35s)
+    # Simulate trigger at 30s while translating
     page.evaluate("""
-        window._kwGetActiveElapsedMs = function() { return 20000; };
+        window._kwGetActiveElapsedMs = function() { return 30000; };
         if (window.cleanupOrphanSkeletons) {
             window.cleanupOrphanSkeletons();
         }
     """)
 
-    # Budget should extend up to 35000ms
-    page.wait_for_function("() => window._kwWatchdogMaxBudgetMs === 35000", timeout=5000)
-    # Skeletons still present (not converted to retry buttons yet)
+    # Budget should extend beyond 35000ms (30000 + 15000 = 45000ms)
+    page.wait_for_function("() => window._kwWatchdogMaxBudgetMs === 45000", timeout=5000)
+    # Skeletons still present (not purged or converted to retry buttons)
     assert page.locator(".skeleton-loader").count() >= 1
     assert page.locator(".btn-retry-cell").count() == 0
 

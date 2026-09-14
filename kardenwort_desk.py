@@ -3387,13 +3387,13 @@ class SqliteStorageAdapter(StorageAdapter):
                     existing_w = existing_words_by_lemma.get(lemma.strip().lower(), {})
                 effective_w_dest = (
                     w_dest
-                    if (w_dest and "skeleton-loader" not in w_dest and "btn-retry-cell" not in w_dest)
+                    if (w_dest and "skeleton-loader" not in w_dest)
                     else existing_w.get("word_destination")
                 )
                 effective_w_prov = (
                     prov_from_arg
                     or existing_w.get("word_provenance")
-                    or ("cached:sqlite" if (effective_w_dest and "skeleton-loader" not in str(effective_w_dest) and "btn-retry-cell" not in str(effective_w_dest)) else None)
+                    or ("cached:sqlite" if (effective_w_dest and "skeleton-loader" not in str(effective_w_dest)) else None)
                 )
 
                 word_entry = {
@@ -9487,7 +9487,7 @@ html, body {{
         # and prov_val lookup at render time uses token_order_val, not the sorted position index.
         if col_word_dest != -1:
             for r_i, r in enumerate(data_rows):
-                if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest] and "btn-retry-cell" not in r[col_word_dest]:
+                if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest]:
                     t_ord_str = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
                     if t_ord_str not in row_provenances:
                         row_provenances[t_ord_str] = "cached:sqlite"
@@ -10465,7 +10465,7 @@ html, body {{
             dynamic_tds += f'<td class="col-classification" data-col="{role}"{cls_title_attr}><div class="scrollable-cell">{inner_html}</div></td>'
 
         prov_attr = ""
-        if prov_val and trans_val and "skeleton-loader" not in trans_val and "btn-retry-cell" not in trans_val:
+        if prov_val and trans_val and "skeleton-loader" not in trans_val:
             prov_title = format_provenance_tooltip(prov_val)
             prov_attr = f' data-provenance="{prov_val}"'
             if prov_title:
@@ -10825,7 +10825,7 @@ html, body {{
                 ov_dynamic_tds += f'<td class="col-classification" data-col="{role}"{ov_cls_title}><div class="scrollable-cell">{inner_html}</div></td>'
 
             ov_prov_attr = ""
-            if ov_prov_val and ov_trans and "skeleton-loader" not in ov_trans and "btn-retry-cell" not in ov_trans:
+            if ov_prov_val and ov_trans and "skeleton-loader" not in ov_trans:
                 p_title = format_provenance_tooltip(ov_prov_val)
                 ov_prov_attr = f' data-provenance="{ov_prov_val}"'
                 if p_title:
@@ -11567,35 +11567,6 @@ html, body {{
     0% { background-position: 0% 50% }
     50% { background-position: 100% 50% }
     100% { background-position: 0% 50% }
-  }
-  .btn-retry-cell {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    font-family: inherit;
-    font-size: 11px;
-    font-weight: 500;
-    line-height: 1;
-    padding: 2px 6px;
-    border-radius: 3px;
-    border: 1px solid {section_border};
-    background: {input_bg};
-    color: {text_muted};
-    cursor: pointer;
-    text-decoration: none;
-    user-select: none;
-    -webkit-user-select: none;
-    transition: background-color 0.15s, border-color 0.15s, color 0.15s;
-    vertical-align: middle;
-  }
-  .btn-retry-cell:hover:not(:disabled) {
-    background: {toolbar_btn_hover};
-    color: {text_color};
-    border-color: {text_muted};
-  }
-  .btn-retry-cell:disabled {
-    opacity: 0.5;
-    cursor: not-allowed;
   }
   .level-3k {
     color: {level_3k_color};
@@ -12554,7 +12525,7 @@ html, body {{
     function tokenizeTranslation() {
         var tc = document.getElementById('translation-container');
         if (!tc) return;
-        if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader') || tc.querySelector('.btn-retry-cell')) {
+        if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader')) {
             return;
         }
 
@@ -13376,7 +13347,7 @@ html, body {{
                     if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader') || !tc.textContent.trim())) {
                         tc.classList.remove('skeleton-loader');
                         tc.removeAttribute('data-pending');
-                        tc.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                        tc.innerHTML = window.AppState.translatedText || '';
                         updated = true;
                     }
                     var sc = document.getElementById('source-container');
@@ -13406,10 +13377,14 @@ html, body {{
                                     if (typeof setCellText === 'function') setCellText(skelTarget, rTransS);
                                     else skelTarget.textContent = rTransS;
                                 } else {
-                                    skelTarget.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                                    if (skelTarget === p) {
+                                        skelTarget.innerHTML = '';
+                                    } else if (skel.parentNode) {
+                                        skel.parentNode.removeChild(skel);
+                                    }
                                 }
                             } else if (p && p.id === 'translation-container') {
-                                p.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                                p.innerHTML = window.AppState.translatedText || '';
                             } else if (p && p.id === 'source-container') {
                                 p.innerHTML = window.AppState.sourceText || "";
                             } else if (skel.parentNode) {
@@ -13431,24 +13406,24 @@ html, body {{
                             var transDiv = transTd.querySelector('.scrollable-cell') || transTd;
                             var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
                             if (!transContent || transContent === '...' || transContent === 'Loading...' || transDiv.querySelector('.skeleton-loader')) {
-                                // Skip Retry if AppState already carries a resolved translation - DOM just hasn't rendered it yet.
                                 var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rTrans = rState ? (rState.trans || rState.WordDestination || rState.word_translation || '') : '';
                                 if (rTrans && rTrans !== '') {
-                                    // Translation is available in state - render it instead of Retry
                                     if (!transTd.classList.contains('editing')) {
                                         if (typeof setCellText === 'function') setCellText(transDiv, rTrans);
                                         else transDiv.textContent = rTrans;
                                     }
                                 } else {
-                                    transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
+                                    if (!transTd.classList.contains('editing')) {
+                                        transDiv.innerHTML = '';
+                                    }
                                 }
                                 updated = true;
                             } else {
                                 var rState = window.AppState.rows[rId] || (tOrd ? window.AppState.rows[tOrd] : null);
                                 var rProv = rState ? (rState.provenance || rState._provenance || rState.transProvenance) : null;
                                 if (rProv && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
-                                    if (!transDiv.querySelector('.btn-retry-cell') && !transDiv.querySelector('.skeleton-loader')) {
+                                    if (!transDiv.querySelector('.skeleton-loader')) {
                                         transTd.setAttribute('data-provenance', rProv);
                                         var pTitle = formatProvenanceTooltip(rProv);
                                         if (pTitle) transTd.setAttribute('title', pTitle);
@@ -13460,18 +13435,6 @@ html, body {{
                                 }
                             }
                         }
-                    }
-
-                    // Display warning toast if any retry badges exist upon terminal finish
-                    var retryCount = document.querySelectorAll('.btn-retry-cell').length;
-                    if (retryCount > 0 && !window._kwRetryToastShown && typeof window.showToast === 'function') {
-                        window._kwRetryToastShown = true;
-                        var curZidVal = (typeof getSessionZid === 'function') ? getSessionZid() : "";
-                        window.showToast("Some translations could not be retrieved. Click to retry.", "warning", 8000, function() {
-                            if (window.retrySession) {
-                                window.retrySession(curZidVal);
-                            }
-                        });
                     }
                 }
                 
@@ -13625,7 +13588,7 @@ html, body {{
                         if (typeof updateBidirectionalHighlights === 'function') updateBidirectionalHighlights();
                         applyTextProvenance();
                     } else if (pendingNode || !currentText || isFailed) {
-                        container.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                        container.innerHTML = '';
                     }
                     return true;
                 } else if (!pendingNode && (forceUpdate || currentText !== newText)) {
@@ -13727,8 +13690,8 @@ html, body {{
                     function applyCellProvenance(effectiveVal) {
                         if (!transTd) return;
                         var existingProv = transTd.getAttribute('data-provenance') || (transTd.querySelector('.scrollable-cell') ? transTd.querySelector('.scrollable-cell').getAttribute('data-provenance') : null);
-                        var effProv = rowProv || existingProv || (effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1 ? 'cached:sqlite' : null);
-                        if (effProv && effectiveVal && effectiveVal.indexOf('btn-retry-cell') === -1 && effectiveVal.indexOf('skeleton-loader') === -1) {
+                        var effProv = rowProv || existingProv || (effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1 ? 'cached:sqlite' : null);
+                        if (effProv && effectiveVal && effectiveVal.indexOf('skeleton-loader') === -1) {
                             transTd.setAttribute('data-provenance', effProv);
                             var pTitle = formatProvenanceTooltip(effProv);
                             if (pTitle) transTd.setAttribute('title', pTitle);
@@ -13751,21 +13714,17 @@ html, body {{
                         var div = tds[2].querySelector('.scrollable-cell') || tds[2];
                         var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
                         var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
-                        var hasRetryBadge = div.querySelector('.btn-retry-cell') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
-                        } else if (hasRetryBadge && val === "" && !isTerm) {
-                            // Retry badges remain active until real translations arrive or terminal stage
                         } else if (val !== "" || globalStage === 'translated' || globalStage === 'translated_words' || globalStage === 'translated_lemmas' || isTerm) {
                             var oldVal = tds[2].classList.contains('editing') ? null : (div.textContent || div.innerText);
                             var targetVal = val;
-                            if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1 && oldVal.indexOf('btn-retry-cell') === -1) {
+                            if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1) {
                                 targetVal = oldVal;
                             }
                             if (targetVal === "" && isTerm) {
-                                var retryBadge = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
-                                if (!tds[2].classList.contains('editing')) div.innerHTML = retryBadge;
+                                if (!tds[2].classList.contains('editing')) div.innerHTML = "";
                             } else {
                                 if (!tds[2].classList.contains('editing')) setCellText(div, targetVal);
                                 applyCellProvenance(targetVal);
@@ -13776,8 +13735,7 @@ html, body {{
                             var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (val === "" && isTerm) {
-                                    var retryBadge = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
-                                    if (!tds[2].classList.contains('editing')) div.innerHTML = retryBadge;
+                                    if (!tds[2].classList.contains('editing')) div.innerHTML = "";
                                     updated = true;
                                 } else if (val !== "") {
                                     if (!tds[2].classList.contains('editing')) setCellText(div, val);
@@ -13791,7 +13749,7 @@ html, body {{
                     } else if (!tds[2].classList.contains('dirty') && !tds[2].classList.contains('editing')) {
                         var div = tds[2].querySelector('.scrollable-cell') || tds[2];
                         var curText = (div.textContent || div.innerText || '').trim();
-                        if (curText && curText !== '...' && curText !== 'Loading...' && !div.querySelector('.skeleton-loader') && !div.querySelector('.btn-retry-cell')) {
+                        if (curText && curText !== '...' && curText !== 'Loading...' && !div.querySelector('.skeleton-loader')) {
                             applyCellProvenance(curText);
                         }
                     }
@@ -14042,7 +14000,6 @@ html, body {{
 
             if (isWebMode && curZid && hasSkeletons) {
                 var maxBudgetMs = 30000; // 30-second initial safety budget
-                var hardCeilingMs = 35000; // 35-second absolute ceiling
                 var totalActiveElapsedMs = 0;
                 var lastVisibleTime = (!document.hidden) ? Date.now() : null;
                 var pollIntervalMs = 1000;
@@ -14061,7 +14018,6 @@ html, body {{
                 };
 
                 window._kwWatchdogMaxBudgetMs = maxBudgetMs;
-                window._kwWatchdogHardCeilingMs = hardCeilingMs;
                 window._kwGetActiveElapsedMs = getActiveElapsedMs;
                 window._kwAdvanceActiveElapsedMs = function(ms) { totalActiveElapsedMs += ms; };
 
@@ -14087,8 +14043,7 @@ html, body {{
                         window._kwWatchdogMaxTimer = null;
                     }
                     var currentElapsed = getActiveElapsedMs();
-                    var effectiveBudget = Math.min(maxBudgetMs, hardCeilingMs);
-                    var remaining = effectiveBudget - currentElapsed;
+                    var remaining = maxBudgetMs - currentElapsed;
                     if (remaining <= 0) {
                         closeEvtSource();
                         stopPolling();
@@ -14106,87 +14061,30 @@ html, body {{
 
                 var WORKER_STALE_THRESHOLD_SECONDS = 10;
 
-                var executeRenderRetryButtons = function() {
+                var executeCleanSkeletonStrip = function() {
                     if (resolved) return;
                     var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
-                    for (var i = 0; i < pendings.length; i++) {
-                        var el = pendings[i];
-                        el.classList.remove("skeleton-loader");
-                        el.removeAttribute("data-pending");
-                        var tr = el.closest ? el.closest('tr') : (function(node) {
-                            while (node && node.nodeName !== 'TR') { node = node.parentNode; }
-                            return node;
-                        })(el);
-                        var rowId = tr ? (tr.getAttribute('data-row-id') || tr.getAttribute('data-token-order')) : null;
-                        var targetDiv = el.classList.contains('scrollable-cell') ? el : ((el.parentNode && el.parentNode.classList.contains('scrollable-cell')) ? el.parentNode : el);
-                        var currentText = (targetDiv.textContent || targetDiv.innerText || "").trim();
-                        if (!currentText || currentText.indexOf('...') !== -1 || currentText === 'Loading' || currentText === 'Loading translation' || currentText === 'Processed') {
-                            if (rowId !== null && rowId !== undefined) {
-                                targetDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
-                            } else if (targetDiv.id === 'translation-container' || (targetDiv.closest && targetDiv.closest('#translation-container'))) {
-                                targetDiv.innerHTML = '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
-                            }
+                    if (pendings.length > 0) {
+                        for (var i = 0; i < pendings.length; i++) {
+                            var el = pendings[i];
+                            el.classList.remove("skeleton-loader");
+                            el.removeAttribute("data-pending");
                         }
-                    }
-
-                    // Comprehensive scan across all table rows for unpopulated translation cells
-                    var allRows = document.querySelectorAll('tr[data-row-id]');
-                    for (var r = 0; r < allRows.length; r++) {
-                        var rowEl = allRows[r];
-                        var rId = rowEl.getAttribute('data-row-id') || rowEl.getAttribute('data-token-order');
-                        var tdsEl = rowEl.getElementsByTagName('td');
-                        if (tdsEl.length >= 3 && rId !== null && rId !== undefined) {
-                            var transTd = rowEl.querySelector('td[data-col="WordDestination"]') || tdsEl[2];
-                            var transDiv = transTd.querySelector('.scrollable-cell') || transTd;
-                            var transContent = (transDiv.textContent || transDiv.innerText || "").trim();
-                            if (!transContent || transContent.indexOf('...') !== -1 || transDiv.querySelector('.skeleton-loader')) {
-                                transDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rId + '" title="Retry translation">Retry</button>';
-                            }
+                        if (typeof window.showToast === 'function') {
+                            window.showToast("Background loading timed out. Restored table editing.", "warning");
                         }
-                    }
-
-                    var tc = document.getElementById('translation-container');
-                    if (tc && (!tc.textContent.trim() || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader'))) {
-                        tc.innerHTML = window.AppState.translatedText || '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
-                    }
-
-                    if (window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
-                        var cList = window.WorkspaceTabs.getCards();
-                        if (cList) {
-                            for (var c = 0; c < cList.length; c++) {
-                                var card = cList[c];
-                                if (card.words) {
-                                    for (var wIdx = 0; wIdx < card.words.length; wIdx++) {
-                                        var wObj = card.words[wIdx];
-                                        if (!wObj.translation || wObj.translation.indexOf('skeleton-loader') !== -1 || wObj.translation.indexOf('...') !== -1) {
-                                            var retryRowId = wObj.row_id !== undefined ? wObj.row_id : wObj.token_order;
-                                            wObj.translation = '<button class="btn-retry-cell" data-row-id="' + retryRowId + '" title="Retry translation">Retry</button>';
-                                        }
-                                        wObj.row_html = null;
+                        if (typeof fetch !== 'undefined' && curZid) {
+                            var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                            fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                                .then(function(res) { if (res.ok) return res.json(); })
+                                .then(function(resObj) {
+                                    var data = (resObj && resObj.data) ? resObj.data : resObj;
+                                    if (data && (data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
+                                        window.receiveUpdate(data);
                                     }
-                                }
-                            }
+                                })
+                                .catch(function() {});
                         }
-                    }
-
-                    if (typeof window.showToast === 'function') {
-                        window.showToast("Background loading timed out. Restored table editing. Some translations timed out. Click to retry.", "warning", 8000, function() {
-                            if (window.retrySession) {
-                                window.retrySession(curZid);
-                            }
-                        });
-                    }
-                    if (typeof fetch !== 'undefined' && curZid) {
-                        var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                        fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
-                            .then(function(res) { if (res.ok) return res.json(); })
-                            .then(function(resObj) {
-                                var data = (resObj && resObj.data) ? resObj.data : resObj;
-                                if (data && (data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
-                                    window.receiveUpdate(data);
-                                }
-                            })
-                            .catch(function() {});
                     }
                 };
 
@@ -14202,12 +14100,17 @@ html, body {{
                             .then(function(resObj) {
                                 if (resolved) return;
                                 var sData = (resObj && resObj.data) ? resObj.data : resObj;
-                                var isBusy = sData ? (sData.is_finished === false || sData.stage === 'translating' || (sData.status && (sData.status.is_finished === false || sData.status.stage === 'translating'))) : false;
-                                var currentElapsed = getActiveElapsedMs();
-                                if (isBusy && currentElapsed < hardCeilingMs) {
-                                    // Backend is actively translating and hard ceiling is not yet reached:
-                                    // Suppress Retry, extend watchdog budget up to the hard ceiling, and continue polling.
-                                    maxBudgetMs = Math.min(maxBudgetMs + 15000, hardCeilingMs);
+                                var isBusy = sData ? (
+                                    (sData.stage === 'translating' || (sData.status && sData.status.stage === 'translating') || sData.worker_status === 'running') &&
+                                    sData.is_finished !== true &&
+                                    (!sData.status || sData.status.is_finished !== true)
+                                ) : false;
+                                if (isBusy) {
+                                    // Backend is actively translating (e.g. Argos ML translation in progress):
+                                    // Suppress timeout, reset watchdog budget, and continue polling.
+                                    totalActiveElapsedMs = 0;
+                                    lastVisibleTime = Date.now();
+                                    maxBudgetMs += 15000;
                                     window._kwWatchdogMaxBudgetMs = maxBudgetMs;
                                     resumeWatchdogTimer();
                                     startWatchdogPolling();
@@ -14232,13 +14135,13 @@ html, body {{
                                     return;
                                 }
 
-                                executeRenderRetryButtons();
+                                executeCleanSkeletonStrip();
                             })
                             .catch(function() {
-                                executeRenderRetryButtons();
+                                executeCleanSkeletonStrip();
                             });
                     } else {
-                        executeRenderRetryButtons();
+                        executeCleanSkeletonStrip();
                     }
                 };
                 window.cleanupOrphanSkeletons = cleanupOrphanSkeletons;
@@ -14270,8 +14173,7 @@ html, body {{
                         return;
                     }
                     var currentElapsed = getActiveElapsedMs();
-                    var effectiveBudget = Math.min(maxBudgetMs, hardCeilingMs);
-                    if (currentElapsed >= hardCeilingMs || currentElapsed >= effectiveBudget) {
+                    if (currentElapsed >= maxBudgetMs) {
                         stopPolling();
                         cleanupOrphanSkeletons();
                         return;
@@ -14289,10 +14191,12 @@ html, body {{
                             isPolling = false;
                             var data = (resObj && resObj.data) ? resObj.data : resObj;
                             if (data) {
-                                var isBusy = (data.is_finished === false || data.stage === 'translating' || (data.status && (data.status.is_finished === false || data.status.stage === 'translating')));
-                                if (isBusy && getActiveElapsedMs() < hardCeilingMs) {
-                                    maxBudgetMs = Math.min(maxBudgetMs + 5000, hardCeilingMs);
-                                    window._kwWatchdogMaxBudgetMs = maxBudgetMs;
+                                var isBusy = ((data.stage === 'translating' || (data.status && data.status.stage === 'translating') || data.worker_status === 'running') &&
+                                    data.is_finished !== true &&
+                                    (!data.status || data.status.is_finished !== true));
+                                if (isBusy) {
+                                    totalActiveElapsedMs = 0;
+                                    lastVisibleTime = Date.now();
                                 }
                             }
                             if (data && (data.rows || data.translatedText || data.translated_text || data.sentences || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
@@ -14566,7 +14470,7 @@ html, body {{
                     var tds = tr.getElementsByTagName('td');
                     for (var m = 0; m < tds.length; m++) {
                         if (tds[m].getAttribute('data-col') === 'WordDestination') {
-                            if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader') || tds[m].querySelector('.btn-retry-cell')) {
+                            if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader')) {
                                 continue;
                             }
                             var trans = tds[m].textContent || tds[m].innerText || "";
@@ -14639,7 +14543,7 @@ html, body {{
                     if (col === '{lemma_col_name}') {
                         lemma = (tds[m].textContent || tds[m].innerText || "").trim();
                     } else if (col === 'WordDestination') {
-                        if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader') || tds[m].querySelector('.btn-retry-cell')) {
+                        if (tds[m].querySelector('.skeleton-loader') || tds[m].querySelector('[data-pending="true"]') || tds[m].classList.contains('skeleton-loader')) {
                             trans = "";
                         } else {
                             var tStr = (tds[m].textContent || tds[m].innerText || "").trim();
@@ -17088,7 +16992,7 @@ html, body {{
                 btnElement.disabled = true;
             }
             if (cellDiv) {
-                cellDiv.innerHTML = '<span class="skeleton-loader" style="width: 60px;" title="Retrying...">Retrying...</span>';
+                cellDiv.innerHTML = '<span class="skeleton-loader" style="width: 60px;"></span>';
             }
 
             var token = getApiToken ? getApiToken() : "";
@@ -17137,7 +17041,7 @@ html, body {{
             })
             .catch(function(err) {
                 if (cellDiv) {
-                    cellDiv.innerHTML = '<button class="btn-retry-cell" data-row-id="' + rowId + '" title="Retry translation">Retry</button>';
+                    cellDiv.innerHTML = '';
                 }
                 if (typeof window.showToast === 'function') {
                     window.showToast("Retry failed: " + (err.message || String(err)), "error");
@@ -17157,19 +17061,6 @@ html, body {{
             };
             if (token) headers['X-API-Token'] = token;
 
-            var retryButtons = document.querySelectorAll('.btn-retry-cell');
-            for (var i = 0; i < retryButtons.length; i++) {
-                var btn = retryButtons[i];
-                var parent = btn.parentNode;
-                if (parent) {
-                    if (parent.id === 'translation-container') {
-                        var pLabel = formatProviderSkeletonLabel(getTextBaseProvider());
-                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
-                    } else {
-                        parent.innerHTML = '<span class="skeleton-loader" data-pending="true" style="width: 60px; display: inline-flex;" title="Retrying...">Retrying...</span>';
-                    }
-                }
-            }
 
             if (typeof window.showToast === 'function') {
                 window.showToast("Retrying unresolved translations...", "info");
@@ -17206,14 +17097,6 @@ html, body {{
         }
         window.retrySession = retrySession;
 
-        document.addEventListener('click', function(e) {
-            var target = e.target;
-            if (target && (target.classList.contains('btn-retry-cell') || (target.closest && target.closest('.btn-retry-cell')))) {
-                e.preventDefault();
-                e.stopPropagation();
-                retrySession();
-            }
-        });
 
         window.onSaveClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
@@ -17296,7 +17179,7 @@ html, body {{
             var tc = document.getElementById('translation-container');
             var tcText = tc ? (tc.textContent || tc.innerText || "").trim() : "";
             var needsRetext = false;
-            if (!tcText || tcText === 'Loading' || tcText === 'Loading translation' || tcText === 'Processed' || tcText.indexOf('...') !== -1 || (tc && (tc.classList.contains('skeleton-loader') || tc.querySelector('.skeleton-loader') || tc.querySelector('.btn-retry-cell')))) {
+            if (!tcText || tcText === 'Loading' || tcText === 'Loading translation' || tcText === 'Processed' || tcText.indexOf('...') !== -1 || (tc && (tc.classList.contains('skeleton-loader') || tc.querySelector('.skeleton-loader')))) {
                 needsRetext = true;
             }
             if (window.AppState && (!window.AppState.translatedText || window.AppState.translatedText.trim() === '')) {
@@ -17315,7 +17198,7 @@ html, body {{
                 }
                 var transCell = transTd ? (transTd.querySelector('.scrollable-cell') || transTd) : null;
                 var transContent = transCell ? (transCell.textContent || transCell.innerText || "").trim() : "";
-                if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') || transCell.querySelector('.skeleton-loader') || transCell.querySelector('.btn-retry-cell')))) {
+                if (!transContent || transContent === 'Loading' || transContent.indexOf('...') !== -1 || (transCell && (transCell.classList.contains('skeleton-loader') || transCell.querySelector('.skeleton-loader')))) {
                     if (rId !== null && rId !== undefined) {
                         untranslatedRowIds.push(rId);
                     }
@@ -17823,7 +17706,7 @@ html, body {{
                 }
                 var isFailed = (window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
                 if (window.AppState && (window.AppState.isFinished || isFailed)) {
-                    return '<button class="btn-retry-cell" data-action="retry-text" title="Retry translation">Retry</button>';
+                    return '';
                 }
                 var pLabel = formatProviderSkeletonLabel(getTextBaseProvider());
                 return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
@@ -21993,7 +21876,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     pass
             if col_word_dest != -1:
                 for r_i, r in enumerate(data_rows):
-                    if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest] and "btn-retry-cell" not in r[col_word_dest]:
+                    if len(r) > col_word_dest and r[col_word_dest].strip() and "skeleton-loader" not in r[col_word_dest]:
                         t_ord_str = str(r[col_token_order]).strip() if col_token_order != -1 and len(r) > col_token_order and str(r[col_token_order]).strip() else str(r_i)
                         if t_ord_str not in row_provenances:
                             row_provenances[t_ord_str] = "cached:sqlite"

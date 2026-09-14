@@ -791,13 +791,12 @@ def test_playwright_child_tab_translation_skeletons_and_live_updates(page, tmp_p
     assert trans_container.locator(".skeleton-loader").count() == 0
     assert "Первое предложение. Второе предложение." in trans_container.inner_text()
 
-    # 4. Switch to Tab 3 (Sentence 2) which was not translated and is finished -> should show retry button
+    # 4. Switch to Tab 3 (Sentence 2) which was not translated and is finished -> clean empty container, no retry button
     tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
     tab3.click()
     assert trans_container.locator(".skeleton-loader").count() == 0
-    retry_btn = trans_container.locator(".btn-retry-cell")
-    assert retry_btn.count() == 1
-    assert "Retry" in retry_btn.inner_text()
+    assert trans_container.locator(".btn-retry-cell").count() == 0
+    assert trans_container.inner_text().strip() == ""
 
 
 def test_tab_switching_renders_clean_plaintext_without_div_tokens(page, tmp_path):

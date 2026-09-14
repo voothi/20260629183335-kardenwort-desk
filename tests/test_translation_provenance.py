@@ -338,7 +338,7 @@ class TestTranslationProvenance(unittest.TestCase):
             ["0", "run", "бег"],
             ["1", "walk", ""],
             ["2", "jump", '<span class="skeleton-loader">Argos...</span>'],
-            ["3", "fly", '<button class="btn-retry-cell">Retry</button>'],
+            ["3", "fly", ""],
         ]
         # Without any row_provenances passed (pre-migration / unassigned)
         rows_dict = format_update_rows_dict(data_rows, headers, role_fields)
