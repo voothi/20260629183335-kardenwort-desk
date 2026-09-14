@@ -3991,6 +3991,9 @@ class SqliteStorageAdapter(StorageAdapter):
                         cast_val = int(value)
                     except (ValueError, TypeError):
                         cast_val = 1
+                elif db_col == "gender":
+                    g_clean = str(value).strip().lower() if value is not None else ""
+                    cast_val = g_clean if g_clean in ("m", "f", "n") else None
 
                 if sentence_idx is not None:
                     cursor.execute(
@@ -21556,7 +21559,8 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
         pos_raw = row[col_pos] if col_pos != -1 and len(row) > col_pos else ""
         gender_raw = row[col_gender] if col_gender != -1 and len(row) > col_gender else ""
         pos_val = format_pos_cell(pos_raw)
-        gender_val = gender_raw.strip()
+        g_clean = gender_raw.strip().lower() if gender_raw is not None else ""
+        gender_val = g_clean if g_clean in ("m", "f", "n") else ""
         token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
         sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
         row_obj = {
@@ -23010,6 +23014,9 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                 if col_name in (selected_col_name, "DeskSelected", "selected"):
                     storage_adapter.update_word_selection(session_zid, sentence_idx=sentence_idx, token_order=token_order, selected=val, zid=zid)
                 else:
+                    if col_name.strip().lower() in ("gender", "wordsourcegender"):
+                        g_clean = str(val).strip().lower() if val is not None else ""
+                        val = g_clean if g_clean in ("m", "f", "n") else None
                     storage_adapter.update_word(session_zid, sentence_idx=sentence_idx, token_order=token_order, field=col_name, value=val, zid=zid)
 
             updated_restored = storage_adapter.restore_session(session_zid)
@@ -23053,6 +23060,9 @@ def core_edit_save(tsv_path_or_session, deltas, config, resolved_paths, fingerpr
                                 if c_name == "_delete":
                                     data_rows[target_row_idx] = None
                                 elif c_name in headers and data_rows[target_row_idx] is not None:
+                                    if c_name.strip().lower() in ("gender", "wordsourcegender"):
+                                        g_clean = str(v_val).strip().lower() if v_val is not None else ""
+                                        v_val = g_clean if g_clean in ("m", "f", "n") else ""
                                     data_rows[target_row_idx][headers.index(c_name)] = v_val
                         data_rows = [r for r in data_rows if r is not None]
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)

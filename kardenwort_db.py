@@ -2114,6 +2114,9 @@ class KardenwortDB:
             if k in allowed_cols:
                 if k == "extra_fields":
                     valid_updates[k] = self._serialize_extra_fields(v)
+                elif k == "gender":
+                    g_clean = str(v).strip().lower() if v is not None else ""
+                    valid_updates[k] = g_clean if g_clean in ("m", "f", "n") else None
                 else:
                     valid_updates[k] = v
 
@@ -2220,6 +2223,9 @@ class KardenwortDB:
                                 direct_cols[col_name] = int(f_v)
                             except (ValueError, TypeError):
                                 direct_cols[col_name] = 1
+                        elif col_name == "gender":
+                            g_clean = str(f_v).strip().lower() if f_v is not None else ""
+                            direct_cols[col_name] = g_clean if g_clean in ("m", "f", "n") else None
                         else:
                             if col_name not in direct_cols or (f_v and not direct_cols[col_name]):
                                 direct_cols[col_name] = f_v

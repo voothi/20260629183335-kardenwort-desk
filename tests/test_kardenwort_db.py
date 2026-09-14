@@ -963,4 +963,44 @@ def test_batch_update_words_multisentence_coordinates(temp_db):
     assert word_map[(2, 1)]["word_destination"] == "два"
 
 
+def test_batch_update_words_sanitizes_non_canonical_gender(temp_db):
+    """Verify batch_update_words and update_word convert non-canonical gender values to NULL."""
+    temp_db.run_migrations()
+    sess_zid = "20260914103721"
+
+    temp_db.insert_session({"zid": sess_zid, "language": "de", "target_language": "ru"})
+    temp_db.insert_sentences([{"session_zid": sess_zid, "sentence_index": 1, "sentence_source": "der Hund geben"}])
+
+    temp_db.insert_words([
+        {"session_zid": sess_zid, "sentence_index": 1, "token_order": 0, "quotation": "der", "lemma": "der", "gender": "m"},
+        {"session_zid": sess_zid, "sentence_index": 1, "token_order": 1, "quotation": "geben", "lemma": "geben", "gender": None},
+        {"session_zid": sess_zid, "sentence_index": 1, "token_order": 2, "quotation": "Hund", "lemma": "Hund", "gender": None},
+    ])
+
+    # Batch update with literal "None", "none", and canonical "m"
+    updates = [
+        {"sentence_index": 1, "token_order": 0, "field": "gender", "value": "None"},
+        {"sentence_index": 1, "token_order": 1, "field": "gender", "value": "none"},
+        {"sentence_index": 1, "token_order": 2, "field": "gender", "value": "m"},
+    ]
+    updated_cnt = temp_db.batch_update_words(sess_zid, updates)
+    assert updated_cnt >= 1
+
+    words = temp_db.get_words_by_session(sess_zid)
+    word_map = {w["token_order"]: w for w in words}
+
+    # "None" and "none" must be converted to NULL (None)
+    assert word_map[0]["gender"] is None
+    assert word_map[1]["gender"] is None
+    # Canonical "m" must be preserved
+    assert word_map[2]["gender"] == "m"
+
+    # Test update_word directly with non-canonical values
+    token_2_id = word_map[2]["id"]
+    temp_db.update_word(token_2_id, {"gender": "null"})
+    refreshed_w2 = [w for w in temp_db.get_words_by_session(sess_zid) if w["id"] == token_2_id][0]
+    assert refreshed_w2["gender"] is None
+
+
+
 
