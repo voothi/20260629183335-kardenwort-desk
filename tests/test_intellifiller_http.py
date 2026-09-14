@@ -78,15 +78,48 @@ class MockIntelliFillerHandler(BaseHTTPRequestHandler):
 
             rows = payload.get("rows", [])
             enriched = []
-            for r in rows:
-                row_id = r.get("row_id", 0)
-                word = r.get("WordSource", r.get("word", ""))
-                enriched.append({
-                    "row_id": row_id,
-                    "WordDestination": f"trans_{word}",
-                    "WordSourceIPA": f"/ipa_{word}/",
-                    "MorphologyAI": "Noun|Sing"
-                })
+            if payload.get("prompt") == "gender_normalization":
+                for r in rows:
+                    row_id = r.get("row_id", 0)
+                    word = r.get("WordSource", r.get("word", ""))
+                    if word == "der":
+                        enriched.append({
+                            "row_id": row_id,
+                            "WordDestination": "the",
+                            "gender": "none",
+                            "WordSourceGender": "None"
+                        })
+                    elif word == "geben":
+                        enriched.append({
+                            "row_id": row_id,
+                            "WordDestination": "to give",
+                            "gender": None,
+                            "WordSourceGender": "null"
+                        })
+                    elif word == "Hund":
+                        enriched.append({
+                            "row_id": row_id,
+                            "WordDestination": "dog",
+                            "gender": "m",
+                            "WordSourceGender": "m"
+                        })
+                    else:
+                        enriched.append({
+                            "row_id": row_id,
+                            "WordDestination": f"trans_{word}",
+                            "gender": "n/a",
+                            "WordSourceGender": "-"
+                        })
+            else:
+                for r in rows:
+                    row_id = r.get("row_id", 0)
+                    word = r.get("WordSource", r.get("word", ""))
+                    enriched.append({
+                        "row_id": row_id,
+                        "WordDestination": f"trans_{word}",
+                        "WordSourceIPA": f"/ipa_{word}/",
+                        "MorphologyAI": "Noun|Sing"
+                    })
 
             resp = {
                 "status": "success",
@@ -271,3 +304,54 @@ def test_intellifiller_http_benchmark_submillisecond(mock_server):
     # Assert fast microservice dispatch (<50ms end-to-end loopback HTTP)
     avg_latency = sum(latencies) / len(latencies)
     assert avg_latency < 50.0
+
+
+def test_intellifiller_http_non_noun_gender_normalization(mock_server, tmp_path):
+    tsv_path = tmp_path / "gender_test.tsv"
+    comments = ["# language=de"]
+    headers = ["WordSource", "WordDestination", "gender", "WordSourceGender"]
+    data_rows = [
+        ["der", "", "", ""],
+        ["geben", "", "", ""],
+        ["Hund", "", "", ""]
+    ]
+    save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SERVICES)
+    config.set(SEC_SERVICES, "intellifiller_server_url", mock_server)
+    config.add_section(SEC_TIMEOUTS)
+    config.set(SEC_TIMEOUTS, "intellifiller_timeout", "10")
+
+    resolved_paths = {
+        "kardenwort_python": sys.executable,
+        "intellifiller_headless": Path(__file__),
+        "anki_mapping_file": None
+    }
+
+    res = _run_headless_intellifiller_impl(
+        tsv_path=tsv_path,
+        prompt_name="gender_normalization",
+        config=config,
+        resolved_paths=resolved_paths,
+        selected_rows=[0, 1, 2],
+        reprocess=True,
+        zid="20260914103721"
+    )
+    assert res is True
+
+    _, res_headers, res_data = load_tsv_rows(tsv_path)
+    g_idx = res_headers.index("gender")
+    wsg_idx = res_headers.index("WordSourceGender")
+
+    # Non-noun "der" (returned "none" / "None") must be normalized to ""
+    assert res_data[0][g_idx] == ""
+    assert res_data[0][wsg_idx] == ""
+
+    # Non-noun "geben" (returned None / "null") must be normalized to ""
+    assert res_data[1][g_idx] == ""
+    assert res_data[1][wsg_idx] == ""
+
+    # Noun "Hund" must keep canonical "m"
+    assert res_data[2][g_idx] == "m"
+    assert res_data[2][wsg_idx] == "m"

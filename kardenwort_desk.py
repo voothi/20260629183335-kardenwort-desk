@@ -7416,7 +7416,17 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
                                     col_idx = headers.index(k)
                                     while len(data_rows[r_idx]) <= col_idx:
                                         data_rows[r_idx].append("")
-                                    data_rows[r_idx][col_idx] = str(v)
+                                    if v is None:
+                                        val_str = ""
+                                    else:
+                                        val_str = str(v)
+                                    if k in ("gender", "WordSourceGender"):
+                                        norm_g = val_str.strip().lower()
+                                        if norm_g in ("none", "null", "n/a", "-") or norm_g not in ("m", "f", "n"):
+                                            val_str = ""
+                                        else:
+                                            val_str = norm_g
+                                    data_rows[r_idx][col_idx] = val_str
 
                         save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
                         logger.info("Headless IntelliFiller (HTTP microservice) finished successfully.")
