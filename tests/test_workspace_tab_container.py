@@ -1947,4 +1947,66 @@ def test_playwright_tab1_master_overview_multi_sentence_hover_and_rainbow(page, 
     assert pinned_all.count() >= 2
 
 
+def test_overview_tab_unification_article_pronoun_der(tmp_path):
+    """
+    Task 3.1: Verify that a session containing 'die' (pron.) and 'den, zur' (art.)
+    yields a single consolidated row for 'der' with combined inflected forms 'den, der, die, zur'
+    on Master Overview (Tab 1), correctly coordinating row IDs.
+    """
+    import re
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "filter_inflected_by_window", "false")
+
+    unique_zid = "20260914102000"
+    text = "Die Frau, die liest. Er geht zur Schule mit den Kindern."
+    tsv_file = tmp_path / f"{unique_zid}.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\tTokenOrder\n"
+        "die\tder\tpron.\tdie\tкоторая\t1\t0\t0\n"
+        "Frau\tFrau\tn.\tFrau\tженщина\t1\t0\t1\n"
+        "liest\tlesen\tv.\tliest\tчитает\t1\t0\t2\n"
+        "geht\tgehen\tv.\tgeht\tидет\t2\t0\t3\n"
+        "zu\tzu\tprep.\tzu, zur\tк\t2\t0\t4\n"
+        "zur\tder\tart.\tder, zur\tв\t2\t0\t5\n"
+        "den\tder\tart.\tden\tдетям\t2\t0\t6\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1  # Tab 1: Master Overview
+    )
+
+    cards_match = re.search(r'<script id="sentence-cards" type="application/json">\s*([\s\S]*?)\s*</script>', html)
+    assert cards_match is not None
+    cards = json.loads(cards_match.group(1))
+    assert len(cards) >= 1
+
+    master = [c for c in cards if c["sentence_idx"] == 0][0]
+    assert "words" in master
+    der_words = [w for w in master["words"] if w["lemma"].strip().lower() == "der"]
+    assert len(der_words) == 1, f"Expected exactly 1 consolidated row for lemma 'der', but got {len(der_words)}"
+
+    consolidated_word = der_words[0]
+    assert consolidated_word["pos"].strip().lower() == "art."
+    inf_forms = [p.strip() for p in consolidated_word["inflected"].split(",") if p.strip()]
+    for expected_form in ["den", "der", "die", "zur"]:
+        assert expected_form in inf_forms, f"Expected '{expected_form}' in inflected forms: {inf_forms}"
+
+    # Verify that the overview word object in the DOM payload coordinates all 3 matched row IDs
+    assert len(consolidated_word["all_row_ids"]) == 3
+
+
 
