@@ -11681,6 +11681,40 @@ html, body {{
   #lemma-table.kw-filter-selected-only.kw-table-dragging tbody tr[data-filter-hidden="1"] {
     display: none !important;
   }
+  .kw-empty-selection-row {
+    display: none;
+  }
+  #lemma-table.kw-filter-selected-only tbody tr.kw-empty-selection-row.kw-empty-visible {
+    display: table-row !important;
+  }
+  .kw-empty-selection-cell {
+    text-align: center;
+    padding: 36px 16px !important;
+    color: {text_muted};
+    font-size: 13px;
+    background: transparent;
+    user-select: none;
+    border-bottom: 1px solid {table_border};
+  }
+  .kw-empty-selection-cell span {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+  }
+  .kw-empty-clear-filter-btn {
+    background: transparent;
+    border: none;
+    color: {flipped_text};
+    text-decoration: underline;
+    cursor: pointer;
+    font-size: 13px;
+    font-family: inherit;
+    padding: 0 2px;
+  }
+  .kw-empty-clear-filter-btn:hover {
+    filter: brightness(1.2);
+  }
   /* Workspace Tab Bar */
   .kw-workspace-tab-bar {
     display: flex;
@@ -16058,6 +16092,50 @@ html, body {{
         }
         window.toggleRowSelection = toggleRowSelection;
         window.getFocusedRowId = function() { return focusedRowId; };
+
+        function updateEmptySelectionState() {
+            var lt = document.getElementById('lemma-table');
+            if (!lt) return;
+            var tbody = lt.querySelector('tbody');
+            if (!tbody) return;
+
+            var emptyRow = document.getElementById('kw-empty-selection-row');
+            var isFilterActive = !!(window.AppState && window.AppState.filterSelectedOnly);
+
+            if (!isFilterActive) {
+                if (emptyRow && emptyRow.parentNode) {
+                    emptyRow.parentNode.removeChild(emptyRow);
+                }
+                return;
+            }
+
+            var selectedRows = tbody.querySelectorAll('tr[data-selected="1"]');
+            if (selectedRows.length === 0) {
+                if (!emptyRow) {
+                    emptyRow = document.createElement('tr');
+                    emptyRow.id = 'kw-empty-selection-row';
+                    emptyRow.className = 'kw-empty-selection-row kw-empty-visible';
+                    emptyRow.innerHTML = (
+                        '<td colspan="100" class="kw-empty-selection-cell">' +
+                        '<span>No items selected. Click words in the text above to select them, or ' +
+                        '<button type="button" id="kw-btn-empty-clear-filter" class="kw-empty-clear-filter-btn">show all words</button>.</span>' +
+                        '</td>'
+                    );
+                    tbody.appendChild(emptyRow);
+                } else {
+                    emptyRow.classList.add('kw-empty-visible');
+                    emptyRow.style.display = '';
+                    if (emptyRow.parentNode !== tbody) {
+                        tbody.appendChild(emptyRow);
+                    }
+                }
+            } else {
+                if (emptyRow && emptyRow.parentNode) {
+                    emptyRow.parentNode.removeChild(emptyRow);
+                }
+            }
+        }
+        window.updateEmptySelectionState = updateEmptySelectionState;
         
         function updateRowStyles() {
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
@@ -16113,6 +16191,9 @@ html, body {{
             }
             if (typeof updateToolbarState === 'function') {
                 updateToolbarState();
+            }
+            if (typeof updateEmptySelectionState === 'function') {
+                updateEmptySelectionState();
             }
         }
         
@@ -17930,6 +18011,9 @@ html, body {{
                 if (typeof window.rebindTableRows === 'function') {
                     window.rebindTableRows();
                 }
+                if (typeof updateEmptySelectionState === 'function') {
+                    updateEmptySelectionState();
+                }
             }
             window.bindCardWordsToTbody = bindCardWordsToTbody;
 
@@ -18195,6 +18279,9 @@ html, body {{
                     if (lt) addClass(lt, 'kw-filter-selected-only');
                     var fb = document.getElementById('kw-btn-filter-selected');
                     if (fb) addClass(fb, 'btn-filter-active');
+                    if (typeof updateEmptySelectionState === 'function') {
+                        updateEmptySelectionState();
+                    }
                 }
                 updateFavicon(activeTabSeq);
                 updateTitle(targetCard);
@@ -18554,6 +18641,7 @@ html, body {{
                     removeClass(filterBtn, 'btn-filter-active');
                 }
             }
+            updateEmptySelectionState();
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
 
@@ -18569,6 +18657,16 @@ html, body {{
                 toggleFilterSelectedOnly();
             });
         }
+
+        addEvent(document, 'click', function(e) {
+            e = e || window.event;
+            var target = e.target || e.srcElement;
+            if (target && (target.id === 'kw-btn-empty-clear-filter' || (target.closest && target.closest('#kw-btn-empty-clear-filter')))) {
+                if (typeof window.setFilterSelectedOnly === 'function') {
+                    window.setFilterSelectedOnly(false);
+                }
+            }
+        });
 
         var btnSave = document.getElementById('kw-btn-save');
         if (btnSave) addEvent(btnSave, 'click', function(e) {

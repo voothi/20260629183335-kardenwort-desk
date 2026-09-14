@@ -80,6 +80,9 @@ def test_selected_filter_css_rules(tmp_path):
     assert 'color: #0d1117;' in html
     assert '#lemma-table.kw-filter-selected-only:not(.kw-table-dragging) tbody tr[data-selected="0"]' in html
     assert 'display: none !important;' in html
+    assert '.kw-empty-selection-row' in html
+    assert '#lemma-table.kw-filter-selected-only tbody tr.kw-empty-selection-row.kw-empty-visible' in html
+    assert '.kw-empty-selection-cell' in html
 
 
 def test_selected_filter_toggle_interaction(page, tmp_path):
@@ -355,4 +358,71 @@ def test_drag_deselection_across_rows_in_filtered_mode(page, tmp_path):
     assert not row2.is_visible()
     assert row3_el.is_visible()
     assert row4_el.is_visible()
+
+
+def test_empty_selection_placeholder_displayed_when_no_rows_selected(page, tmp_path):
+    """Verifies that when the Selected filter is active and 0 rows are selected, an empty state row is displayed."""
+    html = inject_mock_fetch(get_desk_page_html(tmp_path, text_mode="single"))
+    page.set_content(html)
+
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    
+    # Deselect row 0 so 0 rows are selected
+    page.evaluate("window.toggleRowSelection(0, false)")
+    page.wait_for_timeout(50)
+
+    # Empty placeholder should NOT be present when filter is OFF
+    assert page.locator("#kw-empty-selection-row").count() == 0
+
+    # Turn filter ON
+    filter_btn.click()
+    page.wait_for_timeout(50)
+
+    # Now empty state row must be present and visible
+    empty_row = page.locator("#kw-empty-selection-row")
+    assert empty_row.is_visible()
+    assert "No items selected." in empty_row.inner_text()
+    assert "show all words" in empty_row.inner_text()
+
+    # Click the "show all words" action link
+    clear_btn = page.locator("#kw-btn-empty-clear-filter")
+    clear_btn.click()
+    page.wait_for_timeout(50)
+
+    # Filter is turned OFF
+    assert page.evaluate("window.AppState.filterSelectedOnly") is False
+    assert not filter_btn.evaluate("el => el.classList.contains('btn-filter-active')")
+    assert page.locator("#kw-empty-selection-row").count() == 0
+    assert page.locator("#lemma-table tbody tr[data-row-id='0']").is_visible()
+    assert page.locator("#lemma-table tbody tr[data-row-id='1']").is_visible()
+
+
+def test_empty_selection_placeholder_reactivity_on_selecting_word(page, tmp_path):
+    """Verifies that selecting a word while the empty placeholder is visible immediately hides it and shows the row."""
+    html = inject_mock_fetch(get_desk_page_html(tmp_path, text_mode="single"))
+    page.set_content(html)
+
+    filter_btn = page.locator("#kw-btn-filter-selected")
+
+    # Deselect row 0 -> 0 rows selected
+    page.evaluate("window.toggleRowSelection(0, false)")
+    filter_btn.click()
+    page.wait_for_timeout(50)
+
+    empty_row = page.locator("#kw-empty-selection-row")
+    assert empty_row.is_visible()
+
+    # Select row 1 (groß)
+    page.evaluate("window.toggleRowSelection(1, true)")
+    page.wait_for_timeout(50)
+
+    # Placeholder must be removed, row 1 must be visible
+    assert page.locator("#kw-empty-selection-row").count() == 0
+    assert page.locator("#lemma-table tbody tr[data-row-id='1']").is_visible()
+
+    # Deselect row 1 again -> placeholder reappears
+    page.evaluate("window.toggleRowSelection(1, false)")
+    page.wait_for_timeout(50)
+    assert empty_row.is_visible()
+
 
