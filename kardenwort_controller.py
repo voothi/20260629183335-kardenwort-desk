@@ -1354,7 +1354,7 @@ class EnrichmentQueue:
                         if active_text_prov:
                             arbiter.sessions[session_zid]["text_provenance"] = active_text_prov
                             arbiter.sessions[session_zid]["textProvenance"] = active_text_prov
-                        sess_row_provs = arbiter.sessions[session_zid].get("row_provenances", {})
+                        sess_row_provs = dict(arbiter.sessions[session_zid].get("row_provenances", {}) or {})
 
                 if translated_map:
                     for row_idx, row in enumerate(data_rows):
@@ -1365,6 +1365,10 @@ class EnrichmentQueue:
                                 sess_row_provs[t_ord] = lemma_prov_tag
                                 if t_ord.isdigit():
                                     sess_row_provs[int(t_ord)] = lemma_prov_tag
+
+                with arbiter._lock:
+                    if session_zid in arbiter.sessions:
+                        arbiter.sessions[session_zid]["row_provenances"] = sess_row_provs
 
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                 structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields, row_provenances=sess_row_provs)
@@ -1436,10 +1440,33 @@ class EnrichmentQueue:
             # Emit final finished event
             status_val = "failed" if worker_error else "success"
             new_fp = compute_content_fingerprint(data_rows) if data_rows else ""
-            structured_rows = format_update_rows_dict(data_rows, headers, role_fields) if (data_rows and headers and role_fields) else {}
+            fin_row_provs = {}
+            with arbiter._lock:
+                if session_zid in arbiter.sessions:
+                    fin_row_provs = dict(arbiter.sessions[session_zid].get("row_provenances") or {})
+            if not fin_row_provs and 'sess_row_provs' in locals() and sess_row_provs:
+                fin_row_provs = dict(sess_row_provs)
+            if not fin_row_provs and is_sqlite and hasattr(storage_adapter, 'db'):
+                try:
+                    db_words = storage_adapter.db.get_words_by_session(session_zid)
+                    for w in db_words:
+                        w_prov = w.get("word_provenance")
+                        if w_prov:
+                            t_ord = str(w.get("token_order", ""))
+                            fin_row_provs[t_ord] = w_prov
+                            if t_ord.isdigit():
+                                fin_row_provs[int(t_ord)] = w_prov
+                    if fin_row_provs:
+                        with arbiter._lock:
+                            if session_zid in arbiter.sessions:
+                                arbiter.sessions[session_zid]["row_provenances"] = fin_row_provs
+                except Exception:
+                    pass
+
+            structured_rows = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fin_row_provs) if (data_rows and headers and role_fields) else {}
             if tsv_path and data_rows and headers:
                 sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="finished", status=status_val, error=worker_error, zid=session_zid, trace_id=eff_trace_id, text_provenance=active_text_prov, row_provenances=fin_row_provs)
 
             finished_event = {
                 "type": "update",
@@ -1448,6 +1475,8 @@ class EnrichmentQueue:
                 "error": worker_error,
                 "fingerprint": new_fp,
                 "rows": structured_rows,
+                "row_provenances": fin_row_provs,
+                "rowProvenances": fin_row_provs,
             }
             curr_sents = arbiter.sessions.get(session_zid, {}).get("sentences")
             if curr_sents:

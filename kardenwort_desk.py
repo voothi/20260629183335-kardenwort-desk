@@ -13284,66 +13284,71 @@ html, body {{
                         }
                     }
                 }
-                if (rowsData && window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
+                function applyCardProgressiveUpdate(rowsData) {
+                    if (!rowsData || !window.WorkspaceTabs || !window.WorkspaceTabs.getCards) return;
                     var wCards = window.WorkspaceTabs.getCards();
-                    if (wCards && wCards.length > 0) {
-                        var deltasByTokenOrder = {};
-                        var deltasByRowId = {};
-                        for (var rk in rowsData) {
-                            if (rowsData.hasOwnProperty(rk)) {
-                                var d = rowsData[rk];
-                                if (d) {
-                                    if (d.token_order !== undefined && d.token_order !== null && String(d.token_order) !== "") {
-                                        deltasByTokenOrder[String(d.token_order)] = d;
-                                    }
-                                    if (d.row_id !== undefined && d.row_id !== null && String(d.row_id) !== "") {
-                                        deltasByRowId[String(d.row_id)] = d;
-                                    }
-                                    deltasByRowId[String(rk)] = d;
+                    if (!wCards || wCards.length === 0) return;
+                    var deltasByTokenOrder = {};
+                    var deltasByRowId = {};
+                    for (var rk in rowsData) {
+                        if (rowsData.hasOwnProperty(rk)) {
+                            var d = rowsData[rk];
+                            if (d) {
+                                if (d.token_order !== undefined && d.token_order !== null && String(d.token_order) !== "") {
+                                    deltasByTokenOrder[String(d.token_order)] = d;
                                 }
-                            }
-                        }
-                        for (var wc = 0; wc < wCards.length; wc++) {
-                            var cardWords = wCards[wc].words;
-                            if (cardWords) {
-                                for (var ww = 0; ww < cardWords.length; ww++) {
-                                    var cw = cardWords[ww];
-                                    var matchingDelta = null;
-                                    if (cw.token_order !== undefined && cw.token_order !== null && deltasByTokenOrder[String(cw.token_order)]) {
-                                        matchingDelta = deltasByTokenOrder[String(cw.token_order)];
-                                    } else if (cw.row_id !== undefined && cw.row_id !== null && deltasByRowId[String(cw.row_id)]) {
-                                        var candDelta = deltasByRowId[String(cw.row_id)];
-                                        if (candDelta) {
-                                            var candLem = (candDelta.lemma || '').trim().toLowerCase();
-                                            var cwLem = (cw.lemma || '').trim().toLowerCase();
-                                            var candOrd = (candDelta.token_order !== undefined && candDelta.token_order !== null) ? String(candDelta.token_order) : null;
-                                            if ((candOrd && String(cw.token_order) === candOrd) || (candLem && cwLem && candLem === cwLem) || !candLem) {
-                                                matchingDelta = candDelta;
-                                            }
-                                        }
-                                    }
-                                    if (matchingDelta) {
-                                        var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
-                                        if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
-                                        if (matchingDelta.lemma) cw.lemma = matchingDelta.lemma;
-                                        if (matchingDelta.ipa) cw.ipa = matchingDelta.ipa;
-                                        var mMorph = (matchingDelta.morph !== undefined && matchingDelta.morph !== "") ? matchingDelta.morph : ((matchingDelta.morphology !== undefined && matchingDelta.morphology !== "") ? matchingDelta.morphology : matchingDelta.WordSourceMorphologyAI);
-                                        if (mMorph !== undefined && mMorph !== "") cw.morphology = mMorph;
-                                        if (matchingDelta.pos !== undefined) cw.pos = matchingDelta.pos;
-                                        else if (matchingDelta.WordSourcePOS !== undefined) cw.pos = matchingDelta.WordSourcePOS;
-                                        if (matchingDelta.gender !== undefined) cw.gender = matchingDelta.gender;
-                                        else if (matchingDelta.WordSourceGender !== undefined) cw.gender = matchingDelta.WordSourceGender;
-                                        if (matchingDelta.provenance) cw.provenance = matchingDelta.provenance;
-                                        cw.row_html = null;
-                                    }
+                                if (d.row_id !== undefined && d.row_id !== null && String(d.row_id) !== "") {
+                                    deltasByRowId[String(d.row_id)] = d;
                                 }
+                                deltasByRowId[String(rk)] = d;
                             }
-                        }
-                        if (window.WorkspaceTabs && typeof window.WorkspaceTabs.rebindActiveTab === 'function') {
-                            window.WorkspaceTabs.rebindActiveTab();
                         }
                     }
+                    for (var wc = 0; wc < wCards.length; wc++) {
+                        var cardWords = wCards[wc].words;
+                        if (cardWords) {
+                            for (var ww = 0; ww < cardWords.length; ww++) {
+                                var cw = cardWords[ww];
+                                var matchingDelta = null;
+                                if (cw.token_order !== undefined && cw.token_order !== null && deltasByTokenOrder[String(cw.token_order)]) {
+                                    matchingDelta = deltasByTokenOrder[String(cw.token_order)];
+                                } else if (cw.row_id !== undefined && cw.row_id !== null && deltasByRowId[String(cw.row_id)]) {
+                                    var candDelta = deltasByRowId[String(cw.row_id)];
+                                    if (candDelta) {
+                                        var candLem = (candDelta.lemma || '').trim().toLowerCase();
+                                        var cwLem = (cw.lemma || '').trim().toLowerCase();
+                                        var candOrd = (candDelta.token_order !== undefined && candDelta.token_order !== null) ? String(candDelta.token_order) : null;
+                                        if ((candOrd && String(cw.token_order) === candOrd) || (candLem && cwLem && candLem === cwLem) || !candLem) {
+                                            matchingDelta = candDelta;
+                                        }
+                                    }
+                                }
+                                if (matchingDelta) {
+                                    var mTrans = (matchingDelta.trans !== undefined && matchingDelta.trans !== "") ? matchingDelta.trans : ((matchingDelta.WordDestination !== undefined && matchingDelta.WordDestination !== "") ? matchingDelta.WordDestination : matchingDelta.word_translation);
+                                    if (mTrans !== undefined && mTrans !== "") cw.translation = mTrans;
+                                    if (matchingDelta.lemma) cw.lemma = matchingDelta.lemma;
+                                    if (matchingDelta.ipa) cw.ipa = matchingDelta.ipa;
+                                    var mMorph = (matchingDelta.morph !== undefined && matchingDelta.morph !== "") ? matchingDelta.morph : ((matchingDelta.morphology !== undefined && matchingDelta.morphology !== "") ? matchingDelta.morphology : matchingDelta.WordSourceMorphologyAI);
+                                    if (mMorph !== undefined && mMorph !== "") cw.morphology = mMorph;
+                                    if (matchingDelta.pos !== undefined) cw.pos = matchingDelta.pos;
+                                    else if (matchingDelta.WordSourcePOS !== undefined) cw.pos = matchingDelta.WordSourcePOS;
+                                    if (matchingDelta.gender !== undefined) cw.gender = matchingDelta.gender;
+                                    else if (matchingDelta.WordSourceGender !== undefined) cw.gender = matchingDelta.WordSourceGender;
+                                    var newProv = (matchingDelta.provenance !== undefined && matchingDelta.provenance !== null && String(matchingDelta.provenance).trim() !== "") ? matchingDelta.provenance : (cw.provenance || (window.AppState && window.AppState.rows && ((cw.token_order !== undefined && window.AppState.rows[String(cw.token_order)] && window.AppState.rows[String(cw.token_order)].provenance) || (cw.row_id !== undefined && window.AppState.rows[String(cw.row_id)] && window.AppState.rows[String(cw.row_id)].provenance))) || "");
+                                    if (newProv) {
+                                        cw.provenance = newProv;
+                                    }
+                                    cw.row_html = null;
+                                }
+                            }
+                        }
+                    }
+                    if (window.WorkspaceTabs && typeof window.WorkspaceTabs.rebindActiveTab === 'function') {
+                        window.WorkspaceTabs.rebindActiveTab();
+                    }
                 }
+                window.applyCardProgressiveUpdate = applyCardProgressiveUpdate;
+                applyCardProgressiveUpdate(rowsData);
                 if (window.AppState.isFinished) {
                     var tc = document.getElementById('translation-container');
                     if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader') || !tc.textContent.trim())) {
@@ -17881,7 +17886,11 @@ html, body {{
                         var selAttr = isSel ? '1' : '0';
                         var hlClass = w.highlight_class || 'highlight-orange';
                         if (isSel) hlClass += ' selected kw-row-selected';
-                        var provAttr = w.provenance ? (' data-provenance="' + escapeHtml(w.provenance) + '" title="' + escapeHtml(formatProvenanceTooltip(w.provenance)) + '"') : '';
+                        var effectiveProv = w.provenance || (appRow && appRow.provenance) || (window.AppState && window.AppState.rows && ((tOrdStr && window.AppState.rows[tOrdStr] && window.AppState.rows[tOrdStr].provenance) || (rIdStr && window.AppState.rows[rIdStr] && window.AppState.rows[rIdStr].provenance))) || (window.AppState && window.AppState.rowProvenances && (window.AppState.rowProvenances[tOrdStr] || window.AppState.rowProvenances[rIdStr])) || '';
+                        if (effectiveProv && !w.provenance) {
+                            w.provenance = effectiveProv;
+                        }
+                        var provAttr = effectiveProv ? (' data-provenance="' + escapeHtml(effectiveProv) + '" title="' + escapeHtml(formatProvenanceTooltip(effectiveProv)) + '"') : '';
                         var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                         var cardSentenceText = (w.sentence_text || (window.AppState ? window.AppState.sourceText : '') || '');
@@ -17890,7 +17899,7 @@ html, body {{
                         var ipaTooltip = (w.ipa && w.ipa.indexOf('skeleton-loader') === -1) ? w.ipa : '';
                         var morphTooltip = (w.morphology && w.morphology.indexOf('skeleton-loader') === -1) ? w.morphology : '';
                         var posTooltip = formatPosTooltip(w.pos || '');
-                        var genTooltip = formatGenderTooltip(w.gender || '', w.lemma || '', w.provenance || '');
+                        var genTooltip = formatGenderTooltip(w.gender || '', w.lemma || '', effectiveProv || w.provenance || '');
 
                         var infTitleAttr = infTooltip ? (' title="' + escapeHtml(infTooltip) + '"') : '';
                         var lemTitleAttr = lemTooltip ? (' title="' + escapeHtml(lemTooltip) + '"') : '';

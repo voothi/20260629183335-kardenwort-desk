@@ -1613,5 +1613,106 @@ de_prompt=test
         assert res["rows"][1]["provenance"] == "live:google"
 
 
+def test_progressive_task_preserves_row_provenance(tmp_path):
+    """Test 1.1, 1.2, 3.1: Progressive translation preserves row_provenances in arbiter session and emits in finished event."""
+    from kardenwort_controller import EnrichmentQueue
+    import threading
+
+    config_path = tmp_path / "config.ini"
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[roles]\nlemma=WordSource\nword_translation=WordDestination\nsentence_index=SentenceSourceIndex\nsentence_destination=SentenceDestination\n"
+        "[fields]\nTokenOrder=\nWordSource=\nWordDestination=\nSentenceSourceIndex=\nSentenceDestination=\n",
+        encoding="utf-8"
+    )
+
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+
+    config_path.write_text(f"""[pipeline]
+text_base_provider=deepl
+[storage]
+backend=tsv
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[translation]
+translation_strategy=chain
+[triggers]
+run_text_translation=manual
+run_lemma_base_translation=auto
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(config_path)
+    sess_zid = "20260914180848"
+    tsv_file = results_dir / f"{sess_zid}.de.tsv"
+    tsv_file.write_text(
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
+        "0\tHaus\t\t1\n"
+        "1\tBaum\t\t1\n",
+        encoding="utf-8"
+    )
+
+    arbiter = MagicMock()
+    arbiter._lock = threading.Lock()
+    arbiter.config = config
+    arbiter.resolved_paths = resolved_paths
+    arbiter.storage_adapter = None
+    emitted_events = []
+    arbiter.emit_event = lambda sz, ev: emitted_events.append((sz, ev))
+    arbiter.propagate_translations_to_siblings = lambda *a, **kw: None
+
+    arbiter.sessions = {
+        sess_zid: {
+            "session_zid": sess_zid,
+            "text": "Haus. Baum.",
+            "comments": ["# comment"],
+            "headers": ["TokenOrder", "WordSource", "WordDestination", "SentenceSourceIndex"],
+            "data_rows": [["0", "Haus", "", "1"], ["1", "Baum", "", "1"]],
+            "language": "de",
+            "target_lang": "ru",
+            "text_mode": "single",
+            "tsv_path": str(tsv_file),
+            "row_provenances": {},
+        }
+    }
+
+    mock_trans = ProvenanceDict({"Haus": "дом", "Baum": "дерево"}, provenance="live:deepl")
+
+    with patch("kardenwort_controller.translate_lemmas_fast_path", return_value=mock_trans):
+        queue = EnrichmentQueue(config=config, resolved_paths=resolved_paths)
+        queue._execute_progressive_task(
+            session_zid=sess_zid,
+            arbiter=arbiter,
+            language="de",
+            target_lang="ru",
+            text_mode="single",
+            skip_intellifiller=True,
+        )
+
+    # 1. arbiter session MUST have row_provenances updated
+    assert sess_zid in arbiter.sessions
+    sess_provs = arbiter.sessions[sess_zid].get("row_provenances", {})
+    assert sess_provs.get(0) == "live:deepl" or sess_provs.get("0") == "live:deepl"
+    assert sess_provs.get(1) == "live:deepl" or sess_provs.get("1") == "live:deepl"
+
+    # 2. Terminal finished event must have row_provenances and formatted rows with provenance
+    fin_events = [ev for sz, ev in emitted_events if ev.get("stage") == "finished"]
+    assert len(fin_events) >= 1
+    last_fin = fin_events[-1]
+    assert last_fin.get("status") == "success"
+    assert "row_provenances" in last_fin
+    assert last_fin["row_provenances"].get(0) == "live:deepl" or last_fin["row_provenances"].get("0") == "live:deepl"
+    assert last_fin["row_provenances"].get(1) == "live:deepl" or last_fin["row_provenances"].get("1") == "live:deepl"
+    assert "rows" in last_fin
+    assert last_fin["rows"][0]["provenance"] == "live:deepl"
+    assert last_fin["rows"][1]["provenance"] == "live:deepl"
+
+
 if __name__ == "__main__":
     unittest.main()
+
