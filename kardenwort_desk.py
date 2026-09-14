@@ -10349,9 +10349,9 @@ html, body {{
         elif h_lower == "morphology":
             th_elements.append(f'<th class="col-morphology">{h}</th>')
         elif h_lower == "pos":
-            th_elements.append('<th class="col-pos"></th>')
+            th_elements.append('<th class="col-pos">POS</th>')
         elif h_lower == "g":
-            th_elements.append('<th class="col-gender"></th>')
+            th_elements.append('<th class="col-gender">Gender</th>')
         else:
             th_elements.append(f'<th>{h}</th>')
     table_header_html = "<tr>" + "".join(th_elements) + "</tr>"
@@ -19440,9 +19440,9 @@ def render_section(token, ctx):
                 continue
             valid_tokens.append(col_token.lower())
             if col_token.lower() == "pos":
-                html_output += '<th class="col-pos"></th>'
+                html_output += '<th class="col-pos">POS</th>'
             elif col_token.lower() in ("gender", "g"):
-                html_output += '<th class="col-gender"></th>'
+                html_output += '<th class="col-gender">Gender</th>'
             elif col_token.lower() in ("oxford", "cambridge", "goethe", "cefr", "classification"):
                 html_output += '<th class="col-classification">CEFR</th>'
             elif col_token.lower() == "inflected":
