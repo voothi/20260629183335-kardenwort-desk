@@ -5826,6 +5826,101 @@ def test_watchdog_busy_within_ceiling_extends_budget(page):
     assert page.locator(".btn-retry-cell").count() == 0
 
 
+def test_format_gender_badge_suppresses_none_noise(page):
+    """
+    Verify that window.formatGenderBadge suppresses 'None', 'none', 'null', 'n/a', '-',
+    and that DOM rendering producing words with gender 'None' or 'none' produces empty cells.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20260914103721">
+<div class="container">
+  <table id="lemma-table">
+    <thead>
+      <tr>
+        <th data-col="WordSource">Source</th>
+        <th data-col="WordDestination">Translation</th>
+        <th class="col-gender" data-col="WordSourceGender">Gender</th>
+      </tr>
+    </thead>
+    <tbody id="lemma-tbody">
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # 1. Direct unit assertions on formatGenderBadge
+    assert page.evaluate("window.formatGenderBadge('None')") == ""
+    assert page.evaluate("window.formatGenderBadge('none')") == ""
+    assert page.evaluate("window.formatGenderBadge('null')") == ""
+    assert page.evaluate("window.formatGenderBadge('n/a')") == ""
+    assert page.evaluate("window.formatGenderBadge('-')") == ""
+    assert page.evaluate("window.formatGenderBadge('')") == ""
+    assert page.evaluate("window.formatGenderBadge(null)") == ""
+    assert page.evaluate("window.formatGenderBadge(undefined)") == ""
+    assert page.evaluate("window.formatGenderBadge('<span class=\"kw-gender kw-gender-none\">None</span>')") == ""
+
+    # Canonical genders produce valid badge
+    assert page.evaluate("window.formatGenderBadge('m')") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert page.evaluate("window.formatGenderBadge('masc')") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert page.evaluate("window.formatGenderBadge('der')") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert page.evaluate("window.formatGenderBadge('f')") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert page.evaluate("window.formatGenderBadge('fem')") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert page.evaluate("window.formatGenderBadge('die')") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert page.evaluate("window.formatGenderBadge('n')") == '<span class="kw-gender kw-gender-n">n</span>'
+    assert page.evaluate("window.formatGenderBadge('neut')") == '<span class="kw-gender kw-gender-n">n</span>'
+    assert page.evaluate("window.formatGenderBadge('das')") == '<span class="kw-gender kw-gender-n">n</span>'
+
+    # 2. Render cards with bindCardWordsToTbody
+    page.evaluate("""
+        var tbody = document.getElementById('lemma-tbody');
+        var words = [
+            { row_id: 0, token_order: "0", lemma: "der", translation: "the", gender: "None" },
+            { row_id: 1, token_order: "1", lemma: "geben", translation: "to give", gender: "none" },
+            { row_id: 2, token_order: "2", lemma: "Hund", translation: "dog", gender: "m" }
+        ];
+        window.bindCardWordsToTbody(tbody, words, {});
+    """)
+
+    # Verify DOM for row 0 ("der") and row 1 ("geben") contain no gender badges
+    row0_cell = page.locator("tr[data-row-id='0'] td.col-gender")
+    assert row0_cell.locator(".kw-gender").count() == 0
+    assert row0_cell.inner_text().strip() == ""
+
+    row1_cell = page.locator("tr[data-row-id='1'] td.col-gender")
+    assert row1_cell.locator(".kw-gender").count() == 0
+    assert row1_cell.inner_text().strip() == ""
+
+    # Verify DOM for row 2 ("Hund") contains canonical masculine badge
+    row2_cell = page.locator("tr[data-row-id='2'] td.col-gender")
+    assert row2_cell.locator(".kw-gender.kw-gender-m").count() == 1
+    assert row2_cell.inner_text().strip() == "m"
+
+    # 3. Verify that re-render with AppState.rows containing gender: "None" remains suppressed
+    page.evaluate("""
+        window.AppState = window.AppState || {};
+        window.AppState.rows = {
+            "0": { token_order: "0", lemma: "der", gender: "None" },
+            "1": { token_order: "1", lemma: "geben", gender: "none" }
+        };
+        var tbody = document.getElementById('lemma-tbody');
+        var words = [
+            { row_id: 0, token_order: "0", lemma: "der", translation: "the" },
+            { row_id: 1, token_order: "1", lemma: "geben", translation: "to give" }
+        ];
+        window.bindCardWordsToTbody(tbody, words, {});
+    """)
+    assert row0_cell.locator(".kw-gender").count() == 0
+    assert row0_cell.inner_text().strip() == ""
+    assert row1_cell.locator(".kw-gender").count() == 0
+    assert row1_cell.inner_text().strip() == ""
+
+
+
 
 
 

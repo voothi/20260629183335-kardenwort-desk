@@ -2459,11 +2459,11 @@ def format_classification_tooltip(classification_val: Optional[str], role: str =
 
 def format_gender_badge(gender_val: Optional[str]) -> str:
     g = (str(gender_val) if gender_val is not None else "").strip().lower()
-    if g in ("m", "masc", "masculine"):
+    if g in ("m", "masc", "masculine", "der"):
         return '<span class="kw-gender kw-gender-m">m</span>'
-    elif g in ("f", "fem", "feminine"):
+    elif g in ("f", "fem", "feminine", "die"):
         return '<span class="kw-gender kw-gender-f">f</span>'
-    elif g in ("n", "neut", "neuter"):
+    elif g in ("n", "neut", "neuter", "das"):
         return '<span class="kw-gender kw-gender-n">n</span>'
     return ""
 
@@ -12455,12 +12455,35 @@ html, body {{
         return valStr;
     }
 
+    function formatGenderBadge(genderVal) {
+        if (!genderVal) return "";
+        var g = String(genderVal).trim();
+        if (g.indexOf('<span') !== -1) {
+            var m = g.match(/\bkw-gender-(m|f|n)\b/i);
+            if (m) {
+                var code = m[1].toLowerCase();
+                return '<span class="kw-gender kw-gender-' + code + '">' + code + '</span>';
+            }
+            return "";
+        }
+        var gLower = g.toLowerCase();
+        if (gLower === 'm' || gLower === 'masc' || gLower === 'masculine' || gLower === 'der') {
+            return '<span class="kw-gender kw-gender-m">m</span>';
+        } else if (gLower === 'f' || gLower === 'fem' || gLower === 'feminine' || gLower === 'die') {
+            return '<span class="kw-gender kw-gender-f">f</span>';
+        } else if (gLower === 'n' || gLower === 'neut' || gLower === 'neuter' || gLower === 'das') {
+            return '<span class="kw-gender kw-gender-n">n</span>';
+        }
+        return "";
+    }
+
     window.toUnicodeBold = toUnicodeBold;
     window.formatInflectedTooltip = formatInflectedTooltip;
     window.formatLemmaTooltip = formatLemmaTooltip;
     window.formatPosTooltip = formatPosTooltip;
     window.formatGenderTooltip = formatGenderTooltip;
     window.formatClassificationTooltip = formatClassificationTooltip;
+    window.formatGenderBadge = formatGenderBadge;
 
     function getTextBaseProvider() {
         var el = document.getElementById('text-base-provider');
@@ -13895,22 +13918,7 @@ html, body {{
                         if (genderCell && !genderCell.classList.contains('dirty')) {
                             var div = genderCell.querySelector('.scrollable-cell') || genderCell;
                             var rawGender = (rowData.gender !== undefined && rowData.gender !== null) ? rowData.gender : (rowData.WordSourceGender || "");
-                            var targetGenderHtml = "";
-                            if (typeof rawGender === 'string') {
-                                var gTrim = rawGender.trim();
-                                if (gTrim.indexOf('<span') !== -1) {
-                                    targetGenderHtml = gTrim;
-                                } else {
-                                    var gLower = gTrim.toLowerCase();
-                                    if (gLower === 'm' || gLower === 'masc' || gLower === 'masculine') {
-                                        targetGenderHtml = '<span class="kw-gender kw-gender-m">m</span>';
-                                    } else if (gLower === 'f' || gLower === 'fem' || gLower === 'feminine') {
-                                        targetGenderHtml = '<span class="kw-gender kw-gender-f">f</span>';
-                                    } else if (gLower === 'n' || gLower === 'neut' || gLower === 'neuter') {
-                                        targetGenderHtml = '<span class="kw-gender kw-gender-n">n</span>';
-                                    }
-                                }
-                            }
+                            var targetGenderHtml = formatGenderBadge(rawGender);
                             var oldGenderHtml = div.innerHTML;
                             if (oldGenderHtml !== targetGenderHtml) {
                                 if (!genderCell.classList.contains('editing')) div.innerHTML = targetGenderHtml;
@@ -18014,7 +18022,7 @@ html, body {{
                             '<td class="col-ipa" data-col="WordSourceIPA"' + ipaTitleAttr + '><div class="scrollable-cell">' + (w.ipa || '') + '</div></td>' +
                             '<td class="col-morphology" data-col="WordSourceMorphologyAI"' + morphTitleAttr + '><div class="scrollable-cell">' + (w.morphology || '') + '</div></td>' +
                             '<td class="col-pos" data-col="WordSourcePOS"' + posTitleAttr + '><div class="scrollable-cell">' + (w.pos || '') + '</div></td>' +
-                            '<td class="col-gender" data-col="WordSourceGender"' + genTitleAttr + '><div class="scrollable-cell">' + (w.gender ? (w.gender.indexOf('<span') !== -1 ? w.gender : ('<span class="kw-gender kw-gender-' + w.gender.toLowerCase() + '">' + w.gender + '</span>')) : '') + '</div></td>' +
+                            '<td class="col-gender" data-col="WordSourceGender"' + genTitleAttr + '><div class="scrollable-cell">' + formatGenderBadge(w.gender) + '</div></td>' +
                             (w.dynamic_tds || '') +
                             '</tr>'
                         );
@@ -18029,6 +18037,7 @@ html, body {{
                     window.rebindTableRows();
                 }
             }
+            window.bindCardWordsToTbody = bindCardWordsToTbody;
 
             function updateActiveTabTranslation() {
                 var transContainer = document.getElementById('translation-container');
