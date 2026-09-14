@@ -11696,21 +11696,18 @@ html, body {{
     user-select: none;
     border-bottom: 1px solid {table_border};
   }
-  .kw-empty-selection-cell span {
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    gap: 6px;
-  }
   .kw-empty-clear-filter-btn {
+    display: inline;
     background: transparent;
     border: none;
     color: {flipped_text};
     text-decoration: underline;
     cursor: pointer;
-    font-size: 13px;
+    font-size: inherit;
     font-family: inherit;
-    padding: 0 2px;
+    padding: 0;
+    margin: 0;
+    vertical-align: baseline;
   }
   .kw-empty-clear-filter-btn:hover {
     filter: brightness(1.2);
