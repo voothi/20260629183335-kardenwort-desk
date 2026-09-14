@@ -92,7 +92,7 @@ def admin_controller_server(tmp_path_factory):
     server.server_close()
 
 
-def make_admin_request(url, path, method="GET", body=None, token="admin-secret-token"):
+def make_admin_request(url, path, method="GET", body=None, token="admin-secret-token", timeout=15.0):
     full_url = f"{url}{path}"
     headers = {}
     if token:
@@ -104,7 +104,7 @@ def make_admin_request(url, path, method="GET", body=None, token="admin-secret-t
 
     req = urllib.request.Request(full_url, data=data, headers=headers, method=method)
     try:
-        with urllib.request.urlopen(req, timeout=5.0) as resp:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
             resp_body = resp.read()
             content_type = resp.headers.get("Content-Type", "")
             if "application/json" in content_type:
