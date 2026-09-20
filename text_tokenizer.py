@@ -21,6 +21,70 @@ def is_word_char(c: str) -> bool:
             return True
     return c in WORD_CHARS
 
+# Informal apostrophe-less contractions recognized by spaCy
+INFORMAL_CONTRACTIONS = {
+    # Pronoun / Noun + 've
+    "ive": 1,
+    "youve": 3,
+    "weve": 2,
+    "theyve": 4,
+    "couldve": 5,
+    "shouldve": 6,
+    "wouldve": 5,
+    "mightve": 5,
+    "mustve": 4,
+    # Pronoun + 're (note: 'were' is omitted as it is past tense of 'be')
+    "youre": 3,
+    "theyre": 4,
+    # Verb + n't (negation)
+    "dont": 2,
+    "didnt": 3,
+    "doesnt": 4,
+    "cant": 2,
+    "wont": 2,
+    "isnt": 2,
+    "arent": 3,
+    "wasnt": 3,
+    "werent": 4,
+    "hasnt": 3,
+    "havent": 4,
+    "hadnt": 3,
+    "couldnt": 5,
+    "shouldnt": 6,
+    "wouldnt": 5,
+    "mustnt": 4,
+    "neednt": 4,
+    "darent": 4,
+    "aint": 2,
+    # Pronoun + 'd (unambiguous)
+    "youd": 3,
+    "theyd": 4,
+    # Pronoun + 'll (unambiguous; 'ill', 'well', 'shell' omitted)
+    "youll": 3,
+    "theyll": 4,
+    "itll": 2,
+    "thatll": 4,
+}
+
+# Explicit safeguards: English words or abbreviations that MUST NEVER be decomposed
+SAFEGUARD_WORDS = {"id", "wed", "were", "ill", "well", "shell", "canton", "cantor"}
+
+def split_informal_contraction(s: str) -> list:
+    """
+    Split informal English contractions without apostrophes (e.g. Ive -> ['I', 've'],
+    dont -> ['do', 'nt'], didnt -> ['did', 'nt']) into constituent sub-tokens.
+    Preserves casing of original slices.
+    """
+    if not s or any(ch in APOSTROPHE_CHARS for ch in s):
+        return []
+    lower_s = utf8_to_lower(s)
+    if lower_s in SAFEGUARD_WORDS:
+        return []
+    if lower_s in INFORMAL_CONTRACTIONS:
+        split_idx = INFORMAL_CONTRACTIONS[lower_s]
+        return [s[:split_idx], s[split_idx:]]
+    return []
+
 def build_word_list_internal(text: str, keep_spaces: bool) -> list:
     """Scanner-parser: tokenizes text into atoms matching Lua text_utils.lua build_word_list_internal."""
     tokens = []
@@ -77,10 +141,19 @@ def build_word_list_internal(text: str, keep_spaces: bool) -> list:
                     break
             raw_word = "".join(chars[start:i])
             camel_parts = split_camel_case(raw_word)
-            sub_units = camel_parts if len(camel_parts) > 1 else [raw_word]
-            comp_id = curr_compound_id if len(camel_parts) > 1 else None
             if len(camel_parts) > 1:
+                sub_units = camel_parts
+                comp_id = curr_compound_id
                 curr_compound_id += 1
+            else:
+                contraction_parts = split_informal_contraction(raw_word)
+                if len(contraction_parts) > 1:
+                    sub_units = contraction_parts
+                    comp_id = curr_compound_id
+                    curr_compound_id += 1
+                else:
+                    sub_units = [raw_word]
+                    comp_id = None
 
             for unit in sub_units:
                 sub_tok = {
@@ -221,7 +294,12 @@ def decompose_identifier(s: str) -> list:
             result.append(raw)
             result.extend(camel_parts)
         else:
-            result.append(raw)
+            contraction_parts = split_informal_contraction(raw)
+            if len(contraction_parts) > 1:
+                result.append(raw)
+                result.extend(contraction_parts)
+            else:
+                result.append(raw)
     return result
 
 def extract_identifier_subtokens(s: str) -> list:
@@ -236,10 +314,14 @@ def extract_identifier_subtokens(s: str) -> list:
         if not raw:
             continue
         camel_parts = split_camel_case(raw)
-        if camel_parts:
+        if len(camel_parts) > 1:
             result.extend(camel_parts)
         else:
-            result.append(raw)
+            contraction_parts = split_informal_contraction(raw)
+            if contraction_parts:
+                result.extend(contraction_parts)
+            else:
+                result.append(raw)
     return result
 
 

@@ -376,6 +376,73 @@ def test_contractions_and_abbreviations_compatibility(page, tmp_path):
         assert cell_text != ""
 
 
+def test_informal_apostrophe_less_contractions_decomposition(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    source_text = "Ive learned that they didnt break wed or user id."
+    tsv_content = (
+        "# comment\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\n"
+        "I\tI\tя\n"
+        "have\tve\tиметь\n"
+        "learn\tlearned\tучить\n"
+        "they\tthey\tони\n"
+        "do\tdid\tделать\n"
+        "not\tnt\tне\n"
+        "break\tbreak\tломать\n"
+        "wed\twed\tжениться\n"
+        "user\tuser\tпользователь\n"
+        "id\tid\tидентификатор\n"
+    )
+    tsv_file = tmp_path / "20260920180930-informal.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20260920180930",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file)
+    )
+
+    page.set_content(html)
+
+    # 1. Verify "Ive" decomposes into "I" and "ve" sub-tokens sharing a compound_id
+    i_span = page.locator("#source-container span.word[data-lower-clean='i']")
+    ve_span = page.locator("#source-container span.word[data-lower-clean='ve']")
+    assert i_span.is_visible()
+    assert ve_span.is_visible()
+    assert "highlight-orange" in i_span.get_attribute("class")
+    assert "highlight-orange" in ve_span.get_attribute("class")
+    assert "not-connected" not in (i_span.get_attribute("class") or "")
+    assert "not-connected" not in (ve_span.get_attribute("class") or "")
+    comp_id_i = i_span.get_attribute("data-compound-id")
+    comp_id_ve = ve_span.get_attribute("data-compound-id")
+    assert comp_id_i is not None and comp_id_i == comp_id_ve
+
+    # 2. Verify "didnt" decomposes into "did" and "nt" sharing a compound_id
+    did_span = page.locator("#source-container span.word[data-lower-clean='did']")
+    nt_span = page.locator("#source-container span.word[data-lower-clean='nt']")
+    assert did_span.is_visible()
+    assert nt_span.is_visible()
+    assert "highlight-orange" in did_span.get_attribute("class")
+    assert "highlight-orange" in nt_span.get_attribute("class")
+    comp_id_did = did_span.get_attribute("data-compound-id")
+    comp_id_nt = nt_span.get_attribute("data-compound-id")
+    assert comp_id_did is not None and comp_id_did == comp_id_nt
+
+    # 3. Verify safeguard words wed and id remain atomic without compound_id
+    wed_span = page.locator("#source-container span.word[data-lower-clean='wed']")
+    id_span = page.locator("#source-container span.word[data-lower-clean='id']")
+    assert wed_span.is_visible()
+    assert id_span.is_visible()
+    assert wed_span.get_attribute("data-compound-id") is None
+    assert id_span.get_attribute("data-compound-id") is None
+    assert "highlight-orange" in wed_span.get_attribute("class")
+    assert "highlight-orange" in id_span.get_attribute("class")
+
+
 def test_lemma_strips_leading_zid_prefix(page, tmp_path):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     source_text = "Branch 20260815131120-token-mapping-inflected-expansion is ready."
