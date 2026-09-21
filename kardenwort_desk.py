@@ -12150,6 +12150,12 @@ html, body {{
   </div>
 </div>
 <div class="kw-toast-container" id="kw-toast-container"></div>
+<script id="ui-config" type="application/json">
+{ui_config_json}
+</script>
+<script type="text/javascript">
+window.__CONFIG__ = {ui_config_json};
+</script>
 <script id="sentence-cards" type="application/json">
 {sentence_cards_json}
 </script>
@@ -16526,6 +16532,7 @@ html, body {{
                     pushHistory(action);
                     rebuildDeltas();
                     touchedCells[rowId + '_' + colName] = true;
+                    if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
                 }
                 if (window.forceRepaint) window.forceRepaint();
             }
@@ -16622,6 +16629,7 @@ html, body {{
             pushHistory(action);
             applyAction(action);
             rebuildDeltas();
+            if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
         
         function pushHistory(action) {
@@ -16677,6 +16685,7 @@ html, body {{
             historyIndex--;
             revertAction(action);
             rebuildDeltas();
+            if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
         
         window.redo = function() {
@@ -16685,6 +16694,7 @@ html, body {{
             var action = historyStack[historyIndex];
             applyAction(action);
             rebuildDeltas();
+            if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
         
         function rebuildDeltas() {
@@ -17299,19 +17309,19 @@ html, body {{
         window.retrySession = retrySession;
 
 
-        window.onSaveClick = function() {
+        window.onSaveClick = function(quiet) {
             if (window.commitActiveEdit) window.commitActiveEdit();
             if (!window.isDirty()) {
-                window.showToast("No changes to save.", "info");
+                if (!quiet) window.showToast("No changes to save.", "info");
                 return;
             }
             if (typeof fetch === 'undefined') {
-                window.showToast("Network save unavailable in this environment.", "warning");
+                if (!quiet) window.showToast("Network save unavailable in this environment.", "warning");
                 return;
             }
             var sZid = getSessionZid();
             if (!sZid) {
-                window.showToast("Session ZID missing, cannot save.", "error");
+                if (!quiet) window.showToast("Session ZID missing, cannot save.", "error");
                 return;
             }
             var deltasJson = [];
@@ -17357,6 +17367,73 @@ html, body {{
                 window.showToast("Save error: " + formatErrorWithTrace(err, "Network error"), "error");
             });
         };
+
+        var autoSaveDebounceTimer = null;
+        window.triggerAutoSaveOnEdit = function() {
+            var uiCfg = window.__CONFIG__ || {};
+            if (!uiCfg.auto_save_on_edit) return;
+            if (autoSaveDebounceTimer) {
+                clearTimeout(autoSaveDebounceTimer);
+            }
+            autoSaveDebounceTimer = setTimeout(function() {
+                if (window.isDirty && window.isDirty() && typeof window.onSaveClick === 'function') {
+                    window.onSaveClick(true);
+                }
+            }, 300);
+        };
+
+        function performSilentAutoSaveOnClose() {
+            var uiCfg = window.__CONFIG__ || {};
+            if (!uiCfg.auto_save_on_close) return;
+            if (typeof window.commitActiveEdit === 'function') {
+                try { window.commitActiveEdit(); } catch(e) {}
+            }
+            if (!window.isDirty || !window.isDirty()) return;
+            if (typeof fetch === 'undefined') return;
+            var sZid = (typeof getSessionZid === 'function') ? getSessionZid() : null;
+            if (!sZid) return;
+            var deltasJson = [];
+            try {
+                deltasJson = JSON.parse(window.getDeltas());
+            } catch(e) {}
+            if (!deltasJson || deltasJson.length === 0) return;
+
+            var tok = (typeof getApiToken === 'function') ? getApiToken() : '';
+            var headers = { 'Content-Type': 'application/json' };
+            if (tok) headers['X-API-Token'] = tok;
+            var bodyPayload = {
+                session_zid: sZid,
+                deltas: deltasJson,
+                language: (typeof getSessionLang === 'function') ? getSessionLang() : ''
+            };
+            if (tok) bodyPayload.token = tok;
+            var bodyStr = JSON.stringify(bodyPayload);
+
+            try {
+                fetch('/session/save', {
+                    method: 'POST',
+                    headers: headers,
+                    body: bodyStr,
+                    keepalive: true
+                });
+            } catch(e) {
+                if (navigator && navigator.sendBeacon) {
+                    try {
+                        var blob = new Blob([bodyStr], { type: 'application/json' });
+                        navigator.sendBeacon('/session/save', blob);
+                    } catch(e2) {}
+                }
+            }
+        }
+
+        if (typeof window !== 'undefined' && window.addEventListener) {
+            window.addEventListener('pagehide', performSilentAutoSaveOnClose);
+            window.addEventListener('visibilitychange', function() {
+                if (document.visibilityState === 'hidden') {
+                    performSilentAutoSaveOnClose();
+                }
+            });
+        }
 
         window.onUpdateClick = function(forceReload) {
             if (window.commitActiveEdit) window.commitActiveEdit();
@@ -19054,6 +19131,8 @@ setTimeout(function() {{
     html_page = html_page.replace("{lang_mismatch_body}", lang_mismatch_body)
     html_page = html_page.replace("{lang_modal_display}", lang_modal_display)
     html_page = html_page.replace("{mismatch_info_json}", json.dumps(mismatch_info) if mismatch_info else "null")
+    ui_cfg = resolve_ui_config(config)
+    html_page = html_page.replace("{ui_config_json}", json.dumps(ui_cfg))
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{target_language}", target_lang)

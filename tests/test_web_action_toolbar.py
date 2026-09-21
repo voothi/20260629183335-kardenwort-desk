@@ -1518,6 +1518,124 @@ window.fetch = async (url, options) => {
     assert "дерево" in cell1_trans.inner_text()
 
 
+def test_window_config_injection_in_render_flow(tmp_path):
+    """
+    Verify window.__CONFIG__ and <script id="ui-config"> are injected during run_render_flow.
+    """
+    from kardenwort_desk import run_render_flow, load_config, SEC_UI
+
+    cp, resolved_paths, _, _ = load_config()
+    if not cp.has_section(SEC_UI):
+        cp.add_section(SEC_UI)
+    cp.set(SEC_UI, 'auto_save_on_edit', 'true')
+    cp.set(SEC_UI, 'auto_save_on_close', 'true')
+    cp.set(SEC_UI, 'theme', 'dark')
+
+    html_out = run_render_flow(
+        text="Haus",
+        language="de",
+        zid="20260921223000",
+        text_mode="single",
+        config=cp,
+        resolved_paths=resolved_paths,
+        spawn_children=False,
+    )
+
+    assert '<script id="ui-config" type="application/json">' in html_out
+    assert 'window.__CONFIG__ = {"auto_save_on_edit": true, "auto_save_on_close": true' in html_out
+
+
+def test_web_auto_save_on_edit(page, tmp_path):
+    """
+    Verify editing a cell with auto_save_on_edit=true triggers debounced /session/save fetch.
+    """
+    mock_script = """<script>
+window.__fetches = [];
+window.fetch = async (url, options) => {
+    var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    window.__fetches.push({ url: url, options: options, body: bodyObj });
+    if (url === '/session/save') {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, status: 'success' })
+        };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+};
+</script>"""
+
+    html = get_desk_page_html(tmp_path, zid="20260921223001")
+    html = html.replace("<head>", f"<head>{mock_script}")
+    html = html.replace('"auto_save_on_edit": false', '"auto_save_on_edit": true')
+
+    page.set_content(html)
+
+    # Double click cell to edit
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    cell.dblclick()
+    edit_input = cell.locator("input")
+    edit_input.fill("домик_autosave")
+    page.keyboard.press("Enter")
+
+    # Wait for debounced auto-save to fire (300ms + buffer)
+    page.wait_for_timeout(600)
+
+    # Verify fetch('/session/save') was called with deltas
+    fetches = page.evaluate("() => window.__fetches")
+    save_fetches = [f for f in fetches if f["url"] == "/session/save"]
+    assert len(save_fetches) >= 1
+    assert save_fetches[0]["body"]["deltas"][0]["value"] == "домик_autosave"
+
+
+def test_web_auto_save_on_close_silent(page, tmp_path):
+    """
+    Verify pagehide triggers silent background /session/save fetch with keepalive=true.
+    """
+    mock_script = """<script>
+window.__fetches = [];
+window.fetch = async (url, options) => {
+    var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    window.__fetches.push({ url: url, options: options, body: bodyObj });
+    if (url === '/session/save') {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, status: 'success' })
+        };
+    }
+    return { ok: true, status: 200, json: async () => ({}) };
+};
+</script>"""
+
+    html = get_desk_page_html(tmp_path, zid="20260921223002")
+    html = html.replace("<head>", f"<head>{mock_script}")
+
+    page.set_content(html)
+
+    # Double click cell to make it dirty
+    cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    cell.dblclick()
+    edit_input = cell.locator("input")
+    edit_input.fill("жилище_onclose")
+    page.keyboard.press("Enter")
+
+    # auto_save_on_edit is false, so no save fetch has occurred yet
+    fetches_before = page.evaluate("() => window.__fetches")
+    assert not any(f["url"] == "/session/save" for f in fetches_before)
+
+    # Dispatch pagehide event (simulating tab closure or navigation)
+    page.evaluate("() => window.dispatchEvent(new Event('pagehide'))")
+
+    # Verify silent background fetch('/session/save') was issued with keepalive=true
+    fetches_after = page.evaluate("() => window.__fetches")
+    save_fetches = [f for f in fetches_after if f["url"] == "/session/save"]
+    assert len(save_fetches) == 1
+    assert save_fetches[0]["options"]["keepalive"] is True
+    assert save_fetches[0]["body"]["deltas"][0]["value"] == "жилище_onclose"
+
+
+
 
 
 
