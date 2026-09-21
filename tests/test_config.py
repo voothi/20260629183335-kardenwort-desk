@@ -529,4 +529,64 @@ def test_sentences_mode_tab_bar_position_default_and_fallback():
     assert smc_invalid.tab_bar_position == "top"
 
 
+def test_resolve_ui_config():
+    import configparser
+    from kardenwort_desk import resolve_ui_config, SEC_UI, SEC_RENDERING
+    
+    # 1. Defaults when config is None
+    cfg = resolve_ui_config(None)
+    assert cfg['auto_save_on_edit'] is False
+    assert cfg['auto_save_on_close'] is True
+    assert cfg['theme'] == 'dark'
+    assert cfg['launch_in_browser'] is True
+    assert cfg['default_zoom'] == 100
+    assert cfg['auto_inject_updates'] is True
+
+    # 2. Explicit [ui] and [rendering]
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_UI)
+    cp.set(SEC_UI, 'auto_save_on_edit', 'true')
+    cp.set(SEC_UI, 'auto_save_on_close', 'false')
+    cp.set(SEC_UI, 'theme', 'light')
+    cp.set(SEC_UI, 'launch_in_browser', 'false')
+    cp.add_section(SEC_RENDERING)
+    cp.set(SEC_RENDERING, 'default_zoom', '150')
+    cp.set(SEC_RENDERING, 'auto_inject_updates', 'false')
+
+    cfg2 = resolve_ui_config(cp)
+    assert cfg2['auto_save_on_edit'] is True
+    assert cfg2['auto_save_on_close'] is False
+    assert cfg2['theme'] == 'light'
+    assert cfg2['launch_in_browser'] is False
+    assert cfg2['default_zoom'] == 150
+    assert cfg2['auto_inject_updates'] is False
+
+
+def test_persist_default_language_omits_ahk_mutation(tmp_path):
+    from kardenwort_desk import persist_default_language
+
+    # Setup mock desk directory
+    desk_dir = tmp_path / "kardenwort-desk"
+    desk_dir.mkdir()
+    desk_config = desk_dir / "config.ini"
+    desk_config.write_text("[settings]\ndefault_language = de\n", encoding="utf-8")
+
+    # Setup mock sibling AHK directory
+    ahk_dir = tmp_path / "20240411110510-autohotkey" / "kardenwort-window"
+    ahk_dir.mkdir(parents=True)
+    ahk_config = ahk_dir / "config.ini"
+    ahk_config.write_text("[Settings]\nDefaultLanguage = de\n", encoding="utf-8")
+
+    # Persist language update
+    success = persist_default_language("en", base_dir=desk_dir)
+    assert success is True
+
+    # Desk config was updated
+    assert "default_language = en" in desk_config.read_text(encoding="utf-8")
+
+    # AHK config was NOT mutated (remains 'de')
+    assert "DefaultLanguage = de" in ahk_config.read_text(encoding="utf-8")
+
+
+
 

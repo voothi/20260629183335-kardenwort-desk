@@ -405,6 +405,7 @@ SEC_TRIGGERS = "triggers"
 SEC_TRANSLATION = "translation"
 SEC_TRANSLATION_PROVIDERS = "translation_providers"
 SEC_RENDERING = "rendering"
+SEC_UI = "ui"
 SEC_ENVIRONMENT = "environment"
 SEC_LANGUAGES = "languages"
 SEC_LANGUAGE_RESOURCES = "language_resources"
@@ -2084,9 +2085,46 @@ def load_config(config_path=None):
 
     wordfill = resolve_wordfill_config(config, resolved_paths)
 
+    if SEC_UI not in config:
+        config.add_section(SEC_UI)
+        config.set(SEC_UI, 'auto_save_on_edit', 'false')
+        config.set(SEC_UI, 'auto_save_on_close', 'true')
+        config.set(SEC_UI, 'theme', 'dark')
+        config.set(SEC_UI, 'launch_in_browser', 'true')
+
     _migrate_config(config)
     _validate_translation_config(config)
     return config, resolved_paths, goldendict, wordfill
+
+
+def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dict[str, Any]:
+    """
+    Extracts canonical UI configuration parameters with safe defaults.
+    """
+    ui_cfg = {
+        'auto_save_on_edit': False,
+        'auto_save_on_close': True,
+        'theme': 'dark',
+        'launch_in_browser': True,
+        'default_zoom': 100,
+        'auto_inject_updates': True,
+    }
+    if not config:
+        return ui_cfg
+
+    if SEC_UI in config:
+        ui = config[SEC_UI]
+        ui_cfg['auto_save_on_edit'] = ui.getboolean('auto_save_on_edit', fallback=False)
+        ui_cfg['auto_save_on_close'] = ui.getboolean('auto_save_on_close', fallback=True)
+        ui_cfg['theme'] = ui.get('theme', 'dark').strip().lower()
+        ui_cfg['launch_in_browser'] = ui.getboolean('launch_in_browser', fallback=True)
+
+    if SEC_RENDERING in config:
+        rend = config[SEC_RENDERING]
+        ui_cfg['default_zoom'] = rend.getint('default_zoom', fallback=100)
+        ui_cfg['auto_inject_updates'] = rend.getboolean('auto_inject_updates', fallback=True)
+
+    return ui_cfg
 
 
 def load_kardenwort_config(kardenwort_workspace):
@@ -23739,7 +23777,7 @@ def get_ahk_executable():
                 
 def persist_default_language(language: str, base_dir=None) -> bool:
     """
-    Persists the default language to config.ini files in both kardenwort-desk and kardenwort-window.
+    Persists the default language to config.ini in kardenwort-desk.
     Preserves comments and formatting via regex substitution.
     """
     if not language:
@@ -23751,7 +23789,7 @@ def persist_default_language(language: str, base_dir=None) -> bool:
 
     success = False
     
-    # 1. Update desk config.ini
+    # Update desk config.ini
     desk_config = base_dir / "config.ini"
     if desk_config.exists():
         try:
@@ -23767,25 +23805,6 @@ def persist_default_language(language: str, base_dir=None) -> bool:
                 success = True
         except Exception as e:
             logger.warning(f"Failed to update desk config.ini with default_language={language}: {e}")
-
-    # 2. Update autohotkey config.ini
-    ahk_repo = next(base_dir.parent.glob("*-autohotkey"), None) if base_dir.parent else None
-    if ahk_repo:
-        ahk_config = ahk_repo / "kardenwort-window" / "config.ini"
-        if ahk_config.exists():
-            try:
-                content = ahk_config.read_text(encoding="utf-8")
-                if re.search(r'(?i)^\s*DefaultLanguage\s*=', content, flags=re.MULTILINE):
-                    new_content = re.sub(
-                        r'(?i)^(\s*DefaultLanguage\s*=\s*).*$',
-                        r'\g<1>' + language,
-                        content,
-                        flags=re.MULTILINE
-                    )
-                    ahk_config.write_text(new_content, encoding="utf-8")
-                    success = True
-            except Exception as e:
-                logger.warning(f"Failed to update AHK config.ini with DefaultLanguage={language}: {e}")
 
     return success
 

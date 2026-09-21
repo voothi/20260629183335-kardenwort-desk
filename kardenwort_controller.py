@@ -24,6 +24,8 @@ from b64util import encode
 # Import core business logic primitives from kardenwort_desk
 from kardenwort_desk import (
     load_config,
+    resolve_ui_config,
+    SEC_UI,
     load_kardenwort_config,
     resolve_results_dir,
     load_anki_mapping,
@@ -4428,7 +4430,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     self.server.config.add_section(SEC_SETTINGS)
                 self.server.config.set(SEC_SETTINGS, 'default_language', language)
 
-            # 2. Persist to config.ini files (desk and AHK)
+            # 2. Persist to desk config.ini
             base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
             persisted = persist_default_language(language, base_dir=base_dir)
 
@@ -4439,6 +4441,21 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 "ok": True,
                 "language": language,
                 "persisted": persisted,
+            })
+            return
+
+        # Configuration retrieval endpoint
+        if path == '/api/v1/config':
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            ui_cfg = getattr(self.server, 'ui_cfg', None)
+            if not ui_cfg:
+                ui_cfg = resolve_ui_config(self.server.config)
+            default_lang = self.server.config.get(SEC_SETTINGS, 'default_language', fallback='de') if hasattr(self.server, 'config') and self.server.config else 'de'
+            self._send_json(200, {
+                "ok": True,
+                "ui": ui_cfg,
+                "default_language": default_lang,
             })
             return
 
@@ -4481,7 +4498,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                         self.server.config.add_section(SEC_SETTINGS)
                     self.server.config.set(SEC_SETTINGS, 'default_language', target_lang)
 
-                # 2. Persist to config.ini files (desk and AHK)
+                # 2. Persist to desk config.ini
                 base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
                 persist_default_language(target_lang, base_dir=base_dir)
 
@@ -5307,6 +5324,7 @@ def run_controller(args=None):
     server.resolved_paths = resolved_paths
     server.goldendict = goldendict
     server.wordfill_cfg = _wordfill
+    server.ui_cfg = resolve_ui_config(config)
     server.api_key = goldendict.get('server_api_key', '')
     server.seq_counter = 0
     server.seq_lock = threading.Lock()

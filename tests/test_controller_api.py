@@ -645,4 +645,24 @@ def test_progressive_in_flight_deduplication_and_sibling_sse_broadcast(running_c
     server.arbiter.unregister_subscriber(sess_b, sub_b)
 
 
+def test_get_config_api(running_controller):
+    """
+    Verify GET /api/v1/config returns UI configuration and default language.
+    """
+    server_url, server = running_controller
+    req = urllib.request.Request(f"{server_url}/api/v1/config")
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        payload = data.get("data", data)
+        assert payload.get("ok") is True
+        assert "ui" in payload
+        assert "auto_save_on_edit" in payload["ui"]
+        assert "auto_save_on_close" in payload["ui"]
+        assert "theme" in payload["ui"]
+        assert "launch_in_browser" in payload["ui"]
+        assert "default_language" in payload
+
+
+
 
