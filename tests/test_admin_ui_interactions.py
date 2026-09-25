@@ -137,3 +137,70 @@ def test_admin_sessions_shift_click_and_row_click(admin_page):
     assert page.locator("tr[data-zid='20260822000003']").evaluate("el => el.classList.contains('row-selected')") is True
     assert "3 selected" in page.locator("#sessions-selected-count").inner_text()
 
+
+def test_admin_sessions_batch_assign_interaction(admin_page):
+    page = admin_page
+
+    # Mock apiFetch to intercept batch-link and projects list
+    page.evaluate("""() => {
+        window.__batchLinkCalls = [];
+        window.apiFetch = async (url, opts) => {
+            if (url.includes('/api/v1/admin/projects/batch-link')) {
+                window.__batchLinkCalls.push(JSON.parse(opts.body));
+                return { ok: true, linked_count: 2 };
+            }
+            if (url.includes('/api/v1/admin/projects')) {
+                return { projects: [{ id: 42, title: "Target Book", children: [] }] };
+            }
+            if (url.includes('/api/v1/admin/sessions')) {
+                return { sessions: window.state.sessionsExplorer.sessions, total_count: 3 };
+            }
+            return { ok: true };
+        };
+        initModals();
+    }""")
+
+    # 1. Select first two rows
+    page.locator("tr[data-zid='20260822000001'] .session-row-checkbox").click()
+    page.locator("tr[data-zid='20260822000002'] .session-row-checkbox").click()
+
+    # 2. Verify "+ Assign to Node" button is visible in batch toolbar
+    batch_assign_btn = page.locator("#btn-batch-assign-sessions")
+    assert batch_assign_btn.is_visible() is True
+    assert "+ Assign to Node" in batch_assign_btn.inner_text()
+
+    # 3. Click "+ Assign to Node"
+    batch_assign_btn.click()
+
+    # 4. Modal should open in batch mode
+    assign_modal = page.locator("#assign-project-modal")
+    assert assign_modal.evaluate("el => !el.classList.contains('hidden')") is True
+    assert "Assign 2 Sessions to Project Node" in page.locator("#assign-modal-title").inner_text()
+    assert page.locator("#assign-modal-mode").input_value() == "batch"
+
+    # 5. Target node select options populated
+    select_el = page.locator("#assign-project-select")
+    assert select_el.locator("option").count() >= 1
+
+    # 6. Click Save/Assign button
+    page.locator("#btn-assign-modal-save").click()
+
+    # 7. Modal is hidden
+    assert assign_modal.evaluate("el => el.classList.contains('hidden')") is True
+
+    # 8. Verify backend was called with expected batch-link payload
+    calls = page.evaluate("() => window.__batchLinkCalls")
+    assert len(calls) == 1
+    assert calls[0]["project_id"] == 42
+    assert calls[0]["mode"] == "explicit"
+    assert "20260822000001" in calls[0]["session_zids"]
+    assert "20260822000002" in calls[0]["session_zids"]
+
+    # 9. Verify rows remain selected and highlighted (user requirement!)
+    assert page.locator("tr[data-zid='20260822000001']").evaluate("el => el.classList.contains('row-selected')") is True
+    assert page.locator("tr[data-zid='20260822000002']").evaluate("el => el.classList.contains('row-selected')") is True
+    assert page.locator("tr[data-zid='20260822000001'] .session-row-checkbox").evaluate("el => el.checked") is True
+    assert page.locator("tr[data-zid='20260822000002'] .session-row-checkbox").evaluate("el => el.checked") is True
+    assert "2 selected" in page.locator("#sessions-selected-count").inner_text()
+
+

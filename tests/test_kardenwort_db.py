@@ -1002,5 +1002,47 @@ def test_batch_update_words_sanitizes_non_canonical_gender(temp_db):
     assert refreshed_w2["gender"] is None
 
 
+def test_link_sessions_batch_explicit_and_filter(temp_db):
+    """Verify link_sessions_batch sequentially orders links and supports filters/exclusions."""
+    temp_db.run_migrations()
+    proj_id = temp_db.create_project(title="Batch Test Project", slug="batch-test")
+
+    s1 = "20260925200001"
+    s2 = "20260925200002"
+    s3 = "20260925200003"
+    temp_db.insert_session({"zid": s1, "slug": "s1", "source_language": "de", "source_raw_text": "Session 1 text"})
+    temp_db.insert_session({"zid": s2, "slug": "s2", "source_language": "de", "source_raw_text": "Session 2 text"})
+    temp_db.insert_session({"zid": s3, "slug": "s3", "source_language": "en", "source_raw_text": "Session 3 text"})
+
+    # 1. Explicit linking of s1 and s2
+    linked = temp_db.link_sessions_batch(proj_id, session_zids=[s1, s2])
+    assert linked == 2
+
+    links = temp_db.get_project_sessions(proj_id)
+    assert len(links) == 2
+    assert links[0]["session_zid"] == s1
+    assert links[0]["order_index"] == 0
+    assert links[1]["session_zid"] == s2
+    assert links[1]["order_index"] == 1
+
+    # 2. Append s3 explicitly, ensuring sequential continuation (order_index == 2)
+    linked_s3 = temp_db.link_sessions_batch(proj_id, session_zids=[s3])
+    assert linked_s3 == 1
+    links_after = temp_db.get_project_sessions(proj_id)
+    assert len(links_after) == 3
+    assert links_after[2]["session_zid"] == s3
+    assert links_after[2]["order_index"] == 2
+
+    # 3. New project with filter-based batch linking (language="de", excluding s1)
+    proj2_id = temp_db.create_project(title="German Only", slug="german-only")
+    linked_de = temp_db.link_sessions_batch(proj2_id, language="de", excluded_zids=[s1])
+    assert linked_de == 1
+    proj2_links = temp_db.get_project_sessions(proj2_id)
+    assert len(proj2_links) == 1
+    assert proj2_links[0]["session_zid"] == s2
+    assert proj2_links[0]["order_index"] == 0
+
+
+
 
 

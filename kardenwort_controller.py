@@ -4846,6 +4846,44 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, {"ok": ok, "project_id": project_id, "session_zid": session_zid})
             return
 
+        if path == '/api/v1/admin/projects/batch-link':
+            if method != 'POST':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            body = self._read_json_body()
+            self._authenticate_token(body)
+            project_id = body.get('project_id')
+            if project_id is None:
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'project_id' in payload")
+
+            mode = body.get('mode', 'explicit')
+            session_zids = body.get('session_zids') or body.get('zids') or []
+            filter_params = body.get('filter') or {}
+            excluded_zids = body.get('excluded_zids') or []
+
+            from kardenwort_db import KardenwortDB
+            db = KardenwortDB(config=self.server.config, resolved_paths=self.server.resolved_paths)
+
+            if mode == 'all_matching' or (not session_zids and body.get('all_matching')):
+                linked_count = db.link_sessions_batch(
+                    project_id=int(project_id),
+                    session_zids=None,
+                    query=filter_params.get('query'),
+                    language=filter_params.get('language'),
+                    assigned=filter_params.get('assigned'),
+                    filter_project_id=filter_params.get('project_id'),
+                    excluded_zids=excluded_zids,
+                )
+            else:
+                if not isinstance(session_zids, list) or len(session_zids) == 0:
+                    raise StructuredError(ErrorCode.MISSING_FIELD, "Missing or empty 'session_zids' in payload")
+                clean_list = [str(z) for z in session_zids if str(z) not in excluded_zids]
+                linked_count = db.link_sessions_batch(
+                    project_id=int(project_id),
+                    session_zids=clean_list,
+                )
+            self._send_json(200, {"ok": True, "project_id": project_id, "linked_count": linked_count})
+            return
+
         if path == '/api/v1/admin/projects/unlink':
             if method != 'POST':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")

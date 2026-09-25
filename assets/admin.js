@@ -621,6 +621,13 @@ function flattenProjectTree(nodes, prefix = '') {
 
 async function openAssignProjectModal(session) {
     const modal = document.getElementById('assign-project-modal');
+    const modeInput = document.getElementById('assign-modal-mode');
+    if (modeInput) modeInput.value = 'single';
+    const titleEl = document.getElementById('assign-modal-title');
+    if (titleEl) titleEl.textContent = 'Assign Session to Project';
+    const labelEl = document.getElementById('assign-modal-session-label');
+    if (labelEl) labelEl.textContent = 'Session';
+
     document.getElementById('assign-modal-session-zid').value = session.zid;
     
     const infoBox = document.getElementById('assign-modal-session-info');
@@ -648,8 +655,50 @@ async function openAssignProjectModal(session) {
     }
 }
 
+async function openBatchAssignProjectModal() {
+    const totalSelected = getSelectedCount();
+    if (totalSelected === 0) return;
+
+    const modal = document.getElementById('assign-project-modal');
+    const modeInput = document.getElementById('assign-modal-mode');
+    if (modeInput) modeInput.value = 'batch';
+    const titleEl = document.getElementById('assign-modal-title');
+    if (titleEl) titleEl.textContent = `Assign ${totalSelected} Sessions to Project Node`;
+    const labelEl = document.getElementById('assign-modal-session-label');
+    if (labelEl) labelEl.textContent = 'Selected Sessions';
+
+    const infoBox = document.getElementById('assign-modal-session-info');
+    if (state.sessionsExplorer.allMatching) {
+        infoBox.innerHTML = `<strong>All ${totalSelected} matching sessions</strong> across the library will be linked.`;
+    } else {
+        infoBox.innerHTML = `<strong>${totalSelected} selected session(s)</strong> will be linked in table order.`;
+    }
+
+    const select = document.getElementById('assign-project-select');
+    select.innerHTML = '<option value="">Loading projects...</option>';
+    modal.classList.remove('hidden');
+
+    try {
+        if (!state.projectTree || state.projectTree.length === 0) {
+            const res = await apiFetch('/api/v1/admin/projects');
+            state.projectTree = res.projects || [];
+        }
+        const flatProjects = flattenProjectTree(state.projectTree);
+        if (flatProjects.length === 0) {
+            select.innerHTML = '<option value="">No projects available - create a project first</option>';
+            return;
+        }
+        select.innerHTML = flatProjects.map(p => 
+            `<option value="${p.id}">${escapeHtml(p.label)}</option>`
+        ).join('');
+    } catch (e) {
+        select.innerHTML = '<option value="">Failed to load projects</option>';
+    }
+}
+
 async function saveAssignProjectModal() {
-    const sessionZid = document.getElementById('assign-modal-session-zid').value;
+    const modeInput = document.getElementById('assign-modal-mode');
+    const mode = modeInput ? modeInput.value : 'single';
     const projectId = document.getElementById('assign-project-select').value;
 
     if (!projectId) {
@@ -657,6 +706,50 @@ async function saveAssignProjectModal() {
         return;
     }
 
+    if (mode === 'batch') {
+        const totalSelected = getSelectedCount();
+        if (totalSelected === 0) return;
+
+        try {
+            let payload = {
+                project_id: parseInt(projectId)
+            };
+            if (state.sessionsExplorer.allMatching) {
+                payload.mode = 'all_matching';
+                payload.filter = {
+                    query: state.sessionsExplorer.query || undefined,
+                    language: state.sessionsExplorer.language || undefined,
+                    assigned: state.sessionsExplorer.assigned || undefined
+                };
+                payload.excluded_zids = Array.from(state.sessionsExplorer.excludedZids);
+            } else {
+                payload.mode = 'explicit';
+                const sessions = state.sessionsExplorer.sessions || [];
+                const tableOrderedZids = [];
+                const selSet = state.sessionsExplorer.selectedZids;
+                sessions.forEach(s => {
+                    if (selSet.has(s.zid)) tableOrderedZids.push(s.zid);
+                });
+                selSet.forEach(zid => {
+                    if (!tableOrderedZids.includes(zid)) tableOrderedZids.push(zid);
+                });
+                payload.session_zids = tableOrderedZids;
+            }
+
+            const res = await apiFetch('/api/v1/admin/projects/batch-link', {
+                method: 'POST',
+                body: JSON.stringify(payload)
+            });
+
+            showToast(`Assigned ${res.linked_count ?? totalSelected} session(s) to project`, 'success');
+            document.getElementById('assign-project-modal').classList.add('hidden');
+            await loadSessionsExplorer();
+            loadProjectTree();
+        } catch (e) {}
+        return;
+    }
+
+    const sessionZid = document.getElementById('assign-modal-session-zid').value;
     try {
         await apiFetch('/api/v1/admin/projects/link', {
             method: 'POST',
@@ -688,6 +781,7 @@ function initSessionsExplorer() {
     const bannerBtn = document.getElementById('btn-select-all-matching');
     const batchClearBtn = document.getElementById('btn-batch-clear-selection');
     const batchDeleteBtn = document.getElementById('btn-batch-delete-sessions');
+    const batchAssignBtn = document.getElementById('btn-batch-assign-sessions');
 
     let debounceTimer = null;
     searchInput.addEventListener('input', () => {
@@ -796,6 +890,10 @@ function initSessionsExplorer() {
 
     if (batchDeleteBtn) {
         batchDeleteBtn.addEventListener('click', deleteBatchSelectedSessions);
+    }
+
+    if (batchAssignBtn) {
+        batchAssignBtn.addEventListener('click', openBatchAssignProjectModal);
     }
 
     // Drag and Drop TSV Ingestion
@@ -1398,5 +1496,7 @@ if (typeof window !== 'undefined') {
     window.isSessionSelected = isSessionSelected;
     window.clearAllSelections = clearAllSelections;
     window.deleteBatchSelectedSessions = deleteBatchSelectedSessions;
+    window.openBatchAssignProjectModal = openBatchAssignProjectModal;
+    window.saveAssignProjectModal = saveAssignProjectModal;
 }
 

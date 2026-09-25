@@ -88,6 +88,7 @@
                     <span id="sessions-selected-count" class="batch-count-badge">0 selected</span>
                 </div>
                 <div class="batch-toolbar-actions">
+                    <button id="btn-batch-assign-sessions" class="btn btn-primary btn-sm">+ Assign to Node</button>
                     <button id="btn-batch-delete-sessions" class="btn btn-danger btn-sm">Delete Selected</button>
                     <button id="btn-batch-clear-selection" class="btn btn-secondary btn-sm">Clear Selection</button>
                 </div>
@@ -313,13 +314,14 @@
     <div id="assign-project-modal" class="modal-overlay hidden">
         <div class="modal-card">
             <div class="modal-header">
-                <h3>Assign Session to Project</h3>
+                <h3 id="assign-modal-title">Assign Session to Project</h3>
                 <button class="modal-close" id="btn-assign-modal-close">[x]</button>
             </div>
             <div class="modal-body">
+                <input type="hidden" id="assign-modal-mode" value="single" />
                 <input type="hidden" id="assign-modal-session-zid" />
                 <div class="form-group">
-                    <label>Session</label>
+                    <label id="assign-modal-session-label">Session</label>
                     <div id="assign-modal-session-info" class="session-info-display">--</div>
                 </div>
                 <div class="form-group">

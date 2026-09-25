@@ -472,3 +472,70 @@ def test_admin_telemetry_non_blocking_during_sidecar_latency(admin_controller_se
     # Must respond sub-200ms without being blocked by probe_health
     assert duration < 0.2, f"Admin telemetry took {duration:.3f}s, expected < 0.2s"
 
+
+def test_admin_projects_batch_link_endpoint(admin_controller_server):
+    """Verify POST /api/v1/admin/projects/batch-link for explicit and filter-based assignment."""
+    url, server, db, _, _, _ = admin_controller_server
+
+    pid = db.create_project(title="API Batch Target", slug="api-batch-target")
+
+    zids = ["20260925210001", "20260925210002", "20260925210003"]
+    db.insert_session({"zid": zids[0], "slug": "sess-es-1", "source_language": "es", "source_raw_text": "Uno"})
+    db.insert_session({"zid": zids[1], "slug": "sess-es-2", "source_language": "es", "source_raw_text": "Dos"})
+    db.insert_session({"zid": zids[2], "slug": "sess-it-1", "source_language": "it", "source_raw_text": "Tre"})
+
+    # 1. Explicit mode
+    status, resp = make_admin_request(url, "/api/v1/admin/projects/batch-link", method="POST", body={
+        "project_id": pid,
+        "mode": "explicit",
+        "session_zids": [zids[0], zids[1]],
+    })
+    assert status == 200
+    assert resp["ok"] is True
+    assert resp["linked_count"] == 2
+
+    links = db.get_project_sessions(pid)
+    assert len(links) == 2
+    assert links[0]["session_zid"] == zids[0]
+    assert links[0]["order_index"] == 0
+    assert links[1]["session_zid"] == zids[1]
+    assert links[1]["order_index"] == 1
+
+    # 2. Append zids[2] in explicit mode
+    status, resp = make_admin_request(url, "/api/v1/admin/projects/batch-link", method="POST", body={
+        "project_id": pid,
+        "mode": "explicit",
+        "session_zids": [zids[2]],
+    })
+    assert status == 200
+    assert resp["ok"] is True
+    assert resp["linked_count"] == 1
+
+    links_after = db.get_project_sessions(pid)
+    assert len(links_after) == 3
+    assert links_after[2]["session_zid"] == zids[2]
+    assert links_after[2]["order_index"] == 2
+
+    # 3. Filter mode to another project
+    pid2 = db.create_project(title="Spanish Only", slug="spanish-only")
+    status, resp = make_admin_request(url, "/api/v1/admin/projects/batch-link", method="POST", body={
+        "project_id": pid2,
+        "mode": "all_matching",
+        "filter": {"language": "es"},
+        "excluded_zids": [zids[0]],
+    })
+    assert status == 200
+    assert resp["ok"] is True
+    assert resp["linked_count"] == 1
+
+    p2_links = db.get_project_sessions(pid2)
+    assert len(p2_links) == 1
+    assert p2_links[0]["session_zid"] == zids[1]
+
+    # 4. Error case: missing project_id
+    status, resp = make_admin_request(url, "/api/v1/admin/projects/batch-link", method="POST", body={
+        "session_zids": [zids[0]]
+    })
+    assert status == 400
+
+
