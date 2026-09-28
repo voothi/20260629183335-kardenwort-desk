@@ -993,9 +993,41 @@ class KardenwortDB:
                         "parent_id": pr["parent_id"],
                     })
 
+                sel_map: Dict[str, int] = {}
+                try:
+                    sel_sql = f"""
+                        SELECT session_zid, COUNT(DISTINCT token_key) AS selected_count FROM (
+                            SELECT session_zid, token_order AS token_key
+                            FROM words
+                            WHERE session_zid IN ({placeholders}) AND selected = 1
+                            UNION
+                            SELECT session_zid, token_order AS token_key
+                            FROM overview_selections
+                            WHERE session_zid IN ({placeholders}) AND selected = 1
+                        )
+                        GROUP BY session_zid;
+                    """
+                    cursor.execute(sel_sql, session_zids + session_zids)
+                    sel_rows = cursor.fetchall()
+                    sel_map = {r["session_zid"]: r["selected_count"] for r in sel_rows}
+                except Exception:
+                    try:
+                        fallback_sel = f"""
+                            SELECT session_zid, COUNT(*) AS selected_count
+                            FROM words
+                            WHERE session_zid IN ({placeholders}) AND selected = 1
+                            GROUP BY session_zid;
+                        """
+                        cursor.execute(fallback_sel, session_zids)
+                        sel_rows = cursor.fetchall()
+                        sel_map = {r["session_zid"]: r["selected_count"] for r in sel_rows}
+                    except Exception:
+                        sel_map = {}
+
                 for s in sessions:
                     s["projects"] = proj_map.get(s["zid"], [])
                     s["token_count"] = s["word_count"]
+                    s["selected_count"] = sel_map.get(s["zid"], 0)
 
             return sessions, total_count
 
@@ -1535,7 +1567,15 @@ class KardenwortDB:
             sess_del_join = "" if include_deleted else "AND s.deleted_at IS NULL"
             ps_sql = f"""
                 SELECT ps.project_id, ps.session_zid, ps.order_index, ps.added_at,
-                       s.slug, s.source_language, s.target_language, s.text_mode, s.created_at
+                       s.slug, s.source_language, s.target_language, s.text_mode, s.created_at,
+                       (
+                           SELECT COUNT(DISTINCT token_key)
+                           FROM (
+                               SELECT token_order AS token_key FROM words WHERE session_zid = ps.session_zid AND selected = 1
+                               UNION
+                               SELECT token_order AS token_key FROM overview_selections WHERE session_zid = ps.session_zid AND selected = 1
+                           ) w
+                       ) AS selected_count
                 FROM project_sessions ps
                 JOIN sessions s ON ps.session_zid = s.zid {sess_del_join}
                 ORDER BY ps.order_index ASC, ps.added_at ASC;

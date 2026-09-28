@@ -487,3 +487,60 @@ sqlite_db_path = {db_path.name}
     assert payload["headers"] == ["Quotation", "WordSource", "SentenceSourceIndex", "SentenceSource"]
     assert len(payload["data_rows"]) == 1
     assert payload["data_rows"][0][0] == "CLI"
+
+
+def test_sqlite_restore_with_overview_selections(tmp_path):
+    """Verifies that restore_session() overlays overview_selections into DeskSelected and bundle words."""
+    (tmp_path / "anki-mapping.ini").write_text("""[fields]
+Quotation
+WordSource
+SentenceSourceIndex
+SentenceSource
+DeskSelected
+""", encoding="utf-8")
+
+    db_path = tmp_path / "kardenwort.db"
+    resolved_paths = {
+        "sqlite_db_path": db_path,
+        "anki_mapping_file": tmp_path / "anki-mapping.ini",
+        "base_dir": tmp_path,
+        "results_dir": tmp_path / "results",
+    }
+    adapter = SqliteStorageAdapter(resolved_paths=resolved_paths)
+    session_zid = "20260928091500"
+
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="overview-sel-test",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="The quick brown fox.",
+        sentences=[{"sentence_index": 1, "sentence_source": "The quick brown fox."}],
+        words=[
+            {"sentence_index": 1, "token_order": 0, "quotation": "The", "lemma": "the", "selected": 0},
+            {"sentence_index": 1, "token_order": 1, "quotation": "quick", "lemma": "quick", "selected": 0},
+        ],
+    )
+
+    # Initially both words are selected=0
+    initial_restored = adapter.restore_session(session_zid)
+    sel_idx = initial_restored["headers"].index("DeskSelected")
+    assert initial_restored["data_rows"][0][sel_idx] == "0"
+    assert initial_restored["data_rows"][1][sel_idx] == "0"
+    assert initial_restored["words"][0]["selected"] == 0
+
+    # User marks token_order 1 ("quick") in Overview tab (sentence_idx=0)
+    adapter.update_word_selection(session_zid, sentence_idx=0, token_order=1, selected=1)
+
+    # Re-restore session and verify DeskSelected is overlaid
+    restored = adapter.restore_session(session_zid)
+    assert restored["data_rows"][0][sel_idx] == "0"
+    assert restored["data_rows"][1][sel_idx] == "1"
+    assert restored["words"][0]["selected"] == 0
+    assert restored["words"][1]["selected"] == 1
+
+    # Also verify search_sessions reports selected_count = 1
+    sessions, total = adapter.db.search_sessions(query="overview-sel-test")
+    assert total == 1
+    assert sessions[0]["selected_count"] == 1

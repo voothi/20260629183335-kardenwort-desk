@@ -859,5 +859,76 @@ def test_deduplicate_and_represent_different_inflected_forms():
     assert "z. B." in beispiel_row[2] and "zum Beispiel" in beispiel_row[2]
 
 
+def test_project_synthesis_and_deck_export_transfers_overview_selections(temp_project_env):
+    """
+    Verifies that words selected in constituent sessions' Overview tabs (overview_selections)
+    as well as sentence tabs are preserved when synthesizing project materials and exporting decks.
+    """
+    db = temp_project_env["db"]
+    adapter = temp_project_env["adapter"]
+    resolved_paths = temp_project_env["resolved_paths"]
+
+    # 1. Create a project
+    pid = db.create_project(title="Selection Transfer Test", slug="sel-transfer")
+    assert pid is not None
+
+    # 2. Create session 1 with word 'haus' marked selected via overview_selections
+    s1_zid = "20260928092001"
+    adapter.save_session(
+        session_zid=s1_zid,
+        slug="sess-1",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Das Haus ist gross.",
+        sentences=[{"sentence_index": 1, "sentence_source": "Das Haus ist gross."}],
+        words=[{"sentence_index": 1, "token_order": 0, "quotation": "Haus", "lemma": "haus", "selected": 0}],
+    )
+    # Mark in overview_selections
+    adapter.update_word_selection(s1_zid, sentence_idx=0, token_order=0, selected=1)
+
+    # 3. Create session 2 with word 'buch' marked selected directly in words table
+    s2_zid = "20260928092002"
+    adapter.save_session(
+        session_zid=s2_zid,
+        slug="sess-2",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Ein neues Buch.",
+        sentences=[{"sentence_index": 1, "sentence_source": "Ein neues Buch."}],
+        words=[{"sentence_index": 1, "token_order": 0, "quotation": "Buch", "lemma": "buch", "selected": 1}],
+    )
+
+    # Link both sessions to project
+    db.link_session_to_project(pid, s1_zid, order_index=1)
+    db.link_session_to_project(pid, s2_zid, order_index=2)
+
+    # 4. Synthesize project materials
+    synth = synthesize_project_materials(pid, db=db, resolved_paths=resolved_paths, language="de")
+    assert synth["ok"] is True
+    headers = synth["headers"]
+    sel_idx = headers.index("DeskSelected") if "DeskSelected" in headers else headers.index("selected")
+    lem_idx = headers.index("WordSource") if "WordSource" in headers else headers.index("lemma")
+
+    rows_by_lemma = {r[lem_idx].lower(): r for r in synth["data_rows"]}
+    assert "haus" in rows_by_lemma
+    assert "buch" in rows_by_lemma
+    assert rows_by_lemma["haus"][sel_idx] == "1"
+    assert rows_by_lemma["buch"][sel_idx] == "1"
+
+    # 5. Export project deck (export_all=False -> only selected words)
+    deck_mat = aggregate_project_materials(pid, resolved_paths=resolved_paths, language="de", export_all=False)
+    assert deck_mat["ok"] is True
+    tsv_lines = Path(deck_mat["tsv_path"]).read_text(encoding="utf-8").strip().splitlines()
+    data_lines = [l for l in tsv_lines if not l.startswith("#")]
+    tsv_headers = data_lines[0].split("\t")
+    tsv_lem_idx = tsv_headers.index("WordSource") if "WordSource" in tsv_headers else tsv_headers.index("lemma")
+    deck_lemmas = [l.split("\t")[tsv_lem_idx].lower() for l in data_lines[1:]]
+    assert "haus" in deck_lemmas
+    assert "buch" in deck_lemmas
+
+
+
 
 

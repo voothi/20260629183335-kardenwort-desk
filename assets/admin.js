@@ -283,11 +283,13 @@ function createSessionElement(session, projectId, index, total) {
     const item = document.createElement('div');
     item.className = 'session-item';
     item.setAttribute('data-zid', session.session_zid);
+    const selCount = session.selected_count || 0;
     item.innerHTML = `
         <div class="session-item-info">
             <span class="session-badge">${escapeHtml(session.session_zid)}</span>
             <span class="session-slug">${escapeHtml(session.slug || 'untitled')}</span>
             <span class="text-muted" style="font-size: 12px;">(${escapeHtml(session.source_language || '')})</span>
+            <span class="session-badge-selected text-muted" title="Selected Words" style="font-size: 11px; margin-left: 4px;">${selCount} sel</span>
         </div>
         <div class="session-actions">
             <button class="btn btn-icon btn-move-up" ${index === 0 ? 'disabled' : ''} title="Move Up">▲</button>
@@ -1211,14 +1213,14 @@ async function loadSessionsExplorer(force = false) {
         prevBtn.disabled = page <= 1;
         nextBtn.disabled = page >= totalPages;
     } catch (e) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">Failed to load sessions.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">Failed to load sessions.</td></tr>';
     }
 }
 
 function renderSessionsExplorerTable(sessions) {
     const tbody = document.getElementById('sessions-table-body');
     if (!sessions || sessions.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="8" class="empty-state">No matching sessions found.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="9" class="empty-state">No matching sessions found.</td></tr>';
         updateSelectionUI();
         return;
     }
@@ -1253,6 +1255,7 @@ function renderSessionsExplorerTable(sessions) {
             <td><span class="lang-tag">${escapeHtml(s.source_language || '—')}</span></td>
             <td>${s.sentence_count ?? 0}</td>
             <td>${s.word_count ?? s.token_count ?? 0}</td>
+            <td>${s.selected_count ? `<span class="badge badge-warning">${s.selected_count}</span>` : '<span class="text-dim">0</span>'}</td>
             <td>${projectsHtml}</td>
             <td>
                 <div class="table-actions">

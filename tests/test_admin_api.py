@@ -179,6 +179,7 @@ def test_admin_project_tree_crud(admin_controller_server):
     assert root["title"] == "Test Book"
     assert len(root["children"]) >= 1
     assert root["children"][0]["id"] == child_id
+    assert "selected_count" in root["children"][0]["sessions"][0]
 
     # 2. POST create new project
     status, resp = make_admin_request(url, "/api/v1/admin/projects", method="POST", body={
@@ -318,6 +319,7 @@ def test_admin_sessions_explorer_api(admin_controller_server):
     assert sess_item["source_language"] == "de"
     assert sess_item["sentence_count"] == 1
     assert sess_item["word_count"] == 1
+    assert "selected_count" in sess_item
     assert sess_item["projects"] == []
 
     assigned_item = next(s for s in resp["sessions"] if s["zid"] == sess_zid)

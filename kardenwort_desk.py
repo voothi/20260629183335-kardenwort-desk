@@ -3668,6 +3668,18 @@ class SqliteStorageAdapter(StorageAdapter):
                 seen_tokens.add(token_key)
                 unique_db_words.append(word)
 
+            overview_selected_orders = set()
+            try:
+                overview_selected_orders = self.get_overview_selections(zid, zid=zid)
+            except Exception:
+                overview_selected_orders = set()
+
+            for word in unique_db_words:
+                t_ord = word.get("token_order")
+                t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
+                if t_ord_int is not None and t_ord_int in overview_selected_orders:
+                    word["selected"] = 1
+
             data_rows = []
             for word in unique_db_words:
                 s_idx = word.get("sentence_index", 1)
@@ -3739,7 +3751,10 @@ class SqliteStorageAdapter(StorageAdapter):
                     elif h_lower in ("wordsourceipa", "ipa"):
                         row_cells.append(str(word.get("ipa") or ""))
                     elif h_lower in ("deskselected", "selected"):
-                        row_cells.append(str(word.get("selected", 0)))
+                        t_ord = word.get("token_order")
+                        t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
+                        is_sel = 1 if (word.get("selected", 0) or (t_ord_int is not None and t_ord_int in overview_selected_orders)) else 0
+                        row_cells.append(str(is_sel))
                     elif h_lower in ("leitnerbox", "leitner_box"):
                         row_cells.append(str(word.get("leitner_box", 1)))
                     elif h_lower in ("leitnerdue", "leitner_due"):
@@ -4622,8 +4637,9 @@ def aggregate_project_materials(
                 headers = list(restored["headers"])
 
             sess_rows = restored.get("data_rows", [])
-            sel_idx = headers.index("DeskSelected") if "DeskSelected" in headers else -1
-            deck_idx = headers.index("Deck") if "Deck" in headers else -1
+            h_lower = [h.lower() for h in headers]
+            sel_idx = h_lower.index("deskselected") if "deskselected" in h_lower else (h_lower.index("selected") if "selected" in h_lower else -1)
+            deck_idx = h_lower.index("deck") if "deck" in h_lower else -1
 
             for row in sess_rows:
                 is_selected = (
@@ -4772,10 +4788,23 @@ def deduplicate_rows_by_lemma(
         rows_list = grouped_rows[lem]
         merged_row = list(rows_list[0])
         merged_inflected: List[str] = []
+        col_sel = -1
+        h_lower = [h.lower() for h in headers]
+        if "deskselected" in h_lower:
+            col_sel = h_lower.index("deskselected")
+        elif "selected" in h_lower:
+            col_sel = h_lower.index("selected")
+
         for r in rows_list:
             for i, cell in enumerate(r):
                 if i < len(merged_row) and not merged_row[i].strip() and cell.strip():
                     merged_row[i] = cell
+            if col_sel != -1 and len(r) > col_sel and str(r[col_sel]).strip().lower() in ("1", "true"):
+                if len(merged_row) > col_sel:
+                    merged_row[col_sel] = "1"
+                else:
+                    merged_row.extend([""] * (col_sel - len(merged_row) + 1))
+                    merged_row[col_sel] = "1"
             if col_inflected != -1:
                 inf_val = r[col_inflected].strip() if len(r) > col_inflected else ""
                 if inf_val:
@@ -10822,6 +10851,18 @@ html, body {{
 
             ov_k = (ov_lem_clean, ov_eff_pos) if col_pos_dedup != -1 else ov_lem_clean
             matched_ids = lemma_pos_to_row_ids.get(ov_k) or lemma_pos_to_row_ids.get(ov_lem_clean) or [ov_id]
+
+            if ov_is_sel == "0" and col_highlighted != -1:
+                if len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
+                    ov_is_sel = "1"
+                elif matched_ids:
+                    for mid in matched_ids:
+                        if mid < len(data_rows):
+                            mr = data_rows[mid]
+                            if len(mr) > col_highlighted and str(mr[col_highlighted]).strip().lower() in ["1", "true"]:
+                                ov_is_sel = "1"
+                                break
+
             primary_id = next((mid for mid in matched_ids if mid not in used_primary_ids), matched_ids[0])
             used_primary_ids.add(primary_id)
             all_ids_str = ",".join(str(x) for x in matched_ids)
