@@ -5083,7 +5083,25 @@ def synthesize_project_materials(
     if not trees:
         raise StructuredError(ErrorCode.NOT_FOUND, f"No project tree found for ID '{project_id}'.")
 
-    lang = language or (
+    inferred_lang = None
+    if not language:
+        def _find_session_lang(node: Dict[str, Any]) -> Optional[str]:
+            for s in db.get_project_sessions(node.get("id", 0)):
+                sl = s.get("source_language")
+                if sl and str(sl).strip():
+                    return str(sl).strip()
+            for ch in node.get("children", []):
+                cl = _find_session_lang(ch)
+                if cl:
+                    return cl
+            return None
+
+        for root in trees:
+            inferred_lang = _find_session_lang(root)
+            if inferred_lang:
+                break
+
+    lang = language or inferred_lang or (
         config.get(SEC_SETTINGS, "default_language", fallback="de")
         if config and hasattr(config, "get")
         else "de"
@@ -10778,7 +10796,9 @@ html, body {{
                 overview_rows, headers, language, config, resolved_paths, role_fields=role_fields
             )
         else:
-            overview_rows = [list(r) for r in data_rows]
+            overview_rows = sort_rows_by_frequency(
+                [list(r) for r in data_rows], headers, language, config, resolved_paths, role_fields=role_fields
+            )
         
         token_config = RuntimeTokenConfig.from_config(config)
         lemma_pos_to_row_ids = {}

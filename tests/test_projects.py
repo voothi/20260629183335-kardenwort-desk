@@ -929,6 +929,138 @@ def test_project_synthesis_and_deck_export_transfers_overview_selections(temp_pr
     assert "buch" in deck_lemmas
 
 
+def test_synthesize_project_materials_inferred_german_language_and_frequency_sorting(temp_project_env):
+    """
+    Verify that when language=None, synthesize_project_materials automatically infers
+    source_language='de' from constituent German sessions and sorts Tab 1 by German frequency.
+    """
+    from kardenwort_desk import synthesize_project_materials
+    import configparser
+
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    tmp_path = temp_project_env["tmp_path"]
+    resolved_paths = dict(temp_project_env["resolved_paths"])
+    resolved_paths["kardenwort_workspace"] = tmp_path
+
+    pid = db.create_project(title="German Inferred Project", slug="german-inferred")
+    sid1 = "20260928120001"
+    sid2 = "20260928120002"
+
+    adapter.save_session(
+        session_zid=sid1,
+        slug="sess-de-1",
+        source_language="de",
+        source_raw_text="Ein Satz",
+        headers=["WordSource", "SentenceSourceIndex"],
+        data_rows=[
+            ["Haus", "1"],
+            ["und", "1"],
+        ],
+    )
+    adapter.save_session(
+        session_zid=sid2,
+        slug="sess-de-2",
+        source_language="de",
+        source_raw_text="Der Hund",
+        headers=["WordSource", "SentenceSourceIndex"],
+        data_rows=[
+            ["der", "1"],
+            ["Hund", "1"],
+        ],
+    )
+
+    db.link_session_to_project(pid, sid1, order_index=0)
+    db.link_session_to_project(pid, sid2, order_index=1)
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section("settings")
+    # Default language in settings is 'en' to test that session language takes priority
+    cfg.set("settings", "default_language", "en")
+    cfg.add_section("languages")
+    cfg.set("languages", "de_lemma_index", "data/de/freq.csv")
+
+    freq_dir = tmp_path / "data" / "de"
+    freq_dir.mkdir(parents=True, exist_ok=True)
+    # German frequency rank: der (0), und (1), Haus (2), Hund (3)
+    (freq_dir / "freq.csv").write_text("der\nund\nHaus\nHund\nGerman\nInferred\nProject\n", encoding="utf-8")
+
+    synthesized = synthesize_project_materials(
+        project_id=pid,
+        db=db,
+        config=cfg,
+        resolved_paths=resolved_paths,
+        language=None,
+    )
+
+    assert synthesized["ok"] is True
+    assert synthesized["source_language"] == "de"
+    lemmas = [r[0] for r in synthesized["data_rows"]]
+    # 'der' and 'und' must appear at the top in German frequency order
+    assert lemmas[0] == "der"
+    assert lemmas[1] == "und"
+
+
+def test_synthesize_project_materials_inferred_english_language_and_frequency_sorting(temp_project_env):
+    """
+    Verify that when language=None, synthesize_project_materials automatically infers
+    source_language='en' from constituent English sessions and sorts Tab 1 by English frequency.
+    """
+    from kardenwort_desk import synthesize_project_materials
+    import configparser
+
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    tmp_path = temp_project_env["tmp_path"]
+    resolved_paths = dict(temp_project_env["resolved_paths"])
+    resolved_paths["kardenwort_workspace"] = tmp_path
+
+    pid = db.create_project(title="English Inferred Project", slug="english-inferred")
+    sid1 = "20260928130001"
+
+    adapter.save_session(
+        session_zid=sid1,
+        slug="sess-en-1",
+        source_language="en",
+        source_raw_text="The quick dog",
+        headers=["WordSource", "SentenceSourceIndex"],
+        data_rows=[
+            ["dog", "1"],
+            ["the", "1"],
+            ["quick", "1"],
+        ],
+    )
+
+    db.link_session_to_project(pid, sid1, order_index=0)
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section("settings")
+    # Default language in settings is 'de' to test that session language takes priority
+    cfg.set("settings", "default_language", "de")
+    cfg.add_section("languages")
+    cfg.set("languages", "en_lemma_index", "data/en/freq.csv")
+
+    freq_dir = tmp_path / "data" / "en"
+    freq_dir.mkdir(parents=True, exist_ok=True)
+    # English frequency rank: the (0), dog (1), quick (2)
+    (freq_dir / "freq.csv").write_text("the\ndog\nquick\nEnglish\nInferred\nProject\n", encoding="utf-8")
+
+    synthesized = synthesize_project_materials(
+        project_id=pid,
+        db=db,
+        config=cfg,
+        resolved_paths=resolved_paths,
+        language=None,
+    )
+
+    assert synthesized["ok"] is True
+    assert synthesized["source_language"] == "en"
+    lemmas = [r[0] for r in synthesized["data_rows"]]
+    assert lemmas[0] == "the"
+    assert lemmas[1] == "dog"
+
+
+
 
 
 
