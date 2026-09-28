@@ -11153,12 +11153,6 @@ html, body {{
   body.has-dock-bottom .container {
     padding-bottom: 95px;
   }
-  body.kw-ahk-native-host.has-dock-top .container {
-    padding-top: 16px !important;
-  }
-  body.kw-ahk-native-host.has-dock-bottom .container {
-    padding-bottom: 15px !important;
-  }
   .section {
     background: {section_bg};
     border: 1px solid {section_border};
@@ -11701,15 +11695,6 @@ html, body {{
     background: #161b22;
     border-top-color: rgba(255, 255, 255, 0.15);
   }
-  body.kw-ahk-native-host {
-    padding-bottom: 0px !important;
-  }
-  body.kw-ahk-native-host #kw-action-toolbar {
-    display: none !important;
-  }
-  body.kw-ahk-native-host .container {
-    padding-bottom: 15px !important;
-  }
   .kw-action-toolbar button {
     font-family: inherit;
     font-size: 13px;
@@ -11857,9 +11842,6 @@ html, body {{
   .kw-workspace-tab-bar.kw-tab-dock-bottom:hover {
     background: #161b22;
     border-top-color: rgba(255, 255, 255, 0.15);
-  }
-  body.kw-ahk-native-host .kw-workspace-tab-bar {
-    display: none !important;
   }
   .kw-tab-nav {
     font-family: inherit;
@@ -13310,6 +13292,7 @@ window.__CONFIG__ = {ui_config_json};
         
         window.AppState = {
             rows: {},
+            selectedLemmas: {},
             sourceText: null,
             translatedText: null,
             textTranslationStatus: null,
@@ -14558,6 +14541,122 @@ window.__CONFIG__ = {ui_config_json};
             return null;
         }
 
+        function getRowLemma(tr) {
+            if (!tr) return '';
+            var lemCell = tr.querySelector('.col-lemma');
+            if (!lemCell) lemCell = tr.querySelector('[data-col="WordSource"]');
+            if (!lemCell) return '';
+            var txt = (lemCell.textContent || lemCell.innerText || '').trim();
+            return txt.toLowerCase();
+        }
+
+        function getLemmaByRowId(rowId) {
+            if (rowId === undefined || rowId === null) return '';
+            var strId = String(rowId);
+            var tr = findTableRowById(strId);
+            if (tr) {
+                var l = getRowLemma(tr);
+                if (l) return l;
+            }
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                var allC = window.WorkspaceTabs.getCards();
+                if (allC && allC.length > 0) {
+                    for (var c = 0; c < allC.length; c++) {
+                        var words = allC[c].words;
+                        if (words) {
+                            for (var w = 0; w < words.length; w++) {
+                                var wObj = words[w];
+                                if (String(wObj.row_id) === strId) return (wObj.lemma || '').trim().toLowerCase();
+                                if (wObj.all_row_ids) {
+                                    for (var a = 0; a < wObj.all_row_ids.length; a++) {
+                                        if (String(wObj.all_row_ids[a]) === strId) return (wObj.lemma || '').trim().toLowerCase();
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            return '';
+        }
+
+        function syncSelectionsToCardsAndState() {
+            if (!window.AppState) window.AppState = {};
+            if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
+            var selMap = window.AppState.selectedLemmas;
+
+            // 1. Update current tableRows and selectedRowIdsMap
+            var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
+                ? tableRows
+                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+            if (rows && rows.length > 0) {
+                for (var i = 0; i < rows.length; i++) {
+                    var r = rows[i];
+                    var rLem = getRowLemma(r);
+                    var rIdStr = String(r.getAttribute('data-row-id'));
+                    var pIds = [rIdStr];
+                    var trAll = r.getAttribute('data-all-row-ids');
+                    if (trAll) {
+                        var parts = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                        for (var p = 0; p < parts.length; p++) {
+                            if (pIds.indexOf(parts[p]) === -1) pIds.push(parts[p]);
+                        }
+                    }
+                    if (rLem && selMap[rLem]) {
+                        for (var p = 0; p < pIds.length; p++) selectedRowIdsMap[pIds[p]] = true;
+                    } else if (rLem && !selMap[rLem]) {
+                        for (var p = 0; p < pIds.length; p++) delete selectedRowIdsMap[pIds[p]];
+                    }
+                }
+            }
+
+            // 2. Update all cards in WorkspaceTabs
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                var allC = window.WorkspaceTabs.getCards();
+                if (allC && allC.length > 0) {
+                    for (var c = 0; c < allC.length; c++) {
+                        var card = allC[c];
+                        card.selected_ids = [];
+                        if (card.words) {
+                            for (var w = 0; w < card.words.length; w++) {
+                                var wObj = card.words[w];
+                                var wLem = (wObj.lemma || '').trim().toLowerCase();
+                                if (wLem && selMap[wLem]) {
+                                    wObj.selected = "1";
+                                    var rId = String(wObj.row_id);
+                                    if (card.selected_ids.indexOf(rId) === -1) card.selected_ids.push(rId);
+                                    if (wObj.all_row_ids) {
+                                        for (var a = 0; a < wObj.all_row_ids.length; a++) {
+                                            var aId = String(wObj.all_row_ids[a]);
+                                            if (card.selected_ids.indexOf(aId) === -1) card.selected_ids.push(aId);
+                                        }
+                                    }
+                                } else {
+                                    wObj.selected = "0";
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        function setLemmaSelected(lemma, isSelected) {
+            if (!lemma) return;
+            var norm = String(lemma).trim().toLowerCase();
+            if (!norm) return;
+            if (!window.AppState) window.AppState = {};
+            if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
+            if (isSelected) {
+                window.AppState.selectedLemmas[norm] = true;
+            } else {
+                delete window.AppState.selectedLemmas[norm];
+            }
+        }
+        window.getRowLemma = getRowLemma;
+        window.getLemmaByRowId = getLemmaByRowId;
+        window.setLemmaSelected = setLemmaSelected;
+        window.syncSelectionsToCardsAndState = syncSelectionsToCardsAndState;
+
         function isCompoundDelimiterNode(node) {
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
@@ -15327,7 +15426,10 @@ window.__CONFIG__ = {ui_config_json};
                                     }
                                 }
                             }
+                            var rLem = getLemmaByRowId(tid);
+                            if (rLem) setLemmaSelected(rLem, tokenDragMode);
                         }
+                        syncSelectionsToCardsAndState();
                         updateRowStyles();
                         updateBidirectionalHighlights();
                         
@@ -15411,6 +15513,8 @@ window.__CONFIG__ = {ui_config_json};
                                     } else {
                                         delete selectedRowIdsMap[String(atomics[j])];
                                     }
+                                    var rLem = getLemmaByRowId(atomics[j]);
+                                    if (rLem) setLemmaSelected(rLem, tokenDragMode);
                                 }
                             }
                         }
@@ -15445,17 +15549,20 @@ window.__CONFIG__ = {ui_config_json};
                                     var gTd = findTokenData(grp[g]);
                                     if (gTd && gTd.compound_row_ids) {
                                         for (var j = 0; j < gTd.compound_row_ids.length; j++) {
+                                            var cRowId = String(gTd.compound_row_ids[j]);
                                             if (tokenDragMode) {
-                                                selectedRowIdsMap[String(gTd.compound_row_ids[j])] = true;
+                                                selectedRowIdsMap[cRowId] = true;
                                             } else {
-                                                delete selectedRowIdsMap[String(gTd.compound_row_ids[j])];
+                                                delete selectedRowIdsMap[cRowId];
                                             }
+                                            var crLem = getLemmaByRowId(cRowId);
+                                            if (crLem) setLemmaSelected(crLem, tokenDragMode);
                                         }
                                     }
                                 }
                             }
                         }
-                        
+                        syncSelectionsToCardsAndState();
                         updateRowStyles();
                         updateBidirectionalHighlights();
                     } else if (isRmbDragFlipping) {
@@ -15580,8 +15687,11 @@ window.__CONFIG__ = {ui_config_json};
                             for (var p = 0; p < pIds.length; p++) {
                                 selectedRowIdsMap[pIds[p]] = true;
                             }
+                            var trLem = getRowLemma(tr);
+                            if (trLem) setLemmaSelected(trLem, true);
                         }
                     }
+                    syncSelectionsToCardsAndState();
                 } else if (isCtrlKey) {
                     dragStartVisualIdx = rowVisualIdx;
                     dragLastVisualIdx = rowVisualIdx;
@@ -15606,6 +15716,9 @@ window.__CONFIG__ = {ui_config_json};
                             delete selectedRowIdsMap[cId];
                         }
                     }
+                    var rowLem = getRowLemma(row);
+                    if (rowLem) setLemmaSelected(rowLem, dragSelectMode);
+                    syncSelectionsToCardsAndState();
                 } else {
                     dragStartVisualIdx = rowVisualIdx;
                     dragLastVisualIdx = rowVisualIdx;
@@ -15630,6 +15743,9 @@ window.__CONFIG__ = {ui_config_json};
                             delete selectedRowIdsMap[cId];
                         }
                     }
+                    var rowLem = getRowLemma(row);
+                    if (rowLem) setLemmaSelected(rowLem, dragSelectMode);
+                    syncSelectionsToCardsAndState();
                 }
                 
                 lastClickedVisualIdx = rowVisualIdx;
@@ -15737,9 +15853,11 @@ window.__CONFIG__ = {ui_config_json};
                                 delete selectedRowIdsMap[pIds[p]];
                             }
                         }
+                        var trLem = getRowLemma(tr);
+                        if (trLem) setLemmaSelected(trLem, dragSelectMode);
                     }
                 }
-                
+                syncSelectionsToCardsAndState();
                 focusedRowId = rowId;
                 updateRowStyles();
                 updateBidirectionalHighlights();
@@ -15802,12 +15920,20 @@ window.__CONFIG__ = {ui_config_json};
                         selectedRowIdsMap[pIds[p]] = true;
                     }
                 }
+                var rLem = getRowLemma(r);
+                if (rLem) setLemmaSelected(rLem, true);
+            } else {
+                var rLem = getRowLemma(r);
+                if (rLem && window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[rLem]) {
+                    selectedRowIdsMap[rIdStr] = true;
+                }
             }
             if (!r.__kw_wired) {
                 r.__kw_wired = true;
                 wireTableRowEvents(r);
             }
         }
+        syncSelectionsToCardsAndState();
         updateRowStyles();
         updateBidirectionalHighlights();
     }
@@ -16204,6 +16330,8 @@ window.__CONFIG__ = {ui_config_json};
         function clearAllSelections() {
             selectedRowIdsMap = {};
             selectedOrphanWordIdxsMap = {};
+            if (window.AppState) window.AppState.selectedLemmas = {};
+            syncSelectionsToCardsAndState();
             lastClickedRowId = null;
             updateRowStyles();
             updateBidirectionalHighlights();
@@ -16217,16 +16345,25 @@ window.__CONFIG__ = {ui_config_json};
         
         function toggleRowSelection(rowId, forceState) {
             var rIdStr = String(rowId);
-            if (forceState) {
-                selectedRowIdsMap[rIdStr] = true;
+            var lem = getLemmaByRowId(rowId);
+            var willSelect;
+            if (forceState !== undefined) {
+                willSelect = Boolean(forceState);
             } else {
-                if (selectedRowIdsMap.hasOwnProperty(rIdStr)) {
-                    delete selectedRowIdsMap[rIdStr];
-                } else {
+                willSelect = !selectedRowIdsMap.hasOwnProperty(rIdStr);
+            }
+            if (lem) {
+                setLemmaSelected(lem, willSelect);
+                syncSelectionsToCardsAndState();
+            } else {
+                if (willSelect) {
                     selectedRowIdsMap[rIdStr] = true;
+                } else {
+                    delete selectedRowIdsMap[rIdStr];
                 }
             }
             updateRowStyles();
+            updateBidirectionalHighlights();
         }
         window.toggleRowSelection = toggleRowSelection;
         window.getFocusedRowId = function() { return focusedRowId; };
@@ -16369,6 +16506,7 @@ window.__CONFIG__ = {ui_config_json};
                 } catch(e) {}
             }
             
+            var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
             var activeTargetRowIds = {};
             for (var rId in selectedRowIdsMap) {
                 if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
@@ -16404,6 +16542,18 @@ window.__CONFIG__ = {ui_config_json};
                         }
                     }
                 }
+                if (!hasMatchingRow && selLemmas) {
+                    var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
+                        ? token.atomic_row_ids
+                        : (token.row_ids || []);
+                    for (var r = 0; r < tokRowIds.length; r++) {
+                        var rLem = getLemmaByRowId(tokRowIds[r]);
+                        if (rLem && selLemmas[rLem]) {
+                            hasMatchingRow = true;
+                            break;
+                        }
+                    }
+                }
                 if (hasMatchingRow) {
                     var span = null;
                     for (var k = 0; k < tokenSpans.length; k++) {
@@ -16421,6 +16571,22 @@ window.__CONFIG__ = {ui_config_json};
                             }
                             if (isOrphanSelected) {
                                 span.classList.add('active-subtoken');
+                            }
+                        } catch(e) {}
+                    }
+                }
+            }
+
+            if (selLemmas) {
+                for (var k = 0; k < tokenSpans.length; k++) {
+                    var s = tokenSpans[k];
+                    var sLem = (getWordLemma(s) || '').trim().toLowerCase();
+                    if (sLem && selLemmas[sLem]) {
+                        try {
+                            if (s.classList.contains('highlight-purple')) {
+                                s.classList.add('highlight-purple-active');
+                            } else if (s.classList.contains('highlight-orange')) {
+                                s.classList.add('highlight-orange-active');
                             }
                         } catch(e) {}
                     }
@@ -16642,9 +16808,14 @@ window.__CONFIG__ = {ui_config_json};
                 var arr = JSON.parse(rowsJsonStr);
                 selectedRowIdsMap = {};
                 selectedOrphanWordIdxsMap = {};
+                if (window.AppState) window.AppState.selectedLemmas = {};
                 for (var i = 0; i < arr.length; i++) {
-                    selectedRowIdsMap[String(arr[i])] = true;
+                    var rId = String(arr[i]);
+                    selectedRowIdsMap[rId] = true;
+                    var lem = getLemmaByRowId(rId);
+                    if (lem) setLemmaSelected(lem, true);
                 }
+                syncSelectionsToCardsAndState();
                 updateRowStyles();
                 updateBidirectionalHighlights();
                 if (window.forceRepaint) window.forceRepaint();
@@ -17040,7 +17211,10 @@ window.__CONFIG__ = {ui_config_json};
                 for (var i = 0; i < tableRows.length; i++) {
                     var rowId = String(tableRows[i].getAttribute('data-row-id'));
                     selectedRowIdsMap[rowId] = true;
+                    var lem = getRowLemma(tableRows[i]);
+                    if (lem) setLemmaSelected(lem, true);
                 }
+                syncSelectionsToCardsAndState();
                 updateRowStyles();
                 updateBidirectionalHighlights();
                 if (typeof notifyAHKSelection !== 'undefined') {
@@ -17733,6 +17907,31 @@ window.__CONFIG__ = {ui_config_json};
             if (window.commitActiveEdit) window.commitActiveEdit();
             var rows = getSelectedRowsArray();
             var tokenOrders = (typeof getSelectedTokenOrdersArray === 'function') ? getSelectedTokenOrdersArray() : [];
+
+            // Card-scoped filtering in container mode
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+                var activeCard = window.WorkspaceTabs.getActiveCard();
+                var activeSentIdx = (activeCard && activeCard.sentence_idx !== undefined) ? activeCard.sentence_idx : 0;
+                if (activeSentIdx > 0 && activeCard && activeCard.words) {
+                    var cardRowIds = {};
+                    var cardTokenOrders = {};
+                    for (var w = 0; w < activeCard.words.length; w++) {
+                        var wObj = activeCard.words[w];
+                        cardRowIds[String(wObj.row_id)] = true;
+                        if (wObj.all_row_ids) {
+                            for (var a = 0; a < wObj.all_row_ids.length; a++) {
+                                cardRowIds[String(wObj.all_row_ids[a])] = true;
+                            }
+                        }
+                        if (wObj.token_order !== undefined && wObj.token_order !== null) {
+                            cardTokenOrders[String(wObj.token_order)] = true;
+                        }
+                    }
+                    rows = rows.filter(function(rId) { return cardRowIds.hasOwnProperty(String(rId)); });
+                    tokenOrders = tokenOrders.filter(function(tOrd) { return cardTokenOrders.hasOwnProperty(String(tOrd)); });
+                }
+            }
+
             if (!rows.length && !tokenOrders.length) {
                 window.showToast("Please select rows to export.", "warning");
                 return;
@@ -17756,6 +17955,7 @@ window.__CONFIG__ = {ui_config_json};
             var bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
+                selected_row_ids: rows,
                 token_orders: tokenOrders,
                 language: getSessionLang()
             };
@@ -18115,6 +18315,24 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 activeTabSeq = initialSeq;
                 window._kwActiveTabSeq = activeTabSeq;
+                if (!window.AppState) window.AppState = {};
+                if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
+                if (cards && cards.length > 0) {
+                    for (var c = 0; c < cards.length; c++) {
+                        var card = cards[c];
+                        if (card.words) {
+                            for (var w = 0; w < card.words.length; w++) {
+                                var wObj = card.words[w];
+                                var isWSelected = (wObj.selected === "1" || wObj.selected === 1 || (card.selected_ids && card.selected_ids.indexOf(String(wObj.row_id)) !== -1));
+                                if (isWSelected) {
+                                    var wLem = (wObj.lemma || '').trim().toLowerCase();
+                                    if (wLem) window.AppState.selectedLemmas[wLem] = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                syncSelectionsToCardsAndState();
                 if (cards && cards.length > 0) {
                     switchToTab(initialSeq, true);
                 }
@@ -18159,7 +18377,17 @@ window.__CONFIG__ = {ui_config_json};
                     var w = words[i];
                     var rIdStr = String(w.row_id);
                     var tOrdStr = String(w.token_order !== undefined && w.token_order !== null ? w.token_order : rIdStr);
-                    var isSel = !!(selectedMap && selectedMap.hasOwnProperty(rIdStr));
+                    var wLemNorm = (w.lemma || '').trim().toLowerCase();
+                    var isSel = (window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[wLemNorm]) ||
+                                !!(selectedMap && selectedMap.hasOwnProperty(rIdStr));
+                    if (isSel) {
+                        if (selectedMap) selectedMap[rIdStr] = true;
+                        if (w.all_row_ids) {
+                            for (var a = 0; a < w.all_row_ids.length; a++) {
+                                if (selectedMap) selectedMap[String(w.all_row_ids[a])] = true;
+                            }
+                        }
+                    }
                     var appRow = (window.AppState && window.AppState.rows) ? ((tOrdStr && window.AppState.rows[tOrdStr]) || window.AppState.rows[rIdStr]) : null;
                     if (appRow) {
                         var appLem = (appRow.lemma || '').trim().toLowerCase();
@@ -18388,24 +18616,8 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 if (!targetCard) return;
 
-                // 1. Save selections of previous card before leaving
-                if (activeTabSeq !== null) {
-                    var prevCard = null;
-                    for (var p = 0; p < cards.length; p++) {
-                        if (cards[p].seq_num === activeTabSeq) {
-                            prevCard = cards[p];
-                            break;
-                        }
-                    }
-                    if (prevCard && prevCard !== targetCard) {
-                        prevCard.selected_ids = [];
-                        for (var k in selectedRowIdsMap) {
-                            if (selectedRowIdsMap.hasOwnProperty(k)) {
-                                prevCard.selected_ids.push(k);
-                            }
-                        }
-                    }
-                }
+                // 1. Ensure selection state is synchronized across all cards and AppState
+                syncSelectionsToCardsAndState();
 
                 activeTabSeq = targetCard.seq_num;
                 activeSentenceIdx = targetCard.sentence_idx;
@@ -18487,13 +18699,9 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
 
-                // Restore target card's selections
+                // Synchronize target card's selections from global AppState.selectedLemmas
                 selectedRowIdsMap = {};
-                if (targetCard.selected_ids && targetCard.selected_ids.length > 0) {
-                    for (var s = 0; s < targetCard.selected_ids.length; s++) {
-                        selectedRowIdsMap[String(targetCard.selected_ids[s])] = true;
-                    }
-                }
+                syncSelectionsToCardsAndState();
 
                 // Dynamic viewport binding: bind active card's words into #lemma-table tbody
                 var tbody = document.querySelector('#lemma-table tbody');

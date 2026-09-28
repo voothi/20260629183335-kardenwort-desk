@@ -1605,10 +1605,9 @@ def test_drag_selection_across_filled_reword_row_in_table_of_lemmas(page, tmp_pa
 
 
 def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_path):
-    """Regression test: Selecting words in Tab 2 (Sentence 1) and Tab 3 (Sentence 2)
-
-    MUST NOT leak into Tab 1 (Overview) upon render, update (F5), or tab switching.
-    Tab 1 must remain clean with zero selections if user did not select anything there.
+    """
+    Verifies cross-tab selection behavior: selecting words in Tab 2 ('the') and Tab 3 ('on')
+    synchronizes into Tab 1 (Overview) upon tab switching, while unselected words remain unselected.
     """
     from kardenwort_db import KardenwortDB
     db_path = tmp_path / "test_tab1_clean.db"
@@ -1695,12 +1694,19 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     tab1.click()
     page.wait_for_selector('#lemma-table tbody tr')
 
-    # All rows on Tab 1 MUST be unselected
-    tab1_rows = page.locator('#lemma-table tbody tr')
-    for i in range(tab1_rows.count()):
-        row = tab1_rows.nth(i)
-        assert row.get_attribute("data-selected") == "0", f"Row {i} on Tab 1 should be unselected"
-        assert "selected" not in (row.get_attribute("class") or "")
+    # Tab 1 consolidates selections from other tabs: 'the' and 'on' are selected
+    tab1_the = page.locator('#lemma-table tbody tr[data-row-id="0"]')
+    assert tab1_the.get_attribute("data-selected") == "1"
+    assert "selected" in (tab1_the.get_attribute("class") or "")
+
+    tab1_on = page.locator('#lemma-table tbody tr[data-row-id="2"]')
+    assert tab1_on.get_attribute("data-selected") == "1"
+    assert "selected" in (tab1_on.get_attribute("class") or "")
+
+    # Unselected words on Tab 1 remain unselected
+    tab1_first = page.locator('#lemma-table tbody tr[data-row-id="1"]')
+    assert tab1_first.get_attribute("data-selected") == "0"
+    assert "selected" not in (tab1_first.get_attribute("class") or "")
 
     # Switch to Tab 3 (Sentence 2): 'on' MUST be selected
     tab3 = page.locator('.kw-tab-chip[data-tab-seq="3"]')
@@ -2006,6 +2012,283 @@ def test_overview_tab_unification_article_pronoun_der(tmp_path):
 
     # Verify that the overview word object in the DOM payload coordinates all 3 matched row IDs
     assert len(consolidated_word["all_row_ids"]) == 3
+
+
+def test_playwright_cross_tab_selection_synchronization(page, tmp_path):
+    """
+    Task 4.1: Verify cross-tab selection synchronization between Tab 1 and child sentence tabs.
+    Selecting a lemma on Tab 1 (Master Overview) reflects across all child sentence tabs
+    containing that lemma.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_cross_tab_sync.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260929000001"
+    text = "Das Haus ist gross. Die Katze schlaeft im Haus."
+    tsv_file = tmp_path / f"{unique_zid}-sync.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tDeskSelected\tTokenOrder\n"
+        "Haus\tHaus\tHaus\tдом\t1\tDas Haus ist gross.\t0\t0\n"
+        "gross\tgross\tgross\tбольшой\t1\tDas Haus ist gross.\t0\t1\n"
+        "Katze\tKatze\tKatze\tкошка\t2\tDie Katze schlaeft im Haus.\t0\t2\n"
+        "Haus\tHaus\tHaus\tдоме\t2\tDie Katze schlaeft im Haus.\t0\t3\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1  # Start on Tab 1 (Master Overview)
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # On Tab 1 (Master Overview), click the row for "Haus"
+    haus_row_tab1 = page.locator("#lemma-table tbody tr", has_text="Haus").first
+    assert haus_row_tab1.get_attribute("data-selected") == "0"
+    haus_row_tab1.click()
+    assert haus_row_tab1.get_attribute("data-selected") == "1"
+
+    # Verify global AppState.selectedLemmas has 'haus'
+    sel_lemmas = page.evaluate("() => window.AppState && window.AppState.selectedLemmas ? Object.keys(window.AppState.selectedLemmas) : []")
+    assert "haus" in sel_lemmas
+
+    # Switch to Tab 2 (Sentence 1)
+    page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+
+    # On Tab 2: "Haus" should be selected ("1"), "gross" should be unselected ("0")
+    haus_row_tab2 = page.locator("#lemma-table tbody tr", has_text="Haus").first
+    assert haus_row_tab2.get_attribute("data-selected") == "1"
+    gross_row_tab2 = page.locator("#lemma-table tbody tr", has_text="gross").first
+    assert gross_row_tab2.get_attribute("data-selected") == "0"
+
+    # Switch to Tab 3 (Sentence 2)
+    page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+
+    # On Tab 3: "Haus" should be selected ("1"), "Katze" should be unselected ("0")
+    haus_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Haus").first
+    assert haus_row_tab3.get_attribute("data-selected") == "1"
+    katze_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Katze").first
+    assert katze_row_tab3.get_attribute("data-selected") == "0"
+
+
+def test_playwright_cross_tab_deselection_global(page, tmp_path):
+    """
+    Task 4.2: Verify deselecting a word on Tab 2 unmarks it globally on Tab 1 and Tab 3.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_cross_tab_desel.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260929000002"
+    text = "Das Haus ist gross. Die Katze schlaeft im Haus."
+    tsv_file = tmp_path / f"{unique_zid}-desel.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tDeskSelected\tTokenOrder\n"
+        "Haus\tHaus\tHaus\tдом\t1\tDas Haus ist gross.\t1\t0\n"
+        "gross\tgross\tgross\tбольшой\t1\tDas Haus ist gross.\t0\t1\n"
+        "Katze\tKatze\tKatze\tкошка\t2\tDie Katze schlaeft im Haus.\t0\t2\n"
+        "Haus\tHaus\tHaus\tдоме\t2\tDie Katze schlaeft im Haus.\t1\t3\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=2  # Start on Tab 2 (Sentence 1)
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # On Tab 2: "Haus" is initially selected (from TSV DeskSelected=1)
+    haus_row_tab2 = page.locator("#lemma-table tbody tr", has_text="Haus").first
+    assert haus_row_tab2.get_attribute("data-selected") == "1"
+
+    # Deselect "Haus" on Tab 2
+    haus_row_tab2.click()
+    assert haus_row_tab2.get_attribute("data-selected") == "0"
+
+    # Verify global AppState.selectedLemmas no longer has 'haus'
+    sel_lemmas = page.evaluate("() => window.AppState && window.AppState.selectedLemmas ? Object.keys(window.AppState.selectedLemmas) : []")
+    assert "haus" not in sel_lemmas
+
+    # Switch to Tab 3 (Sentence 2)
+    page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+
+    # On Tab 3: "Haus" should now be unselected ("0")
+    haus_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Haus").first
+    assert haus_row_tab3.get_attribute("data-selected") == "0"
+
+    # Switch to Tab 1 (Master Overview)
+    page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+
+    # On Tab 1: "Haus" should also be unselected ("0")
+    haus_row_tab1 = page.locator("#lemma-table tbody tr", has_text="Haus").first
+    assert haus_row_tab1.get_attribute("data-selected") == "0"
+
+    # Now select "Katze" on Tab 1
+    katze_row_tab1 = page.locator("#lemma-table tbody tr", has_text="Katze").first
+    katze_row_tab1.click()
+    assert katze_row_tab1.get_attribute("data-selected") == "1"
+
+    # Switch to Tab 3 (Sentence 2)
+    page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+    katze_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Katze").first
+    assert katze_row_tab3.get_attribute("data-selected") == "1"
+
+    # Deselect "Katze" on Tab 3
+    katze_row_tab3.click()
+    assert katze_row_tab3.get_attribute("data-selected") == "0"
+
+    # Switch back to Tab 1: "Katze" is unselected
+    page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+    katze_row_tab1_back = page.locator("#lemma-table tbody tr", has_text="Katze").first
+    assert katze_row_tab1_back.get_attribute("data-selected") == "0"
+
+
+def test_playwright_card_scoped_send_to_anki_export(page, tmp_path):
+    """
+    Task 4.3: Verify 'Send to Anki' export on a child sentence tab exports strictly that sentence's words,
+    while exporting on Tab 1 exports all selected words across the session.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_card_scoped_export.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260929000003"
+    text = "Das Haus ist gross. Die Katze schlaeft."
+    tsv_file = tmp_path / f"{unique_zid}-export.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tDeskSelected\tTokenOrder\n"
+        "Haus\tHaus\tHaus\tдом\t1\tDas Haus ist gross.\t1\t0\n"
+        "gross\tgross\tgross\tбольшой\t1\tDas Haus ist gross.\t0\t1\n"
+        "Katze\tKatze\tKatze\tкошка\t2\tDie Katze schlaeft.\t1\t2\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1  # Tab 1
+    )
+
+    mock_script = """<script>
+window.__fetches = [];
+window.fetch = async function(url, options) {
+    var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    window.__fetches.push({ url: url, options: options, body: bodyObj });
+    if (url === '/session/export') {
+        return {
+            ok: true,
+            status: 200,
+            json: async () => ({ ok: true, status: 'success', import_complete: true })
+        };
+    }
+    return { ok: true, status: 200, json: async () => ({ ok: true }) };
+};
+</script>
+"""
+    html_with_mock = html.replace("<head>", "<head>\n" + mock_script, 1)
+
+    page.set_content(html_with_mock)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Initially both 'Haus' (sent 1) and 'Katze' (sent 2) are selected (DeskSelected=1 in TSV)
+    # Switch to Tab 2 (Sentence 1)
+    page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+
+    # Verify 'Haus' is selected on Tab 2
+    haus_tab2 = page.locator("#lemma-table tbody tr", has_text="Haus").first
+    assert haus_tab2.get_attribute("data-selected") == "1"
+
+    # Click 'Send to Anki' from Tab 2 (Sentence 1)
+    page.locator("#kw-btn-export").click()
+    page.wait_for_timeout(100)
+
+    fetches = page.evaluate("window.__fetches")
+    assert len(fetches) >= 1
+    last_fetch = fetches[-1]
+    assert last_fetch["url"] == "/session/export"
+
+    # Export from Tab 2 (Sentence 1) MUST contain row 0 ("Haus"), but MUST NOT contain row 2 ("Katze")
+    assert 0 in last_fetch["body"]["row_ids"]
+    assert 2 not in last_fetch["body"]["row_ids"]
+
+    # Now switch to Tab 1 (Master Overview)
+    page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+
+    # Click 'Send to Anki' from Tab 1 (Master Overview)
+    page.locator("#kw-btn-export").click()
+    page.wait_for_timeout(100)
+
+    fetches_all = page.evaluate("window.__fetches")
+    assert len(fetches_all) >= 2
+    overview_fetch = fetches_all[-1]
+    assert overview_fetch["url"] == "/session/export"
+
+    # Export from Tab 1 (Master Overview) MUST export all selected rows (both 0 and 2)
+    assert 0 in overview_fetch["body"]["row_ids"]
+    assert 2 in overview_fetch["body"]["row_ids"]
+
 
 
 

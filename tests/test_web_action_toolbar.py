@@ -388,19 +388,19 @@ def test_ahk_host_toolbar_suppression(page, tmp_path):
     assert not page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
     assert page.locator("#kw-action-toolbar").is_visible()
 
-    # 2. AutoHotkey ActiveX host mode (window.ahkCall present): toolbar hidden, class added
+    # 2. AutoHotkey ActiveX host mode (window.ahkCall present): toolbar remains visible, host class added
     mock_ahk_script = "<script>window.ahkCall = function(cmd, arg) {};</script>"
     html_ahk = html.replace("<head>", f"<head>\n{mock_ahk_script}")
     page.set_content(html_ahk)
     assert page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
-    assert not page.locator("#kw-action-toolbar").is_visible()
+    assert page.locator("#kw-action-toolbar").is_visible()
 
-    # 3. AutoHotkey external host mode (window.external.ahkCall present): toolbar hidden
+    # 3. AutoHotkey external host mode (window.external.ahkCall present): toolbar remains visible
     mock_ext_script = "<script>window.external = { ahkCall: function(cmd, arg) {} };</script>"
     html_ext = html.replace("<head>", f"<head>\n{mock_ext_script}")
     page.set_content(html_ext)
     assert page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
-    assert not page.locator("#kw-action-toolbar").is_visible()
+    assert page.locator("#kw-action-toolbar").is_visible()
 
 def test_mshtml_activex_environment_without_fetch(page, tmp_path):
     page_errors = []
@@ -421,9 +421,9 @@ delete window.EventSource;
     # Verify no unhandled JavaScript errors during load/watchdog setup
     assert len(page_errors) == 0
 
-    # Verify toolbar is suppressed and kw-ahk-native-host class is present
+    # Verify toolbar is visible and kw-ahk-native-host class is present
     assert page.evaluate("document.body.classList.contains('kw-ahk-native-host')")
-    assert not page.locator("#kw-action-toolbar").is_visible()
+    assert page.locator("#kw-action-toolbar").is_visible()
 
     # Verify action handlers execute safely with fallback toasts without throwing script errors
     page.evaluate("window.onSaveClick && window.onSaveClick()")
