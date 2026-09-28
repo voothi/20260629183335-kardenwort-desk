@@ -64,7 +64,8 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
             in_js = True
             continue
         if in_js and '</script>' in line:
-            break
+            in_js = False
+            continue
         if in_js:
             js_lines.append(line)
             
@@ -93,6 +94,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     js = js.replace("{input_bg}", "white")
     js = js.replace("{text_color}", "black")
     js = js.replace("{input_border}", "gray")
+    js = js.replace("{ui_config_json}", "{}")
     
     return js
 

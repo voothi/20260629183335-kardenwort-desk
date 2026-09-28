@@ -3519,6 +3519,7 @@ class SqliteStorageAdapter(StorageAdapter):
         self,
         zid: str,
         results_dir: Optional[Path] = None,
+        include_overview_selections: bool = False,
         **kwargs,
     ) -> Dict[str, Any]:
         if not zid or str(zid).strip() in ("", "00000000000000"):
@@ -3669,16 +3670,17 @@ class SqliteStorageAdapter(StorageAdapter):
                 unique_db_words.append(word)
 
             overview_selected_orders = set()
-            try:
-                overview_selected_orders = self.get_overview_selections(zid, zid=zid)
-            except Exception:
-                overview_selected_orders = set()
+            if include_overview_selections:
+                try:
+                    overview_selected_orders = self.get_overview_selections(zid, zid=zid)
+                except Exception:
+                    overview_selected_orders = set()
 
-            for word in unique_db_words:
-                t_ord = word.get("token_order")
-                t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
-                if t_ord_int is not None and t_ord_int in overview_selected_orders:
-                    word["selected"] = 1
+                for word in unique_db_words:
+                    t_ord = word.get("token_order")
+                    t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
+                    if t_ord_int is not None and t_ord_int in overview_selected_orders:
+                        word["selected"] = 1
 
             data_rows = []
             for word in unique_db_words:
@@ -3753,7 +3755,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     elif h_lower in ("deskselected", "selected"):
                         t_ord = word.get("token_order")
                         t_ord_int = int(t_ord) if (t_ord is not None and str(t_ord).strip().isdigit()) else None
-                        is_sel = 1 if (word.get("selected", 0) or (t_ord_int is not None and t_ord_int in overview_selected_orders)) else 0
+                        is_sel = 1 if (word.get("selected", 0) or (include_overview_selections and t_ord_int is not None and t_ord_int in overview_selected_orders)) else 0
                         row_cells.append(str(is_sel))
                     elif h_lower in ("leitnerbox", "leitner_box"):
                         row_cells.append(str(word.get("leitner_box", 1)))
@@ -4632,7 +4634,7 @@ def aggregate_project_materials(
 
         for sess in sessions:
             s_zid = sess["session_zid"]
-            restored = adapter.restore_session(s_zid)
+            restored = adapter.restore_session(s_zid, include_overview_selections=True)
             if not headers and restored.get("headers"):
                 headers = list(restored["headers"])
 
@@ -5192,7 +5194,7 @@ def synthesize_project_materials(
 
         for sess in sessions:
             s_zid = sess["session_zid"]
-            restored = adapter.restore_session(s_zid)
+            restored = adapter.restore_session(s_zid, include_overview_selections=True)
             if not headers and restored.get("headers"):
                 headers = list(restored["headers"])
 
@@ -10851,17 +10853,6 @@ html, body {{
 
             ov_k = (ov_lem_clean, ov_eff_pos) if col_pos_dedup != -1 else ov_lem_clean
             matched_ids = lemma_pos_to_row_ids.get(ov_k) or lemma_pos_to_row_ids.get(ov_lem_clean) or [ov_id]
-
-            if ov_is_sel == "0" and col_highlighted != -1:
-                if len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
-                    ov_is_sel = "1"
-                elif matched_ids:
-                    for mid in matched_ids:
-                        if mid < len(data_rows):
-                            mr = data_rows[mid]
-                            if len(mr) > col_highlighted and str(mr[col_highlighted]).strip().lower() in ["1", "true"]:
-                                ov_is_sel = "1"
-                                break
 
             primary_id = next((mid for mid in matched_ids if mid not in used_primary_ids), matched_ids[0])
             used_primary_ids.add(primary_id)

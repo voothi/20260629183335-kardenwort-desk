@@ -534,7 +534,7 @@ DeskSelected
     adapter.update_word_selection(session_zid, sentence_idx=0, token_order=1, selected=1)
 
     # Re-restore session and verify DeskSelected is overlaid
-    restored = adapter.restore_session(session_zid)
+    restored = adapter.restore_session(session_zid, include_overview_selections=True)
     assert restored["data_rows"][0][sel_idx] == "0"
     assert restored["data_rows"][1][sel_idx] == "1"
     assert restored["words"][0]["selected"] == 0
