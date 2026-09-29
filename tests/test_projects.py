@@ -1060,6 +1060,172 @@ def test_synthesize_project_materials_inferred_english_language_and_frequency_so
     assert lemmas[1] == "dog"
 
 
+def test_synthesize_project_materials_preserves_sentence_local_rows_across_sessions(temp_project_env):
+    """
+    Verify that synthesize_project_materials retains sentence-local data rows
+    across constituent sessions without dropping repeated vocabulary, and that
+    total_words accurately reports distinct lemmas.
+    """
+    from kardenwort_desk import synthesize_project_materials, _run_render_flow_impl
+    import json
+    import re
+
+    db: KardenwortDB = temp_project_env["db"]
+    adapter: SqliteStorageAdapter = temp_project_env["adapter"]
+    tmp_path = temp_project_env["tmp_path"]
+    resolved_paths = dict(temp_project_env["resolved_paths"])
+    resolved_paths["kardenwort_workspace"] = tmp_path
+    anki_mapping = tmp_path / "anki_mapping.ini"
+    anki_mapping.write_text("", encoding="utf-8")
+    resolved_paths["anki_mapping_file"] = anki_mapping
+
+    pid = db.create_project(title="Repeated Words Project", slug="repeat-proj")
+    sid1 = "20260929110001"
+    sid2 = "20260929110002"
+
+    # Session 1 has 'be' and 'complete'
+    adapter.save_session(
+        session_zid=sid1,
+        slug="sess-repeat-1",
+        source_language="en",
+        source_raw_text="are complete.",
+        headers=["Quotation", "WordSource", "SentenceSourceIndex", "DeskSelected"],
+        data_rows=[
+            ["are", "be", "1", "1"],
+            ["complete", "complete", "1", "1"],
+        ],
+        sentences=[{
+            "session_zid": sid1,
+            "sentence_index": 1,
+            "sentence_source": "are complete.",
+            "sentence_destination": "являются полными.",
+        }],
+    )
+
+    # Session 2 repeats 'are complete.' and adds 'review'
+    adapter.save_session(
+        session_zid=sid2,
+        slug="sess-repeat-2",
+        source_language="en",
+        source_raw_text="are complete.\nready for review.",
+        headers=["Quotation", "WordSource", "SentenceSourceIndex", "DeskSelected"],
+        data_rows=[
+            ["are", "be", "1", "1"],
+            ["complete", "complete", "1", "1"],
+            ["ready", "ready", "2", "1"],
+            ["review", "review", "2", "1"],
+        ],
+        sentences=[
+            {
+                "session_zid": sid2,
+                "sentence_index": 1,
+                "sentence_source": "are complete.",
+                "sentence_destination": "являются полными.",
+            },
+            {
+                "session_zid": sid2,
+                "sentence_index": 2,
+                "sentence_source": "ready for review.",
+                "sentence_destination": "готовы к рассмотрению.",
+            },
+        ],
+    )
+
+    db.link_session_to_project(pid, sid1, order_index=0)
+    db.link_session_to_project(pid, sid2, order_index=1)
+
+    synthesized = synthesize_project_materials(
+        project_id=pid,
+        db=db,
+        resolved_paths=resolved_paths,
+        language="en",
+    )
+
+    assert synthesized["ok"] is True
+    # 4 unique lemmas: be, complete, ready, review (+ project title words 'Repeated', 'Words', 'Project')
+    assert synthesized["total_words"] == 7
+
+    # Data rows must contain all 6 constituent session rows + 3 title heading rows
+    s_col = synthesized["headers"].index("SentenceSourceIndex")
+    w_col = synthesized["headers"].index("WordSource")
+    
+    rows_by_sent = {}
+    for r in synthesized["data_rows"]:
+        s_idx = r[s_col]
+        rows_by_sent.setdefault(s_idx, []).append(r[w_col])
+
+    # Sentence 1: '# Repeated Words Project' (3 title words)
+    assert len(rows_by_sent["1"]) == 3
+    # Sentence 2 (from sid1): 'are complete.' (be, complete)
+    assert "be" in rows_by_sent["2"]
+    assert "complete" in rows_by_sent["2"]
+    # Sentence 3 (from sid2 sent 1): 'are complete.' (be, complete preserved, not dropped!)
+    assert "be" in rows_by_sent["3"]
+    assert "complete" in rows_by_sent["3"]
+    # Sentence 4 (from sid2 sent 2): 'ready for review.' (ready, review)
+    assert "ready" in rows_by_sent["4"]
+    assert "review" in rows_by_sent["4"]
+
+    # Render into container HTML and check cards
+    synth_zid = "20260929119999"
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    tsv_path = results_dir / f"{synth_zid}.en.tsv"
+    tsv_lines = ["\t".join(synthesized["headers"])] + ["\t".join(r) for r in synthesized["data_rows"]]
+    tsv_path.write_text("\n".join(tsv_lines) + "\n", encoding="utf-8")
+
+    adapter.save_session(
+        session_zid=synth_zid,
+        zid=synth_zid,
+        slug="synth-rendered",
+        source_language="en",
+        source_raw_text=synthesized["source_text"],
+        headers=synthesized["headers"],
+        data_rows=synthesized["data_rows"],
+        sentences=synthesized["sentences"],
+    )
+
+    import configparser
+    cfg = configparser.ConfigParser()
+    cfg.add_section("settings")
+    cfg.set("settings", "default_target_language", "ru")
+    cfg.add_section("sentences_mode")
+    cfg.set("sentences_mode", "enabled", "true")
+    cfg.set("sentences_mode", "delivery_mode", "container")
+    cfg.set("sentences_mode", "deduplication_scope", "sentence")
+    cfg.add_section("storage")
+    cfg.set("storage", "sqlite_db_path", str(db.db_path))
+    cfg.add_section("languages")
+    cfg.set("languages", "en_prompt", "dummy")
+
+    html = _run_render_flow_impl(
+        synthesized["source_text"],
+        "en",
+        synth_zid,
+        "multi",
+        config=cfg,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=tsv_path,
+        spawn_children=False,
+    )
+
+    m = re.search(r'id="sentence-cards"[^>]*>(.*?)</script>', html, re.DOTALL)
+    assert m is not None
+    cards = json.loads(m.group(1).strip())
+    # 5 cards: 1 master card + 4 sentence cards
+    assert len(cards) == 5
+
+    card_words_by_sent = {c["sentence_idx"]: [w["lemma"] for w in c["words"]] for c in cards if c["sentence_idx"] > 0}
+    # Every child card has its words populated!
+    assert "be" in card_words_by_sent[2]
+    assert "complete" in card_words_by_sent[2]
+    assert "be" in card_words_by_sent[3]
+    assert "complete" in card_words_by_sent[3]
+    assert "ready" in card_words_by_sent[4]
+    assert "review" in card_words_by_sent[4]
+
+
 
 
 

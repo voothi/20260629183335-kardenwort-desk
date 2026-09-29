@@ -2290,5 +2290,84 @@ window.fetch = async function(url, options) {
     assert 2 in overview_fetch["body"]["row_ids"]
 
 
+def test_playwright_container_tab_switching_repeated_words_and_empty_state(page, tmp_path):
+    """
+    Verify container mode tab switching:
+    1. Sentences with repeated vocabulary across tabs display their respective words correctly.
+    2. Sentences with 0 vocabulary words render the styled empty state row.
+    3. Switching between tabs dynamically updates the table and empty state.
+    """
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_repeated_and_empty.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20260929000004"
+    text = "The cat slept.\nThe cat ate.\n1 1"
+    tsv_file = tmp_path / f"{unique_zid}-test.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tDeskSelected\tTokenOrder\n"
+        "cat\tcat\tcat\tкот\t1\tThe cat slept.\t0\t0\n"
+        "slept\tsleep\tsleep\tспал\t1\tThe cat slept.\t0\t1\n"
+        "cat\tcat\tcat\tкот\t2\tThe cat ate.\t0\t2\n"
+        "ate\teat\teat\tел\t2\tThe cat ate.\t0\t3\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=unique_zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Tab 1: Master Overview has both 'cat', 'sleep', and 'eat'
+    assert page.locator("#lemma-table tbody tr", has_text="cat").count() >= 1
+    assert page.locator("#lemma-table tbody tr", has_text="sleep").count() >= 1
+
+    # Switch to Tab 2 (Sentence 1: "The cat slept.")
+    page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+    assert page.locator("#lemma-table tbody tr", has_text="cat").count() == 1
+    assert page.locator("#lemma-table tbody tr", has_text="sleep").count() == 1
+    assert page.locator("#lemma-table tbody tr", has_text="eat").count() == 0
+
+    # Switch to Tab 3 (Sentence 2: "The cat ate.") - 'cat' repeated here must NOT be empty!
+    page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
+    assert page.locator("#lemma-table tbody tr", has_text="cat").count() == 1
+    assert page.locator("#lemma-table tbody tr", has_text="eat").count() == 1
+    assert page.locator("#lemma-table tbody tr", has_text="sleep").count() == 0
+
+    # Switch to Tab 4 (Sentence 3: "1 1") - has 0 words, must render empty state
+    page.locator('.kw-tab-chip[data-tab-seq="4"]').click()
+    page.wait_for_selector("#lemma-table tbody tr.kw-empty-table-row", timeout=5000)
+    empty_cell = page.locator("#lemma-table tbody tr.kw-empty-table-row td.kw-empty-cell")
+    assert "No vocabulary words in this section" in empty_cell.text_content()
+
+    # Switch back to Tab 3 - table is restored properly
+    page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
+    page.wait_for_function("document.querySelector('#lemma-table tbody tr:not(.kw-empty-table-row)') !== null", timeout=5000)
+    assert page.locator("#lemma-table tbody tr", has_text="cat").count() == 1
+
+
+
 
 

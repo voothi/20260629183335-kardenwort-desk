@@ -5342,8 +5342,15 @@ def synthesize_project_materials(
                 all_data_rows.append(h_row)
 
     combined_text = "\n".join(t.strip() for t in source_texts if t.strip())
-    all_data_rows = deduplicate_rows_by_lemma(all_data_rows, headers)
     all_data_rows = sort_rows_by_frequency(all_data_rows, headers, lang, config, resolved_paths)
+
+    col_lem = headers.index("WordSource") if "WordSource" in headers else -1
+    unique_lemmas = {
+        r[col_lem].strip().lower()
+        for r in all_data_rows
+        if col_lem != -1 and len(r) > col_lem and r[col_lem].strip()
+    } if col_lem != -1 else set()
+    total_words_count = len(unique_lemmas) if unique_lemmas else len(all_data_rows)
 
     return {
         "ok": True,
@@ -5360,7 +5367,7 @@ def synthesize_project_materials(
         "data_rows": all_data_rows,
         "sentences": all_sentences,
         "total_sessions": total_sessions,
-        "total_words": len(all_data_rows),
+        "total_words": total_words_count,
         "comments": [f"# Synthesized Project Session: {project.get('title')} (ID: {project_id})"],
         "chapters": chapters,
         "fingerprint": compute_content_fingerprint(all_data_rows),
@@ -11016,6 +11023,29 @@ html, body {{
                     c_tsv_name = f"{z_p}-{c_slug}.{l_p}.tsv"
 
             sent_words = [w for w in all_word_objs if str(w.get("sentence_idx")) == str(sent_i)]
+            if not sent_words and s_src and s_src.strip() and overview_word_objs:
+                sub_tokens = []
+                try:
+                    sub_tokens = tok.build_word_list_internal(s_src, keep_spaces=True)
+                except Exception:
+                    sub_tokens = []
+                if sub_tokens:
+                    sub_words = {t["lower_clean"] for t in sub_tokens if t.get("is_word") and "lower_clean" in t}
+                else:
+                    sub_words = {w.lower() for w in re.findall(r'\b[^\W\d_]+\b', s_src, re.UNICODE)}
+
+                if sub_words:
+                    for ow in overview_word_objs:
+                        ow_lem = (ow.get("lemma") or "").strip().lower()
+                        ow_inf = (ow.get("inflected") or "").strip().lower()
+                        forms = {f.strip() for f in ow_inf.split(',') if f.strip()}
+                        if (ow_lem and ow_lem in sub_words) or any(f in sub_words for f in forms):
+                            recovered_w = dict(ow)
+                            recovered_w["sentence_idx"] = str(sent_i)
+                            if recovered_w.get("row_html"):
+                                recovered_w["row_html"] = re.sub(r'data-sentence-idx="[^"]*"', f'data-sentence-idx="{sent_i}"', recovered_w["row_html"])
+                            sent_words.append(recovered_w)
+
             child_cards.append({
                 "index": idx + 1,
                 "seq_num": seq,
@@ -11058,6 +11088,8 @@ html, body {{
             active_c = next((c for c in sentence_cards if c["seq_num"] == active_seq_num), None)
             if active_c and active_c.get("words"):
                 table_rows_html = "\n".join(w["row_html"] for w in active_c["words"])
+            elif active_c and active_c.get("words") is not None and len(active_c.get("words")) == 0:
+                table_rows_html = '<tr class="kw-empty-table-row"><td colspan="10" class="kw-empty-cell" style="text-align: center; padding: 24px; color: var(--color-fg-muted, #8b949e); font-style: italic;">No vocabulary words in this section</td></tr>'
 
     dock_body_class = ""
     if len(sentence_cards) > 1 and smc.delivery_mode == "container":
@@ -18707,6 +18739,11 @@ window.__CONFIG__ = {ui_config_json};
                 var tbody = document.querySelector('#lemma-table tbody');
                 if (tbody && targetCard.words && targetCard.words.length > 0) {
                     bindCardWordsToTbody(tbody, targetCard.words, selectedRowIdsMap);
+                } else if (tbody && targetCard.words && targetCard.words.length === 0) {
+                    tbody.innerHTML = '<tr class="kw-empty-table-row"><td colspan="10" class="kw-empty-cell" style="text-align: center; padding: 24px; color: var(--color-fg-muted, #8b949e); font-style: italic;">No vocabulary words in this section</td></tr>';
+                    if (typeof window.rebindTableRows === 'function') {
+                        window.rebindTableRows();
+                    }
                 } else {
                     // Fallback to tableRows display toggling if words collection is absent
                     var tableRows = document.querySelectorAll('#lemma-table tbody tr');
