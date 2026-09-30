@@ -14239,15 +14239,27 @@ window.__CONFIG__ = {ui_config_json};
                     var currentElapsed = getActiveElapsedMs();
                     var remaining = maxBudgetMs - currentElapsed;
                     if (remaining <= 0) {
-                        closeEvtSource();
-                        stopPolling();
-                        cleanupOrphanSkeletons();
+                        var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        if (pendings > 0) {
+                            enterHeartbeatFallback();
+                            cleanupOrphanSkeletons();
+                        } else {
+                            closeEvtSource();
+                            stopPolling();
+                            cleanupOrphanSkeletons();
+                        }
                     } else {
                         window._kwWatchdogMaxTimer = setTimeout(function() {
                             if (!resolved) {
-                                closeEvtSource();
-                                stopPolling();
-                                cleanupOrphanSkeletons();
+                                var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                                if (pendings > 0) {
+                                    enterHeartbeatFallback();
+                                    cleanupOrphanSkeletons();
+                                } else {
+                                    closeEvtSource();
+                                    stopPolling();
+                                    cleanupOrphanSkeletons();
+                                }
                             }
                         }, remaining);
                     }
@@ -14257,6 +14269,9 @@ window.__CONFIG__ = {ui_config_json};
 
                 var executeCleanSkeletonStrip = function() {
                     if (resolved) return;
+                    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                        return;
+                    }
                     var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
                     if (pendings.length > 0) {
                         for (var i = 0; i < pendings.length; i++) {
@@ -14282,11 +14297,36 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 };
 
+                var enterHeartbeatFallback = function() {
+                    if (resolved) return;
+                    var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                    if (remaining === 0) return;
+                    window._kwIsHeartbeat = true;
+                    pollIntervalMs = 3000;
+                    if (window._kwSkeletonPollTimer) {
+                        clearInterval(window._kwSkeletonPollTimer);
+                        window._kwSkeletonPollTimer = null;
+                    }
+                    window._kwSkeletonPollTimer = setInterval(pollSessionStatus, 3000);
+                };
+                window._kwEnterHeartbeatFallback = enterHeartbeatFallback;
+
                 var cleanupOrphanSkeletons = function() {
                     if (resolved) return;
+                    if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                        enterHeartbeatFallback();
+                        return;
+                    }
                     if (isWebMode && curZid && typeof fetch !== 'undefined') {
                         var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                        fetch(statusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                        var cController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                        var cTimeoutId = cController ? setTimeout(function() {
+                            try { cController.abort(); } catch(e) {}
+                        }, 4000) : null;
+                        var cOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                        if (cController) cOpts.signal = cController.signal;
+
+                        fetch(statusUrl, cOpts)
                             .then(function(res) {
                                 if (res.ok) return res.json();
                                 throw new Error("status fetch failed");
@@ -14306,8 +14346,10 @@ window.__CONFIG__ = {ui_config_json};
                                     lastVisibleTime = Date.now();
                                     maxBudgetMs += 15000;
                                     window._kwWatchdogMaxBudgetMs = maxBudgetMs;
+                                    window._kwIsHeartbeat = false;
+                                    pollIntervalMs = 1000;
                                     resumeWatchdogTimer();
-                                    startWatchdogPolling();
+                                    startWatchdogPolling(true);
                                     return;
                                 }
 
@@ -14332,7 +14374,14 @@ window.__CONFIG__ = {ui_config_json};
                                 executeCleanSkeletonStrip();
                             })
                             .catch(function() {
+                                if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                                    enterHeartbeatFallback();
+                                    return;
+                                }
                                 executeCleanSkeletonStrip();
+                            })
+                            .finally(function() {
+                                if (cTimeoutId) clearTimeout(cTimeoutId);
                             });
                     } else {
                         executeCleanSkeletonStrip();
@@ -14356,6 +14405,10 @@ window.__CONFIG__ = {ui_config_json};
                         clearTimeout(window._kwSseSafetyTimer);
                         window._kwSseSafetyTimer = null;
                     }
+                    if (window._kwSseReconnectTimer) {
+                        clearTimeout(window._kwSseReconnectTimer);
+                        window._kwSseReconnectTimer = null;
+                    }
                 };
 
                 var pollSessionStatus = function() {
@@ -14368,21 +14421,36 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     var currentElapsed = getActiveElapsedMs();
                     if (currentElapsed >= maxBudgetMs) {
-                        stopPolling();
-                        cleanupOrphanSkeletons();
-                        return;
+                        var remainingPendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        if (remainingPendings > 0 && !window._kwIsHeartbeat) {
+                            enterHeartbeatFallback();
+                            cleanupOrphanSkeletons();
+                            return;
+                        } else if (remainingPendings === 0) {
+                            stopPolling();
+                            cleanupOrphanSkeletons();
+                            return;
+                        }
                     }
                     if (isPolling) return;
                     isPolling = true;
 
                     var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                    fetch(statusUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                    var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                    var timeoutId = controller ? setTimeout(function() {
+                        try { controller.abort(); } catch(e) {}
+                    }, 4000) : null;
+                    var fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
+                    if (controller) {
+                        fetchOpts.signal = controller.signal;
+                    }
+
+                    fetch(statusUrl, fetchOpts)
                         .then(function(res) {
                             if (res.ok) return res.json();
                             throw new Error("status endpoint error");
                         })
                         .then(function(resObj) {
-                            isPolling = false;
                             var data = (resObj && resObj.data) ? resObj.data : resObj;
                             if (data) {
                                 var isBusy = ((data.stage === 'translating' || (data.status && data.status.stage === 'translating') || data.worker_status === 'running') &&
@@ -14391,6 +14459,11 @@ window.__CONFIG__ = {ui_config_json};
                                 if (isBusy) {
                                     totalActiveElapsedMs = 0;
                                     lastVisibleTime = Date.now();
+                                    if (window._kwIsHeartbeat) {
+                                        window._kwIsHeartbeat = false;
+                                        pollIntervalMs = 1000;
+                                        startWatchdogPolling(true);
+                                    }
                                 }
                             }
                             if (data && (data.rows || data.translatedText || data.translated_text || data.sentences || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished')))) {
@@ -14412,12 +14485,22 @@ window.__CONFIG__ = {ui_config_json};
                                 }
                             }
                         })
-                        .catch(function() {
+                        .catch(function(err) {
+                            if (typeof navigator !== 'undefined' && navigator.onLine === false) {
+                                enterHeartbeatFallback();
+                                return;
+                            }
                             var renderCheckUrl = "/?session_zid=" + encodeURIComponent(curZid);
-                            fetch(renderCheckUrl, { method: 'GET' })
+                            var rcController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
+                            var rcTimeoutId = rcController ? setTimeout(function() {
+                                try { rcController.abort(); } catch(e) {}
+                            }, 4000) : null;
+                            var rcOpts = { method: 'GET' };
+                            if (rcController) rcOpts.signal = rcController.signal;
+
+                            fetch(renderCheckUrl, rcOpts)
                                 .then(function(res) { return res.text(); })
                                 .then(function(htmlText) {
-                                    isPolling = false;
                                     if (htmlText && htmlText.indexOf('skeleton-loader') === -1) {
                                         resolved = true;
                                         if (window._kwWatchdogMaxTimer) {
@@ -14431,19 +14514,30 @@ window.__CONFIG__ = {ui_config_json};
                                         }
                                     }
                                 })
-                                .catch(function() {
-                                    isPolling = false;
+                                .catch(function() {})
+                                .finally(function() {
+                                    if (rcTimeoutId) clearTimeout(rcTimeoutId);
                                 });
+                        })
+                        .finally(function() {
+                            if (timeoutId) clearTimeout(timeoutId);
+                            isPolling = false;
                         });
                 };
 
-                var startWatchdogPolling = function() {
-                    if (resolved || window._kwSkeletonPollTimer) return;
+                var startWatchdogPolling = function(restart) {
+                    if (resolved) return;
                     if (typeof fetch === 'undefined') return;
                     var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
                     if (remaining === 0) return;
-                    window._kwSkeletonPollTimer = setInterval(pollSessionStatus, pollIntervalMs);
-                    setTimeout(pollSessionStatus, 500);
+                    if (restart && window._kwSkeletonPollTimer) {
+                        clearInterval(window._kwSkeletonPollTimer);
+                        window._kwSkeletonPollTimer = null;
+                    }
+                    if (!window._kwSkeletonPollTimer) {
+                        window._kwSkeletonPollTimer = setInterval(pollSessionStatus, pollIntervalMs);
+                        setTimeout(pollSessionStatus, 100);
+                    }
                 };
 
                 if (!document.hidden) {
@@ -14470,24 +14564,60 @@ window.__CONFIG__ = {ui_config_json};
                     startWatchdogPolling();
                 }
 
-                // Channel: EventSource (SSE) running concurrently with watchdog polling
-                if (typeof EventSource !== 'undefined') {
+                var sseBackoffMs = 1000;
+                var connectSse = function(forceReconnect) {
+                    if (resolved) return;
+                    if (typeof EventSource === 'undefined') return;
+                    if (window._kwEvtSource) {
+                        if (!forceReconnect && window._kwEvtSource.readyState !== 2) {
+                            return;
+                        }
+                        try { window._kwEvtSource.close(); } catch(err) {}
+                        window._kwEvtSource = null;
+                    }
+                    if (forceReconnect) {
+                        sseBackoffMs = 1000;
+                        if (window._kwSseReconnectTimer) {
+                            clearTimeout(window._kwSseReconnectTimer);
+                            window._kwSseReconnectTimer = null;
+                        }
+                    }
                     try {
                         var sseUrl = "/events?zid=" + encodeURIComponent(curZid);
                         var evtSource = new EventSource(sseUrl);
                         window._kwEvtSource = evtSource;
 
-                        // 30-second safety timer to ensure EventSource is closed and slot is released
+                        if (window._kwSseSafetyTimer) {
+                            clearTimeout(window._kwSseSafetyTimer);
+                            window._kwSseSafetyTimer = null;
+                        }
                         window._kwSseSafetyTimer = setTimeout(function() {
                             closeEvtSource();
                         }, maxBudgetMs);
 
-                        // On error: immediately close socket to prevent browser auto-reconnect loops
+                        evtSource.onopen = function() {
+                            sseBackoffMs = 1000;
+                        };
+
                         evtSource.onerror = function(err) {
                             closeEvtSource();
+                            if (resolved) return;
+                            var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                            if (remaining === 0) return;
+                            if (!window._kwSseReconnectTimer) {
+                                var delay = sseBackoffMs;
+                                sseBackoffMs = Math.min(sseBackoffMs * 2, 16000);
+                                window._kwSseReconnectTimer = setTimeout(function() {
+                                    window._kwSseReconnectTimer = null;
+                                    if (!resolved && document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0) {
+                                        connectSse(true);
+                                    }
+                                }, delay);
+                            }
                         };
 
                         evtSource.onmessage = function(e) {
+                            sseBackoffMs = 1000;
                             try {
                                 var parsed = JSON.parse(e.data);
                                 if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage || parsed.is_finished)) {
@@ -14513,9 +14643,48 @@ window.__CONFIG__ = {ui_config_json};
                     } catch(sseErr) {
                         closeEvtSource();
                     }
-                }
+                };
+
+                // Channel: EventSource (SSE) running concurrently with watchdog polling
+                connectSse();
 
                 window.startPolling = startWatchdogPolling;
+                window._kwStartWatchdogPolling = startWatchdogPolling;
+                window._kwPollSessionStatus = pollSessionStatus;
+                window._kwConnectSse = connectSse;
+
+                if (!window._kwNetworkListenersAttached) {
+                    window._kwNetworkListenersAttached = true;
+                    window.addEventListener('online', function() {
+                        var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        if (remaining > 0) {
+                            if (typeof window._kwStartWatchdogPolling === 'function') {
+                                window._kwStartWatchdogPolling(true);
+                            }
+                            if (typeof window._kwPollSessionStatus === 'function') {
+                                window._kwPollSessionStatus();
+                            }
+                            if (typeof window._kwConnectSse === 'function') {
+                                window._kwConnectSse(true);
+                            }
+                        }
+                    });
+
+                    window.addEventListener('focus', function() {
+                        var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        if (remaining > 0) {
+                            if (typeof window._kwStartWatchdogPolling === 'function') {
+                                window._kwStartWatchdogPolling(false);
+                            }
+                            if (typeof window._kwPollSessionStatus === 'function') {
+                                window._kwPollSessionStatus();
+                            }
+                            if (typeof window._kwConnectSse === 'function') {
+                                window._kwConnectSse(false);
+                            }
+                        }
+                    });
+                }
             }
         }
         window.initWatchdog = initWatchdog;
