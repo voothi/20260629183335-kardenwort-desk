@@ -4444,20 +4444,49 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             })
             return
 
-        # Configuration retrieval endpoint
+        # Configuration retrieval and update endpoint
         if path == '/api/v1/config':
-            if method != 'GET':
+            if method == 'GET':
+                ui_cfg = getattr(self.server, 'ui_cfg', None)
+                if not ui_cfg:
+                    ui_cfg = resolve_ui_config(self.server.config)
+                default_lang = self.server.config.get(SEC_SETTINGS, 'default_language', fallback='de') if hasattr(self.server, 'config') and self.server.config else 'de'
+                self._send_json(200, {
+                    "ok": True,
+                    "ui": ui_cfg,
+                    "default_language": default_lang,
+                })
+                return
+            elif method == 'POST':
+                body = self._read_json_body()
+                self._authenticate_token(body)
+                sec = body.get('section', 'rendering')
+                key = body.get('key')
+                val = str(body.get('value', ''))
+                if not key and 'highlight_same_lemma' in body:
+                    key = 'highlight_same_lemma'
+                    val = str(body.get('highlight_same_lemma')).lower()
+                if key and hasattr(self.server, 'config') and self.server.config:
+                    if not self.server.config.has_section(sec):
+                        self.server.config.add_section(sec)
+                    self.server.config.set(sec, key, val)
+                    if hasattr(self.server, 'ui_cfg') and self.server.ui_cfg is not None:
+                        self.server.ui_cfg[key] = (val.lower() in ('1', 'true', 'yes'))
+                    cfg_file = getattr(self.server, 'config_path', None)
+                    if not cfg_file and hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
+                        base_dir = self.server.resolved_paths.get('base_dir')
+                        if base_dir:
+                            cfg_file = Path(base_dir) / 'config.ini'
+                    if cfg_file and Path(cfg_file).exists():
+                        try:
+                            with open(cfg_file, 'w', encoding='utf-8') as f:
+                                self.server.config.write(f)
+                        except Exception as e:
+                            logger.warning(f"Failed to write config.ini: {e}")
+                self._send_json(200, {"ok": True, "section": sec, "key": key, "value": val})
+                return
+            else:
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            ui_cfg = getattr(self.server, 'ui_cfg', None)
-            if not ui_cfg:
-                ui_cfg = resolve_ui_config(self.server.config)
-            default_lang = self.server.config.get(SEC_SETTINGS, 'default_language', fallback='de') if hasattr(self.server, 'config') and self.server.config else 'de'
-            self._send_json(200, {
-                "ok": True,
-                "ui": ui_cfg,
-                "default_language": default_lang,
-            })
-            return
 
         # Atomic Language Confirmation & Session Tab Spawning
         if path == '/api/v1/confirm-language':

@@ -2108,6 +2108,7 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
         'launch_in_browser': True,
         'default_zoom': 100,
         'auto_inject_updates': True,
+        'highlight_same_lemma': False,
     }
     if not config:
         return ui_cfg
@@ -2123,6 +2124,7 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
         rend = config[SEC_RENDERING]
         ui_cfg['default_zoom'] = rend.getint('default_zoom', fallback=100)
         ui_cfg['auto_inject_updates'] = rend.getboolean('auto_inject_updates', fallback=True)
+        ui_cfg['highlight_same_lemma'] = rend.getboolean('highlight_same_lemma', fallback=False)
 
     return ui_cfg
 
@@ -2323,14 +2325,51 @@ def to_unicode_bold(text: str) -> str:
     return "".join(result)
 
 def format_inflected_sentence_tooltip(
-    sentence_text: Optional[str],
-    inflected_val: Optional[str],
-    token_order: Optional[Union[str, int]] = None
+    sentence_text: Optional[Union[str, List[Any]]] = None,
+    inflected_val: Optional[str] = None,
+    token_order: Optional[Union[str, int]] = None,
+    sentences: Optional[List[Any]] = None,
 ) -> str:
+    items = sentences if sentences is not None else (sentence_text if isinstance(sentence_text, list) else None)
+    if items is not None:
+        formatted_lines = []
+        seen_lines = set()
+        for item in items:
+            s_txt, i_val, t_ord = "", "", None
+            if isinstance(item, (list, tuple)):
+                if len(item) == 1:
+                    s_txt = item[0]
+                elif len(item) == 2:
+                    s_txt, i_val = item[0], item[1]
+                elif len(item) >= 3:
+                    s_txt, i_val, t_ord = item[0], item[1], item[2]
+            elif isinstance(item, dict):
+                s_txt = item.get("sentence") or item.get("sentence_source") or ""
+                i_val = item.get("inflected") or item.get("inflected_val") or inflected_val or ""
+                t_ord = item.get("token_order", token_order)
+            elif isinstance(item, str):
+                s_txt = item
+                i_val = inflected_val or ""
+                t_ord = token_order
+
+            s_clean = (s_txt or "").strip()
+            if not s_clean:
+                continue
+            line = format_inflected_sentence_tooltip(sentence_text=s_clean, inflected_val=i_val, token_order=t_ord)
+            if line and line not in seen_lines:
+                seen_lines.add(line)
+                formatted_lines.append(line)
+
+        if len(formatted_lines) > 1:
+            return "\n".join(f"[{idx + 1}] {line}" for idx, line in enumerate(formatted_lines))
+        elif len(formatted_lines) == 1:
+            return formatted_lines[0]
+        return (inflected_val or "").strip()
+
     if not sentence_text:
         return (inflected_val or "").strip()
     if not inflected_val:
-        return sentence_text.strip()
+        return str(sentence_text).strip()
     
     target_indices = set()
     if token_order is not None:
@@ -2343,7 +2382,7 @@ def format_inflected_sentence_tooltip(
     
     target_words = set(re.findall(r'[\w]+', inflected_val.lower()))
     
-    parts = re.split(r'(\w+)', sentence_text)
+    parts = re.split(r'(\w+)', str(sentence_text))
     word_idx = 0
     has_indices = bool(target_indices)
     
@@ -10701,6 +10740,20 @@ html, body {{
 
                 tok_data["atomic_row_ids"] = atomic_rows
                 tok_data["compound_row_ids"] = compound_cand_rows
+                if atomic_rows:
+                    prim_idx = atomic_rows[0]
+                    tok_data["atomic_id"] = prim_idx
+                    if 0 <= prim_idx < len(data_rows):
+                        r_prim = data_rows[prim_idx]
+                        if col_index != -1 and len(r_prim) > col_index and str(r_prim[col_index]).strip():
+                            try:
+                                tok_data["sentence_idx"] = int(str(r_prim[col_index]).strip())
+                            except Exception:
+                                tok_data["sentence_idx"] = str(r_prim[col_index]).strip()
+                        if col_token_order != -1 and len(r_prim) > col_token_order and str(r_prim[col_token_order]).strip():
+                            tok_data["token_order"] = str(r_prim[col_token_order]).strip()
+                        if col_lemma != -1 and len(r_prim) > col_lemma and str(r_prim[col_lemma]).strip():
+                            tok_data["lemma"] = str(r_prim[col_lemma]).strip()
             word_counter += 1
         token_manifest.append(tok_data)
         
@@ -10881,6 +10934,18 @@ html, body {{
             ov_k = (ov_lem_clean, ov_eff_pos) if col_pos_dedup != -1 else ov_lem_clean
             matched_ids = lemma_pos_to_row_ids.get(ov_k) or lemma_pos_to_row_ids.get(ov_lem_clean) or [ov_id]
 
+            # Translation deduplication and rollup across atomic occurrences for merged rows
+            if col_word_dest != -1 and matched_ids and len(matched_ids) > 1:
+                seen_trans = []
+                for mid in matched_ids:
+                    if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_word_dest:
+                        tr_cand = str(data_rows[mid][col_word_dest] or "").strip()
+                        if tr_cand and tr_cand != "[FAILED]" and "skeleton-loader" not in tr_cand and tr_cand not in ("-", "--"):
+                            if tr_cand not in seen_trans:
+                                seen_trans.append(tr_cand)
+                if seen_trans:
+                    ov_trans = ", ".join(seen_trans)
+
             primary_id = next((mid for mid in matched_ids if mid not in used_primary_ids), matched_ids[0])
             used_primary_ids.add(primary_id)
             all_ids_str = ",".join(str(x) for x in matched_ids)
@@ -10891,7 +10956,23 @@ html, body {{
             ov_gender = format_gender_badge(ov_gender_raw)
 
             ov_sentence = text
-            ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
+            if matched_ids and len(matched_ids) > 1:
+                col_sent_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+                ov_sent_tuples = []
+                for mid in matched_ids:
+                    if 0 <= mid < len(data_rows):
+                        r_item = data_rows[mid]
+                        sent_txt = r_item[col_sent_src].strip() if col_sent_src != -1 and len(r_item) > col_sent_src else ""
+                        inf_form = resolve_row_inflected_form(r_item, col_inflected, col_inflected2, col_quotation, col_lemma)
+                        t_ord_item = r_item[col_token_order] if col_token_order != -1 and len(r_item) > col_token_order else ""
+                        if sent_txt:
+                            ov_sent_tuples.append((sent_txt, inf_form, t_ord_item))
+                if ov_sent_tuples:
+                    ov_inf_tooltip = format_inflected_sentence_tooltip(sentences=ov_sent_tuples)
+                else:
+                    ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
+            else:
+                ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
             ov_inf_title = f' title="{html.escape(ov_inf_tooltip)}"' if ov_inf_tooltip else ''
 
             ov_lemma_tooltip = format_lemma_article_tooltip(ov_lemma, ov_gender_raw, lang=language)
@@ -10934,7 +11015,28 @@ html, body {{
 
             ov_prov_attr = ""
             if ov_trans and "skeleton-loader" not in ov_trans:
-                ov_tooltip_title = format_translation_cell_tooltip(ov_trans, ov_prov_val)
+                if matched_ids and len(matched_ids) > 1:
+                    mapping_pairs = []
+                    seen_pair_keys = set()
+                    for mid in matched_ids:
+                        if 0 <= mid < len(data_rows):
+                            r_mid = data_rows[mid]
+                            m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip()
+                            m_tr = r_mid[col_word_dest].strip() if col_word_dest != -1 and len(r_mid) > col_word_dest else ""
+                            if m_inf and m_tr and m_tr != "[FAILED]" and "skeleton-loader" not in m_tr and m_tr not in ("-", "--"):
+                                if (m_inf, m_tr) not in seen_pair_keys:
+                                    seen_pair_keys.add((m_inf, m_tr))
+                                    mapping_pairs.append(f"{m_inf}: {m_tr}")
+                    if mapping_pairs:
+                        ov_tooltip_title = ", ".join(mapping_pairs)
+                        p_title = format_provenance_tooltip(ov_prov_val, zid=zid)
+                        if p_title:
+                            ov_tooltip_title = f"{ov_tooltip_title} ({p_title})"
+                    else:
+                        ov_tooltip_title = format_translation_cell_tooltip(ov_trans, ov_prov_val)
+                else:
+                    ov_tooltip_title = format_translation_cell_tooltip(ov_trans, ov_prov_val)
+
                 ov_prov_data = f' data-provenance="{ov_prov_val}"' if ov_prov_val else ''
                 ov_prov_title = f' title="{html.escape(ov_tooltip_title)}"' if ov_tooltip_title else ''
                 ov_prov_attr = f'{ov_prov_data}{ov_prov_title}'
@@ -11410,6 +11512,10 @@ html, body {{
   .source-text span.word.active-subtoken {
     outline: 1.5px solid #2ea043 !important;
   }
+  .source-text span.word.lemma-peer-highlight {
+    background-color: rgba(210, 153, 34, 0.25) !important;
+    outline: 1px dashed rgba(210, 153, 34, 0.5) !important;
+  }
   .translation-text {
     font-size: 16px;
     color: {text_color};
@@ -11779,6 +11885,17 @@ html, body {{
     background: {flipped_bg};
     border-color: {flipped_border};
     color: {flipped_text};
+  }
+  .kw-action-toolbar button#kw-btn-same-lemma.active {
+    background: #d29922;
+    border-color: #f0883e;
+    color: #0d1117;
+    font-weight: 600;
+  }
+  .kw-action-toolbar button#kw-btn-same-lemma.active:hover:not(:disabled) {
+    background: #bb8019;
+    border-color: #f0883e;
+    color: #0d1117;
   }
   .kw-action-toolbar button.btn-filter-active {
     background: #d29922;
@@ -12195,6 +12312,7 @@ html, body {{
   </div>
 </div>
 <div class="kw-action-toolbar" id="kw-action-toolbar">
+  <button type="button" id="kw-btn-same-lemma" class="btn-toggle{same_lemma_active_class}" title="Toggle Same Lemma highlighting">Same Lemma</button>
   <button type="button" id="kw-btn-filter-selected" title="Toggle view: show only selected words">Selected</button>
   <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
   <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
@@ -13322,9 +13440,17 @@ window.__CONFIG__ = {ui_config_json};
             }
         } catch(e) {}
         
+        var initialSameLemma = (window.__CONFIG__ && window.__CONFIG__.highlight_same_lemma) ? true : false;
+        try {
+            var lsVal = localStorage.getItem('kw_highlight_same_lemma');
+            if (lsVal !== null) initialSameLemma = (lsVal === 'true');
+        } catch(e) {}
+
         window.AppState = {
             rows: {},
             selectedLemmas: {},
+            activeTokenSelections: [],
+            highlightSameLemma: initialSameLemma,
             sourceText: null,
             translatedText: null,
             textTranslationStatus: null,
@@ -13441,6 +13567,10 @@ window.__CONFIG__ = {ui_config_json};
                             } else if (delta.transProvenance) {
                                 window.AppState.rows[rowId].provenance = delta.transProvenance;
                             }
+                        }
+                    }
+                    for (var rowId in rowsData) {
+                        if (rowsData.hasOwnProperty(rowId)) {
                             if (window.AppView.renderRow(rowId, data.stage)) {
                                 updated = true;
                             }
@@ -13502,6 +13632,37 @@ window.__CONFIG__ = {ui_config_json};
                                         cw.provenance = newProv;
                                     }
                                     cw.row_html = null;
+                                }
+                                if (cw.all_row_ids && cw.all_row_ids.length > 1) {
+                                    var anyOverlap = false;
+                                    for (var chk = 0; chk < cw.all_row_ids.length; chk++) {
+                                        if (deltasByRowId.hasOwnProperty(String(cw.all_row_ids[chk]))) {
+                                            anyOverlap = true;
+                                            break;
+                                        }
+                                    }
+                                    if (anyOverlap) {
+                                        var rolledTrans = [];
+                                        for (var aidx = 0; aidx < cw.all_row_ids.length; aidx++) {
+                                            var subId = String(cw.all_row_ids[aidx]);
+                                            var subDelta = deltasByRowId[subId];
+                                            var subState = (window.AppState && window.AppState.rows) ? window.AppState.rows[subId] : null;
+                                            var subTr = "";
+                                            if (subDelta) {
+                                                subTr = (subDelta.trans !== undefined && subDelta.trans !== "") ? subDelta.trans : ((subDelta.WordDestination !== undefined && subDelta.WordDestination !== "") ? subDelta.WordDestination : subDelta.word_translation);
+                                            }
+                                            if (!subTr && subState) {
+                                                subTr = (subState.trans !== undefined && subState.trans !== "") ? subState.trans : ((subState.WordDestination !== undefined && subState.WordDestination !== "") ? subState.WordDestination : subState.word_translation);
+                                            }
+                                            if (subTr && subTr !== "[FAILED]" && subTr.indexOf('skeleton-loader') === -1 && subTr !== '-' && subTr !== '--') {
+                                                if (rolledTrans.indexOf(subTr) === -1) rolledTrans.push(subTr);
+                                            }
+                                        }
+                                        if (rolledTrans.length > 0) {
+                                            cw.translation = rolledTrans.join(', ');
+                                            cw.row_html = null;
+                                        }
+                                    }
                                 }
                             }
                         }
@@ -13805,6 +13966,19 @@ window.__CONFIG__ = {ui_config_json};
                 } else {
                     tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
                 }
+                if (!tr) {
+                    tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
+                }
+                if (!tr) {
+                    var allTrs = document.querySelectorAll('tr[data-all-row-ids]');
+                    for (var at = 0; at < allTrs.length; at++) {
+                        var parts = (allTrs[at].getAttribute('data-all-row-ids') || '').split(',').map(function(s) { return s.trim(); });
+                        if (parts.indexOf(String(rowId)) !== -1) {
+                            tr = allTrs[at];
+                            break;
+                        }
+                    }
+                }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
                 if (tds.length >= 5) {
@@ -13907,6 +14081,25 @@ window.__CONFIG__ = {ui_config_json};
                     if (!tds[2].classList.contains('dirty') && hasTransProp) {
                         var div = tds[2].querySelector('.scrollable-cell') || tds[2];
                         var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
+                        var allRowIdsAttr = tr.getAttribute('data-all-row-ids');
+                        if (allRowIdsAttr) {
+                            var midParts = allRowIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                            if (midParts.length > 1) {
+                                var rolledTrans = [];
+                                for (var mp = 0; mp < midParts.length; mp++) {
+                                    var mRow = window.AppState.rows[midParts[mp]];
+                                    if (mRow) {
+                                        var mTr = (mRow.trans !== undefined && mRow.trans !== "") ? mRow.trans : ((mRow.WordDestination !== undefined && mRow.WordDestination !== "") ? mRow.WordDestination : mRow.word_translation);
+                                        if (mTr && mTr !== "[FAILED]" && mTr.indexOf('skeleton-loader') === -1 && mTr !== '-' && mTr !== '--') {
+                                            if (rolledTrans.indexOf(mTr) === -1) rolledTrans.push(mTr);
+                                        }
+                                    }
+                                }
+                                if (rolledTrans.length > 0) {
+                                    val = rolledTrans.join(', ');
+                                }
+                            }
+                        }
                         var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
@@ -14925,6 +15118,47 @@ window.__CONFIG__ = {ui_config_json};
             return group;
         }
 
+        function findSeparablePartnerSpans(span) {
+            if (!span || !span.classList || !span.classList.contains('word')) return span ? [span] : [];
+            var td = findTokenData(span);
+            if (!td || !td.row_ids || td.row_ids.length === 0) return [span];
+            var partners = [span];
+            var targetRowIds = td.row_ids;
+            for (var k = 0; k < tokenSpans.length; k++) {
+                var otherSpan = tokenSpans[k];
+                if (otherSpan === span) continue;
+                var otd = findTokenData(otherSpan);
+                if (!otd || !otd.row_ids || otd.row_ids.length === 0) continue;
+                var shared = false;
+                for (var r = 0; r < targetRowIds.length; r++) {
+                    if (otd.row_ids.indexOf(targetRowIds[r]) !== -1) {
+                        if (otd.sentence_idx === undefined || td.sentence_idx === undefined || otd.sentence_idx === td.sentence_idx) {
+                            shared = true;
+                            break;
+                        }
+                    }
+                }
+                if (shared && partners.indexOf(otherSpan) === -1) {
+                    partners.push(otherSpan);
+                }
+            }
+            return partners;
+        }
+
+        function findRelatedTokenSpans(span) {
+            var compGroup = findCompoundSiblingSpans(span);
+            var result = [];
+            for (var c = 0; c < compGroup.length; c++) {
+                var sepPartners = findSeparablePartnerSpans(compGroup[c]);
+                for (var s = 0; s < sepPartners.length; s++) {
+                    if (result.indexOf(sepPartners[s]) === -1) {
+                        result.push(sepPartners[s]);
+                    }
+                }
+            }
+            return result.length > 0 ? result : [span];
+        }
+
         function findTokenData(span) {
             var wordIdx = parseInt(span.getAttribute('data-word-idx'));
             for (var i = 0; i < tokenMap.length; i++) {
@@ -14935,6 +15169,86 @@ window.__CONFIG__ = {ui_config_json};
             }
             return null;
         }
+
+        function findTokenDataByVisualIdx(wordIdx) {
+            wordIdx = parseInt(wordIdx, 10);
+            for (var i = 0; i < tokenMap.length; i++) {
+                if (tokenMap[i].visual_idx === wordIdx) {
+                    return tokenMap[i];
+                }
+            }
+            return null;
+        }
+
+        function isTokenInActiveSelections(visualIdx) {
+            if (!window.AppState || !window.AppState.activeTokenSelections) return false;
+            visualIdx = parseInt(visualIdx, 10);
+            for (var i = 0; i < window.AppState.activeTokenSelections.length; i++) {
+                if (window.AppState.activeTokenSelections[i].visual_idx === visualIdx) {
+                    return true;
+                }
+            }
+            return false;
+        }
+
+        function clearTokenSelections() {
+            if (window.AppState) {
+                window.AppState.activeTokenSelections = [];
+            }
+        }
+
+        function addTokenToActiveSelections(span) {
+            if (!window.AppState) window.AppState = {};
+            if (!window.AppState.activeTokenSelections) window.AppState.activeTokenSelections = [];
+            var relatedSpans = findRelatedTokenSpans(span);
+            for (var i = 0; i < relatedSpans.length; i++) {
+                var s = relatedSpans[i];
+                var td = findTokenData(s);
+                var vIdx = td ? td.visual_idx : parseInt(s.getAttribute('data-word-idx'), 10);
+                if (isNaN(vIdx)) continue;
+                var exists = false;
+                for (var j = 0; j < window.AppState.activeTokenSelections.length; j++) {
+                    if (window.AppState.activeTokenSelections[j].visual_idx === vIdx) {
+                        exists = true;
+                        break;
+                    }
+                }
+                if (!exists) {
+                    var sIdx = (td && td.sentence_idx !== undefined) ? td.sentence_idx : parseInt(s.getAttribute('data-sentence-idx'), 10);
+                    var tOrder = (td && td.token_order !== undefined) ? td.token_order : (s.getAttribute('data-token-order') || '');
+                    var aId = (td && td.atomic_id !== undefined) ? td.atomic_id : ((td && td.atomic_row_ids && td.atomic_row_ids.length > 0) ? td.atomic_row_ids[0] : ((td && td.row_ids && td.row_ids.length > 0) ? td.row_ids[0] : null));
+                    var lem = (td && td.lemma) ? td.lemma : (getWordLemma(s) || '');
+                    window.AppState.activeTokenSelections.push({
+                        visual_idx: vIdx,
+                        sentence_idx: sIdx,
+                        token_order: tOrder,
+                        atomic_id: aId,
+                        lemma: lem
+                    });
+                }
+            }
+        }
+
+        function removeTokenFromActiveSelections(span) {
+            if (!window.AppState || !window.AppState.activeTokenSelections) return;
+            var relatedSpans = findRelatedTokenSpans(span);
+            var vIdxsToRemove = {};
+            for (var i = 0; i < relatedSpans.length; i++) {
+                var s = relatedSpans[i];
+                var td = findTokenData(s);
+                var vIdx = td ? td.visual_idx : parseInt(s.getAttribute('data-word-idx'), 10);
+                if (!isNaN(vIdx)) vIdxsToRemove[vIdx] = true;
+            }
+            window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
+                return !vIdxsToRemove[item.visual_idx];
+            });
+        }
+
+        window.findTokenDataByVisualIdx = findTokenDataByVisualIdx;
+        window.isTokenInActiveSelections = isTokenInActiveSelections;
+        window.clearTokenSelections = clearTokenSelections;
+        window.addTokenToActiveSelections = addTokenToActiveSelections;
+        window.removeTokenFromActiveSelections = removeTokenFromActiveSelections;
 
         function getRawRowTranslations(span) {
             var tokenData = findTokenData(span);
@@ -15554,83 +15868,41 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                         
-                        var allSelected = true;
-                        if (targetRowIds.length === 0) {
-                            var wIdx = clickedTokenData.visual_idx;
-                            if (wIdx !== undefined && wIdx !== null) {
-                                if (selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
-                                    delete selectedOrphanWordIdxsMap[String(wIdx)];
-                                    allSelected = true;
-                                } else {
-                                    selectedOrphanWordIdxsMap[String(wIdx)] = true;
-                                    allSelected = false;
-                                }
-                            } else {
-                                allSelected = false;
-                            }
+                        var isCtrl = !!(e.ctrlKey || e.metaKey);
+                        var isShift = !!e.shiftKey;
+                        var isAlreadySelected = isTokenInActiveSelections(clickedTokenData.visual_idx);
+
+                        if (isAlreadySelected) {
+                            tokenDragMode = false;
+                            removeTokenFromActiveSelections(span);
                         } else {
-                            for (var j = 0; j < targetRowIds.length; j++) {
-                                var tid = String(targetRowIds[j]);
-                                var isTidSel = selectedRowIdsMap.hasOwnProperty(tid);
-                                if (!isTidSel) {
-                                    for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                        var tr = tableRows[trIdx];
-                                        var allAttr = tr.getAttribute('data-all-row-ids');
-                                        if (allAttr) {
-                                            var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                            if (pList.indexOf(tid) !== -1) {
-                                                var trId = String(tr.getAttribute('data-row-id'));
-                                                if (selectedRowIdsMap.hasOwnProperty(trId) || tr.getAttribute('data-selected') === '1') {
-                                                    isTidSel = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
+                            if (!isCtrl && !isShift) {
+                                clearTokenSelections();
+                                selectedRowIdsMap = {};
+                                if (window.AppState && window.AppState.selectedLemmas) {
+                                    for (var lk in window.AppState.selectedLemmas) delete window.AppState.selectedLemmas[lk];
                                 }
-                                if (!isTidSel) {
-                                    allSelected = false;
-                                    break;
+                            }
+                            tokenDragMode = true;
+                            addTokenToActiveSelections(span);
+                        }
+
+                        // Re-sync selectedRowIdsMap based on activeTokenSelections so table row displays visual selection
+                        selectedRowIdsMap = {};
+                        if (window.AppState && window.AppState.activeTokenSelections) {
+                            for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                var at = window.AppState.activeTokenSelections[a];
+                                var aTd = findTokenDataByVisualIdx(at.visual_idx);
+                                var rIds = aTd ? (aTd.row_ids || aTd.atomic_row_ids || []) : [];
+                                for (var r = 0; r < rIds.length; r++) {
+                                    selectedRowIdsMap[String(rIds[r])] = true;
+                                }
+                                if (at.atomic_id !== undefined && at.atomic_id !== null) {
+                                    selectedRowIdsMap[String(at.atomic_id)] = true;
                                 }
                             }
                         }
                         
-                        tokenDragMode = !allSelected;
-                        
-                        for (var j = 0; j < targetRowIds.length; j++) {
-                            var tid = String(targetRowIds[j]);
-                            if (tokenDragMode) {
-                                selectedRowIdsMap[tid] = true;
-                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                    var tr = tableRows[trIdx];
-                                    var allAttr = tr.getAttribute('data-all-row-ids');
-                                    if (allAttr) {
-                                        var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                        if (pList.indexOf(tid) !== -1) {
-                                            selectedRowIdsMap[String(tr.getAttribute('data-row-id'))] = true;
-                                        }
-                                    }
-                                }
-                            } else {
-                                delete selectedRowIdsMap[tid];
-                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                    var tr = tableRows[trIdx];
-                                    var allAttr = tr.getAttribute('data-all-row-ids');
-                                    if (allAttr) {
-                                        var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                        if (pList.indexOf(tid) !== -1) {
-                                            delete selectedRowIdsMap[String(tr.getAttribute('data-row-id'))];
-                                            for (var p = 0; p < pList.length; p++) {
-                                                delete selectedRowIdsMap[pList[p]];
-                                            }
-                                        }
-                                    }
-                                }
-                            }
-                            var rLem = getLemmaByRowId(tid);
-                            if (rLem) setLemmaSelected(rLem, tokenDragMode);
-                        }
-                        syncSelectionsToCardsAndState();
                         updateRowStyles();
                         updateBidirectionalHighlights();
                         
@@ -15703,19 +15975,23 @@ window.__CONFIG__ = {ui_config_json};
                         tokenDragLastIdx = currIdx;
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
-                            var td = findTokenData(s);
-                            if (td) {
-                                var atomics = (td.atomic_row_ids !== undefined)
-                                    ? td.atomic_row_ids
-                                    : (td.row_ids || []);
-                                for (var j = 0; j < atomics.length; j++) {
-                                    if (tokenDragMode) {
-                                        selectedRowIdsMap[String(atomics[j])] = true;
-                                    } else {
-                                        delete selectedRowIdsMap[String(atomics[j])];
-                                    }
-                                    var rLem = getLemmaByRowId(atomics[j]);
-                                    if (rLem) setLemmaSelected(rLem, tokenDragMode);
+                            if (tokenDragMode) {
+                                addTokenToActiveSelections(s);
+                            } else {
+                                removeTokenFromActiveSelections(s);
+                            }
+                        }
+                        selectedRowIdsMap = {};
+                        if (window.AppState && window.AppState.activeTokenSelections) {
+                            for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                var at = window.AppState.activeTokenSelections[a];
+                                var aTd = findTokenDataByVisualIdx(at.visual_idx);
+                                var rIds = aTd ? (aTd.row_ids || aTd.atomic_row_ids || []) : [];
+                                for (var r = 0; r < rIds.length; r++) {
+                                    selectedRowIdsMap[String(rIds[r])] = true;
+                                }
+                                if (at.atomic_id !== undefined && at.atomic_id !== null) {
+                                    selectedRowIdsMap[String(at.atomic_id)] = true;
                                 }
                             }
                         }
@@ -15821,6 +16097,9 @@ window.__CONFIG__ = {ui_config_json};
             }
             if (e.button !== 0 && e.button !== 2) {
                 return;
+            }
+            if (e.button === 0 && window.AppState) {
+                window.AppState.activeTokenSelections = [];
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
@@ -16531,7 +16810,10 @@ window.__CONFIG__ = {ui_config_json};
         function clearAllSelections() {
             selectedRowIdsMap = {};
             selectedOrphanWordIdxsMap = {};
-            if (window.AppState) window.AppState.selectedLemmas = {};
+            if (window.AppState) {
+                window.AppState.selectedLemmas = {};
+                window.AppState.activeTokenSelections = [];
+            }
             syncSelectionsToCardsAndState();
             lastClickedRowId = null;
             updateRowStyles();
@@ -16704,92 +16986,136 @@ window.__CONFIG__ = {ui_config_json};
                     span.classList.remove('highlight-orange-active');
                     span.classList.remove('highlight-purple-active');
                     span.classList.remove('active-subtoken');
+                    span.classList.remove('lemma-peer-highlight');
                 } catch(e) {}
             }
             
-            var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
-            var activeTargetRowIds = {};
-            for (var rId in selectedRowIdsMap) {
-                if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
-                var rowId = parseInt(rId, 10);
-                if (!isNaN(rowId)) activeTargetRowIds[rowId] = true;
-            }
-            for (var i = 0; i < tableRows.length; i++) {
-                var tr = tableRows[i];
-                var trId = String(tr.getAttribute('data-row-id'));
-                var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
-                if (trSelected) {
-                    var allAttr = tr.getAttribute('data-all-row-ids');
-                    if (allAttr) {
-                        var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                        for (var p = 0; p < parts.length; p++) {
-                            var pInt = parseInt(parts[p], 10);
-                            if (!isNaN(pInt)) activeTargetRowIds[pInt] = true;
-                        }
-                    }
-                }
-            }
+            var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
             
-            for (var i = 0; i < tokenMap.length; i++) {
-                var token = tokenMap[i];
-                var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
-                if ((!token.row_ids || token.row_ids.length === 0) && !isOrphanSelected) continue;
-                var hasMatchingRow = isOrphanSelected;
-                if (!hasMatchingRow && token.row_ids) {
-                    for (var r = 0; r < token.row_ids.length; r++) {
-                        if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
-                            hasMatchingRow = true;
-                            break;
-                        }
+            if (hasActiveTokens) {
+                var activeVisualIdxs = {};
+                var activeLemmas = {};
+                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                    var item = window.AppState.activeTokenSelections[a];
+                    if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                        activeVisualIdxs[String(item.visual_idx)] = true;
+                    }
+                    if (item.lemma) {
+                        activeLemmas[String(item.lemma).trim().toLowerCase()] = true;
                     }
                 }
-                if (!hasMatchingRow && selLemmas) {
-                    var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
-                        ? token.atomic_row_ids
-                        : (token.row_ids || []);
-                    for (var r = 0; r < tokRowIds.length; r++) {
-                        var rLem = getLemmaByRowId(tokRowIds[r]);
-                        if (rLem && selLemmas[rLem]) {
-                            hasMatchingRow = true;
-                            break;
-                        }
-                    }
-                }
-                if (hasMatchingRow) {
-                    var span = null;
-                    for (var k = 0; k < tokenSpans.length; k++) {
-                        if (tokenSpans[k].getAttribute('data-word-idx') == token.visual_idx) {
-                            span = tokenSpans[k];
-                            break;
-                        }
-                    }
-                    if (span) {
-                        try {
-                            if (span.classList.contains('highlight-purple')) {
-                                span.classList.add('highlight-purple-active');
-                            } else if (span.classList.contains('highlight-orange')) {
-                                span.classList.add('highlight-orange-active');
-                            }
-                            if (isOrphanSelected) {
-                                span.classList.add('active-subtoken');
-                            }
-                        } catch(e) {}
-                    }
-                }
-            }
-
-            if (selLemmas) {
+                
+                var isSameLemmaOn = !!(window.AppState && window.AppState.highlightSameLemma);
+                
                 for (var k = 0; k < tokenSpans.length; k++) {
                     var s = tokenSpans[k];
-                    var sLem = (getWordLemma(s) || '').trim().toLowerCase();
-                    if (sLem && selLemmas[sLem]) {
+                    var vIdxStr = String(s.getAttribute('data-word-idx'));
+                    if (activeVisualIdxs[vIdxStr]) {
                         try {
                             if (s.classList.contains('highlight-purple')) {
                                 s.classList.add('highlight-purple-active');
-                            } else if (s.classList.contains('highlight-orange')) {
+                            } else {
                                 s.classList.add('highlight-orange-active');
                             }
                         } catch(e) {}
+                    } else if (isSameLemmaOn) {
+                        var sLem = (getWordLemma(s) || s.getAttribute('data-lower-clean') || '').trim().toLowerCase();
+                        if (!sLem) {
+                            var td = findTokenData(s);
+                            if (td && td.lemma) sLem = String(td.lemma).trim().toLowerCase();
+                        }
+                        if (sLem && activeLemmas[sLem]) {
+                            try {
+                                s.classList.add('lemma-peer-highlight');
+                            } catch(e) {}
+                        }
+                    }
+                }
+            } else {
+                var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
+                var activeTargetRowIds = {};
+                for (var rId in selectedRowIdsMap) {
+                    if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
+                    var rowId = parseInt(rId, 10);
+                    if (!isNaN(rowId)) activeTargetRowIds[rowId] = true;
+                }
+                for (var i = 0; i < tableRows.length; i++) {
+                    var tr = tableRows[i];
+                    var trId = String(tr.getAttribute('data-row-id'));
+                    var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
+                    if (trSelected) {
+                        var allAttr = tr.getAttribute('data-all-row-ids');
+                        if (allAttr) {
+                            var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                            for (var p = 0; p < parts.length; p++) {
+                                var pInt = parseInt(parts[p], 10);
+                                if (!isNaN(pInt)) activeTargetRowIds[pInt] = true;
+                            }
+                        }
+                    }
+                }
+                
+                for (var i = 0; i < tokenMap.length; i++) {
+                    var token = tokenMap[i];
+                    var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
+                    if ((!token.row_ids || token.row_ids.length === 0) && !isOrphanSelected) continue;
+                    var hasMatchingRow = isOrphanSelected;
+                    if (!hasMatchingRow && token.row_ids) {
+                        for (var r = 0; r < token.row_ids.length; r++) {
+                            if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
+                                hasMatchingRow = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!hasMatchingRow && selLemmas) {
+                        var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
+                            ? token.atomic_row_ids
+                            : (token.row_ids || []);
+                        for (var r = 0; r < tokRowIds.length; r++) {
+                            var rLem = getLemmaByRowId(tokRowIds[r]);
+                            if (rLem && selLemmas[rLem]) {
+                                hasMatchingRow = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (hasMatchingRow) {
+                        var span = null;
+                        for (var k = 0; k < tokenSpans.length; k++) {
+                            if (tokenSpans[k].getAttribute('data-word-idx') == token.visual_idx) {
+                                span = tokenSpans[k];
+                                break;
+                            }
+                        }
+                        if (span) {
+                            try {
+                                if (span.classList.contains('highlight-purple')) {
+                                    span.classList.add('highlight-purple-active');
+                                } else if (span.classList.contains('highlight-orange')) {
+                                    span.classList.add('highlight-orange-active');
+                                }
+                                if (isOrphanSelected) {
+                                    span.classList.add('active-subtoken');
+                                }
+                            } catch(e) {}
+                        }
+                    }
+                }
+
+                if (selLemmas) {
+                    for (var k = 0; k < tokenSpans.length; k++) {
+                        var s = tokenSpans[k];
+                        var sLem = (getWordLemma(s) || '').trim().toLowerCase();
+                        if (sLem && selLemmas[sLem]) {
+                            try {
+                                if (s.classList.contains('highlight-purple')) {
+                                    s.classList.add('highlight-purple-active');
+                                } else if (s.classList.contains('highlight-orange')) {
+                                    s.classList.add('highlight-orange-active');
+                                }
+                            } catch(e) {}
+                        }
                     }
                 }
             }
@@ -18045,8 +18371,64 @@ window.__CONFIG__ = {ui_config_json};
 
         window.onRewordClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
-            var rows = getSelectedRowsArray();
-            var tokenOrders = (typeof getSelectedTokenOrdersArray === 'function') ? getSelectedTokenOrdersArray() : [];
+            var rows = [];
+            var tokenOrders = [];
+
+            var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
+
+            if (hasActiveTokens) {
+                // 1. Token-scoped (targeted) selection
+                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                    var item = window.AppState.activeTokenSelections[a];
+                    if (item.atomic_id !== undefined && item.atomic_id !== null) {
+                        var aId = parseInt(item.atomic_id, 10);
+                        if (!isNaN(aId) && rows.indexOf(aId) === -1) {
+                            rows.push(aId);
+                        }
+                    } else if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                        var td = findTokenDataByVisualIdx(item.visual_idx);
+                        var atomics = td ? (td.atomic_row_ids || td.row_ids || []) : [];
+                        for (var at = 0; at < atomics.length; at++) {
+                            var atId = parseInt(atomics[at], 10);
+                            if (!isNaN(atId) && rows.indexOf(atId) === -1) {
+                                rows.push(atId);
+                            }
+                        }
+                    }
+                    if (item.token_order !== undefined && item.token_order !== null && String(item.token_order).trim() !== '') {
+                        if (tokenOrders.indexOf(item.token_order) === -1) {
+                            tokenOrders.push(item.token_order);
+                        }
+                    }
+                }
+            } else {
+                // 2. Row-scoped selection (from #lemma-table directly): unroll data-all-row-ids
+                if (typeof tableRows !== 'undefined' && tableRows) {
+                    for (var i = 0; i < tableRows.length; i++) {
+                        var tr = tableRows[i];
+                        var trId = String(tr.getAttribute('data-row-id'));
+                        var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
+                        if (isTrSel) {
+                            var allAttr = tr.getAttribute('data-all-row-ids');
+                            if (allAttr) {
+                                var parts = allAttr.split(',').map(function(s) { return parseInt(s.trim(), 10); }).filter(function(n) { return !isNaN(n); });
+                                for (var p = 0; p < parts.length; p++) {
+                                    if (rows.indexOf(parts[p]) === -1) rows.push(parts[p]);
+                                }
+                            } else {
+                                var trIdInt = parseInt(trId, 10);
+                                if (!isNaN(trIdInt) && rows.indexOf(trIdInt) === -1) {
+                                    rows.push(trIdInt);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (rows.length === 0) {
+                    rows = getSelectedRowsArray();
+                }
+                tokenOrders = (typeof getSelectedTokenOrdersArray === 'function') ? getSelectedTokenOrdersArray() : [];
+            }
             if (!rows.length && !tokenOrders.length) {
                 window.showToast("Please select rows to re-word.", "warning");
                 return;
@@ -18106,8 +18488,64 @@ window.__CONFIG__ = {ui_config_json};
 
         window.onSendToAnkiClick = function() {
             if (window.commitActiveEdit) window.commitActiveEdit();
-            var rows = getSelectedRowsArray();
-            var tokenOrders = (typeof getSelectedTokenOrdersArray === 'function') ? getSelectedTokenOrdersArray() : [];
+            var rows = [];
+            var tokenOrders = [];
+
+            var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
+
+            if (hasActiveTokens) {
+                // 1. Token-scoped (targeted) selection
+                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                    var item = window.AppState.activeTokenSelections[a];
+                    if (item.atomic_id !== undefined && item.atomic_id !== null) {
+                        var aId = parseInt(item.atomic_id, 10);
+                        if (!isNaN(aId) && rows.indexOf(aId) === -1) {
+                            rows.push(aId);
+                        }
+                    } else if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                        var td = findTokenDataByVisualIdx(item.visual_idx);
+                        var atomics = td ? (td.atomic_row_ids || td.row_ids || []) : [];
+                        for (var at = 0; at < atomics.length; at++) {
+                            var atId = parseInt(atomics[at], 10);
+                            if (!isNaN(atId) && rows.indexOf(atId) === -1) {
+                                rows.push(atId);
+                            }
+                        }
+                    }
+                    if (item.token_order !== undefined && item.token_order !== null && String(item.token_order).trim() !== '') {
+                        if (tokenOrders.indexOf(item.token_order) === -1) {
+                            tokenOrders.push(item.token_order);
+                        }
+                    }
+                }
+            } else {
+                // 2. Row-scoped selection (from #lemma-table directly): unroll data-all-row-ids
+                if (typeof tableRows !== 'undefined' && tableRows) {
+                    for (var i = 0; i < tableRows.length; i++) {
+                        var tr = tableRows[i];
+                        var trId = String(tr.getAttribute('data-row-id'));
+                        var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
+                        if (isTrSel) {
+                            var allAttr = tr.getAttribute('data-all-row-ids');
+                            if (allAttr) {
+                                var parts = allAttr.split(',').map(function(s) { return parseInt(s.trim(), 10); }).filter(function(n) { return !isNaN(n); });
+                                for (var p = 0; p < parts.length; p++) {
+                                    if (rows.indexOf(parts[p]) === -1) rows.push(parts[p]);
+                                }
+                            } else {
+                                var trIdInt = parseInt(trId, 10);
+                                if (!isNaN(trIdInt) && rows.indexOf(trIdInt) === -1) {
+                                    rows.push(trIdInt);
+                                }
+                            }
+                        }
+                    }
+                }
+                if (rows.length === 0) {
+                    rows = getSelectedRowsArray();
+                }
+                tokenOrders = (typeof getSelectedTokenOrdersArray === 'function') ? getSelectedTokenOrdersArray() : [];
+            }
 
             // Card-scoped filtering in container mode
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
@@ -18173,7 +18611,9 @@ window.__CONFIG__ = {ui_config_json};
             .then(function(resObj) {
                 setButtonLoading(exportBtn, false, "", "Send to Anki");
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || resObj.data.import_complete || resObj.data.import_started)) {
-                    window.showToast("✓ " + rows.length + " cards exported to Anki", "success");
+                    var cardCount = rows.length;
+                    var cardWord = cardCount === 1 ? "card" : "cards";
+                    window.showToast("✓ " + cardCount + " " + cardWord + " exported to Anki", "success");
                 } else {
                     window.showToast("Export failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
                 }
@@ -18597,6 +19037,21 @@ window.__CONFIG__ = {ui_config_json};
                         var isMatchingRow = (appOrd && appOrd === tOrdStr) || (appLem && wLem && appLem === wLem) || !appLem;
                         if (isMatchingRow) {
                             var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
+                            if (w.all_row_ids && w.all_row_ids.length > 1 && window.AppState && window.AppState.rows) {
+                                var rolledTrans = [];
+                                for (var aidx = 0; aidx < w.all_row_ids.length; aidx++) {
+                                    var subRow = window.AppState.rows[String(w.all_row_ids[aidx])];
+                                    if (subRow) {
+                                        var subTr = (subRow.trans !== undefined && subRow.trans !== "") ? subRow.trans : ((subRow.WordDestination !== undefined && subRow.WordDestination !== "") ? subRow.WordDestination : subRow.word_translation);
+                                        if (subTr && subTr !== "[FAILED]" && subTr.indexOf('skeleton-loader') === -1 && subTr !== '-' && subTr !== '--') {
+                                            if (rolledTrans.indexOf(subTr) === -1) rolledTrans.push(subTr);
+                                        }
+                                    }
+                                }
+                                if (rolledTrans.length > 0) {
+                                    updatedTrans = rolledTrans.join(', ');
+                                }
+                            }
                             if (updatedTrans !== undefined && updatedTrans !== "") {
                                 w.translation = updatedTrans;
                             }
@@ -19281,6 +19736,59 @@ window.__CONFIG__ = {ui_config_json};
             window.showToast("Language verification cancelled.", "info");
         };
 
+        function setHighlightSameLemma(active) {
+            if (window.AppState) {
+                window.AppState.highlightSameLemma = !!active;
+            }
+            if (window.__CONFIG__) {
+                window.__CONFIG__.highlight_same_lemma = !!active;
+            }
+            try {
+                localStorage.setItem('kw_highlight_same_lemma', String(!!active));
+            } catch(e) {}
+            var btn = document.getElementById('kw-btn-same-lemma');
+            if (btn) {
+                if (active) {
+                    addClass(btn, 'active');
+                } else {
+                    removeClass(btn, 'active');
+                }
+            }
+            if (typeof updateBidirectionalHighlights === 'function') {
+                updateBidirectionalHighlights();
+            }
+            try {
+                fetch('/api/v1/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(!!active) })
+                }).catch(function() {});
+            } catch(e) {}
+        }
+        window.setHighlightSameLemma = setHighlightSameLemma;
+
+        function toggleHighlightSameLemma() {
+            var cur = (window.AppState && window.AppState.highlightSameLemma) ? true : false;
+            var next = !cur;
+            setHighlightSameLemma(next);
+            if (typeof window.showToast === 'function') {
+                window.showToast(next ? "Same Lemma highlighting enabled" : "Same Lemma highlighting disabled", "info");
+            }
+        }
+        window.toggleHighlightSameLemma = toggleHighlightSameLemma;
+
+        var btnSameLemma = document.getElementById('kw-btn-same-lemma');
+        if (btnSameLemma) {
+            if (window.AppState && window.AppState.highlightSameLemma) {
+                addClass(btnSameLemma, 'active');
+            } else {
+                removeClass(btnSameLemma, 'active');
+            }
+            addEvent(btnSameLemma, 'click', function() {
+                toggleHighlightSameLemma();
+            });
+        }
+
         function setFilterSelectedOnly(active) {
             if (window.AppState) {
                 window.AppState.filterSelectedOnly = !!active;
@@ -19599,6 +20107,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{mismatch_info_json}", json.dumps(mismatch_info) if mismatch_info else "null")
     ui_cfg = resolve_ui_config(config)
     html_page = html_page.replace("{ui_config_json}", json.dumps(ui_cfg))
+    html_page = html_page.replace("{same_lemma_active_class}", " active" if ui_cfg.get("highlight_same_lemma") else "")
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{target_language}", target_lang)
@@ -21454,14 +21963,20 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
         return skipped_payload
         
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
-    selected_row_set = {str(r) for r in actual_export_rows} | {int(r) for r in actual_export_rows if str(r).isdigit()}
     target_indices = []
-    for i, row in enumerate(data_rows):
-        if row is None:
-            continue
-        t_ord = str(row[col_token_order]).strip() if col_token_order != -1 and len(row) > col_token_order else str(i)
-        if i in selected_row_set or t_ord in selected_row_set or (t_ord.isdigit() and int(t_ord) in selected_row_set):
-            target_indices.append(i)
+    seen = set()
+    for r in actual_export_rows:
+        if isinstance(r, int) or (isinstance(r, str) and str(r).isdigit()):
+            r_idx = int(r)
+            if 0 <= r_idx < len(data_rows) and r_idx not in seen and data_rows[r_idx] is not None:
+                target_indices.append(r_idx)
+                seen.add(r_idx)
+        elif col_token_order != -1:
+            r_str = str(r).strip()
+            for i, row in enumerate(data_rows):
+                if row and i not in seen and len(row) > col_token_order and str(row[col_token_order]).strip() == r_str:
+                    target_indices.append(i)
+                    seen.add(i)
 
     exported_rows = []
     for idx in target_indices:

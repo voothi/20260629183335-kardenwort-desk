@@ -88,6 +88,9 @@ auto_inject_updates = true
 ; Default zoom percentage for the UI
 default_zoom = 100
 
+; Whether to highlight peer occurrences sharing the same lemma in the text (muted tint)
+highlight_same_lemma = false
+
 [ui]
 ; Auto-save session deltas immediately after every inline cell edit
 auto_save_on_edit = false
