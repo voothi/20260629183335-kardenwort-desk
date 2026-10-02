@@ -4020,15 +4020,6 @@ class SqliteStorageAdapter(StorageAdapter):
                                 db_slug = str(restored.get("slug") or "").strip().lower()
                                 if db_slug and file_slug and db_slug != file_slug:
                                     return self._tsv_fallback.load_tsv_rows(p)
-                            results_dir = None
-                            if self.resolved_paths and "results_dir" in self.resolved_paths:
-                                results_dir = Path(self.resolved_paths["results_dir"]).resolve()
-                            try:
-                                is_in_results = bool(results_dir and p.resolve().is_relative_to(results_dir))
-                            except Exception:
-                                is_in_results = False
-                            if not is_in_results:
-                                return self._tsv_fallback.load_tsv_rows(p)
                             return (
                                 restored.get("comments", []),
                                 restored.get("headers", []),
@@ -10070,6 +10061,11 @@ html, body {{
                     col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
                     col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
                     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+                    if col_token_order == -1:
+                        headers.append("TokenOrder")
+                        col_token_order = len(headers) - 1
+                        for r_i, r in enumerate(current_rows):
+                            r.append(str(r_i))
                     col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
                     col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
                     data_rows = sort_session_data_rows(
