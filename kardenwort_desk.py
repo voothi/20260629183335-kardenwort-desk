@@ -18029,15 +18029,10 @@ window.__CONFIG__ = {ui_config_json};
                                 }
                                 
                                 if (isDirectRowMatch) {
-                                    if (isExactLemmaMatch || !primaryLemmaOccurrences[lemKey]) {
-                                        primaryLemmaOccurrences[lemKey] = true;
-                                        if (span.classList.contains('highlight-purple')) {
-                                            span.classList.add('highlight-purple-active');
-                                        } else if (span.classList.contains('highlight-orange')) {
-                                            span.classList.add('highlight-orange-active');
-                                        }
-                                    } else if (isSameLemmaOn) {
-                                        span.classList.add('lemma-peer-highlight');
+                                    if (span.classList.contains('highlight-purple')) {
+                                        span.classList.add('highlight-purple-active');
+                                    } else if (span.classList.contains('highlight-orange')) {
+                                        span.classList.add('highlight-orange-active');
                                     }
                                 } else if (isSameLemmaOn) {
                                     span.classList.add('lemma-peer-highlight');
