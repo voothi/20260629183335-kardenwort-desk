@@ -2311,22 +2311,8 @@ GENDER_FULL_NAME_MAP = {
 def to_unicode_bold(text: str) -> str:
     if not text:
         return ""
-    umlauts = {
-        'ä': ('a', '\u0308'),
-        'ö': ('o', '\u0308'),
-        'ü': ('u', '\u0308'),
-        'Ä': ('A', '\u0308'),
-        'Ö': ('O', '\u0308'),
-        'Ü': ('U', '\u0308'),
-        'ß': ('ss', ''),
-        'ẞ': ('SS', ''),
-    }
     result = []
     for ch in text:
-        if ch in umlauts:
-            base, mark = umlauts[ch]
-            result.append(to_unicode_bold(base) + mark)
-            continue
         code = ord(ch)
         if 65 <= code <= 90:  # A-Z
             result.append(chr(0x1D5D4 + code - 65))

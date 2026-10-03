@@ -563,10 +563,3 @@ def test_first_click_token_selection_when_table_row_preselected(page, tmp_path):
     assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
 
 
-def test_to_unicode_bold_german_umlauts():
-    """Verifies that to_unicode_bold converts German umlauts to bold glyphs with combining diaeresis (Task 5.1)."""
-    assert kardenwort_desk.to_unicode_bold("können") == "𝗸𝗼̈𝗻𝗻𝗲𝗻"
-    assert kardenwort_desk.to_unicode_bold("groß") == "𝗴𝗿𝗼𝘀𝘀"
-    assert kardenwort_desk.to_unicode_bold("Zustellung") == "𝗭𝘂𝘀𝘁𝗲𝗹𝗹𝘂𝗻𝗴"
-    assert kardenwort_desk.to_unicode_bold("Äpfel") == "𝗔̈𝗽𝗳𝗲𝗹"
-    assert kardenwort_desk.to_unicode_bold("Über") == "𝗨̈𝗯𝗲𝗿"
