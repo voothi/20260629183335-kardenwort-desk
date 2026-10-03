@@ -4598,17 +4598,23 @@ class SqliteStorageAdapter(StorageAdapter):
                         new_trans = row_updates.get(trans_field, "")
                         new_morph = row_updates.get(morph_field, "")
 
-                        occ_data[str(target_vidx)] = {
-                            "pos": new_pos,
-                            "trans": new_trans,
-                            "morph": new_morph
-                        }
+                        for vi in target_vidxs:
+                            occ_data[str(vi)] = {
+                                "pos": new_pos,
+                                "trans": new_trans,
+                                "morph": new_morph
+                            }
 
                         w_lem = (matched_word.get("lemma") or "").strip().lower()
 
-                        pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
-                        trans_items = [(int(k), v.get("trans", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("trans")]
-                        morph_items = [(int(k), v.get("morph", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("morph")]
+                        # Aggregate only over occurrences targeted in THIS re-word.
+                        # Earlier stored occurrences stay in occurrence_data for the
+                        # per-token view, but must not leak into the row value.
+                        current_keys = {str(v) for v in target_vidxs}
+                        scoped_occ = {k: v for k, v in occ_data.items() if str(k) in current_keys and isinstance(v, dict)}
+                        pos_items = [(int(k), v.get("pos", "")) for k, v in scoped_occ.items() if str(k).isdigit() and v.get("pos")]
+                        trans_items = [(int(k), v.get("trans", "")) for k, v in scoped_occ.items() if str(k).isdigit() and v.get("trans")]
+                        morph_items = [(int(k), v.get("morph", "")) for k, v in scoped_occ.items() if str(k).isdigit() and v.get("morph")]
 
                         if len(pos_items) > 1:
                             if w_lem == "der":
