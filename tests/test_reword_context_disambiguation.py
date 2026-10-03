@@ -229,3 +229,42 @@ de_prompt=test
     assert "[" not in sentences[0]["sentence_source"]
     assert "]" not in sentences[0]["sentence_source"]
 
+
+def test_render_html_occurrence_tooltips(tmp_path):
+    import json
+    import html
+    import kardenwort_desk
+    
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    raw_sentence = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    tsv_content = (
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tWordSourceMorphologyAI\tSentenceSourceIndex\n"
+        "das, den, der, die\tder\tart., pron.\tтот, который\tder (определенный артикль); der (относительное местоимение)\t1\n"
+    )
+    tsv_file = tmp_path / "20261003180000-test.de.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+    
+    html_out = kardenwort_desk.run_render_flow(
+        text=raw_sentence,
+        language="de",
+        zid="20261003180000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+    
+    assert 'data-occ="' in html_out
+    # Extract data-occ JSON
+    part = html_out.split('data-occ="')[1].split('"')[0]
+    occ_data = json.loads(html.unescape(part))
+    
+    # Check that each occurrence has form, pos, and inflected_tooltip
+    for v_idx, entry in occ_data.items():
+        assert "form" in entry
+        assert "pos" in entry
+        assert "inflected_tooltip" in entry
+        assert "Er fängt heute mit" in entry["inflected_tooltip"]
+

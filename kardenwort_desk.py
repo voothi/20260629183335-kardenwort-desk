@@ -4623,15 +4623,36 @@ class SqliteStorageAdapter(StorageAdapter):
                                 }
 
                         w_lem = (matched_word.get("lemma") or "").strip().lower()
+                        col_s_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+                        sent_text = ""
+                        if col_s_src != -1 and row_idx < len(data_rows) and len(data_rows[row_idx]) > col_s_src:
+                            sent_text = data_rows[row_idx][col_s_src]
 
-                        # Aggregate only over occurrences targeted in THIS re-word.
-                        # Earlier stored occurrences stay in occurrence_data for the
-                        # per-token view, but must not leak into the row value.
-                        current_keys = {str(v) for v in target_vidxs}
-                        scoped_occ = {k: v for k, v in occ_data.items() if str(k) in current_keys and isinstance(v, dict)}
-                        pos_items = [(int(k), v.get("pos", "")) for k, v in scoped_occ.items() if str(k).isdigit() and v.get("pos")]
-                        trans_items = [(int(k), v.get("trans", "")) for k, v in scoped_occ.items() if str(k).isdigit() and v.get("trans")]
-                        morph_items = [(int(k), v.get("morph", "")) for k, v in scoped_occ.items() if str(k).isdigit() and v.get("morph")]
+                        if sent_text and w_lem:
+                            try:
+                                import text_tokenizer as tok
+                                all_toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
+                                matched_quot = [f.strip().lower() for f in (matched_word.get("quotation") or "").split(",") if f.strip()]
+                                for st in all_toks:
+                                    st_clean = (st.get("lower_clean") or st.get("text") or "").strip().lower()
+                                    is_match = (st_clean == w_lem) or (st_clean in matched_quot) or (w_lem == "der" and st_clean in ("der", "die", "das", "den", "dem", "des"))
+                                    if st.get("is_word") and is_match:
+                                        st_vidx_str = str(st.get("visual_idx"))
+                                        if st_vidx_str not in occ_data:
+                                            fallback_pos = matched_word.get("pos") or ""
+                                            if w_lem == "der" and "art." in fallback_pos:
+                                                fallback_pos = "art."
+                                            occ_data[st_vidx_str] = {
+                                                "pos": fallback_pos,
+                                                "trans": matched_word.get("word_destination") or "",
+                                                "morph": matched_word.get("morphology") or ""
+                                            }
+                            except Exception:
+                                pass
+
+                        pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
+                        trans_items = [(int(k), v.get("trans", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("trans")]
+                        morph_items = [(int(k), v.get("morph", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("morph")]
 
                         if len(pos_items) > 1:
                             if w_lem == "der":
@@ -10979,21 +11000,31 @@ html, body {{
             for tok_item in source_tokens:
                 if tok_item.get("is_word") and (tok_item.get("lower_clean") or "").lower() in der_forms:
                     v_key = str(tok_item.get("visual_idx"))
+                    raw_w = (tok_item.get("text") or "").strip().lower()
+                    v_int = tok_item.get("visual_idx", 0)
+                    prev_toks = [st for st in source_tokens if st.get("visual_idx", 0) < v_int and st.get("text", "").strip()]
+                    prev_t = prev_toks[-1].get("text", "").strip() if prev_toks else ""
+                    is_rel_pron = (prev_t == "," or prev_t.endswith(","))
+                    pos_inferred = "pron." if is_rel_pron else "art."
+                    trans_inferred = "который" if pos_inferred == "pron." else "тот"
+                    if raw_w == "die" and pos_inferred == "pron.":
+                        trans_inferred = "которая"
+                    inf_tooltip = format_inflected_sentence_tooltip(row_sentence, raw_w, token_order=token_order_val)
                     if v_key not in _row_occ:
-                        raw_w = (tok_item.get("text") or "").strip().lower()
-                        v_int = tok_item.get("visual_idx", 0)
-                        prev_toks = [st for st in source_tokens if st.get("visual_idx", 0) < v_int and st.get("text", "").strip()]
-                        prev_t = prev_toks[-1].get("text", "").strip() if prev_toks else ""
-                        is_rel_pron = (prev_t == "," or prev_t.endswith(","))
-                        pos_inferred = "pron." if is_rel_pron else "art."
-                        trans_inferred = "который" if pos_inferred == "pron." else "тот"
-                        if raw_w == "die" and pos_inferred == "pron.":
-                            trans_inferred = "которая"
                         _row_occ[v_key] = {
+                            "form": raw_w,
                             "pos": pos_inferred,
                             "trans": trans_inferred,
-                            "morph": f"der ({'корень: относительное местоимение' if pos_inferred == 'pron.' else 'определенный артикль'})"
+                            "morph": f"der ({'корень: относительное местоимение' if pos_inferred == 'pron.' else 'определенный артикль'})",
+                            "inflected_tooltip": inf_tooltip
                         }
+                    else:
+                        entry = dict(_row_occ[v_key])
+                        if "form" not in entry:
+                            entry["form"] = raw_w
+                        if "inflected_tooltip" not in entry:
+                            entry["inflected_tooltip"] = inf_tooltip
+                        _row_occ[v_key] = entry
         if _row_occ:
             try:
                 occ_attr = ' data-occ="' + html.escape(json.dumps(_row_occ, ensure_ascii=False), quote=True) + '"'
@@ -17694,7 +17725,18 @@ window.__CONFIG__ = {ui_config_json};
         function applyOccurrenceView() {
             var rows = document.querySelectorAll('tr[data-occ]');
             var sels = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
-            var cellMap = { 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
+            var cellMap = { 'col-inflected': 'form', 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
+            var posNameMap = {
+                'art.': 'Article',
+                'pron.': 'Pronoun',
+                'det.': 'Determiner',
+                'prep.': 'Preposition',
+                'n.': 'Noun',
+                'v.': 'Verb',
+                'adj.': 'Adjective',
+                'adv.': 'Adverb',
+                'conj.': 'Conjunction'
+            };
             for (var r = 0; r < rows.length; r++) {
                 var tr = rows[r];
                 var occ = null;
@@ -17715,8 +17757,17 @@ window.__CONFIG__ = {ui_config_json};
                     if (!td) continue;
                     var cell = td.querySelector('.scrollable-cell') || td;
                     if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', cell.innerHTML);
+                    if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', td.getAttribute('title') || '');
+                    if (cell !== td && !cell.hasAttribute('data-orig-title')) cell.setAttribute('data-orig-title', cell.getAttribute('title') || '');
+
                     if (picked.length === 0) {
                         if (cell.innerHTML !== td.getAttribute('data-orig-html')) cell.innerHTML = td.getAttribute('data-orig-html');
+                        var origTdTitle = td.getAttribute('data-orig-title');
+                        if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
+                        if (cell !== td) {
+                            var origCellTitle = cell.getAttribute('data-orig-title');
+                            if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
+                        }
                         continue;
                     }
                     var vals = [];
@@ -17726,7 +17777,14 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     if (vals.length === 0) {
                         cell.innerHTML = td.getAttribute('data-orig-html');
+                        var origTdTitle = td.getAttribute('data-orig-title');
+                        if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
+                        if (cell !== td) {
+                            var origCellTitle = cell.getAttribute('data-orig-title');
+                            if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
+                        }
                     } else {
+                        var newTooltip = '';
                         if (cls === 'col-pos') {
                             var posOrder = { 'art.': 0, 'pron.': 1, 'det.': 2, 'prep.': 3 };
                             vals.sort(function(a, b) {
@@ -17734,8 +17792,36 @@ window.__CONFIG__ = {ui_config_json};
                                 var ob = (posOrder[b] !== undefined) ? posOrder[b] : 99;
                                 return oa - ob;
                             });
+                            cell.textContent = vals.join(', ');
+                            newTooltip = vals.map(function(p) {
+                                var lower = p.toLowerCase();
+                                return posNameMap[lower] || p;
+                            }).join(', ');
+                        } else if (cls === 'col-morphology') {
+                            cell.textContent = vals.join('; ');
+                            newTooltip = vals.join('; ');
+                        } else if (cls === 'col-translation') {
+                            cell.textContent = vals.join(', ');
+                            var prov = td.getAttribute('data-provenance');
+                            newTooltip = vals.join(', ');
+                            if (prov) {
+                                newTooltip += ' (' + prov + ')';
+                            }
+                        } else if (cls === 'col-inflected') {
+                            cell.textContent = vals.join(', ');
+                            var tooltips = [];
+                            for (var q = 0; q < picked.length; q++) {
+                                if (picked[q].inflected_tooltip && tooltips.indexOf(picked[q].inflected_tooltip) === -1) {
+                                    tooltips.push(picked[q].inflected_tooltip);
+                                }
+                            }
+                            newTooltip = tooltips.length > 0 ? tooltips.join('\n---\n') : vals.join(', ');
                         }
-                        cell.textContent = vals.join(cls === 'col-morphology' ? '; ' : ', ');
+
+                        if (newTooltip) {
+                            td.setAttribute('title', newTooltip);
+                            if (cell !== td) cell.setAttribute('title', newTooltip);
+                        }
                     }
                 }
             }
