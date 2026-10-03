@@ -17815,7 +17815,7 @@ window.__CONFIG__ = {ui_config_json};
                                     tooltips.push(picked[q].inflected_tooltip);
                                 }
                             }
-                            newTooltip = tooltips.length > 0 ? tooltips.join('\n---\n') : vals.join(', ');
+                            newTooltip = tooltips.length > 0 ? tooltips.join('\\n---\\n') : vals.join(', ');
                         }
 
                         if (newTooltip) {
