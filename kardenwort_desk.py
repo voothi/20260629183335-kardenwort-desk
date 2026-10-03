@@ -18118,14 +18118,18 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     if (span) {
                         try {
-                            if (isDirectRowMatch || isTargetedActiveTokenMatch) {
-                                if (span.classList.contains('highlight-purple')) {
-                                    span.classList.add('highlight-purple-active');
-                                } else if (span.classList.contains('highlight-orange')) {
-                                    span.classList.add('highlight-orange-active');
-                                }
-                                if (isOrphanSelected) {
-                                    span.classList.add('active-subtoken');
+                            if (hasActiveTokens) {
+                                if (isDirectRowMatch || isTargetedActiveTokenMatch) {
+                                    if (span.classList.contains('highlight-purple')) {
+                                        span.classList.add('highlight-purple-active');
+                                    } else if (span.classList.contains('highlight-orange')) {
+                                        span.classList.add('highlight-orange-active');
+                                    }
+                                    if (isOrphanSelected) {
+                                        span.classList.add('active-subtoken');
+                                    }
+                                } else if (isSameLemmaOn) {
+                                    span.classList.add('lemma-peer-highlight');
                                 }
                             } else if (isLegacyOverview) {
                                 if (span.classList.contains('highlight-purple')) {
@@ -18136,8 +18140,41 @@ window.__CONFIG__ = {ui_config_json};
                                 if (isOrphanSelected) {
                                     span.classList.add('active-subtoken');
                                 }
-                            } else if (isSameLemmaOn) {
-                                span.classList.add('lemma-peer-highlight');
+                            } else {
+                                var isExactLemmaMatch = (tokClean && tokLem && tokClean === tokLem);
+                                var isDirectQuotationMatch = false;
+                                
+                                var refRowId = (lastClickedRowId !== null && lastClickedRowId !== undefined) ? lastClickedRowId : matchedRowId;
+                                if (refRowId !== null && refRowId !== undefined) {
+                                    var rTr = document.querySelector('tr[data-row-id="' + refRowId + '"]');
+                                    if (rTr) {
+                                        var lemCell = rTr.querySelector('.col-lemma') || rTr.querySelector('[data-col="WordSource"]');
+                                        var rLemText = (lemCell ? (lemCell.textContent || lemCell.innerText || '') : (rTr.getAttribute('data-lemma') || '')).trim().toLowerCase();
+                                        if (rLemText && tokClean === rLemText) isExactLemmaMatch = true;
+                                        
+                                        var rCell = rTr.querySelector('.col-inflected') || rTr.querySelector('[data-col="WordSourceInflectedForm"]') || rTr.querySelector('[data-col="Quotation"]');
+                                        var rQuot = (rCell ? (rCell.textContent || rCell.innerText || '') : (rTr.getAttribute('data-quotation') || '')).trim().toLowerCase();
+                                        if (rQuot) {
+                                            var qParts = rQuot.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                                            if (qParts.length === 1 && (refRowId === lastClickedRowId || lastClickedRowId === null)) {
+                                                var qWords = qParts[0].split(/\s+/);
+                                                if (qParts[0] === tokClean || qWords.indexOf(tokClean) !== -1) {
+                                                    isDirectQuotationMatch = true;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+
+                                if (isExactLemmaMatch || isDirectQuotationMatch) {
+                                    if (span.classList.contains('highlight-purple')) {
+                                        span.classList.add('highlight-purple-active');
+                                    } else if (span.classList.contains('highlight-orange')) {
+                                        span.classList.add('highlight-orange-active');
+                                    }
+                                } else if (isSameLemmaOn) {
+                                    span.classList.add('lemma-peer-highlight');
+                                }
                             }
                         } catch(e) {}
                     }
