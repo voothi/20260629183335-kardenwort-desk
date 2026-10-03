@@ -15990,30 +15990,53 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                         
-                        var isCurrentlyActiveToken = isTokenInActiveSelections(clickedTokenData.visual_idx);
+                        var allSelected = true;
                         if (targetRowIds.length === 0) {
                             var wIdx = clickedTokenData.visual_idx;
                             if (wIdx !== undefined && wIdx !== null) {
                                 if (selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
                                     delete selectedOrphanWordIdxsMap[String(wIdx)];
-                                    tokenDragMode = false;
+                                    allSelected = true;
                                 } else {
                                     selectedOrphanWordIdxsMap[String(wIdx)] = true;
-                                    tokenDragMode = true;
+                                    allSelected = false;
                                 }
                             } else {
-                                tokenDragMode = true;
+                                allSelected = false;
                             }
                         } else {
-                            if (!isCurrentlyActiveToken) {
-                                tokenDragMode = true;
-                                if (!window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) {
-                                    selectedRowIdsMap = {};
-                                }
+                            if (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) {
+                                allSelected = false;
+                                selectedRowIdsMap = {};
                             } else {
-                                tokenDragMode = false;
+                                for (var j = 0; j < targetRowIds.length; j++) {
+                                    var tid = String(targetRowIds[j]);
+                                    var isTidSel = selectedRowIdsMap.hasOwnProperty(tid);
+                                    if (!isTidSel) {
+                                        for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+                                            var tr = tableRows[trIdx];
+                                            var allAttr = tr.getAttribute('data-all-row-ids');
+                                            if (allAttr) {
+                                                var pList = allAttr.split(',').map(function(s) { return s.trim(); });
+                                                if (pList.indexOf(tid) !== -1) {
+                                                    var trId = String(tr.getAttribute('data-row-id'));
+                                                    if (selectedRowIdsMap.hasOwnProperty(trId) || tr.getAttribute('data-selected') === '1') {
+                                                        isTidSel = true;
+                                                        break;
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                    if (!isTidSel) {
+                                        allSelected = false;
+                                        break;
+                                    }
+                                }
                             }
                         }
+                        
+                        tokenDragMode = !allSelected;
 
                         initialSelectedMap = {};
                         for (var key in selectedRowIdsMap) {
@@ -16764,6 +16787,13 @@ window.__CONFIG__ = {ui_config_json};
                 notifyAHKSelection();
             }
         }
+        if (window.__deskHandleMouseUp) {
+            if (document.removeEventListener) {
+                document.removeEventListener('mouseup', window.__deskHandleMouseUp);
+                window.removeEventListener('mouseup', window.__deskHandleMouseUp);
+            }
+        }
+        window.__deskHandleMouseUp = handleMouseUp;
         addEvent(document, 'mouseup', handleMouseUp);
         addEvent(window, 'mouseup', handleMouseUp);
         
@@ -17210,7 +17240,56 @@ window.__CONFIG__ = {ui_config_json};
                 var matchedRowId = null;
 
                 if (hasActiveTokens) {
-                    hasMatchingRow = isOrphanSelected || !!activeVisualIdxs[String(token.visual_idx)];
+                    if (isOrphanSelected || !!activeVisualIdxs[String(token.visual_idx)]) {
+                        hasMatchingRow = true;
+                    } else if (token.row_ids && token.row_ids.length > 0) {
+                        var sharesActiveRow = false;
+                        for (var r = 0; r < token.row_ids.length; r++) {
+                            if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
+                                sharesActiveRow = true;
+                                break;
+                            }
+                        }
+
+                        if (sharesActiveRow) {
+                            var isCompoundSibling = false;
+                            var sharesIdenticalAtomic = false;
+                            var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
+                            var tokClean = (token.lower_clean || token.text || '').trim().toLowerCase();
+
+                            for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                var atItem = window.AppState.activeTokenSelections[a];
+                                if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
+                                    var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
+                                    if (!atClean) {
+                                        var atSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                        if (atSpan) atClean = (atSpan.getAttribute('data-lower-clean') || atSpan.textContent || '').trim().toLowerCase();
+                                    }
+                                    if (tokClean && atClean && tokClean === atClean) {
+                                        sharesIdenticalAtomic = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if (!sharesIdenticalAtomic) {
+                                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                    var atItem = window.AppState.activeTokenSelections[a];
+                                    var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                    var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
+                                    if (aSpan && tSpan) {
+                                        var grp = findCompoundSiblingSpans(aSpan);
+                                        if (grp && grp.indexOf(tSpan) !== -1) {
+                                            isCompoundSibling = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (sharesIdenticalAtomic || isCompoundSibling) {
+                                hasMatchingRow = true;
+                            }
+                        }
+                    }
                 } else {
                     hasMatchingRow = isOrphanSelected;
                     if (!hasMatchingRow && token.row_ids) {
