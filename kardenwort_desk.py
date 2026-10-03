@@ -13657,6 +13657,45 @@ window.__CONFIG__ = {ui_config_json};
             var targetIdx = getTargetIdx(idx, isSource);
             var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
             var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
+            if (isSource) {
+                var isCurrentlyActive = false;
+                var vIdxAttr = this.getAttribute('data-word-idx');
+                if (vIdxAttr !== null && typeof isTokenInActiveSelections === 'function') {
+                    isCurrentlyActive = isTokenInActiveSelections(parseInt(vIdxAttr, 10));
+                }
+                if (!isCurrentlyActive && (this.classList.contains('highlight-purple-active') || this.classList.contains('highlight-orange-active') || this.classList.contains('active-subtoken'))) {
+                    isCurrentlyActive = true;
+                }
+
+                if (!isCurrentlyActive) {
+                    if (bIdx !== -1) {
+                        var entry = mvpBookmarks[bIdx];
+                        if (entry.srcSpan) removeClass(entry.srcSpan, 'hl-mvp-hover');
+                        if (entry.transSpan) removeClass(entry.transSpan, 'hl-mvp-hover');
+                        mvpBookmarks.splice(bIdx, 1);
+                    }
+                    if (typeof findRelatedTokenSpans === 'function') {
+                        var related = findRelatedTokenSpans(this);
+                        for (var r = 0; r < related.length; r++) {
+                            var rSpan = related[r];
+                            for (var m = mvpBookmarks.length - 1; m >= 0; m--) {
+                                if (mvpBookmarks[m].srcSpan === rSpan) {
+                                    var rentry = mvpBookmarks[m];
+                                    if (rentry.srcSpan) removeClass(rentry.srcSpan, 'hl-mvp-hover');
+                                    if (rentry.transSpan) removeClass(rentry.transSpan, 'hl-mvp-hover');
+                                    mvpBookmarks.splice(m, 1);
+                                }
+                            }
+                        }
+                    }
+                    refreshBookmarkClasses();
+                    return;
+                } else if (bIdx !== -1) {
+                    refreshBookmarkClasses();
+                    return;
+                }
+            }
+
             if (bIdx !== -1) {
                 var entry = mvpBookmarks[bIdx];
                 if (entry.srcSpan) removeClass(entry.srcSpan, 'hl-mvp-hover');
@@ -16872,8 +16911,9 @@ window.__CONFIG__ = {ui_config_json};
             if (e.button !== 0 && e.button !== 2) {
                 return;
             }
-            if (e.button === 0 && window.AppState) {
-                window.AppState.activeTokenSelections = [];
+            if (e.button === 0) {
+                if (window.AppState) window.AppState.activeTokenSelections = [];
+                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
@@ -17599,6 +17639,7 @@ window.__CONFIG__ = {ui_config_json};
                 window.AppState.selectedLemmas = {};
                 window.AppState.activeTokenSelections = [];
             }
+            if (window.clearMVPBookmarks) window.clearMVPBookmarks();
             syncSelectionsToCardsAndState();
             lastClickedRowId = null;
             updateRowStyles();
