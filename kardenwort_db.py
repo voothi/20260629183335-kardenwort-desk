@@ -154,6 +154,68 @@ class KardenwortConnection(sqlite3.Connection):
             self.close()
 
 
+def sanitize_extra_fields(data: Any) -> Dict[str, Any]:
+    """
+    Sanitizes extra_fields by recursively unwrapping any nested 'extra_fields'
+    or 'extrafields' dictionaries/strings, flattening them into a single clean dictionary,
+    and ensuring no recursive 'extra_fields' or 'extrafields' subkey remains.
+    """
+    if data is None:
+        return {}
+    if isinstance(data, str):
+        data = data.strip()
+        if not data:
+            return {}
+        try:
+            data = json.loads(data)
+        except Exception:
+            return {}
+    if not isinstance(data, dict):
+        return {}
+
+    merged: Dict[str, Any] = {}
+    curr = dict(data)
+
+    while True:
+        nested_val = None
+        for k, v in list(curr.items()):
+            k_norm = k.strip().lower().replace("_", "")
+            if k_norm == "extrafields":
+                nested_val = v
+            else:
+                if k not in merged or (v and not merged[k]):
+                    merged[k] = v
+
+        if nested_val is None:
+            break
+
+        if isinstance(nested_val, str):
+            nested_val = nested_val.strip()
+            if not nested_val:
+                break
+            try:
+                curr = json.loads(nested_val)
+            except Exception:
+                break
+        elif isinstance(nested_val, dict):
+            curr = dict(nested_val)
+        else:
+            break
+
+        if not isinstance(curr, dict):
+            break
+
+    # Clean occurrence_data if present
+    if "occurrence_data" in merged and isinstance(merged["occurrence_data"], dict):
+        occ = merged["occurrence_data"]
+        occ.pop("extra_fields", None)
+        occ.pop("extrafields", None)
+
+    merged.pop("extra_fields", None)
+    merged.pop("extrafields", None)
+    return merged
+
+
 # ---------------------------------------------------------------------------
 # KardenwortDB Connection and Relational Engine
 # ---------------------------------------------------------------------------
@@ -377,6 +439,14 @@ class KardenwortDB:
                     duration_ms=mig_dur,
                     details={"migration": sql_file.name},
                 )
+
+            # Automatically sanitize any legacy nested extra_fields in words table
+            try:
+                sanitized_rows = self.sanitize_all_words_extra_fields(zid=zid)
+                if sanitized_rows > 0:
+                    self.logger.log("INFO", f"Sanitized legacy extra_fields in {sanitized_rows} rows", zid=zid)
+            except Exception as se:
+                self.logger.log("WARNING", f"Auto-sanitization of extra_fields skipped: {se}", zid=zid)
 
             total_dur = (time.perf_counter() - start_t) * 1000.0
             result = {
@@ -2007,20 +2077,32 @@ class KardenwortDB:
     # ---------------------------------------------------------------------------
     # Normalized CRUD Helpers: Words
     # ---------------------------------------------------------------------------
+    sanitize_extra_fields = staticmethod(sanitize_extra_fields)
+
     def _serialize_extra_fields(self, extra_fields: Any) -> Optional[str]:
         if extra_fields is None:
             return None
         if isinstance(extra_fields, (dict, list)):
+            if isinstance(extra_fields, dict):
+                extra_fields = sanitize_extra_fields(extra_fields)
             return json.dumps(extra_fields, ensure_ascii=False)
+        if isinstance(extra_fields, str):
+            extra_fields = extra_fields.strip()
+            if not extra_fields:
+                return None
+            try:
+                parsed = json.loads(extra_fields)
+                if isinstance(parsed, dict):
+                    parsed = sanitize_extra_fields(parsed)
+                    return json.dumps(parsed, ensure_ascii=False)
+            except Exception:
+                pass
         return str(extra_fields)
 
     def _deserialize_extra_fields(self, record: Dict[str, Any]) -> Dict[str, Any]:
         raw = record.get("extra_fields")
-        if raw and isinstance(raw, str):
-            try:
-                record["extra_fields"] = json.loads(raw)
-            except Exception:
-                pass
+        if raw:
+            record["extra_fields"] = sanitize_extra_fields(raw)
         return record
 
     def insert_word(self, word: Dict[str, Any], zid: Optional[str] = None) -> int:
@@ -2278,6 +2360,28 @@ class KardenwortDB:
             cursor.execute("DELETE FROM words WHERE id = ?;", (word_id,))
             return cursor.rowcount > 0
 
+    def sanitize_all_words_extra_fields(self, zid: Optional[str] = None) -> int:
+        """
+        Scans all records in words table and sanitizes extra_fields,
+        unnesting any recursive extra_fields payloads and reducing bloat.
+        Returns the number of rows updated.
+        """
+        cleaned_count = 0
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute("SELECT id, extra_fields FROM words WHERE extra_fields IS NOT NULL AND extra_fields != '';")
+            rows = cursor.fetchall()
+            for r in rows:
+                w_id = r["id"]
+                raw_ef = r["extra_fields"]
+                if '"extra_fields"' in raw_ef or '"extrafields"' in raw_ef:
+                    cleaned = sanitize_extra_fields(raw_ef)
+                    new_serialized = self._serialize_extra_fields(cleaned)
+                    if new_serialized != raw_ef:
+                        cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (new_serialized, w_id))
+                        cleaned_count += 1
+        return cleaned_count
+
     def batch_update_words(
         self,
         session_zid: str,
@@ -2326,6 +2430,8 @@ class KardenwortDB:
             "word_provenance": "word_provenance",
             "wordprovenance": "word_provenance",
             "provenance": "word_provenance",
+            "extrafields": "extra_fields",
+            "extra_fields": "extra_fields",
         }
 
         updated_count = 0
@@ -2362,11 +2468,25 @@ class KardenwortDB:
                         elif col_name == "gender":
                             g_clean = str(f_v).strip().lower() if f_v is not None else ""
                             direct_cols[col_name] = g_clean if g_clean in ("m", "f", "n") else None
+                        elif col_name == "extra_fields":
+                            cleaned_ef = sanitize_extra_fields(f_v)
+                            direct_cols[col_name] = self._serialize_extra_fields(cleaned_ef)
                         else:
                             if col_name not in direct_cols or (f_v and not direct_cols[col_name]):
                                 direct_cols[col_name] = f_v
                     else:
                         custom_fields[f_k] = f_v
+
+                if custom_fields:
+                    custom_fields.pop("extra_fields", None)
+                    custom_fields.pop("extrafields", None)
+
+                if "extra_fields" in direct_cols and custom_fields:
+                    base_ef = sanitize_extra_fields(direct_cols["extra_fields"])
+                    base_ef.update(custom_fields)
+                    base_ef = sanitize_extra_fields(base_ef)
+                    direct_cols["extra_fields"] = self._serialize_extra_fields(base_ef)
+                    custom_fields = {}
 
                 if direct_cols:
                     set_clauses = [f"{c} = ?" for c in direct_cols.keys()]
@@ -2394,21 +2514,40 @@ class KardenwortDB:
                     if row:
                         w_id = row["id"]
                         raw_ef = row["extra_fields"]
-                        ef_dict = {}
-                        if raw_ef:
-                            if isinstance(raw_ef, dict):
-                                ef_dict = dict(raw_ef)
-                            elif isinstance(raw_ef, str):
-                                try:
-                                    ef_dict = json.loads(raw_ef)
-                                except Exception:
-                                    ef_dict = {}
+                        ef_dict = sanitize_extra_fields(raw_ef)
                         ef_dict.update(custom_fields)
+                        ef_dict = sanitize_extra_fields(ef_dict)
                         cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (self._serialize_extra_fields(ef_dict), w_id))
                         if not direct_cols and cursor.rowcount > 0:
                             updated_count += cursor.rowcount
 
         return updated_count
+
+    def repair_corrupted_extra_fields(self, zid: Optional[str] = None) -> int:
+        """
+        Scans the words table for records with corrupted, bloated, or recursively nested extra_fields,
+        unnests and cleans them using sanitize_extra_fields, and rewrites the record.
+        Returns the number of rows repaired.
+        """
+        repaired_count = 0
+        with self.get_connection(zid=zid) as conn:
+            cursor = conn.cursor()
+            cursor.execute(
+                "SELECT id, extra_fields FROM words WHERE extra_fields IS NOT NULL AND extra_fields != '' AND extra_fields != '{}';"
+            )
+            rows = cursor.fetchall()
+            for row in rows:
+                w_id = row["id"]
+                raw_ef = row["extra_fields"]
+                if not raw_ef:
+                    continue
+                if '"extra_fields"' in raw_ef or '"extrafields"' in raw_ef or len(raw_ef) > 2048:
+                    sanitized = sanitize_extra_fields(raw_ef)
+                    serialized = self._serialize_extra_fields(sanitized)
+                    if serialized != raw_ef:
+                        cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (serialized, w_id))
+                        repaired_count += 1
+        return repaired_count
 
     # ---------------------------------------------------------------------------
     # Atomic Session Bundle Operations
@@ -2585,3 +2724,11 @@ class QueryExecutionError(Exception):
         super().__init__(message)
         self.error_code = error_code
         self.message = message
+
+
+def repair_corrupted_extra_fields(db_path_or_db: Union[str, Path, KardenwortDB], zid: Optional[str] = None) -> int:
+    """Convenience module function to repair bloated or corrupted extra_fields in words table."""
+    if isinstance(db_path_or_db, KardenwortDB):
+        return db_path_or_db.repair_corrupted_extra_fields(zid=zid)
+    db = KardenwortDB(db_path=db_path_or_db)
+    return db.repair_corrupted_extra_fields(zid=zid)

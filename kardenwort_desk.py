@@ -35,6 +35,23 @@ if vendor_dir not in sys.path:
     sys.path.append(vendor_dir)
 
 
+def set_max_csv_field_size_limit() -> int:
+    """
+    Safely expands Python csv field size limit to the maximum platform capacity.
+    Handles OverflowError on 64-bit Windows where C long is 32-bit.
+    """
+    max_limit = sys.maxsize
+    while True:
+        try:
+            csv.field_size_limit(max_limit)
+            return max_limit
+        except OverflowError:
+            max_limit = int(max_limit / 10)
+
+
+set_max_csv_field_size_limit()
+
+
 class ErrorCode(str, Enum):
     """
     Authoritative enumeration of all permitted structured diagnostic error code
@@ -3272,6 +3289,7 @@ class TsvStorageAdapter(StorageAdapter):
         **kwargs,
     ) -> Tuple[List[str], List[str], List[List[str]]]:
         import csv
+        set_max_csv_field_size_limit()
         comments = []
         headers = []
         data_rows = []
@@ -3794,6 +3812,9 @@ class SqliteStorageAdapter(StorageAdapter):
                         ef = {}
                 if isinstance(ef, dict):
                     for k in ef.keys():
+                        k_norm = k.strip().lower().replace("_", "")
+                        if k_norm in ("extrafields", "occurrencedata"):
+                            continue
                         if not any(h.lower() == k.lower() for h in headers) and not any(eh.lower() == k.lower() for eh in extra_headers):
                             extra_headers.append(k)
             headers.extend(extra_headers)
@@ -4513,6 +4534,9 @@ class SqliteStorageAdapter(StorageAdapter):
                         continue
                     row_updates = {}
                     for col_idx, h in enumerate(updated_headers):
+                        h_norm = h.strip().lower().replace("_", "")
+                        if h_norm in ("extrafields", "occurrencedata"):
+                            continue
                         if col_idx < len(r):
                             row_updates[h] = sanitize_bracketed_field(r[col_idx])
                     row_updates["word_provenance"] = "live:intellifiller"
@@ -4526,14 +4550,8 @@ class SqliteStorageAdapter(StorageAdapter):
 
                     if matched_word and target_vidx is not None:
                         ef_raw = matched_word.get("extra_fields")
-                        ef_dict = {}
-                        if isinstance(ef_raw, str):
-                            try:
-                                ef_dict = json.loads(ef_raw)
-                            except Exception:
-                                ef_dict = {}
-                        elif isinstance(ef_raw, dict):
-                            ef_dict = dict(ef_raw)
+                        from kardenwort_db import sanitize_extra_fields
+                        ef_dict = sanitize_extra_fields(ef_raw)
 
                         occ_data = ef_dict.get("occurrence_data", {})
                         if not isinstance(occ_data, dict):
@@ -4598,6 +4616,7 @@ class SqliteStorageAdapter(StorageAdapter):
                             row_updates[morph_field] = aggregate_sequential_distinct(morph_items, delimiter="; ")
 
                         ef_dict["occurrence_data"] = occ_data
+                        ef_dict = sanitize_extra_fields(ef_dict)
                         row_updates["extra_fields"] = json.dumps(ef_dict, ensure_ascii=False)
 
                     if matched_word:
@@ -5773,6 +5792,7 @@ def _sanitize_rows(data_rows: Optional[List[List[str]]]) -> Optional[List[List[s
 
 
 def load_tsv_rows(tsv_path: Path, adapter: Optional[StorageAdapter] = None) -> Tuple[List[str], List[str], List[List[str]]]:
+    set_max_csv_field_size_limit()
     act_adapter = adapter or _DEFAULT_TSV_ADAPTER
     return act_adapter.load_tsv_rows(tsv_path)
 
