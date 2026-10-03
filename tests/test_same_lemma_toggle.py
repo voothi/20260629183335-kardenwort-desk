@@ -235,11 +235,21 @@ def test_table_row_click_clears_active_token_selections(page, tmp_path):
     table_row.click()
     assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 0
 
-    # 3. Click table row to select it row-scoped -> both occurrences in text get highlight-orange-active
+    # 3. Click table row to select it row-scoped -> with Lemma OFF, only primary occurrence (Am) gets highlight-orange-active
     table_row.click()
     assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 0
-    assert "highlight-orange-active" in (beim_span.get_attribute("class") or "")
     assert "highlight-orange-active" in (am_span.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (beim_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (beim_span.get_attribute("class") or "")
+
+    # 4. Toggle Lemma ON -> peer occurrence (Beim) dynamically receives lemma-peer-highlight in real time
+    page.locator("#kw-btn-same-lemma").click()
+    assert "highlight-orange-active" in (am_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (beim_span.get_attribute("class") or "")
+
+    # 5. Toggle Lemma OFF -> peer occurrence loses lemma-peer-highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert "lemma-peer-highlight" not in (beim_span.get_attribute("class") or "")
 
 
 def test_targeted_token_export_creates_single_card(page, tmp_path, monkeypatch):
