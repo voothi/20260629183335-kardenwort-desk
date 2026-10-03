@@ -4598,12 +4598,29 @@ class SqliteStorageAdapter(StorageAdapter):
                         new_trans = row_updates.get(trans_field, "")
                         new_morph = row_updates.get(morph_field, "")
 
-                        for vi in target_vidxs:
-                            occ_data[str(vi)] = {
+                        if len(target_vidxs) == 1:
+                            occ_data[str(target_vidxs[0])] = {
                                 "pos": new_pos,
                                 "trans": new_trans,
                                 "morph": new_morph
                             }
+                        else:
+                            for vi in target_vidxs:
+                                existing_vi = occ_data.get(str(vi), {})
+                                vi_pos = existing_vi.get("pos", new_pos)
+                                vi_trans = existing_vi.get("trans", new_trans)
+                                vi_morph = existing_vi.get("morph", new_morph)
+                                if "art." in new_pos and "pron." in new_pos:
+                                    pass
+                                else:
+                                    vi_pos = new_pos
+                                    vi_trans = new_trans
+                                    vi_morph = new_morph
+                                occ_data[str(vi)] = {
+                                    "pos": vi_pos,
+                                    "trans": vi_trans,
+                                    "morph": vi_morph
+                                }
 
                         w_lem = (matched_word.get("lemma") or "").strip().lower()
 
@@ -10953,6 +10970,30 @@ html, body {{
 
         occ_attr = ""
         _row_occ = row_occurrences.get(str(token_order_val))
+        if lemma_val and lemma_val.strip().lower() == "der":
+            if not isinstance(_row_occ, dict):
+                _row_occ = {}
+            else:
+                _row_occ = dict(_row_occ)
+            der_forms = {"der", "die", "das", "den", "dem", "des"}
+            for tok_item in source_tokens:
+                if tok_item.get("is_word") and (tok_item.get("lower_clean") or "").lower() in der_forms:
+                    v_key = str(tok_item.get("visual_idx"))
+                    if v_key not in _row_occ:
+                        raw_w = (tok_item.get("text") or "").strip().lower()
+                        v_int = tok_item.get("visual_idx", 0)
+                        prev_toks = [st for st in source_tokens if st.get("visual_idx", 0) < v_int and st.get("text", "").strip()]
+                        prev_t = prev_toks[-1].get("text", "").strip() if prev_toks else ""
+                        is_rel_pron = (prev_t == "," or prev_t.endswith(","))
+                        pos_inferred = "pron." if is_rel_pron else "art."
+                        trans_inferred = "который" if pos_inferred == "pron." else "тот"
+                        if raw_w == "die" and pos_inferred == "pron.":
+                            trans_inferred = "которая"
+                        _row_occ[v_key] = {
+                            "pos": pos_inferred,
+                            "trans": trans_inferred,
+                            "morph": f"der ({'корень: относительное местоимение' if pos_inferred == 'pron.' else 'определенный артикль'})"
+                        }
         if _row_occ:
             try:
                 occ_attr = ' data-occ="' + html.escape(json.dumps(_row_occ, ensure_ascii=False), quote=True) + '"'
@@ -17686,6 +17727,14 @@ window.__CONFIG__ = {ui_config_json};
                     if (vals.length === 0) {
                         cell.innerHTML = td.getAttribute('data-orig-html');
                     } else {
+                        if (cls === 'col-pos') {
+                            var posOrder = { 'art.': 0, 'pron.': 1, 'det.': 2, 'prep.': 3 };
+                            vals.sort(function(a, b) {
+                                var oa = (posOrder[a] !== undefined) ? posOrder[a] : 99;
+                                var ob = (posOrder[b] !== undefined) ? posOrder[b] : 99;
+                                return oa - ob;
+                            });
+                        }
                         cell.textContent = vals.join(cls === 'col-morphology' ? '; ' : ', ');
                     }
                 }
