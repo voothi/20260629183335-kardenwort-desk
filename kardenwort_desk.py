@@ -17859,8 +17859,11 @@ window.__CONFIG__ = {ui_config_json};
                 var rowId = parseInt(rId, 10);
                 if (!isNaN(rowId)) activeTargetRowIds[rowId] = true;
             }
-            for (var i = 0; i < tableRows.length; i++) {
-                var tr = tableRows[i];
+            var curTableRows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
+                ? tableRows
+                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+            for (var i = 0; i < curTableRows.length; i++) {
+                var tr = curTableRows[i];
                 var trId = String(tr.getAttribute('data-row-id'));
                 var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                 if (trSelected) {
@@ -17877,6 +17880,7 @@ window.__CONFIG__ = {ui_config_json};
             
             var activeVisualIdxs = {};
             var activeLemmas = {};
+            var activeTokenRowIds = {};
             if (hasActiveTokens) {
                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                     var item = window.AppState.activeTokenSelections[a];
@@ -17885,6 +17889,40 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     if (item.lemma) {
                         activeLemmas[String(item.lemma).trim().toLowerCase()] = true;
+                    }
+                    var vIdxInt = parseInt(item.visual_idx, 10);
+                    for (var m = 0; m < tokenMap.length; m++) {
+                        if (parseInt(tokenMap[m].visual_idx, 10) === vIdxInt) {
+                            var tokRows = tokenMap[m].row_ids || [];
+                            for (var r = 0; r < tokRows.length; r++) {
+                                activeTokenRowIds[String(tokRows[r])] = true;
+                            }
+                            break;
+                        }
+                    }
+                }
+                for (var i = 0; i < curTableRows.length; i++) {
+                    var tr = curTableRows[i];
+                    var trId = String(tr.getAttribute('data-row-id'));
+                    var allAttr = tr.getAttribute('data-all-row-ids');
+                    var trGroup = [trId];
+                    if (allAttr) {
+                        var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                        for (var p = 0; p < parts.length; p++) {
+                            if (trGroup.indexOf(parts[p]) === -1) trGroup.push(parts[p]);
+                        }
+                    }
+                    var hasActiveInTr = false;
+                    for (var g = 0; g < trGroup.length; g++) {
+                        if (activeTokenRowIds[trGroup[g]]) {
+                            hasActiveInTr = true;
+                            break;
+                        }
+                    }
+                    if (hasActiveInTr) {
+                        for (var g = 0; g < trGroup.length; g++) {
+                            activeTokenRowIds[trGroup[g]] = true;
+                        }
                     }
                 }
             }
@@ -17897,101 +17935,96 @@ window.__CONFIG__ = {ui_config_json};
                 if ((!token.row_ids || token.row_ids.length === 0) && !isOrphanSelected) continue;
                 
                 var hasMatchingRow = false;
+                var isDirectRowMatch = false;
+                var isTargetedActiveTokenMatch = false;
                 var matchedRowId = null;
 
-                if (hasActiveTokens) {
-                    if (isOrphanSelected || !!activeVisualIdxs[String(token.visual_idx)]) {
-                        hasMatchingRow = true;
-                    } else if (token.row_ids && token.row_ids.length > 0) {
-                        var sharesActiveRow = false;
-                        for (var r = 0; r < token.row_ids.length; r++) {
-                            if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
-                                sharesActiveRow = true;
-                                break;
-                            }
-                        }
+                var tokClean = (token.lower_clean || token.text || '').trim().toLowerCase();
+                var tokLem = (token.lemma || tokClean).trim().toLowerCase();
+                var isLemmaActive = hasActiveTokens && activeLemmas.hasOwnProperty(tokLem);
 
-                        if (sharesActiveRow) {
-                            var isCompoundSibling = false;
-                            var sharesIdenticalAtomic = false;
-                            var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
-                            var tokClean = (token.lower_clean || token.text || '').trim().toLowerCase();
-
-                            for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
-                                var atItem = window.AppState.activeTokenSelections[a];
-                                if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
-                                    var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
-                                    if (!atClean) {
-                                        var atSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
-                                        if (atSpan) atClean = (atSpan.getAttribute('data-lower-clean') || atSpan.textContent || '').trim().toLowerCase();
-                                    }
-                                    if (tokClean && atClean && tokClean === atClean) {
-                                        var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
-                                        var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
-                                        var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
-                                        var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
-                                        var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
-                                        var hasCompoundContext = (token.compound_row_ids && token.compound_row_ids.length > 0) ||
-                                            (aTd && aTd.compound_row_ids && aTd.compound_row_ids.length > 0) ||
-                                            (atItem.compound_row_ids && atItem.compound_row_ids.length > 0) ||
-                                            (tSpan && tSpan.hasAttribute('data-compound-id')) ||
-                                            (aSpan && aSpan.hasAttribute('data-compound-id')) ||
-                                            (tGrp && tGrp.length > 1) ||
-                                            (aGrp && aGrp.length > 1);
-                                        if (hasCompoundContext) {
-                                            sharesIdenticalAtomic = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if (!sharesIdenticalAtomic) {
-                                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
-                                    var atItem = window.AppState.activeTokenSelections[a];
-                                    var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
-                                    var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
-                                    if (aSpan && tSpan) {
-                                        var grp = findCompoundSiblingSpans(aSpan);
-                                        if (grp && grp.indexOf(tSpan) !== -1) {
-                                            isCompoundSibling = true;
-                                            break;
-                                        }
-                                    }
-                                }
-                            }
-                            if (sharesIdenticalAtomic || isCompoundSibling) {
-                                hasMatchingRow = true;
-                            }
-                        }
-                    }
-                } else {
-                    hasMatchingRow = isOrphanSelected;
-                    var isDirectRowMatch = false;
-                    if (!hasMatchingRow && token.row_ids) {
-                        for (var r = 0; r < token.row_ids.length; r++) {
-                            if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
+                if (hasActiveTokens && (isOrphanSelected || !!activeVisualIdxs[String(token.visual_idx)])) {
+                    hasMatchingRow = true;
+                    isTargetedActiveTokenMatch = true;
+                } else if (token.row_ids && token.row_ids.length > 0) {
+                    for (var r = 0; r < token.row_ids.length; r++) {
+                        var rid = token.row_ids[r];
+                        if (activeTargetRowIds.hasOwnProperty(rid)) {
+                            if (!isLemmaActive) {
                                 hasMatchingRow = true;
                                 isDirectRowMatch = true;
-                                matchedRowId = token.row_ids[r];
+                                matchedRowId = rid;
                                 break;
+                            } else {
+                                var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
+                                var sharesIdenticalAtomic = false;
+                                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                    var atItem = window.AppState.activeTokenSelections[a];
+                                    if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
+                                        var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
+                                        if (!atClean) {
+                                            var atSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                            if (atSpan) atClean = (atSpan.getAttribute('data-lower-clean') || atSpan.textContent || '').trim().toLowerCase();
+                                        }
+                                        if (tokClean && atClean && tokClean === atClean) {
+                                            var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
+                                            var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                            var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
+                                            var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
+                                            var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
+                                            var hasCompoundContext = (token.compound_row_ids && token.compound_row_ids.length > 0) ||
+                                                (aTd && aTd.compound_row_ids && aTd.compound_row_ids.length > 0) ||
+                                                (atItem.compound_row_ids && atItem.compound_row_ids.length > 0) ||
+                                                (tSpan && tSpan.hasAttribute('data-compound-id')) ||
+                                                (aSpan && aSpan.hasAttribute('data-compound-id')) ||
+                                                (tGrp && tGrp.length > 1) ||
+                                                (aGrp && aGrp.length > 1);
+                                            if (hasCompoundContext) {
+                                                sharesIdenticalAtomic = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                var isCompoundSibling = false;
+                                if (!sharesIdenticalAtomic) {
+                                    for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                        var atItem = window.AppState.activeTokenSelections[a];
+                                        var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                        var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
+                                        if (aSpan && tSpan) {
+                                            var grp = findCompoundSiblingSpans(aSpan);
+                                            if (grp && grp.indexOf(tSpan) !== -1) {
+                                                isCompoundSibling = true;
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                                if (sharesIdenticalAtomic || isCompoundSibling) {
+                                    hasMatchingRow = true;
+                                    isTargetedActiveTokenMatch = true;
+                                    break;
+                                }
                             }
                         }
                     }
-                    if (!hasMatchingRow && selLemmas) {
-                        var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
-                            ? token.atomic_row_ids
-                            : (token.row_ids || []);
-                        for (var r = 0; r < tokRowIds.length; r++) {
-                            var rLem = getLemmaByRowId(tokRowIds[r]);
-                            if (rLem && selLemmas[rLem]) {
-                                hasMatchingRow = true;
-                                matchedRowId = tokRowIds[r];
-                                break;
-                            }
-                        }
-                        if (!hasMatchingRow && token.lemma && selLemmas[String(token.lemma).trim().toLowerCase()]) {
+                }
+                
+                if (!hasMatchingRow && selLemmas) {
+                    var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
+                        ? token.atomic_row_ids
+                        : (token.row_ids || []);
+                    for (var r = 0; r < tokRowIds.length; r++) {
+                        var rLem = getLemmaByRowId(tokRowIds[r]);
+                        if (rLem && selLemmas[rLem]) {
                             hasMatchingRow = true;
+                            matchedRowId = tokRowIds[r];
+                            break;
                         }
+                    }
+                    if (!hasMatchingRow && token.lemma && selLemmas[String(token.lemma).trim().toLowerCase()]) {
+                        hasMatchingRow = true;
                     }
                 }
                 
@@ -18005,7 +18038,7 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     if (span) {
                         try {
-                            if (hasActiveTokens || isLegacyOverview) {
+                            if (isDirectRowMatch || isTargetedActiveTokenMatch) {
                                 if (span.classList.contains('highlight-purple')) {
                                     span.classList.add('highlight-purple-active');
                                 } else if (span.classList.contains('highlight-orange')) {
@@ -18014,29 +18047,17 @@ window.__CONFIG__ = {ui_config_json};
                                 if (isOrphanSelected) {
                                     span.classList.add('active-subtoken');
                                 }
-                            } else {
-                                var tokClean = (token.lower_clean || token.text || (span.getAttribute('data-lower-clean') || span.textContent || '')).trim().toLowerCase();
-                                var tokLem = (token.lemma || getWordLemma(span) || tokClean).trim().toLowerCase();
-                                var lemKey = tokLem || ('row_' + (matchedRowId !== null && matchedRowId !== undefined ? matchedRowId : token.visual_idx));
-                                
-                                var isExactLemmaMatch = (tokClean && tokLem && tokClean === tokLem);
-                                if (!isExactLemmaMatch && matchedRowId !== null && matchedRowId !== undefined) {
-                                    var rTr = document.querySelector('tr[data-row-id="' + matchedRowId + '"]');
-                                    if (rTr) {
-                                        var rLemText = (rTr.getAttribute('data-lemma') || '').trim().toLowerCase();
-                                        if (rLemText && tokClean === rLemText) isExactLemmaMatch = true;
-                                    }
+                            } else if (isLegacyOverview) {
+                                if (span.classList.contains('highlight-purple')) {
+                                    span.classList.add('highlight-purple-active');
+                                } else if (span.classList.contains('highlight-orange')) {
+                                    span.classList.add('highlight-orange-active');
                                 }
-                                
-                                if (isDirectRowMatch) {
-                                    if (span.classList.contains('highlight-purple')) {
-                                        span.classList.add('highlight-purple-active');
-                                    } else if (span.classList.contains('highlight-orange')) {
-                                        span.classList.add('highlight-orange-active');
-                                    }
-                                } else if (isSameLemmaOn) {
-                                    span.classList.add('lemma-peer-highlight');
+                                if (isOrphanSelected) {
+                                    span.classList.add('active-subtoken');
                                 }
+                            } else if (isSameLemmaOn) {
+                                span.classList.add('lemma-peer-highlight');
                             }
                         } catch(e) {}
                     }
