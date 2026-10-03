@@ -16550,6 +16550,27 @@ window.__CONFIG__ = {ui_config_json};
                         var isTransitionFromTableSelection = (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0);
                         var isTokenCurrentlyActive = isTokenInActiveSelections(clickedTokenData.visual_idx);
                         
+                        var isSameAsTableSelection = false;
+                        if (isTransitionFromTableSelection && lastClickedRowId !== null && lastClickedRowId !== undefined) {
+                            var checkIds = [String(lastClickedRowId)];
+                            var lastTr = document.querySelector('tr[data-row-id="' + lastClickedRowId + '"]');
+                            if (lastTr) {
+                                var trAll = lastTr.getAttribute('data-all-row-ids');
+                                if (trAll) {
+                                    var pList = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                                    for (var p = 0; p < pList.length; p++) {
+                                        if (checkIds.indexOf(pList[p]) === -1) checkIds.push(pList[p]);
+                                    }
+                                }
+                            }
+                            for (var t = 0; t < targetRowIds.length; t++) {
+                                if (checkIds.indexOf(String(targetRowIds[t])) !== -1) {
+                                    isSameAsTableSelection = true;
+                                    break;
+                                }
+                            }
+                        }
+
                         if (targetRowIds.length === 0) {
                             var wIdx = clickedTokenData.visual_idx;
                             if (wIdx !== undefined && wIdx !== null) {
@@ -16565,8 +16586,12 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         } else {
                             if (isTransitionFromTableSelection) {
-                                tokenDragMode = true;
-                                selectedRowIdsMap = {};
+                                if (isSameAsTableSelection) {
+                                    tokenDragMode = false;
+                                } else {
+                                    tokenDragMode = true;
+                                    selectedRowIdsMap = {};
+                                }
                             } else {
                                 tokenDragMode = !isTokenCurrentlyActive;
                             }
