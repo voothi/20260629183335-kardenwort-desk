@@ -924,3 +924,73 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path):
     first_der_after2 = page.locator('#source-container span.word:has-text("der")').nth(0)
     assert "highlight-orange-active" in (das_span_after.get_attribute("class") or "")
     assert "highlight-orange-active" not in (first_der_after2.get_attribute("class") or "")
+
+
+def test_table_row_click_highlights_all_der_occurrences(page, tmp_path):
+    """Verifies that selecting 'der' in the lemma table highlights all 'der' occurrences in active orange (20261004001104)."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("rendering"):
+        config.add_section("rendering")
+    config.set("rendering", "highlight_same_lemma", "false")
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261004001105"
+    tsv_file = tmp_path / f"{zid}-table-der.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "das, den, der, die\tder\tart., pron.\tтот, который\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+
+    html_file = tmp_path / "page_table_der.html"
+    html_file.write_text(html, encoding="utf-8")
+
+    page.goto(html_file.as_uri())
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    der_spans = page.locator('#source-container span.word:has-text("der")')
+    first_der = der_spans.nth(0)
+    second_der = der_spans.nth(1)
+
+    table_row = page.locator("#lemma-table tbody tr").first
+
+    # 1. Click table row for 'der'
+    table_row.click()
+
+    # 2. Both 'der' tokens must be highlighted in active yellow (highlight-orange-active)
+    assert "highlight-orange-active" in (first_der.get_attribute("class") or "")
+    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
+
+    # 3. Toggle Lemma ON -> peer forms (die, das, den) receive lemma-peer-highlight
+    die_span = page.locator('#source-container span.word:has-text("die")').first
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+    den_span = page.locator('#source-container span.word:has-text("den")').first
+
+    page.locator("#kw-btn-same-lemma").click()
+    assert "lemma-peer-highlight" in (die_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (das_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (den_span.get_attribute("class") or "")
+

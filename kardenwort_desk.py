@@ -17966,10 +17966,12 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 } else {
                     hasMatchingRow = isOrphanSelected;
+                    var isDirectRowMatch = false;
                     if (!hasMatchingRow && token.row_ids) {
                         for (var r = 0; r < token.row_ids.length; r++) {
                             if (activeTargetRowIds.hasOwnProperty(token.row_ids[r])) {
                                 hasMatchingRow = true;
+                                isDirectRowMatch = true;
                                 matchedRowId = token.row_ids[r];
                                 break;
                             }
@@ -18013,14 +18015,29 @@ window.__CONFIG__ = {ui_config_json};
                                     span.classList.add('active-subtoken');
                                 }
                             } else {
-                                var tokLem = (token.lemma || getWordLemma(span) || span.getAttribute('data-lower-clean') || '').trim().toLowerCase();
+                                var tokClean = (token.lower_clean || token.text || (span.getAttribute('data-lower-clean') || span.textContent || '')).trim().toLowerCase();
+                                var tokLem = (token.lemma || getWordLemma(span) || tokClean).trim().toLowerCase();
                                 var lemKey = tokLem || ('row_' + (matchedRowId !== null && matchedRowId !== undefined ? matchedRowId : token.visual_idx));
-                                if (!primaryLemmaOccurrences[lemKey]) {
-                                    primaryLemmaOccurrences[lemKey] = true;
-                                    if (span.classList.contains('highlight-purple')) {
-                                        span.classList.add('highlight-purple-active');
-                                    } else if (span.classList.contains('highlight-orange')) {
-                                        span.classList.add('highlight-orange-active');
+                                
+                                var isExactLemmaMatch = (tokClean && tokLem && tokClean === tokLem);
+                                if (!isExactLemmaMatch && matchedRowId !== null && matchedRowId !== undefined) {
+                                    var rTr = document.querySelector('tr[data-row-id="' + matchedRowId + '"]');
+                                    if (rTr) {
+                                        var rLemText = (rTr.getAttribute('data-lemma') || '').trim().toLowerCase();
+                                        if (rLemText && tokClean === rLemText) isExactLemmaMatch = true;
+                                    }
+                                }
+                                
+                                if (isDirectRowMatch) {
+                                    if (isExactLemmaMatch || !primaryLemmaOccurrences[lemKey]) {
+                                        primaryLemmaOccurrences[lemKey] = true;
+                                        if (span.classList.contains('highlight-purple')) {
+                                            span.classList.add('highlight-purple-active');
+                                        } else if (span.classList.contains('highlight-orange')) {
+                                            span.classList.add('highlight-orange-active');
+                                        }
+                                    } else if (isSameLemmaOn) {
+                                        span.classList.add('lemma-peer-highlight');
                                     }
                                 } else if (isSameLemmaOn) {
                                     span.classList.add('lemma-peer-highlight');
