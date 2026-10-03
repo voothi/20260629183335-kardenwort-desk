@@ -1863,11 +1863,20 @@ def test_deduplicate_rows_unify_article_pronoun_lemmas():
 
     assert len(deduped) == 1
     assert deduped[0][1] == "der"
-    assert deduped[0][2] == "art."
+    assert deduped[0][2] == "art., pron."
     # Combined inflected forms cleanly merged and sorted
     assert "die" in deduped[0][0]
     assert "den" in deduped[0][0]
     assert "zur" in deduped[0][0]
+
+    # Invariant: single-role occurrences retain pure article POS
+    data_rows_art_only = [
+        ["den", "der", "art."],
+        ["die", "der", "art."],
+    ]
+    deduped_art_only = desk.deduplicate_rows(data_rows_art_only, col_word_source=1, col_pos=2, col_inflected=0, config=config)
+    assert len(deduped_art_only) == 1
+    assert deduped_art_only[0][2] == "art."
 
 
 def test_deduplicate_rows_pos_aware_toggle():

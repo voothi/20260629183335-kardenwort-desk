@@ -2243,6 +2243,11 @@ def normalize_pos_tag(pos: Optional[str]) -> str:
     if not pos:
         return ""
     pos_clean = str(pos).strip()
+    if not pos_clean:
+        return ""
+    if "," in pos_clean:
+        parts = [normalize_pos_tag(p.strip()) for p in pos_clean.split(',') if p.strip()]
+        return ", ".join(parts)
     pos_upper = pos_clean.upper()
     if pos_upper in POS_NORMALIZATION_MAP:
         return POS_NORMALIZATION_MAP[pos_upper]
@@ -2430,6 +2435,9 @@ def format_pos_tooltip(pos_val: Optional[str]) -> str:
     p_clean = str(pos_val).strip()
     if not p_clean:
         return ""
+    if "," in p_clean:
+        parts = [format_pos_tooltip(p.strip()) for p in p_clean.split(',') if p.strip()]
+        return ", ".join(parts)
     if p_clean in POS_FULL_NAME_MAP:
         return POS_FULL_NAME_MAP[p_clean]
     if p_clean.upper() in POS_FULL_NAME_MAP:
@@ -8329,7 +8337,7 @@ def get_desk_token_mappings(resolved_paths=None, language=None, config=None) -> 
     return mappings
 
 
-def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None, col_quotation=-1):
+def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None, col_quotation=-1, col_word_dest=-1):
     deduped_rows = []
     seen_words = {}
 
@@ -8387,11 +8395,13 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                 quot_val = row[col_quotation].strip().lower() if col_quotation != -1 and len(row) > col_quotation else (row[0].strip().lower() if len(row) > 0 else "")
                 if not inf_val or inf_val in POSSESSIVE_DISCARD_TOKENS or inf_val == "s" or quot_val in POSSESSIVE_DISCARD_TOKENS:
                     continue
-            pos = row[col_pos].strip().lower() if col_pos != -1 and len(row) > col_pos else ""
+            pos_raw = row[col_pos].strip() if col_pos != -1 and len(row) > col_pos else ""
+            pos_norm = normalize_pos_tag(pos_raw).lower() if pos_raw else ""
+            pos = pos_norm or pos_raw.lower()
             is_unified_der = unify_article_pronoun_lemmas and w == "der"
             if not deduplicate_pos_aware:
                 effective_pos = ""
-            elif is_unified_der and pos in ("art.", "pron.", "det.", "prep."):
+            elif is_unified_der and any(p.strip() in ("art.", "pron.", "det.", "prep.") for p in pos.split(',')):
                 effective_pos = "art."
             else:
                 effective_pos = pos
@@ -8438,13 +8448,47 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                     deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
 
                 if col_pos != -1 and len(deduped_rows[existing_row_idx]) > col_pos:
-                    if is_unified_der and pos == "art.":
-                        deduped_rows[existing_row_idx][col_pos] = "art."
+                    if is_unified_der:
+                        existing_pos_raw = deduped_rows[existing_row_idx][col_pos].strip()
+                        seen_pos = []
+                        for p in existing_pos_raw.split(','):
+                            norm_p = normalize_pos_tag(p).lower()
+                            if norm_p and norm_p not in seen_pos:
+                                seen_pos.append(norm_p)
+                        if pos:
+                            for p in pos.split(','):
+                                norm_p = normalize_pos_tag(p).lower()
+                                if norm_p and norm_p not in seen_pos:
+                                    seen_pos.append(norm_p)
+                        pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
+                        seen_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
+                        deduped_rows[existing_row_idx][col_pos] = ", ".join(seen_pos)
                     elif not deduplicate_pos_aware and not deduped_rows[existing_row_idx][col_pos].strip() and pos:
                         deduped_rows[existing_row_idx][col_pos] = pos
 
+                eff_col_dest = col_word_dest
+                if eff_col_dest == -1 and is_unified_der:
+                    remaining_cols = [c for c in range(min(len(deduped_rows[existing_row_idx]), len(row))) if c not in (col_word_source, col_pos, col_inflected, col_quotation)]
+                    if len(remaining_cols) == 1:
+                        eff_col_dest = remaining_cols[0]
+
+                if is_unified_der and eff_col_dest != -1 and len(deduped_rows[existing_row_idx]) > eff_col_dest and len(row) > eff_col_dest:
+                    existing_trans = str(deduped_rows[existing_row_idx][eff_col_dest] or "").strip()
+                    new_trans = str(row[eff_col_dest] or "").strip()
+                    seen_trans = []
+                    for t_val in (existing_trans, new_trans):
+                        if t_val and t_val != "[FAILED]" and "skeleton-loader" not in t_val and t_val not in ("-", "--"):
+                            for part in t_val.split(','):
+                                p_clean = part.strip()
+                                if p_clean and p_clean.lower() not in [x.lower() for x in seen_trans]:
+                                    seen_trans.append(p_clean)
+                    if seen_trans:
+                        deduped_rows[existing_row_idx][eff_col_dest] = ", ".join(seen_trans)
+
                 for c in range(min(len(deduped_rows[existing_row_idx]), len(row))):
                     if c not in (col_inflected, col_quotation):
+                        if is_unified_der and eff_col_dest != -1 and c == eff_col_dest:
+                            continue
                         if not str(deduped_rows[existing_row_idx][c]).strip() and str(row[c]).strip():
                             deduped_rows[existing_row_idx][c] = row[c]
                 continue
@@ -9189,6 +9233,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         col_inflected = headers.index(role_fields.get('inflected', 'WordSourceInflectedForm')) if role_fields.get('inflected', 'WordSourceInflectedForm') in headers else -1
         col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
         col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
+        col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
         
         dedup_scope_cfg = smc.deduplication_scope
         if col_word_source != -1 and dedup_scope_cfg != 'none':
@@ -9210,11 +9255,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                             if any(f in sub_words for f in forms) or (row_lem.lower() in sub_words):
                                 s_rows.append(list(row))
                     s_text = source_sentences[s_i]
-                    s_dedup = deduplicate_rows(s_rows, col_word_source, col_pos, col_inflected, config, window_text=s_text, language=language, resolved_paths=resolved_paths)
+                    s_dedup = deduplicate_rows(s_rows, col_word_source, col_pos, col_inflected, config, window_text=s_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest)
                     s_dedup = sort_rows_by_frequency(s_dedup, headers, language, config, resolved_paths, role_fields=role_fields)
                     master_data_rows.extend(s_dedup)
             else:
-                master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text, language=language, resolved_paths=resolved_paths)
+                master_data_rows = deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest)
         else:
             master_data_rows = [list(r) for r in data_rows]
 
@@ -9358,7 +9403,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         sub_rows.append(sub_row)
                         
                 if col_word_source != -1 and dedup_scope_cfg == 'sentence':
-                    sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths)
+                    sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest)
 
                 # Pre-sort child sentence rows by lemma frequency so restore_session() is an immediate O(1) load
                 sub_rows = sort_rows_by_frequency(
@@ -10883,7 +10928,7 @@ html, body {{
             overview_rows = deduplicate_rows(
                 data_rows, col_ws_dedup, col_pos_dedup, col_inflected, config,
                 window_text=text, language=language, resolved_paths=resolved_paths,
-                col_quotation=col_quotation
+                col_quotation=col_quotation, col_word_dest=col_word_dest
             )
             overview_rows = sort_rows_by_frequency(
                 overview_rows, headers, language, config, resolved_paths, role_fields=role_fields
@@ -10902,7 +10947,7 @@ html, body {{
             is_unified_der = token_config.unify_article_pronoun_lemmas and lem == "der"
             if not token_config.deduplicate_pos_aware:
                 eff_pos = ""
-            elif is_unified_der and pos_val in ("art.", "pron.", "det.", "prep."):
+            elif is_unified_der and any(p.strip() in ("art.", "pron.", "det.", "prep.") for p in pos_val.split(',')):
                 eff_pos = "art."
             else:
                 eff_pos = pos_val
@@ -10959,7 +11004,7 @@ html, body {{
             is_ov_unified_der = token_config.unify_article_pronoun_lemmas and ov_lem_clean == "der"
             if not token_config.deduplicate_pos_aware:
                 ov_eff_pos = ""
-            elif is_ov_unified_der and ov_pos_clean in ("art.", "pron.", "det.", "prep."):
+            elif is_ov_unified_der and any(p.strip() in ("art.", "pron.", "det.", "prep.") for p in ov_pos_clean.split(',')):
                 ov_eff_pos = "art."
             else:
                 ov_eff_pos = ov_pos_clean
@@ -10974,16 +11019,55 @@ html, body {{
                     if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_word_dest:
                         tr_cand = str(data_rows[mid][col_word_dest] or "").strip()
                         if tr_cand and tr_cand != "[FAILED]" and "skeleton-loader" not in tr_cand and tr_cand not in ("-", "--"):
-                            if tr_cand not in seen_trans:
-                                seen_trans.append(tr_cand)
+                            for part in tr_cand.split(','):
+                                p_clean = part.strip()
+                                if p_clean and p_clean.lower() not in [x.lower() for x in seen_trans]:
+                                    seen_trans.append(p_clean)
                 if seen_trans:
                     ov_trans = ", ".join(seen_trans)
+
+            # Morphology metadata consolidation across atomic occurrences for merged rows
+            if col_morph != -1 and matched_ids and len(matched_ids) > 1:
+                seen_morph = []
+                for mid in matched_ids:
+                    if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_morph:
+                        m_cand = str(data_rows[mid][col_morph] or "").strip()
+                        if m_cand and m_cand != "[FAILED]" and "skeleton-loader" not in m_cand and m_cand not in ("-", "--"):
+                            delim = ';' if ';' in m_cand else ','
+                            for part in m_cand.split(delim):
+                                p_clean = part.strip()
+                                if p_clean and p_clean.lower() not in [x.lower() for x in seen_morph]:
+                                    seen_morph.append(p_clean)
+                if seen_morph:
+                    ov_morph = "; ".join(seen_morph)
+
+            ov_pos_raw = ov_r[col_pos] if col_pos != -1 and len(ov_r) > col_pos else ""
+            if is_ov_unified_der and matched_ids and len(matched_ids) > 1 and col_pos != -1:
+                seen_ov_pos = []
+                for mid in matched_ids:
+                    if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_pos:
+                        p_val = data_rows[mid][col_pos].strip()
+                        if p_val:
+                            for p_sub in p_val.split(','):
+                                norm_p = normalize_pos_tag(p_sub).lower()
+                                if norm_p and norm_p not in seen_ov_pos:
+                                    seen_ov_pos.append(norm_p)
+                if seen_ov_pos:
+                    pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
+                    seen_ov_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
+                    ov_pos_raw = ", ".join(seen_ov_pos)
+
+            if col_word_dest != -1 and len(ov_r) > col_word_dest and ov_trans:
+                ov_r[col_word_dest] = ov_trans
+            if col_morph != -1 and len(ov_r) > col_morph and ov_morph:
+                ov_r[col_morph] = ov_morph
+            if col_pos != -1 and len(ov_r) > col_pos and ov_pos_raw:
+                ov_r[col_pos] = ov_pos_raw
 
             primary_id = next((mid for mid in matched_ids if mid not in used_primary_ids), matched_ids[0])
             used_primary_ids.add(primary_id)
             all_ids_str = ",".join(str(x) for x in matched_ids)
 
-            ov_pos_raw = ov_r[col_pos] if col_pos != -1 and len(ov_r) > col_pos else ""
             ov_gender_raw = ov_r[col_gender] if col_gender != -1 and len(ov_r) > col_gender else ""
             ov_pos = format_pos_cell(ov_pos_raw)
             ov_gender = format_gender_badge(ov_gender_raw)
@@ -12630,6 +12714,10 @@ window.__CONFIG__ = {ui_config_json};
         if (!posVal) return "";
         var pClean = String(posVal).trim();
         if (!pClean) return "";
+        if (pClean.indexOf(',') !== -1) {
+            var parts = pClean.split(',').map(function(p) { return formatPosTooltip(p.trim()); }).filter(Boolean);
+            return parts.join(', ');
+        }
         if (POS_FULL_NAME_MAP_JS[pClean]) return POS_FULL_NAME_MAP_JS[pClean];
         if (POS_FULL_NAME_MAP_JS[pClean.toUpperCase()]) return POS_FULL_NAME_MAP_JS[pClean.toUpperCase()];
         if (POS_FULL_NAME_MAP_JS[pClean.toLowerCase()]) return POS_FULL_NAME_MAP_JS[pClean.toLowerCase()];

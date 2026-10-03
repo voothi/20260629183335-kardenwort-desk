@@ -664,4 +664,117 @@ def test_shared_lemma_multi_token_with_lemma_toggle(page, tmp_path):
     assert "lemma-peer-highlight" not in (die_span.get_attribute("class") or "")
 
 
+def test_unified_article_pronoun_pos_and_translation_aggregation(page, tmp_path):
+    """Verifies that unified der rows aggregate distinct POS tags ('art., pron.') and translations ('тот, который') (Tasks 3.1 & 3.2)."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261003132144"
+    tsv_file = tmp_path / f"{zid}-unified-art-pron.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "der\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt.\tОн начинает сегодня работу, которая ему нравится.\t0\n"
+        "die\tder\tpron.\tкоторый\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt.\tОн начинает сегодня работу, которая ему нравится.\t0\n"
+        "das\tder\tart.\tтот\t2\tWeil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tПотому что проект должен принести успех, который ему обещали.\t0\n"
+        "den\tder\tart.\tтот\t2\tWeil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tПотому что проект должен принести успех, который ему обещали.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "Er fängt heute mit der Arbeit an, die ihm gefällt. Weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    # 1. Exactly one unified row for lemma 'der' on Master Overview (Tab 1)
+    rows = page.locator("#lemma-table tbody tr[data-sentence-idx='0']")
+    assert rows.count() == 1
+
+    # 2. Consolidated POS is 'art., pron.' and tooltip is 'Article, Pronoun'
+    pos_cell = rows.first.locator("td.col-pos")
+    assert pos_cell.inner_text().strip() == "art., pron."
+    assert "Article, Pronoun" in (pos_cell.get_attribute("title") or "")
+
+    # 3. Consolidated translation is 'тот, который'
+    trans_cell = rows.first.locator("td.col-translation")
+    assert trans_cell.inner_text().strip() == "тот, который"
+
+    # 4. Clicking relative pronoun 'die' in text selects the unified row
+    die_span = page.locator('#source-container span.word:has-text("die")').first
+    die_span.click()
+    assert page.evaluate("() => window.getSelectedRowsArray()") == [0, 1, 2, 3]
+    assert "highlight-orange-active" in (die_span.get_attribute("class") or "")
+
+
+def test_unified_article_only_single_role_preserves_pure_art_pos(page, tmp_path):
+    """Verifies that sentences containing exclusively articles retain exact POS 'art.' and primary translation (Task 3.2)."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261003150502"
+    tsv_file = tmp_path / f"{zid}-unified-art-only.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "den\tder\tart.\tтот\t1\tEr sieht den Hund und das Kind.\tОн видит собаку и ребенка.\t0\n"
+        "das\tder\tart.\tтот\t2\tEr sieht das Kind und die Katze.\tОн видит ребенка и кошку.\t0\n"
+        "die\tder\tart.\tтот\t2\tEr sieht das Kind und die Katze.\tОн видит ребенка и кошку.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "Er sieht den Hund und das Kind. Er sieht das Kind und die Katze."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    rows = page.locator("#lemma-table tbody tr[data-sentence-idx='0']")
+    assert rows.count() == 1
+
+    pos_cell = rows.first.locator("td.col-pos")
+    assert pos_cell.inner_text().strip() == "art."
+    assert pos_cell.get_attribute("title") == "Article"
+
+    trans_cell = rows.first.locator("td.col-translation")
+    assert trans_cell.inner_text().strip() == "тот"
+
+
+
 
