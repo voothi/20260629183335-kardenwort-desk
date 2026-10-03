@@ -4605,31 +4605,6 @@ class SqliteStorageAdapter(StorageAdapter):
                         }
 
                         w_lem = (matched_word.get("lemma") or "").strip().lower()
-                        col_s_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
-                        sent_text = ""
-                        if col_s_src != -1 and row_idx < len(data_rows) and len(data_rows[row_idx]) > col_s_src:
-                            sent_text = data_rows[row_idx][col_s_src]
-
-                        if sent_text and w_lem:
-                            try:
-                                all_toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
-                                matched_quot = [f.strip().lower() for f in (matched_word.get("quotation") or "").split(",") if f.strip()]
-                                for st in all_toks:
-                                    st_clean = (st.get("lower_clean") or st.get("text") or "").strip().lower()
-                                    is_match = (st_clean == w_lem) or (st_clean in matched_quot) or (w_lem == "der" and st_clean in ("der", "die", "das", "den", "dem", "des"))
-                                    if st.get("is_word") and is_match:
-                                        st_vidx_str = str(st.get("visual_idx"))
-                                        if st_vidx_str not in occ_data:
-                                            fallback_pos = matched_word.get("pos") or ""
-                                            if w_lem == "der" and "art." in fallback_pos:
-                                                fallback_pos = "art."
-                                            occ_data[st_vidx_str] = {
-                                                "pos": fallback_pos,
-                                                "trans": matched_word.get("word_destination") or "",
-                                                "morph": matched_word.get("morphology") or ""
-                                            }
-                            except Exception:
-                                pass
 
                         pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
                         trans_items = [(int(k), v.get("trans", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("trans")]
