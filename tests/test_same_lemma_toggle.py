@@ -776,5 +776,151 @@ def test_unified_article_only_single_role_preserves_pure_art_pos(page, tmp_path)
     assert trans_cell.inner_text().strip() == "тот"
 
 
+def test_active_subtoken_click_does_not_highlight_earlier_duplicate_token(page, tmp_path):
+    """Verifies that clicking a duplicate lemma token (second 'der') does not apply solid active highlight to the earlier token (Task 3.1)."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261003163541"
+    tsv_file = tmp_path / f"{zid}-duplicate-token.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "der\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "die\tder\tpron.\tкоторый\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "das\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "den\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "der\tder\tpron.\tкоторый\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    der_spans = page.locator('#source-container span.word:has-text("der")')
+    assert der_spans.count() >= 2
+    first_der = der_spans.nth(0)
+    second_der = der_spans.nth(1)
+
+    # 1. Click second 'der' in text
+    second_der.click()
+
+    # 2. Second 'der' receives active highlight, first 'der' remains non-active
+    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (first_der.get_attribute("class") or "")
+
+    # 3. Toggle Same Lemma ON -> first 'der' receives lemma-peer-highlight, second remains active
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is True
+    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (first_der.get_attribute("class") or "")
+
+    # 4. Toggle Same Lemma OFF -> first 'der' loses peer highlight, second remains active
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is False
+    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (first_der.get_attribute("class") or "")
 
 
+def test_active_subtoken_persists_across_page_reload(page, tmp_path):
+    """Verifies that active subtoken selection is preserved across page reload via sessionStorage (Task 3.2)."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261003163542"
+    tsv_file = tmp_path / f"{zid}-reload-persistence.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "der\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "die\tder\tpron.\tкоторый\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "das\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "den\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+        "der\tder\tpron.\tкоторый\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde.\tОн начинает сегодня с работы, которая ему нравится, потому что проект должен принести успех, который ему обещали.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+
+    html_file = tmp_path / "page.html"
+    html_file.write_text(html, encoding="utf-8")
+
+    page.goto(html_file.as_uri())
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    der_spans = page.locator('#source-container span.word:has-text("der")')
+    first_der = der_spans.nth(0)
+    second_der = der_spans.nth(1)
+
+    # 1. Click second 'der' and verify active highlight
+    second_der.click()
+    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (first_der.get_attribute("class") or "")
+
+    # 2. Reload page (F5)
+    page.reload()
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    der_spans_after = page.locator('#source-container span.word:has-text("der")')
+    first_der_after = der_spans_after.nth(0)
+    second_der_after = der_spans_after.nth(1)
+
+    # 3. Verify second 'der' retained active highlight across reload
+    assert "highlight-orange-active" in (second_der_after.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (first_der_after.get_attribute("class") or "")
+
+    # 4. Now click 'das' and reload again
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+    das_span.click()
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+
+    page.reload()
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    das_span_after = page.locator('#source-container span.word:has-text("das")').first
+    first_der_after2 = page.locator('#source-container span.word:has-text("der")').nth(0)
+    assert "highlight-orange-active" in (das_span_after.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (first_der_after2.get_attribute("class") or "")
