@@ -563,3 +563,105 @@ def test_first_click_token_selection_when_table_row_preselected(page, tmp_path):
     assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
 
 
+def test_sequential_clicks_shared_lemma_additive_selection(page, tmp_path):
+    """Verifies that sequential clicks on words sharing a single lemma row additively select without toggle oscillation (Task 3.1)."""
+    raw_html = get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False)
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    den_span = page.locator('#source-container span.word:has-text("den")').first
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+    die_span = page.locator('#source-container span.word:has-text("die")').first
+
+    # 1. Click 'den'
+    den_span.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 1
+    assert page.evaluate("() => window.getSelectedRowsArray()") == [0, 1, 2]
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (das_span.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (die_span.get_attribute("class") or "")
+
+    # 2. Click 'das' -> must additively select 'das' without deselecting row 0
+    das_span.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 2
+    assert page.evaluate("() => window.getSelectedRowsArray()") == [0, 1, 2]
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (die_span.get_attribute("class") or "")
+
+    # 3. Click 'die' -> all three active, row 0 remains selected
+    die_span.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 3
+    assert page.evaluate("() => window.getSelectedRowsArray()") == [0, 1, 2]
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (die_span.get_attribute("class") or "")
+
+
+def test_dependency_checked_shared_lemma_deselection(page, tmp_path):
+    """Verifies that deselecting one token keeps the shared row selected until the final token is deselected (Task 3.2)."""
+    raw_html = get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False)
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    den_span = page.locator('#source-container span.word:has-text("den")').first
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+
+    # Select both
+    den_span.click()
+    das_span.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 2
+    assert page.evaluate("() => window.getSelectedRowsArray()") == [0, 1, 2]
+
+    # Deselect 'den' -> 'das' remains, so row 0 stays selected
+    den_span.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 1
+    assert page.evaluate("() => window.getSelectedRowsArray()") == [0, 1, 2]
+    assert "highlight-orange-active" not in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+
+    # Deselect 'das' -> last token deselected, so row 0 is deselected
+    das_span.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 0
+    assert page.evaluate("() => window.getSelectedRowsArray()") == []
+    assert "highlight-orange-active" not in (das_span.get_attribute("class") or "")
+
+
+def test_shared_lemma_multi_token_with_lemma_toggle(page, tmp_path):
+    """Verifies that unselected peers display lemma-peer-highlight when Lemma toggle is ON with multiple active tokens (Task 2.2)."""
+    raw_html = get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False)
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    den_span = page.locator('#source-container span.word:has-text("den")').first
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+    die_span = page.locator('#source-container span.word:has-text("die")').first
+
+    # Select 'den' and 'das'
+    den_span.click()
+    das_span.click()
+
+    # Toggle Lemma ON
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is True
+
+    # 'den' and 'das' active, 'die' is peer highlight
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (die_span.get_attribute("class") or "")
+
+    # Toggle Lemma OFF -> 'die' returns to baseline
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is False
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (die_span.get_attribute("class") or "")
+
+
+

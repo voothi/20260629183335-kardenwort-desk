@@ -13420,6 +13420,8 @@ window.__CONFIG__ = {ui_config_json};
     function init() {
         if (isInitialized) return;
         isInitialized = true;
+        window.__deskInstanceId = (window.__deskInstanceId || 0) + 1;
+        var myDeskInstanceId = window.__deskInstanceId;
         checkAhkHost();
         var tableRows = [];
         var selectedRowIdsMap = {};
@@ -14934,8 +14936,14 @@ window.__CONFIG__ = {ui_config_json};
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
         var tokenSpans = [];
         for (var i = 0; i < spans.length; i++) {
-            if (spans[i].classList.contains('word')) {
-                tokenSpans.push(spans[i]);
+            var sp = spans[i];
+            if (sp.classList.contains('word')) {
+                tokenSpans.push(sp);
+                if (sp.classList.contains('flipped')) {
+                    sp.classList.remove('flipped');
+                    var orig = sp.getAttribute('data-original-text');
+                    if (orig) sp.textContent = orig;
+                }
             }
         }
         var lemmaTable = document.getElementById('lemma-table');
@@ -15305,6 +15313,89 @@ window.__CONFIG__ = {ui_config_json};
             }
             return false;
         }
+
+        function isRowStillNeededByOtherActiveTokens(rowIdStr, excludedVisualIdxsMap) {
+            if (!window.AppState || !window.AppState.activeTokenSelections) return false;
+            var targetRowIdInt = parseInt(rowIdStr, 10);
+            
+            var relevantRowIds = {};
+            relevantRowIds[String(rowIdStr)] = true;
+            if (!isNaN(targetRowIdInt)) relevantRowIds[String(targetRowIdInt)] = true;
+
+            var rows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
+                ? tableRows
+                : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+            if (rows && rows.length > 0) {
+                for (var i = 0; i < rows.length; i++) {
+                    var tr = rows[i];
+                    var mainId = String(tr.getAttribute('data-row-id'));
+                    var trAll = tr.getAttribute('data-all-row-ids');
+                    var trGroup = [mainId];
+                    if (trAll) {
+                        var pList = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                        for (var p = 0; p < pList.length; p++) {
+                            if (trGroup.indexOf(pList[p]) === -1) trGroup.push(pList[p]);
+                        }
+                    }
+                    var containsTarget = false;
+                    for (var g = 0; g < trGroup.length; g++) {
+                        if (trGroup[g] === String(rowIdStr) || (!isNaN(targetRowIdInt) && parseInt(trGroup[g], 10) === targetRowIdInt)) {
+                            containsTarget = true;
+                            break;
+                        }
+                    }
+                    if (containsTarget) {
+                        for (var g = 0; g < trGroup.length; g++) {
+                            relevantRowIds[trGroup[g]] = true;
+                        }
+                    }
+                }
+            }
+
+            for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                var item = window.AppState.activeTokenSelections[a];
+                if (excludedVisualIdxsMap && excludedVisualIdxsMap[item.visual_idx]) continue;
+                var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(item.visual_idx) : null;
+                if (!td) {
+                    var s = document.querySelector('span[data-word-idx="' + item.visual_idx + '"]');
+                    if (s) td = findTokenData(s);
+                }
+                var atomics = td ? ((td.atomic_row_ids !== undefined) ? td.atomic_row_ids : (td.row_ids || [])) : [];
+                for (var r = 0; r < atomics.length; r++) {
+                    if (relevantRowIds[String(atomics[r])]) {
+                        return true;
+                    }
+                }
+            }
+            return false;
+        }
+        window.isRowStillNeededByOtherActiveTokens = isRowStillNeededByOtherActiveTokens;
+
+        function isLemmaStillNeededByOtherActiveTokens(lemmaStr, excludedVisualIdxsMap) {
+            if (!lemmaStr || !window.AppState || !window.AppState.activeTokenSelections) return false;
+            var normLemma = String(lemmaStr).trim().toLowerCase();
+            if (!normLemma) return false;
+            for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                var item = window.AppState.activeTokenSelections[a];
+                if (excludedVisualIdxsMap && excludedVisualIdxsMap[item.visual_idx]) continue;
+                var td = findTokenDataByVisualIdx ? findTokenDataByVisualIdx(item.visual_idx) : null;
+                if (!td) {
+                    var s = document.querySelector('span[data-word-idx="' + item.visual_idx + '"]');
+                    if (s) td = findTokenData(s);
+                }
+                if (td) {
+                    var atomics = (td.atomic_row_ids !== undefined) ? td.atomic_row_ids : (td.row_ids || []);
+                    for (var r = 0; r < atomics.length; r++) {
+                        var l = getLemmaByRowId(atomics[r]);
+                        if (l && l.trim().toLowerCase() === normLemma) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            return false;
+        }
+        window.isLemmaStillNeededByOtherActiveTokens = isLemmaStillNeededByOtherActiveTokens;
 
         function clearTokenSelections() {
             if (window.AppState) {
@@ -15948,6 +16039,7 @@ window.__CONFIG__ = {ui_config_json};
             (function(span) {
                 addEvent(span, 'mousedown', function(e) {
                     if (window.__selectableTextMode) return;
+                    if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
                     e = e || window.event;
                     
                     if (e.button === 0) { // LMB
@@ -15976,59 +16068,45 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                         
-                        var allSelected = true;
+                        var isTransitionFromTableSelection = (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0);
+                        var isTokenCurrentlyActive = isTokenInActiveSelections(clickedTokenData.visual_idx);
+                        
                         if (targetRowIds.length === 0) {
                             var wIdx = clickedTokenData.visual_idx;
                             if (wIdx !== undefined && wIdx !== null) {
                                 if (selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
                                     delete selectedOrphanWordIdxsMap[String(wIdx)];
-                                    allSelected = true;
+                                    tokenDragMode = false;
                                 } else {
                                     selectedOrphanWordIdxsMap[String(wIdx)] = true;
-                                    allSelected = false;
+                                    tokenDragMode = true;
                                 }
                             } else {
-                                allSelected = false;
+                                tokenDragMode = true;
                             }
                         } else {
-                            if (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) {
-                                allSelected = false;
+                            if (isTransitionFromTableSelection) {
+                                tokenDragMode = true;
                                 selectedRowIdsMap = {};
                             } else {
-                                for (var j = 0; j < targetRowIds.length; j++) {
-                                    var tid = String(targetRowIds[j]);
-                                    var isTidSel = selectedRowIdsMap.hasOwnProperty(tid);
-                                    if (!isTidSel) {
-                                        for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                            var tr = tableRows[trIdx];
-                                            var allAttr = tr.getAttribute('data-all-row-ids');
-                                            if (allAttr) {
-                                                var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                                if (pList.indexOf(tid) !== -1) {
-                                                    var trId = String(tr.getAttribute('data-row-id'));
-                                                    if (selectedRowIdsMap.hasOwnProperty(trId) || tr.getAttribute('data-selected') === '1') {
-                                                        isTidSel = true;
-                                                        break;
-                                                    }
-                                                }
-                                            }
-                                        }
-                                    }
-                                    if (!isTidSel) {
-                                        allSelected = false;
-                                        break;
-                                    }
-                                }
+                                tokenDragMode = !isTokenCurrentlyActive;
                             }
                         }
                         
-                        tokenDragMode = !allSelected;
-
                         initialSelectedMap = {};
                         for (var key in selectedRowIdsMap) {
                             if (selectedRowIdsMap.hasOwnProperty(key)) {
                                 initialSelectedMap[key] = selectedRowIdsMap[key];
                             }
+                        }
+
+                        var relatedSpans = findRelatedTokenSpans(span);
+                        var vIdxsToRemove = {};
+                        for (var i = 0; i < relatedSpans.length; i++) {
+                            var rSpan = relatedSpans[i];
+                            var rTd = findTokenData(rSpan);
+                            var rvIdx = rTd ? rTd.visual_idx : parseInt(rSpan.getAttribute('data-word-idx'), 10);
+                            if (!isNaN(rvIdx)) vIdxsToRemove[rvIdx] = true;
                         }
                         
                         for (var j = 0; j < targetRowIds.length; j++) {
@@ -16045,24 +16123,30 @@ window.__CONFIG__ = {ui_config_json};
                                         }
                                     }
                                 }
+                                var rLem = getLemmaByRowId(tid);
+                                if (rLem) setLemmaSelected(rLem, true);
                             } else {
-                                delete selectedRowIdsMap[tid];
-                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                    var tr = tableRows[trIdx];
-                                    var allAttr = tr.getAttribute('data-all-row-ids');
-                                    if (allAttr) {
-                                        var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                        if (pList.indexOf(tid) !== -1) {
-                                            delete selectedRowIdsMap[String(tr.getAttribute('data-row-id'))];
-                                            for (var p = 0; p < pList.length; p++) {
-                                                delete selectedRowIdsMap[pList[p]];
+                                if (!isRowStillNeededByOtherActiveTokens(tid, vIdxsToRemove)) {
+                                    delete selectedRowIdsMap[tid];
+                                    for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+                                        var tr = tableRows[trIdx];
+                                        var allAttr = tr.getAttribute('data-all-row-ids');
+                                        if (allAttr) {
+                                            var pList = allAttr.split(',').map(function(s) { return s.trim(); });
+                                            if (pList.indexOf(tid) !== -1) {
+                                                delete selectedRowIdsMap[String(tr.getAttribute('data-row-id'))];
+                                                for (var p = 0; p < pList.length; p++) {
+                                                    delete selectedRowIdsMap[pList[p]];
+                                                }
                                             }
                                         }
                                     }
                                 }
+                                var rLem = getLemmaByRowId(tid);
+                                if (rLem && !isLemmaStillNeededByOtherActiveTokens(rLem, vIdxsToRemove)) {
+                                    setLemmaSelected(rLem, false);
+                                }
                             }
-                            var rLem = getLemmaByRowId(tid);
-                            if (rLem) setLemmaSelected(rLem, tokenDragMode);
                         }
                         if (tokenDragMode) {
                             addTokenToActiveSelections(span);
@@ -16111,6 +16195,7 @@ window.__CONFIG__ = {ui_config_json};
                 
                 addEvent(span, 'mouseover', function(e) {
                     if (window.__selectableTextMode) return;
+                    if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
                     e = e || window.event;
                     if (isTokenDragSelecting) {
                         if (e.buttons !== undefined && (e.buttons & 1) === 0) {
@@ -16589,6 +16674,7 @@ window.__CONFIG__ = {ui_config_json};
     rebindTableRows();
     
     function handleMouseUp(e) {
+            if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
             e = e || window.event;
             var lt = document.getElementById('lemma-table');
             if (lt) {

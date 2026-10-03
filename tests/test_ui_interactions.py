@@ -2022,10 +2022,15 @@ def test_compound_subtoken_lmb_selection(page):
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
     assert sorted(selected_rows) == [0, 1, 3]
 
-    # 3. Clicking on 'camel' again deselects [1, 3] (since both are currently selected), leaving row 0
+    # 3. Clicking on 'camel' again deselects row 1; row 3 remains selected because 'split' is still active and maps to row 3
     span_camel.click(button="left")
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
-    assert sorted(selected_rows) == [0]
+    assert sorted(selected_rows) == [0, 3]
+
+    # Deselecting 'split' removes the last active token mapping to row 3, leaving no selected rows
+    span_split.click(button="left")
+    selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
+    assert selected_rows == []
 
     # 4. Drag-selecting across split -> camel -> case accumulates all rows [0, 1, 2, 3]
     page.evaluate("""() => {
