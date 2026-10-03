@@ -4170,7 +4170,7 @@ class SqliteStorageAdapter(StorageAdapter):
             p = Path(tsv_path)
             if p.exists():
                 sess_zid = extract_zid(p)
-                if sess_zid:
+                if sess_zid and sess_zid != "00000000000000":
                     try:
                         restored = self.restore_session(sess_zid)
                         if restored is not None and "data_rows" in restored:
@@ -4190,9 +4190,17 @@ class SqliteStorageAdapter(StorageAdapter):
                 return self._tsv_fallback.load_tsv_rows(p)
             else:
                 sess_zid = extract_zid(p)
-                if sess_zid:
+                candidates = []
+                if sess_zid and sess_zid != "00000000000000":
+                    candidates.append(sess_zid)
+                prefix_match = re.match(r'^([^-.]+)', p.name)
+                if prefix_match:
+                    cand = prefix_match.group(1).strip()
+                    if cand and cand not in candidates and cand != "00000000000000":
+                        candidates.append(cand)
+                for candidate_zid in candidates:
                     try:
-                        restored = self.restore_session(sess_zid)
+                        restored = self.restore_session(candidate_zid)
                         if restored is not None and "data_rows" in restored:
                             return (
                                 restored.get("comments", []),
@@ -4201,6 +4209,10 @@ class SqliteStorageAdapter(StorageAdapter):
                             )
                     except Exception:
                         pass
+                raise StructuredError(
+                    ErrorCode.NOT_FOUND,
+                    f"Session TSV file not found on disk or SQLite storage: '{p}'"
+                )
         return self._tsv_fallback.load_tsv_rows(tsv_path)
 
     @contextlib.contextmanager
