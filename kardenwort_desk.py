@@ -9923,6 +9923,7 @@ html, body {{
     
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     row_provenances = {}
+    row_occurrences = {}
     if is_sqlite:
         tsv_zid = extract_zid(working_tsv_path)
         for candidate_zid in [tsv_zid, zid]:
@@ -9931,6 +9932,13 @@ html, body {{
                     db_words = storage_adapter.db.get_words_by_session(str(candidate_zid).strip())
                     if db_words:
                         for w in db_words:
+                            try:
+                                from kardenwort_db import sanitize_extra_fields as _san_ef
+                                _occ = _san_ef(w.get("extra_fields")).get("occurrence_data")
+                                if isinstance(_occ, dict) and len(_occ) > 0:
+                                    row_occurrences[str(w.get("token_order", ""))] = _occ
+                            except Exception:
+                                pass
                             w_prov = w.get("word_provenance")
                             if w_prov:
                                 t_ord = str(w.get("token_order", ""))
@@ -10937,8 +10945,16 @@ html, body {{
             prov_title = f' title="{html.escape(tooltip_title)}"' if tooltip_title else ''
             prov_attr = f'{prov_data}{prov_title}'
 
+        occ_attr = ""
+        _row_occ = row_occurrences.get(str(token_order_val))
+        if _row_occ:
+            try:
+                occ_attr = ' data-occ="' + html.escape(json.dumps(_row_occ, ensure_ascii=False), quote=True) + '"'
+            except Exception:
+                occ_attr = ""
+
         row_html_line = (
-            f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}" data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
+            f'<tr data-row-id="{row_id}" data-token-order="{token_order_val}"{occ_attr} data-sentence-idx="{sent_idx_val}" data-selected="{is_selected}" class="{row_highlight_class}">'
             f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{inflected_title_attr}><div class="scrollable-cell">{inflected_val}</div></td>'
             f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{lemma_title_attr}><div class="scrollable-cell">{lemma_val}</div></td>'
             f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{prov_attr}><div class="scrollable-cell"{prov_attr}>{trans_val}</div></td>'
@@ -17628,7 +17644,50 @@ window.__CONFIG__ = {ui_config_json};
             }
         }
         
+        function applyOccurrenceView() {
+            var rows = document.querySelectorAll('tr[data-occ]');
+            var sels = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
+            var cellMap = { 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
+            for (var r = 0; r < rows.length; r++) {
+                var tr = rows[r];
+                var occ = null;
+                try { occ = JSON.parse(tr.getAttribute('data-occ')); } catch (e) { occ = null; }
+                var picked = [];
+                if (occ) {
+                    var keys = [];
+                    for (var s = 0; s < sels.length; s++) {
+                        var k = String(sels[s].visual_idx);
+                        if (occ.hasOwnProperty(k) && keys.indexOf(k) === -1) keys.push(k);
+                    }
+                    keys.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+                    for (var q = 0; q < keys.length; q++) picked.push(occ[keys[q]]);
+                }
+                for (var cls in cellMap) {
+                    if (!cellMap.hasOwnProperty(cls)) continue;
+                    var td = tr.querySelector('td.' + cls);
+                    if (!td) continue;
+                    var cell = td.querySelector('.scrollable-cell') || td;
+                    if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', cell.innerHTML);
+                    if (picked.length === 0) {
+                        if (cell.innerHTML !== td.getAttribute('data-orig-html')) cell.innerHTML = td.getAttribute('data-orig-html');
+                        continue;
+                    }
+                    var vals = [];
+                    for (var p = 0; p < picked.length; p++) {
+                        var v = (picked[p][cellMap[cls]] || '').trim();
+                        if (v && vals.indexOf(v) === -1) vals.push(v);
+                    }
+                    if (vals.length === 0) {
+                        cell.innerHTML = td.getAttribute('data-orig-html');
+                    } else {
+                        cell.textContent = vals.join(cls === 'col-morphology' ? '; ' : ', ');
+                    }
+                }
+            }
+        }
+
         function updateBidirectionalHighlights() {
+            try { applyOccurrenceView(); } catch (e) {}
             for (var i = 0; i < tokenSpans.length; i++) {
                 var span = tokenSpans[i];
                 try {
