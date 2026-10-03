@@ -53,8 +53,8 @@ def test_same_lemma_button_markup_and_order(tmp_path):
     html = get_desk_page_html(tmp_path, highlight_same_lemma=False)
     
     assert 'id="kw-btn-same-lemma"' in html
-    assert 'title="Toggle Same Lemma highlighting"' in html
-    assert '>Same Lemma</button>' in html
+    assert 'title="Toggle Lemma-wide highlighting"' in html
+    assert '>Lemma</button>' in html
     
     # Verify order in toolbar: Same Lemma appears before Selected
     same_lemma_idx = html.find('id="kw-btn-same-lemma"')

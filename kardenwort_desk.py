@@ -12339,7 +12339,7 @@ html, body {{
   </div>
 </div>
 <div class="kw-action-toolbar" id="kw-action-toolbar">
-  <button type="button" id="kw-btn-same-lemma" class="btn-toggle{same_lemma_active_class}" title="Toggle Same Lemma highlighting">Same Lemma</button>
+  <button type="button" id="kw-btn-same-lemma" class="btn-toggle{same_lemma_active_class}" title="Toggle Lemma-wide highlighting">Lemma</button>
   <button type="button" id="kw-btn-filter-selected" title="Toggle view: show only selected words">Selected</button>
   <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
   <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
@@ -19863,7 +19863,7 @@ window.__CONFIG__ = {ui_config_json};
             var next = !cur;
             setHighlightSameLemma(next);
             if (typeof window.showToast === 'function') {
-                window.showToast(next ? "Same Lemma highlighting enabled" : "Same Lemma highlighting disabled", "info");
+                window.showToast(next ? "Lemma highlighting enabled" : "Lemma highlighting disabled", "info");
             }
         }
         window.toggleHighlightSameLemma = toggleHighlightSameLemma;
