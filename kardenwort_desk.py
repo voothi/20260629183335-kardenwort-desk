@@ -17452,19 +17452,53 @@ window.__CONFIG__ = {ui_config_json};
 
                         if (sharesActiveRow) {
                             var isCompoundSibling = false;
+                            var sharesIdenticalAtomic = false;
+                            var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
+                            var tokClean = (token.lower_clean || token.text || '').trim().toLowerCase();
+
                             for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                                 var atItem = window.AppState.activeTokenSelections[a];
-                                var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
-                                var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
-                                if (aSpan && tSpan) {
-                                    var grp = findCompoundSiblingSpans(aSpan);
-                                    if (grp && grp.indexOf(tSpan) !== -1) {
-                                        isCompoundSibling = true;
-                                        break;
+                                if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
+                                    var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
+                                    if (!atClean) {
+                                        var atSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                        if (atSpan) atClean = (atSpan.getAttribute('data-lower-clean') || atSpan.textContent || '').trim().toLowerCase();
+                                    }
+                                    if (tokClean && atClean && tokClean === atClean) {
+                                        var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
+                                        var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                        var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
+                                        var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
+                                        var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
+                                        var hasCompoundContext = (token.compound_row_ids && token.compound_row_ids.length > 0) ||
+                                            (aTd && aTd.compound_row_ids && aTd.compound_row_ids.length > 0) ||
+                                            (atItem.compound_row_ids && atItem.compound_row_ids.length > 0) ||
+                                            (tSpan && tSpan.hasAttribute('data-compound-id')) ||
+                                            (aSpan && aSpan.hasAttribute('data-compound-id')) ||
+                                            (tGrp && tGrp.length > 1) ||
+                                            (aGrp && aGrp.length > 1);
+                                        if (hasCompoundContext) {
+                                            sharesIdenticalAtomic = true;
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                            if (isCompoundSibling) {
+                            if (!sharesIdenticalAtomic) {
+                                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                    var atItem = window.AppState.activeTokenSelections[a];
+                                    var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                    var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
+                                    if (aSpan && tSpan) {
+                                        var grp = findCompoundSiblingSpans(aSpan);
+                                        if (grp && grp.indexOf(tSpan) !== -1) {
+                                            isCompoundSibling = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                            if (sharesIdenticalAtomic || isCompoundSibling) {
                                 hasMatchingRow = true;
                             }
                         }
