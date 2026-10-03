@@ -2288,15 +2288,39 @@ def sanitize_bracketed_field(val: Any) -> str:
 
 def build_bracketed_sentence_context(
     sentence_text: str,
-    target_visual_idx: Optional[int] = None,
+    target_visual_idx: Optional[Union[int, List[int], Set[int]]] = None,
     target_word: Optional[str] = None,
     target_occurrence: Optional[int] = None,
+    target_visual_indices: Optional[Any] = None,
 ) -> str:
     """
-    Wraps only the targeted token occurrence in square brackets '[word]'
+    Wraps only the targeted token occurrence(s) in square brackets '[word]'
     for LLM prompt context disambiguation. All other tokens remain unbracketed.
     """
-    if not sentence_text or (target_visual_idx is None and target_occurrence is None and not target_word):
+    if not sentence_text and not target_word:
+        return sentence_text
+
+    target_set = set()
+    if target_visual_indices:
+        for vi in target_visual_indices:
+            try:
+                target_set.add(int(vi))
+            except Exception:
+                pass
+    if target_visual_idx is not None:
+        if isinstance(target_visual_idx, (list, set, tuple)):
+            for vi in target_visual_idx:
+                try:
+                    target_set.add(int(vi))
+                except Exception:
+                    pass
+        else:
+            try:
+                target_set.add(int(target_visual_idx))
+            except Exception:
+                pass
+
+    if not target_set and target_occurrence is None and not target_word:
         return sentence_text
 
     try:
@@ -2308,20 +2332,13 @@ def build_bracketed_sentence_context(
         return sentence_text
 
     # Target by visual_idx first if provided
-    matched = False
-    if target_visual_idx is not None:
-        try:
-            tv_int = int(target_visual_idx)
-            matched = any(t.get("visual_idx") == tv_int for t in tokens)
-        except (ValueError, TypeError):
-            matched = False
-
-    if matched:
-        tv_int = int(target_visual_idx)
-        return "".join(
-            f"[{t['text']}]" if t.get("visual_idx") == tv_int else t["text"]
-            for t in tokens
-        )
+    if target_set:
+        matched = any(t.get("visual_idx") in target_set for t in tokens)
+        if matched:
+            return "".join(
+                f"[{t['text']}]" if t.get("visual_idx") in target_set else t["text"]
+                for t in tokens
+            )
 
     # Fallback: target by word and occurrence count
     if target_word:
@@ -4470,20 +4487,24 @@ class SqliteStorageAdapter(StorageAdapter):
         elif selected_rows is not None:
             target_scratch_indices = [int(r) for r in selected_rows if str(r).isdigit() and 0 <= int(r) < len(data_rows)]
 
-        target_vidx = None
+        target_vidxs = []
         if visual_indices and len(visual_indices) > 0:
-            try:
-                target_vidx = int(visual_indices[0])
-            except Exception:
-                pass
-        elif target_coordinates and len(target_coordinates) > 0 and isinstance(target_coordinates[0], dict):
-            try:
-                target_vidx = int(target_coordinates[0].get('visual_idx'))
-            except Exception:
-                pass
+            for vi in visual_indices:
+                try:
+                    target_vidxs.append(int(vi))
+                except Exception:
+                    pass
+        elif target_coordinates and len(target_coordinates) > 0:
+            for tc in target_coordinates:
+                if isinstance(tc, dict) and tc.get('visual_idx') is not None:
+                    try:
+                        target_vidxs.append(int(tc.get('visual_idx')))
+                    except Exception:
+                        pass
+        target_vidx = target_vidxs[0] if target_vidxs else None
 
         scratch_data_rows = [list(r) for r in data_rows]
-        if target_vidx is not None:
+        if target_vidxs:
             col_sent_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
             if col_sent_src != -1:
                 target_scratch_set = set(target_scratch_indices) if target_scratch_indices is not None else set(range(len(scratch_data_rows)))
@@ -4492,7 +4513,7 @@ class SqliteStorageAdapter(StorageAdapter):
                         raw_sent = scratch_data_rows[s_row_idx][col_sent_src]
                         scratch_data_rows[s_row_idx][col_sent_src] = build_bracketed_sentence_context(
                             raw_sent,
-                            target_visual_idx=target_vidx
+                            target_visual_indices=target_vidxs
                         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4580,13 +4601,18 @@ class SqliteStorageAdapter(StorageAdapter):
                         if sent_text and w_lem:
                             try:
                                 all_toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
+                                matched_quot = [f.strip().lower() for f in (matched_word.get("quotation") or "").split(",") if f.strip()]
                                 for st in all_toks:
                                     st_clean = (st.get("lower_clean") or st.get("text") or "").strip().lower()
-                                    if st.get("is_word") and st_clean == w_lem:
+                                    is_match = (st_clean == w_lem) or (st_clean in matched_quot) or (w_lem == "der" and st_clean in ("der", "die", "das", "den", "dem", "des"))
+                                    if st.get("is_word") and is_match:
                                         st_vidx_str = str(st.get("visual_idx"))
                                         if st_vidx_str not in occ_data:
+                                            fallback_pos = matched_word.get("pos") or ""
+                                            if w_lem == "der" and "art." in fallback_pos:
+                                                fallback_pos = "art."
                                             occ_data[st_vidx_str] = {
-                                                "pos": matched_word.get("pos") or "",
+                                                "pos": fallback_pos,
                                                 "trans": matched_word.get("word_destination") or "",
                                                 "morph": matched_word.get("morphology") or ""
                                             }
