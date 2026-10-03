@@ -980,17 +980,14 @@ def test_table_row_click_highlights_all_der_occurrences(page, tmp_path):
     # 1. Click table row for 'der'
     table_row.click()
 
-    # 2. Both 'der' tokens must be highlighted in active yellow (highlight-orange-active)
-    assert "highlight-orange-active" in (first_der.get_attribute("class") or "")
-    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
-
-    # 3. Toggle Lemma ON -> peer forms (die, das, den) receive lemma-peer-highlight
+    # 2. Both 'der' tokens AND all inflected row constituents (die, das, den) must be highlighted in active yellow (highlight-orange-active)
     die_span = page.locator('#source-container span.word:has-text("die")').first
     das_span = page.locator('#source-container span.word:has-text("das")').first
     den_span = page.locator('#source-container span.word:has-text("den")').first
 
-    page.locator("#kw-btn-same-lemma").click()
-    assert "lemma-peer-highlight" in (die_span.get_attribute("class") or "")
-    assert "lemma-peer-highlight" in (das_span.get_attribute("class") or "")
-    assert "lemma-peer-highlight" in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (first_der.get_attribute("class") or "")
+    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
+    assert "highlight-orange-active" in (die_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
 

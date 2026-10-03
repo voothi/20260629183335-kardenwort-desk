@@ -18154,12 +18154,14 @@ window.__CONFIG__ = {ui_config_json};
                                         
                                         var rCell = rTr.querySelector('.col-inflected') || rTr.querySelector('[data-col="WordSourceInflectedForm"]') || rTr.querySelector('[data-col="Quotation"]');
                                         var rQuot = (rCell ? (rCell.textContent || rCell.innerText || '') : (rTr.getAttribute('data-quotation') || '')).trim().toLowerCase();
-                                        if (rQuot) {
+                                        if (rQuot && (refRowId === lastClickedRowId || lastClickedRowId === null)) {
                                             var qParts = rQuot.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                                            if (qParts.length === 1 && (refRowId === lastClickedRowId || lastClickedRowId === null)) {
-                                                var qWords = qParts[0].split(/\s+/);
-                                                if (qParts[0] === tokClean || qWords.indexOf(tokClean) !== -1) {
+                                            for (var q = 0; q < qParts.length; q++) {
+                                                var part = qParts[q];
+                                                var qWords = part.split(/\s+/);
+                                                if (part === tokClean || qWords.indexOf(tokClean) !== -1) {
                                                     isDirectQuotationMatch = true;
+                                                    break;
                                                 }
                                             }
                                         }
