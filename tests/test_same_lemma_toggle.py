@@ -100,6 +100,7 @@ def test_same_lemma_toggle_interaction(page, tmp_path):
     same_lemma_btn.click()
     assert same_lemma_btn.evaluate("el => el.classList.contains('active')")
     assert page.evaluate("() => window.AppState.highlightSameLemma") is True
+    assert "Lemma highlighting enabled" in page.locator("#kw-toast-container").inner_text()
     
     # Verify fetch was called to persist config
     fetches = page.evaluate("() => window.__fetches")
@@ -113,6 +114,7 @@ def test_same_lemma_toggle_interaction(page, tmp_path):
     same_lemma_btn.click()
     assert not same_lemma_btn.evaluate("el => el.classList.contains('active')")
     assert page.evaluate("() => window.AppState.highlightSameLemma") is False
+    assert "Lemma highlighting disabled" in page.locator("#kw-toast-container").inner_text()
     
     fetches = page.evaluate("() => window.__fetches")
     assert len(fetches) == 2
@@ -470,4 +472,101 @@ def test_reword_dispatch_and_dynamic_rollup(page, tmp_path):
     assert "во время матча" in trans_cell_text
 
 
+def get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False, zid="20261003101348"):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("rendering"):
+        config.add_section("rendering")
+    config.set("rendering", "highlight_same_lemma", "true" if highlight_same_lemma else "false")
 
+    tsv_file = tmp_path / f"{zid}-intra-test.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "den\tder\tart.\tв\t1\tEr sieht den Hund, das Kind und die Katze.\tОн видит собаку, ребенка и кошку.\t0\n"
+        "das\tder\tart.\tв\t1\tEr sieht den Hund, das Kind und die Katze.\tОн видит собаку, ребенка и кошку.\t0\n"
+        "die\tder\tart.\tв\t1\tEr sieht den Hund, das Kind und die Katze.\tОн видит собаку, ребенка и кошку.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="Er sieht den Hund, das Kind und die Katze.",
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    return html
+
+
+def test_intra_sentence_duplicate_lemmas_selection_and_highlighting(page, tmp_path):
+    """Verifies that non-verb tokens (articles) within the same sentence are not coupled as partners (Tasks 3.1 & 3.2)."""
+    raw_html = get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False)
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+
+    den_span = page.locator('#source-container span.word:has-text("den")').first
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+    die_span = page.locator('#source-container span.word:has-text("die")').first
+
+    # 1. Click "den" in text
+    den_span.click()
+
+    # Strictly "den" is in activeTokenSelections
+    active_tokens = page.evaluate("() => window.AppState.activeTokenSelections")
+    assert len(active_tokens) == 1
+
+    # "den" gets highlight-orange-active, "das" and "die" do not
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (das_span.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (die_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (das_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (die_span.get_attribute("class") or "")
+
+    # 2. Toggle Lemma ON -> "das" and "die" dynamically receive lemma-peer-highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (das_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (die_span.get_attribute("class") or "")
+
+    # 3. Toggle Lemma OFF -> peer highlights removed
+    page.locator("#kw-btn-same-lemma").click()
+    assert "lemma-peer-highlight" not in (das_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (die_span.get_attribute("class") or "")
+
+
+def test_first_click_token_selection_when_table_row_preselected(page, tmp_path):
+    """Verifies that clicking a word span immediately selects it on the first click even if a table row was selected (Task 4.1)."""
+    raw_html = get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False)
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    # Select table row
+    table_row = page.locator("#lemma-table tbody tr").first
+    table_row.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 0
+
+    # Click "das" in text on first click
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+    das_span.click()
+
+    # Must be selected on the very first click
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 1
+    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+
+
+def test_to_unicode_bold_german_umlauts():
+    """Verifies that to_unicode_bold converts German umlauts to bold glyphs with combining diaeresis (Task 5.1)."""
+    assert kardenwort_desk.to_unicode_bold("können") == "𝗸𝗼̈𝗻𝗻𝗲𝗻"
+    assert kardenwort_desk.to_unicode_bold("groß") == "𝗴𝗿𝗼𝘀𝘀"
+    assert kardenwort_desk.to_unicode_bold("Zustellung") == "𝗭𝘂𝘀𝘁𝗲𝗹𝗹𝘂𝗻𝗴"
+    assert kardenwort_desk.to_unicode_bold("Äpfel") == "𝗔̈𝗽𝗳𝗲𝗹"
+    assert kardenwort_desk.to_unicode_bold("Über") == "𝗨̈𝗯𝗲𝗿"

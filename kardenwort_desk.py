@@ -2311,8 +2311,22 @@ GENDER_FULL_NAME_MAP = {
 def to_unicode_bold(text: str) -> str:
     if not text:
         return ""
+    umlauts = {
+        'ä': ('a', '\u0308'),
+        'ö': ('o', '\u0308'),
+        'ü': ('u', '\u0308'),
+        'Ä': ('A', '\u0308'),
+        'Ö': ('O', '\u0308'),
+        'Ü': ('U', '\u0308'),
+        'ß': ('ss', ''),
+        'ẞ': ('SS', ''),
+    }
     result = []
     for ch in text:
+        if ch in umlauts:
+            base, mark = umlauts[ch]
+            result.append(to_unicode_bold(base) + mark)
+            continue
         code = ord(ch)
         if 65 <= code <= 90:  # A-Z
             result.append(chr(0x1D5D4 + code - 65))
@@ -10781,6 +10795,12 @@ html, body {{
                             tok_data["token_order"] = str(r_prim[col_token_order]).strip()
                         if col_lemma != -1 and len(r_prim) > col_lemma and str(r_prim[col_lemma]).strip():
                             tok_data["lemma"] = str(r_prim[col_lemma]).strip()
+                        if col_pos != -1 and len(r_prim) > col_pos and str(r_prim[col_pos]).strip():
+                            tok_data["pos"] = str(r_prim[col_pos]).strip()
+                if "pos" not in tok_data and filtered_rows and 0 <= filtered_rows[0] < len(data_rows):
+                    r_f = data_rows[filtered_rows[0]]
+                    if col_pos != -1 and len(r_f) > col_pos and str(r_f[col_pos]).strip():
+                        tok_data["pos"] = str(r_f[col_pos]).strip()
             word_counter += 1
         token_manifest.append(tok_data)
         
@@ -15149,10 +15169,74 @@ window.__CONFIG__ = {ui_config_json};
             return group;
         }
 
+        function isNonVerbalPartOfSpeech(pos) {
+            if (!pos) return false;
+            var p = String(pos).trim().toLowerCase();
+            if (p === 'art.' || p === 'art' || p === 'artikel' || p === 'article' ||
+                p === 'pron.' || p === 'pron' || p === 'pronoun' || p === 'pronomen' ||
+                p === 'det.' || p === 'det' || p === 'determiner' ||
+                p === 'noun' || p === 'noun.' || p === 'n.' || p === 'subst.' || p === 'subst' || p === 'substantiv' ||
+                p === 'adv.' || p === 'adv' || p === 'adverb' ||
+                p === 'adj.' || p === 'adj' || p === 'adjective' || p === 'adjektiv') {
+                return true;
+            }
+            if (p.indexOf('art') === 0 || p.indexOf('pron') === 0 || p.indexOf('det') === 0 || p.indexOf('noun') === 0 || p.indexOf('subst') === 0) {
+                return true;
+            }
+            return false;
+        }
+
+        function getWordPOS(span) {
+            if (!span) return "";
+            var td = findTokenData(span);
+            if (td && td.pos) return td.pos;
+            if (td && td.row_ids && td.row_ids.length > 0) {
+                for (var i = 0; i < td.row_ids.length; i++) {
+                    var tr = findTableRowById(td.row_ids[i]);
+                    if (tr) {
+                        var posCell = tr.querySelector('td.col-pos');
+                        if (posCell) {
+                            var text = (posCell.textContent || posCell.innerText || "").trim();
+                            if (text) return text;
+                        }
+                    }
+                }
+            }
+            return "";
+        }
+        window.getWordPOS = getWordPOS;
+
         function findSeparablePartnerSpans(span) {
             if (!span || !span.classList || !span.classList.contains('word')) return span ? [span] : [];
             var td = findTokenData(span);
             if (!td || !td.row_ids || td.row_ids.length === 0) return [span];
+
+            var spanPos = (td && td.pos) ? td.pos : getWordPOS(span);
+            if (isNonVerbalPartOfSpeech(spanPos)) {
+                return [span];
+            }
+
+            var isSpanSeparableCandidate = span.classList.contains('highlight-purple') ||
+                (td && td.token_order && String(td.token_order).indexOf('+') !== -1);
+
+            if (!isSpanSeparableCandidate) {
+                var isMultiToken = false;
+                for (var r = 0; r < td.row_ids.length; r++) {
+                    var tr = findTableRowById(td.row_ids[r]);
+                    if (tr) {
+                        var infCell = tr.querySelector('td.col-inflected');
+                        var infText = infCell ? (infCell.textContent || infCell.innerText || '').trim() : '';
+                        if (infText.indexOf(' ') !== -1 || infText.indexOf('+') !== -1) {
+                            isMultiToken = true;
+                            break;
+                        }
+                    }
+                }
+                if (!isMultiToken) {
+                    return [span];
+                }
+            }
+
             var partners = [span];
             var targetRowIds = td.row_ids;
             for (var k = 0; k < tokenSpans.length; k++) {
@@ -15160,6 +15244,29 @@ window.__CONFIG__ = {ui_config_json};
                 if (otherSpan === span) continue;
                 var otd = findTokenData(otherSpan);
                 if (!otd || !otd.row_ids || otd.row_ids.length === 0) continue;
+
+                var otherPos = (otd && otd.pos) ? otd.pos : getWordPOS(otherSpan);
+                if (isNonVerbalPartOfSpeech(otherPos)) continue;
+
+                var isOtherSeparableCandidate = otherSpan.classList.contains('highlight-purple') ||
+                    (otd && otd.token_order && String(otd.token_order).indexOf('+') !== -1);
+
+                if (!isOtherSeparableCandidate) {
+                    var otherMulti = false;
+                    for (var r = 0; r < otd.row_ids.length; r++) {
+                        var tr = findTableRowById(otd.row_ids[r]);
+                        if (tr) {
+                            var infCell = tr.querySelector('td.col-inflected');
+                            var infText = infCell ? (infCell.textContent || infCell.innerText || '').trim() : '';
+                            if (infText.indexOf(' ') !== -1 || infText.indexOf('+') !== -1) {
+                                otherMulti = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!otherMulti) continue;
+                }
+
                 var shared = false;
                 for (var r = 0; r < targetRowIds.length; r++) {
                     if (otd.row_ids.indexOf(targetRowIds[r]) !== -1) {
@@ -15883,55 +15990,37 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                         
+                        var isCurrentlyActiveToken = isTokenInActiveSelections(clickedTokenData.visual_idx);
+                        if (targetRowIds.length === 0) {
+                            var wIdx = clickedTokenData.visual_idx;
+                            if (wIdx !== undefined && wIdx !== null) {
+                                if (selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
+                                    delete selectedOrphanWordIdxsMap[String(wIdx)];
+                                    tokenDragMode = false;
+                                } else {
+                                    selectedOrphanWordIdxsMap[String(wIdx)] = true;
+                                    tokenDragMode = true;
+                                }
+                            } else {
+                                tokenDragMode = true;
+                            }
+                        } else {
+                            if (!isCurrentlyActiveToken) {
+                                tokenDragMode = true;
+                                if (!window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) {
+                                    selectedRowIdsMap = {};
+                                }
+                            } else {
+                                tokenDragMode = false;
+                            }
+                        }
+
                         initialSelectedMap = {};
                         for (var key in selectedRowIdsMap) {
                             if (selectedRowIdsMap.hasOwnProperty(key)) {
                                 initialSelectedMap[key] = selectedRowIdsMap[key];
                             }
                         }
-                        
-                        var allSelected = true;
-                        if (targetRowIds.length === 0) {
-                            var wIdx = clickedTokenData.visual_idx;
-                            if (wIdx !== undefined && wIdx !== null) {
-                                if (selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
-                                    delete selectedOrphanWordIdxsMap[String(wIdx)];
-                                    allSelected = true;
-                                } else {
-                                    selectedOrphanWordIdxsMap[String(wIdx)] = true;
-                                    allSelected = false;
-                                }
-                            } else {
-                                allSelected = false;
-                            }
-                        } else {
-                            for (var j = 0; j < targetRowIds.length; j++) {
-                                var tid = String(targetRowIds[j]);
-                                var isTidSel = selectedRowIdsMap.hasOwnProperty(tid);
-                                if (!isTidSel) {
-                                    for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                        var tr = tableRows[trIdx];
-                                        var allAttr = tr.getAttribute('data-all-row-ids');
-                                        if (allAttr) {
-                                            var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                            if (pList.indexOf(tid) !== -1) {
-                                                var trId = String(tr.getAttribute('data-row-id'));
-                                                if (selectedRowIdsMap.hasOwnProperty(trId) || tr.getAttribute('data-selected') === '1') {
-                                                    isTidSel = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-                                if (!isTidSel) {
-                                    allSelected = false;
-                                    break;
-                                }
-                            }
-                        }
-                        
-                        tokenDragMode = !allSelected;
                         
                         for (var j = 0; j < targetRowIds.length; j++) {
                             var tid = String(targetRowIds[j]);
