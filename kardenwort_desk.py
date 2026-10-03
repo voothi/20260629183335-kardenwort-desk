@@ -16551,15 +16551,31 @@ window.__CONFIG__ = {ui_config_json};
                         var isTokenCurrentlyActive = isTokenInActiveSelections(clickedTokenData.visual_idx);
                         
                         var isSameAsTableSelection = false;
-                        if (isTransitionFromTableSelection && lastClickedRowId !== null && lastClickedRowId !== undefined) {
-                            var checkIds = [String(lastClickedRowId)];
-                            var lastTr = document.querySelector('tr[data-row-id="' + lastClickedRowId + '"]');
-                            if (lastTr) {
-                                var trAll = lastTr.getAttribute('data-all-row-ids');
-                                if (trAll) {
-                                    var pList = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                                    for (var p = 0; p < pList.length; p++) {
-                                        if (checkIds.indexOf(pList[p]) === -1) checkIds.push(pList[p]);
+                        if (isTransitionFromTableSelection) {
+                            var checkIds = [];
+                            var selTrs = document.querySelectorAll('#lemma-table tbody tr.selected, #lemma-table tbody tr.kw-row-selected');
+                            if (lastClickedRowId !== null && lastClickedRowId !== undefined) {
+                                var lastTr = document.querySelector('tr[data-row-id="' + lastClickedRowId + '"]');
+                                var isLastTrSelected = lastTr && (selectedRowIdsMap.hasOwnProperty(String(lastClickedRowId)) || lastTr.classList.contains('selected') || lastTr.classList.contains('kw-row-selected'));
+                                if (isLastTrSelected) {
+                                    checkIds.push(String(lastClickedRowId));
+                                    var trAll = lastTr.getAttribute('data-all-row-ids');
+                                    if (trAll) {
+                                        var pList = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                                        for (var p = 0; p < pList.length; p++) {
+                                            if (checkIds.indexOf(pList[p]) === -1) checkIds.push(pList[p]);
+                                        }
+                                    }
+                                }
+                            } else if (selTrs && selTrs.length === 1) {
+                                var singleTr = selTrs[0];
+                                var singleTrId = String(singleTr.getAttribute('data-row-id'));
+                                checkIds.push(singleTrId);
+                                var singleAll = singleTr.getAttribute('data-all-row-ids');
+                                if (singleAll) {
+                                    var spList = singleAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                                    for (var sp = 0; sp < spList.length; sp++) {
+                                        if (checkIds.indexOf(spList[sp]) === -1) checkIds.push(spList[sp]);
                                     }
                                 }
                             }
@@ -16656,6 +16672,7 @@ window.__CONFIG__ = {ui_config_json};
                             addTokenToActiveSelections(span);
                         } else {
                             removeTokenFromActiveSelections(span);
+                            lastClickedRowId = null;
                         }
                         syncSelectionsToCardsAndState();
                         updateRowStyles();
@@ -17951,9 +17968,6 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
             }
-
-            var primaryLemmaOccurrences = {};
-
             for (var i = 0; i < tokenMap.length; i++) {
                 var token = tokenMap[i];
                 var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
