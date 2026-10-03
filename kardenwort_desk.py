@@ -2259,6 +2259,120 @@ def normalize_pos_tag(pos: Optional[str]) -> str:
 def format_pos_cell(pos_val: Optional[str]) -> str:
     return normalize_pos_tag(pos_val)
 
+def sanitize_bracketed_field(val: Any) -> str:
+    """Removes square brackets that might have leaked from prompt context into output values."""
+    if not val:
+        return ""
+    val_str = str(val).strip()
+    if val_str.startswith('[') and val_str.endswith(']') and len(val_str) >= 2:
+        val_str = val_str[1:-1].strip()
+    val_str = re.sub(r'\[([^\]]+)\]', r'\1', val_str)
+    return val_str.strip()
+
+def build_bracketed_sentence_context(
+    sentence_text: str,
+    target_visual_idx: Optional[int] = None,
+    target_word: Optional[str] = None,
+    target_occurrence: Optional[int] = None,
+) -> str:
+    """
+    Wraps only the targeted token occurrence in square brackets '[word]'
+    for LLM prompt context disambiguation. All other tokens remain unbracketed.
+    """
+    if not sentence_text or (target_visual_idx is None and target_occurrence is None and not target_word):
+        return sentence_text
+
+    try:
+        tokens = tok.build_word_list_internal(sentence_text, keep_spaces=True)
+    except Exception:
+        return sentence_text
+
+    if not tokens:
+        return sentence_text
+
+    # Target by visual_idx first if provided
+    matched = False
+    if target_visual_idx is not None:
+        try:
+            tv_int = int(target_visual_idx)
+            matched = any(t.get("visual_idx") == tv_int for t in tokens)
+        except (ValueError, TypeError):
+            matched = False
+
+    if matched:
+        tv_int = int(target_visual_idx)
+        return "".join(
+            f"[{t['text']}]" if t.get("visual_idx") == tv_int else t["text"]
+            for t in tokens
+        )
+
+    # Fallback: target by word and occurrence count
+    if target_word:
+        clean_target = target_word.strip().lower()
+        occ_target = int(target_occurrence) if target_occurrence is not None else 0
+        curr_occ = 0
+        parts = []
+        for t in tokens:
+            t_clean = (t.get("lower_clean") or t.get("text") or "").strip().lower()
+            if t.get("is_word") and t_clean == clean_target:
+                if curr_occ == occ_target:
+                    parts.append(f"[{t['text']}]")
+                else:
+                    parts.append(t["text"])
+                curr_occ += 1
+            else:
+                parts.append(t["text"])
+        return "".join(parts)
+
+    return sentence_text
+
+def aggregate_sequential_distinct(
+    items: List[Tuple[Any, str]],
+    delimiter: str = ", ",
+    split_subtokens: bool = True
+) -> str:
+    """
+    Given a list of (order_key, text_value) tuples:
+    1. Sorts items by order_key in ascending sentence appearance order.
+    2. Splits each text_value by delimiter (if split_subtokens is True and delimiter is in text_value).
+    3. Deduplicates elements case-insensitively while preserving sequential sentence appearance order.
+    4. Returns joined string with delimiter.
+    """
+    if not items:
+        return ""
+
+    def _sort_key(item):
+        k = item[0]
+        if isinstance(k, (int, float)):
+            return (0, k)
+        try:
+            return (0, int(str(k).strip()))
+        except Exception:
+            return (1, str(k))
+
+    sorted_items = sorted(items, key=_sort_key)
+    seen_lower = set()
+    result = []
+    delim_char = delimiter.strip()
+
+    for _, val in sorted_items:
+        if not val or not str(val).strip():
+            continue
+        val_str = str(val).strip()
+        if val_str in ("[FAILED]", "-", "--") or "skeleton-loader" in val_str:
+            continue
+        parts = [p.strip() for p in val_str.split(delim_char)] if (split_subtokens and delim_char in val_str) else [val_str]
+        for p in parts:
+            if not p:
+                continue
+            p_lower = p.lower()
+            if p_lower not in seen_lower:
+                seen_lower.add(p_lower)
+                result.append(p)
+
+    return delimiter.join(result)
+
+
 POS_FULL_NAME_MAP = {
     "n.": "Noun",
     "NOUN": "Noun",
@@ -4279,6 +4393,8 @@ class SqliteStorageAdapter(StorageAdapter):
         zid: Optional[str] = None,
         trace_id: Optional[str] = None,
         token_orders: Optional[List[Any]] = None,
+        target_coordinates: Optional[List[Any]] = None,
+        visual_indices: Optional[List[Any]] = None,
     ) -> bool:
         """
         Enriches a SQLite session using IntelliFiller via ephemeral scratch payload,
@@ -4333,9 +4449,34 @@ class SqliteStorageAdapter(StorageAdapter):
         elif selected_rows is not None:
             target_scratch_indices = [int(r) for r in selected_rows if str(r).isdigit() and 0 <= int(r) < len(data_rows)]
 
+        target_vidx = None
+        if visual_indices and len(visual_indices) > 0:
+            try:
+                target_vidx = int(visual_indices[0])
+            except Exception:
+                pass
+        elif target_coordinates and len(target_coordinates) > 0 and isinstance(target_coordinates[0], dict):
+            try:
+                target_vidx = int(target_coordinates[0].get('visual_idx'))
+            except Exception:
+                pass
+
+        scratch_data_rows = [list(r) for r in data_rows]
+        if target_vidx is not None:
+            col_sent_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+            if col_sent_src != -1:
+                target_scratch_set = set(target_scratch_indices) if target_scratch_indices is not None else set(range(len(scratch_data_rows)))
+                for s_row_idx in target_scratch_set:
+                    if 0 <= s_row_idx < len(scratch_data_rows) and len(scratch_data_rows[s_row_idx]) > col_sent_src:
+                        raw_sent = scratch_data_rows[s_row_idx][col_sent_src]
+                        scratch_data_rows[s_row_idx][col_sent_src] = build_bracketed_sentence_context(
+                            raw_sent,
+                            target_visual_idx=target_vidx
+                        )
+
         with tempfile.TemporaryDirectory() as temp_dir:
             temp_tsv_path = Path(temp_dir) / f"{session_zid}-ephemeral.tsv"
-            self._tsv_fallback.save_tsv_rows_safely(temp_tsv_path, comments, headers, data_rows)
+            self._tsv_fallback.save_tsv_rows_safely(temp_tsv_path, comments, headers, scratch_data_rows)
 
             success = run_headless_intellifiller(
                 tsv_path=temp_tsv_path,
@@ -4373,7 +4514,7 @@ class SqliteStorageAdapter(StorageAdapter):
                     row_updates = {}
                     for col_idx, h in enumerate(updated_headers):
                         if col_idx < len(r):
-                            row_updates[h] = r[col_idx]
+                            row_updates[h] = sanitize_bracketed_field(r[col_idx])
                     row_updates["word_provenance"] = "live:intellifiller"
 
                     t_ord = str(r[upd_col_tord]).strip() if upd_col_tord != -1 and len(r) > upd_col_tord else ""
@@ -4382,6 +4523,82 @@ class SqliteStorageAdapter(StorageAdapter):
                     matched_word = words_by_token.get((sent_idx, t_ord)) or (words_by_tord.get(t_ord) if t_ord else None)
                     if not matched_word and row_idx < len(db_words_sorted):
                         matched_word = db_words_sorted[row_idx]
+
+                    if matched_word and target_vidx is not None:
+                        ef_raw = matched_word.get("extra_fields")
+                        ef_dict = {}
+                        if isinstance(ef_raw, str):
+                            try:
+                                ef_dict = json.loads(ef_raw)
+                            except Exception:
+                                ef_dict = {}
+                        elif isinstance(ef_raw, dict):
+                            ef_dict = dict(ef_raw)
+
+                        occ_data = ef_dict.get("occurrence_data", {})
+                        if not isinstance(occ_data, dict):
+                            occ_data = {}
+
+                        pos_field = role_fields.get('pos', 'WordSourcePOS')
+                        trans_field = role_fields.get('word_translation', 'WordDestination')
+                        morph_field = role_fields.get('morphology', 'WordSourceMorphologyAI')
+
+                        new_pos = row_updates.get(pos_field, "")
+                        new_trans = row_updates.get(trans_field, "")
+                        new_morph = row_updates.get(morph_field, "")
+
+                        occ_data[str(target_vidx)] = {
+                            "pos": new_pos,
+                            "trans": new_trans,
+                            "morph": new_morph
+                        }
+
+                        w_lem = (matched_word.get("lemma") or "").strip().lower()
+                        col_s_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+                        sent_text = ""
+                        if col_s_src != -1 and row_idx < len(data_rows) and len(data_rows[row_idx]) > col_s_src:
+                            sent_text = data_rows[row_idx][col_s_src]
+
+                        if sent_text and w_lem:
+                            try:
+                                all_toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
+                                for st in all_toks:
+                                    st_clean = (st.get("lower_clean") or st.get("text") or "").strip().lower()
+                                    if st.get("is_word") and st_clean == w_lem:
+                                        st_vidx_str = str(st.get("visual_idx"))
+                                        if st_vidx_str not in occ_data:
+                                            occ_data[st_vidx_str] = {
+                                                "pos": matched_word.get("pos") or "",
+                                                "trans": matched_word.get("word_destination") or "",
+                                                "morph": matched_word.get("morphology") or ""
+                                            }
+                            except Exception:
+                                pass
+
+                        pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
+                        trans_items = [(int(k), v.get("trans", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("trans")]
+                        morph_items = [(int(k), v.get("morph", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("morph")]
+
+                        if len(pos_items) > 1:
+                            if w_lem == "der":
+                                seen_occ_pos = []
+                                for _, p_val in sorted(pos_items, key=lambda x: x[0]):
+                                    for p_sub in p_val.split(','):
+                                        norm_p = normalize_pos_tag(p_sub).lower()
+                                        if norm_p and norm_p not in seen_occ_pos:
+                                            seen_occ_pos.append(norm_p)
+                                pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
+                                seen_occ_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
+                                row_updates[pos_field] = ", ".join(seen_occ_pos)
+                            else:
+                                row_updates[pos_field] = aggregate_sequential_distinct(pos_items, delimiter=", ")
+                        if len(trans_items) > 1:
+                            row_updates[trans_field] = aggregate_sequential_distinct(trans_items, delimiter=", ")
+                        if len(morph_items) > 1:
+                            row_updates[morph_field] = aggregate_sequential_distinct(morph_items, delimiter="; ")
+
+                        ef_dict["occurrence_data"] = occ_data
+                        row_updates["extra_fields"] = json.dumps(ef_dict, ensure_ascii=False)
 
                     if matched_word:
                         w_id = matched_word.get("id")
@@ -11014,48 +11231,59 @@ html, body {{
 
             # Translation deduplication and rollup across atomic occurrences for merged rows
             if col_word_dest != -1 and matched_ids and len(matched_ids) > 1:
-                seen_trans = []
-                for mid in matched_ids:
+                sorted_matched_ids = sorted(
+                    matched_ids,
+                    key=lambda mid: int(data_rows[mid][col_token_order]) if (col_token_order != -1 and len(data_rows[mid]) > col_token_order and str(data_rows[mid][col_token_order]).isdigit()) else mid
+                )
+                trans_items = []
+                for mid in sorted_matched_ids:
                     if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_word_dest:
                         tr_cand = str(data_rows[mid][col_word_dest] or "").strip()
                         if tr_cand and tr_cand != "[FAILED]" and "skeleton-loader" not in tr_cand and tr_cand not in ("-", "--"):
-                            for part in tr_cand.split(','):
-                                p_clean = part.strip()
-                                if p_clean and p_clean.lower() not in [x.lower() for x in seen_trans]:
-                                    seen_trans.append(p_clean)
-                if seen_trans:
-                    ov_trans = ", ".join(seen_trans)
+                            trans_items.append((mid, tr_cand))
+                if trans_items:
+                    ov_trans = aggregate_sequential_distinct(trans_items, delimiter=", ")
 
             # Morphology metadata consolidation across atomic occurrences for merged rows
             if col_morph != -1 and matched_ids and len(matched_ids) > 1:
-                seen_morph = []
-                for mid in matched_ids:
+                sorted_matched_ids = sorted(
+                    matched_ids,
+                    key=lambda mid: int(data_rows[mid][col_token_order]) if (col_token_order != -1 and len(data_rows[mid]) > col_token_order and str(data_rows[mid][col_token_order]).isdigit()) else mid
+                )
+                morph_items = []
+                for mid in sorted_matched_ids:
                     if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_morph:
                         m_cand = str(data_rows[mid][col_morph] or "").strip()
                         if m_cand and m_cand != "[FAILED]" and "skeleton-loader" not in m_cand and m_cand not in ("-", "--"):
-                            delim = ';' if ';' in m_cand else ','
-                            for part in m_cand.split(delim):
-                                p_clean = part.strip()
-                                if p_clean and p_clean.lower() not in [x.lower() for x in seen_morph]:
-                                    seen_morph.append(p_clean)
-                if seen_morph:
-                    ov_morph = "; ".join(seen_morph)
+                            morph_items.append((mid, m_cand))
+                if morph_items:
+                    ov_morph = aggregate_sequential_distinct(morph_items, delimiter="; ")
 
             ov_pos_raw = ov_r[col_pos] if col_pos != -1 and len(ov_r) > col_pos else ""
-            if is_ov_unified_der and matched_ids and len(matched_ids) > 1 and col_pos != -1:
-                seen_ov_pos = []
-                for mid in matched_ids:
+            if matched_ids and len(matched_ids) > 1 and col_pos != -1:
+                sorted_matched_ids = sorted(
+                    matched_ids,
+                    key=lambda mid: int(data_rows[mid][col_token_order]) if (col_token_order != -1 and len(data_rows[mid]) > col_token_order and str(data_rows[mid][col_token_order]).isdigit()) else mid
+                )
+                pos_items = []
+                for mid in sorted_matched_ids:
                     if 0 <= mid < len(data_rows) and len(data_rows[mid]) > col_pos:
                         p_val = data_rows[mid][col_pos].strip()
                         if p_val:
+                            pos_items.append((mid, p_val))
+                if pos_items:
+                    if is_ov_unified_der:
+                        seen_ov_pos = []
+                        for _, p_val in pos_items:
                             for p_sub in p_val.split(','):
                                 norm_p = normalize_pos_tag(p_sub).lower()
                                 if norm_p and norm_p not in seen_ov_pos:
                                     seen_ov_pos.append(norm_p)
-                if seen_ov_pos:
-                    pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
-                    seen_ov_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
-                    ov_pos_raw = ", ".join(seen_ov_pos)
+                        pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
+                        seen_ov_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
+                        ov_pos_raw = ", ".join(seen_ov_pos)
+                    else:
+                        ov_pos_raw = aggregate_sequential_distinct(pos_items, delimiter=", ")
 
             if col_word_dest != -1 and len(ov_r) > col_word_dest and ov_trans:
                 ov_r[col_word_dest] = ov_trans
@@ -18858,6 +19086,7 @@ window.__CONFIG__ = {ui_config_json};
             if (window.commitActiveEdit) window.commitActiveEdit();
             var rows = [];
             var tokenOrders = [];
+            var targetCoordinates = [];
 
             var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
 
@@ -18865,6 +19094,15 @@ window.__CONFIG__ = {ui_config_json};
                 // 1. Token-scoped (targeted) selection
                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                     var item = window.AppState.activeTokenSelections[a];
+                    if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                        targetCoordinates.push({
+                            visual_idx: item.visual_idx,
+                            sentence_idx: item.sentence_idx,
+                            token_order: item.token_order,
+                            atomic_id: item.atomic_id,
+                            lemma: item.lemma
+                        });
+                    }
                     if (item.atomic_id !== undefined && item.atomic_id !== null) {
                         var aId = parseInt(item.atomic_id, 10);
                         if (!isNaN(aId) && rows.indexOf(aId) === -1) {
@@ -18940,6 +19178,10 @@ window.__CONFIG__ = {ui_config_json};
                 token_orders: tokenOrders,
                 language: getSessionLang()
             };
+            if (targetCoordinates.length > 0) {
+                bodyPayload.target_coordinates = targetCoordinates;
+                bodyPayload.visual_indices = targetCoordinates.map(function(c) { return c.visual_idx; });
+            }
             if (tok) bodyPayload.token = tok;
 
             fetch('/session/reword', {

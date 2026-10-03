@@ -1973,6 +1973,8 @@ class SessionArbiter:
         language: Optional[str] = None,
         zid: Optional[str] = None,
         token_orders: Optional[List[Any]] = None,
+        target_coordinates: Optional[List[Any]] = None,
+        visual_indices: Optional[List[Any]] = None,
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -2085,6 +2087,8 @@ class SessionArbiter:
                             reprocess=True,
                             zid=req_zid,
                             token_orders=target_token_orders if target_token_orders else None,
+                            target_coordinates=target_coordinates,
+                            visual_indices=visual_indices,
                         )
                     except StructuredError:
                         raise
@@ -3161,6 +3165,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             session_zid = body.get('session_zid')
             selected_rows = body.get('row_ids') or body.get('selected_rows') or []
             token_orders = body.get('token_orders')
+            target_coordinates = body.get('target_coordinates')
+            visual_indices = body.get('visual_indices')
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing 'session_zid' in payload")
 
@@ -3171,6 +3177,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 language=body.get('language'),
                 zid=body.get('zid'),
                 token_orders=token_orders,
+                target_coordinates=target_coordinates,
+                visual_indices=visual_indices,
             )
             self._send_json(200, res)
             return
