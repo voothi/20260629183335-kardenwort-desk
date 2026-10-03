@@ -2005,7 +2005,7 @@ def test_overview_tab_unification_article_pronoun_der(tmp_path):
     assert len(der_words) == 1, f"Expected exactly 1 consolidated row for lemma 'der', but got {len(der_words)}"
 
     consolidated_word = der_words[0]
-    assert consolidated_word["pos"].strip().lower() == "art."
+    assert consolidated_word["pos"].strip().lower() == "art., pron."
     inf_forms = [p.strip() for p in consolidated_word["inflected"].split(",") if p.strip()]
     for expected_form in ["den", "der", "die", "zur"]:
         assert expected_form in inf_forms, f"Expected '{expected_form}' in inflected forms: {inf_forms}"
