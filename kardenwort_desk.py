@@ -16576,39 +16576,30 @@ window.__CONFIG__ = {ui_config_json};
                         var isTokenCurrentlyActive = isTokenInActiveSelections(clickedTokenData.visual_idx);
                         
                         var isSameAsTableSelection = false;
-                        if (isTransitionFromTableSelection) {
-                            var checkIds = [];
-                            var selTrs = document.querySelectorAll('#lemma-table tbody tr.selected, #lemma-table tbody tr.kw-row-selected');
-                            if (lastClickedRowId !== null && lastClickedRowId !== undefined) {
-                                var lastTr = document.querySelector('tr[data-row-id="' + lastClickedRowId + '"]');
-                                var isLastTrSelected = lastTr && (selectedRowIdsMap.hasOwnProperty(String(lastClickedRowId)) || lastTr.classList.contains('selected') || lastTr.classList.contains('kw-row-selected'));
-                                if (isLastTrSelected) {
-                                    checkIds.push(String(lastClickedRowId));
-                                    var trAll = lastTr.getAttribute('data-all-row-ids');
-                                    if (trAll) {
-                                        var pList = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                                        for (var p = 0; p < pList.length; p++) {
-                                            if (checkIds.indexOf(pList[p]) === -1) checkIds.push(pList[p]);
-                                        }
-                                    }
-                                }
-                            } else if (selTrs && selTrs.length === 1) {
-                                var singleTr = selTrs[0];
-                                var singleTrId = String(singleTr.getAttribute('data-row-id'));
-                                checkIds.push(singleTrId);
-                                var singleAll = singleTr.getAttribute('data-all-row-ids');
-                                if (singleAll) {
-                                    var spList = singleAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                                    for (var sp = 0; sp < spList.length; sp++) {
-                                        if (checkIds.indexOf(spList[sp]) === -1) checkIds.push(spList[sp]);
-                                    }
-                                }
-                            }
+                        if (isTransitionFromTableSelection && lastClickedRowId !== null && lastClickedRowId !== undefined) {
+                            var lcRowIdStr = String(lastClickedRowId);
                             for (var t = 0; t < targetRowIds.length; t++) {
-                                if (checkIds.indexOf(String(targetRowIds[t])) !== -1) {
+                                var tidStr = String(targetRowIds[t]);
+                                if (tidStr === lcRowIdStr) {
                                     isSameAsTableSelection = true;
                                     break;
                                 }
+                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+                                    var tr = tableRows[trIdx];
+                                    var trIdStr = String(tr.getAttribute('data-row-id'));
+                                    if (trIdStr === lcRowIdStr) {
+                                        var allAttr = tr.getAttribute('data-all-row-ids');
+                                        if (allAttr) {
+                                            var pList = allAttr.split(',').map(function(s) { return s.trim(); });
+                                            if (pList.indexOf(tidStr) !== -1) {
+                                                isSameAsTableSelection = true;
+                                                break;
+                                            }
+                                        }
+                                        break;
+                                    }
+                                }
+                                if (isSameAsTableSelection) break;
                             }
                         }
 
