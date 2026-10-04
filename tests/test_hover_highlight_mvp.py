@@ -510,4 +510,86 @@ def test_coordinated_single_pass_pinning_and_table_coexistence(page, tmp_path):
     assert "highlight-purple-active" not in (der_span.get_attribute("class") or "")
 
 
+def test_table_selected_token_click_deselection_and_two_step_esc(page, tmp_path):
+    """Verifies that:
+    1. Clicking a table-selected word in text deselects it immediately without adding a frame.
+    2. Subsequent click on the deselected word selects it and pins a rainbow frame.
+    3. Next click removes both selection and frame in 1 single pass.
+    4. First Esc clears frames while keeping table selection; second Esc clears all selections.
+    """
+    tsv_path = tmp_path / "test.tsv"
+    tsv_path.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "das, den, der, die\tder\tart., pron.\tтот, который\t1\tEr fängt heute mit der Arbeit an.\tОн начинает сегодня с работы.\t0\n"
+        "fängt an\tanfangen\tv.\tначинать\t1\tEr fängt heute mit der Arbeit an.\tОн начинает сегодня с работы.\t0\n",
+        encoding='utf-8'
+    )
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set(SEC_RENDERING, 'hover_highlight', 'true')
+    config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
+    config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '3')
+
+    html = run_render_flow(
+        text="Er fängt heute mit der Arbeit an.",
+        language="de",
+        zid="20261004121500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=tsv_path
+    )
+    page.set_content(html)
+    page.evaluate("""
+        window.AppState.applyDeltas({
+            translatedText: "<div>Он начинает сегодня с работы.</div>",
+            stage: "finished"
+        });
+    """)
+
+    faengt_span = page.locator('#source-container span.word:has-text("fängt")').first
+    table_anf = page.locator('#lemma-table tbody tr').nth(1)
+    table_der = page.locator('#lemma-table tbody tr').first
+
+    # 1. Select in table -> word active without rainbow frame
+    table_anf.click()
+    assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" not in (faengt_span.get_attribute("class") or "")
+    assert "highlight-purple-active" in (faengt_span.get_attribute("class") or "")
+
+    # 2. Click in text -> deselects immediately, NO frame added!
+    faengt_span.click()
+    assert 1 not in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" not in (faengt_span.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (faengt_span.get_attribute("class") or "")
+
+    # 3. Click in text again -> selects + pins rainbow frame
+    faengt_span.click()
+    assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" in (faengt_span.get_attribute("class") or "")
+    assert "highlight-purple-active" in (faengt_span.get_attribute("class") or "")
+
+    # 4. Click in text third time -> removes selection AND frame in 1 pass
+    faengt_span.click()
+    assert 1 not in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" not in (faengt_span.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (faengt_span.get_attribute("class") or "")
+
+    # 5. Two-step Escape behavior
+    faengt_span.click()  # add frame + select
+    table_der.click()    # table select
+    assert "hl-mvp-pin" in (faengt_span.get_attribute("class") or "")
+    
+    # 1st Esc: removes rainbow frames, keeps table selections
+    page.keyboard.press("Escape")
+    assert "hl-mvp-pin" not in (faengt_span.get_attribute("class") or "")
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) > 0
+
+    # 2nd Esc: removes all remaining selections
+    page.keyboard.press("Escape")
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 0
+
+
+
 

@@ -13673,6 +13673,21 @@ window.__CONFIG__ = {ui_config_json};
                 if (entry.transSpan) removeClass(entry.transSpan, 'hl-mvp-hover');
                 mvpBookmarks.splice(bIdx, 1);
             } else {
+                if (isSource) {
+                    if (this._skipMvpPinOnDeselect) {
+                        delete this._skipMvpPinOnDeselect;
+                        return;
+                    }
+                    if (typeof findRelatedTokenSpans === 'function') {
+                        var relSpans = findRelatedTokenSpans(this);
+                        for (var rs = 0; rs < relSpans.length; rs++) {
+                            if (relSpans[rs]._skipMvpPinOnDeselect) {
+                                delete relSpans[rs]._skipMvpPinOnDeselect;
+                                return;
+                            }
+                        }
+                    }
+                }
                 while (mvpBookmarks.length >= mvpN) {
                     var oldest = mvpBookmarks.shift();
                     if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
@@ -16621,8 +16636,18 @@ window.__CONFIG__ = {ui_config_json};
                                     }
                                 }
                             }
-                            if (isTokenPinned || isTokenCurrentlyActive) {
+                            var shouldDeselect = isTokenPinned || (isTransitionFromTableSelection ? isSameAsTableSelection : isTokenCurrentlyActive);
+                            if (shouldDeselect) {
                                 tokenDragMode = false;
+                                if (!isTokenPinned) {
+                                    span._skipMvpPinOnDeselect = true;
+                                    if (typeof findRelatedTokenSpans === 'function') {
+                                        var relDeselectSpans = findRelatedTokenSpans(span);
+                                        for (var rd = 0; rd < relDeselectSpans.length; rd++) {
+                                            relDeselectSpans[rd]._skipMvpPinOnDeselect = true;
+                                        }
+                                    }
+                                }
                             } else {
                                 tokenDragMode = true;
                             }
