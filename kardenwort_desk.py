@@ -14009,6 +14009,12 @@ window.__CONFIG__ = {ui_config_json};
         var rmbFlipMode = true;
         var initialFlippedMap = null;
         
+        var pos_display_order_json;
+        var POS_DISPLAY_ORDER_MAP = {pos_display_order_json};
+        if (!POS_DISPLAY_ORDER_MAP || POS_DISPLAY_ORDER_MAP['art.'] === undefined) {
+            POS_DISPLAY_ORDER_MAP = (window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3};
+        }
+        window.POS_DISPLAY_ORDER_MAP = POS_DISPLAY_ORDER_MAP;
         var tokenMap = [];
         try {
             var tokenMapEl = document.getElementById('token-map');
@@ -15887,6 +15893,47 @@ window.__CONFIG__ = {ui_config_json};
             return sepPartners.length > 0 ? sepPartners : [span];
         }
 
+        function getRowGroupIds(tr) {
+            if (!tr) return [];
+            var ids = [String(tr.getAttribute('data-row-id'))];
+            var allAttr = tr.getAttribute('data-all-row-ids');
+            if (allAttr) {
+                var parts = allAttr.split(',');
+                for (var i = 0; i < parts.length; i++) {
+                    var p = parts[i].trim();
+                    if (p && ids.indexOf(p) === -1) ids.push(p);
+                }
+            }
+            return ids;
+        }
+        function getExtraRowIds(tr) { return getRowGroupIds(tr).slice(1); }
+        window.getRowGroupIds = getRowGroupIds;
+        window.getExtraRowIds = getExtraRowIds;
+
+        var LEGACY_OVERVIEW_CUTOFF_ZID = '20261002000000';
+        function isLegacyOverviewContext() {
+            var isOverviewTab = !!(window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().index === 0);
+            var cardZid = '';
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().zid) {
+                cardZid = String(window.WorkspaceTabs.getActiveCard().zid);
+            } else if (typeof SESSION_ZID !== 'undefined' && SESSION_ZID && SESSION_ZID !== '__SESSION_ZID__') {
+                cardZid = String(SESSION_ZID);
+            } else if (window.__CONFIG__ && window.__CONFIG__.zid) {
+                cardZid = String(window.__CONFIG__.zid);
+            }
+            return isOverviewTab && (cardZid && cardZid < LEGACY_OVERVIEW_CUTOFF_ZID);
+        }
+        window.isLegacyOverviewContext = isLegacyOverviewContext;
+
+        function decideTokenClickAction(ctx) {
+            var isTableSelectedToken = !!(ctx.isRowSelected && !ctx.isRowBackedByActiveToken);
+            var shouldDeselect = ctx.hasActiveTokens
+                ? !!(ctx.isInActiveSelections || ctx.isTokenPinned || isTableSelectedToken || ctx.isOrphanSelected)
+                : !!(ctx.isVisuallyActive || ctx.isRowSelected || ctx.isLemmaSelected || ctx.isInActiveSelections || ctx.isTokenPinned || ctx.isOrphanSelected);
+            return { shouldDeselect: shouldDeselect, isTableSelectedToken: isTableSelectedToken };
+        }
+        window.decideTokenClickAction = decideTokenClickAction;
+
         function findTokenData(span) {
             var wordIdx = parseInt(span.getAttribute('data-word-idx'));
             for (var i = 0; i < tokenMap.length; i++) {
@@ -16748,14 +16795,11 @@ window.__CONFIG__ = {ui_config_json};
                                 for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
                                     var tr = tableRows[trIdx];
                                     if (String(tr.getAttribute('data-row-id')) === tidStr) {
-                                        var allAttr = tr.getAttribute('data-all-row-ids');
-                                        if (allAttr) {
-                                            var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                            for (var p = 0; p < pList.length; p++) {
-                                                if (selectedRowIdsMap.hasOwnProperty(pList[p])) {
-                                                    isRowSelected = true;
-                                                    break;
-                                                }
+                                        var pList = getExtraRowIds(tr);
+                                        for (var p = 0; p < pList.length; p++) {
+                                            if (selectedRowIdsMap.hasOwnProperty(pList[p])) {
+                                                isRowSelected = true;
+                                                break;
                                             }
                                         }
                                         break;
@@ -16779,15 +16823,7 @@ window.__CONFIG__ = {ui_config_json};
                             }
                             for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
                                 var tr = tableRows[trIdx];
-                                var trId = String(tr.getAttribute('data-row-id'));
-                                var allAttr = tr.getAttribute('data-all-row-ids');
-                                var pList = [trId];
-                                if (allAttr) {
-                                    var extras = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                                    for (var p = 0; p < extras.length; p++) {
-                                        if (pList.indexOf(extras[p]) === -1) pList.push(extras[p]);
-                                    }
-                                }
+                                var pList = getRowGroupIds(tr);
                                 var intersects = false;
                                 for (var p = 0; p < pList.length; p++) {
                                     if (targetMergedRowIds[pList[p]]) {
@@ -16828,18 +16864,8 @@ window.__CONFIG__ = {ui_config_json};
                                 if (isRowBackedByActiveToken) break;
                             }
                         }
-                        var isTableSelectedToken = isRowSelected && !isRowBackedByActiveToken;
                         
-                        var isOverviewTab = !!(window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().index === 0);
-                        var cardZid = '';
-                        if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().zid) {
-                            cardZid = String(window.WorkspaceTabs.getActiveCard().zid);
-                        } else if (typeof SESSION_ZID !== 'undefined' && SESSION_ZID && SESSION_ZID !== '__SESSION_ZID__') {
-                            cardZid = String(SESSION_ZID);
-                        } else if (window.__CONFIG__ && window.__CONFIG__.zid) {
-                            cardZid = String(window.__CONFIG__.zid);
-                        }
-                        var isLegacyOverview = isOverviewTab && (cardZid && cardZid < '20261002000000');
+                        var isLegacyOverview = isLegacyOverviewContext();
                         var isLemmaSelected = false;
                         if (!hasActiveTokens && isLegacyOverview) {
                             var tokLem = (typeof getWordLemma === 'function' ? getWordLemma(span) : null) || (clickedTokenData && clickedTokenData.lemma);
@@ -16854,12 +16880,18 @@ window.__CONFIG__ = {ui_config_json};
                             isOrphanSelected = true;
                         }
                         
-                        var shouldDeselect = false;
-                        if (hasActiveTokens) {
-                            shouldDeselect = isInActiveSelections || isTokenPinned || isTableSelectedToken || isOrphanSelected;
-                        } else {
-                            shouldDeselect = isVisuallyActive || isRowSelected || isLemmaSelected || isInActiveSelections || isTokenPinned || isOrphanSelected;
-                        }
+                        var clickDecision = decideTokenClickAction({
+                            hasActiveTokens: hasActiveTokens,
+                            isVisuallyActive: isVisuallyActive,
+                            isRowSelected: isRowSelected,
+                            isRowBackedByActiveToken: isRowBackedByActiveToken,
+                            isLemmaSelected: isLemmaSelected,
+                            isInActiveSelections: isInActiveSelections,
+                            isTokenPinned: isTokenPinned,
+                            isOrphanSelected: isOrphanSelected
+                        });
+                        var isTableSelectedToken = clickDecision.isTableSelectedToken;
+                        var shouldDeselect = clickDecision.shouldDeselect;
                         
                         if (shouldDeselect) {
                             tokenDragMode = false;
@@ -16905,12 +16937,9 @@ window.__CONFIG__ = {ui_config_json};
                                 selectedRowIdsMap[tid] = true;
                                 for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
                                     var tr = tableRows[trIdx];
-                                    var allAttr = tr.getAttribute('data-all-row-ids');
-                                    if (allAttr) {
-                                        var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                        if (pList.indexOf(tid) !== -1) {
-                                            selectedRowIdsMap[String(tr.getAttribute('data-row-id'))] = true;
-                                        }
+                                    var pList = getRowGroupIds(tr);
+                                    if (pList.indexOf(tid) !== -1) {
+                                        selectedRowIdsMap[pList[0]] = true;
                                     }
                                 }
                                 var rLem = getLemmaByRowId(tid);
@@ -16920,14 +16949,10 @@ window.__CONFIG__ = {ui_config_json};
                                     delete selectedRowIdsMap[tid];
                                     for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
                                         var tr = tableRows[trIdx];
-                                        var allAttr = tr.getAttribute('data-all-row-ids');
-                                        if (allAttr) {
-                                            var pList = allAttr.split(',').map(function(s) { return s.trim(); });
-                                            if (pList.indexOf(tid) !== -1) {
-                                                delete selectedRowIdsMap[String(tr.getAttribute('data-row-id'))];
-                                                for (var p = 0; p < pList.length; p++) {
-                                                    delete selectedRowIdsMap[pList[p]];
-                                                }
+                                        var pList = getRowGroupIds(tr);
+                                        if (pList.indexOf(tid) !== -1) {
+                                            for (var p = 0; p < pList.length; p++) {
+                                                delete selectedRowIdsMap[pList[p]];
                                             }
                                         }
                                     }
@@ -17152,14 +17177,7 @@ window.__CONFIG__ = {ui_config_json};
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
-            var constituentIds = [rowIdStr];
-            var allIdsAttr = row.getAttribute('data-all-row-ids');
-            if (allIdsAttr) {
-                var pList = allIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                for (var p = 0; p < pList.length; p++) {
-                    if (constituentIds.indexOf(pList[p]) === -1) constituentIds.push(pList[p]);
-                }
-            }
+            var constituentIds = getRowGroupIds(row);
             
             var rowVisualIdx = -1;
             for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
@@ -17204,15 +17222,7 @@ window.__CONFIG__ = {ui_config_json};
                     for (var rIdx = start; rIdx <= end; rIdx++) {
                         if (rIdx >= 0 && rIdx < tableRows.length) {
                             var tr = tableRows[rIdx];
-                            var trId = String(tr.getAttribute('data-row-id'));
-                            var pIds = [trId];
-                            var trAll = tr.getAttribute('data-all-row-ids');
-                            if (trAll) {
-                                var trParts = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                                for (var tp = 0; tp < trParts.length; tp++) {
-                                    if (pIds.indexOf(trParts[tp]) === -1) pIds.push(trParts[tp]);
-                                }
-                            }
+                            var pIds = getRowGroupIds(tr);
                             for (var p = 0; p < pIds.length; p++) {
                                 selectedRowIdsMap[pIds[p]] = true;
                             }
@@ -17367,14 +17377,7 @@ window.__CONFIG__ = {ui_config_json};
                         }
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isContainer = !!(window.WorkspaceTabs && window.WorkspaceTabs.getCards);
-                        var pIds = [trId];
-                        if (!isContainer) {
-                            var trAll = tr.getAttribute('data-all-row-ids');
-                            if (trAll) {
-                                pIds = trAll.split(',').filter(Boolean);
-                                if (pIds.indexOf(trId) === -1) pIds.push(trId);
-                            }
-                        }
+                        var pIds = isContainer ? [trId] : getRowGroupIds(tr);
                         for (var p = 0; p < pIds.length; p++) {
                             if (dragSelectMode) {
                                 selectedRowIdsMap[pIds[p]] = true;
@@ -17444,13 +17447,9 @@ window.__CONFIG__ = {ui_config_json};
                 initialHighlights[rIdStr] = isHl;
             }
             if (isHl) {
-                selectedRowIdsMap[rIdStr] = true;
-                var trAll = r.getAttribute('data-all-row-ids');
-                if (trAll) {
-                    var pIds = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                    for (var p = 0; p < pIds.length; p++) {
-                        selectedRowIdsMap[pIds[p]] = true;
-                    }
+                var pIds = getRowGroupIds(r);
+                for (var p = 0; p < pIds.length; p++) {
+                    selectedRowIdsMap[pIds[p]] = true;
                 }
                 var rLem = getRowLemma(r);
                 if (rLem) setLemmaSelected(rLem, true);
@@ -17514,9 +17513,7 @@ window.__CONFIG__ = {ui_config_json};
                                 for (var r = minRow; r <= maxRow; r++) {
                                     if (r >= 0 && r < tableRows.length) {
                                         var tr = tableRows[r];
-                                        var trId = String(tr.getAttribute('data-row-id'));
-                                        var trAll = tr.getAttribute('data-all-row-ids');
-                                        var pIds = trAll ? trAll.split(',').filter(Boolean) : [trId];
+                                        var pIds = getRowGroupIds(tr);
                                         var isSel = pIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
                                         if (isSel) {
                                             var term = getTableRowWordsToPlay(tr, audioLmbSource);
@@ -18107,7 +18104,7 @@ window.__CONFIG__ = {ui_config_json};
                 } else {
                     var newTooltip = '';
                     if (cls === 'col-pos') {
-                        var posOrder = { 'art.': 0, 'pron.': 1, 'det.': 2, 'prep.': 3 };
+                        var posOrder = POS_DISPLAY_ORDER_MAP;
                         vals.sort(function(a, b) {
                             var oa = (posOrder[a] !== undefined) ? posOrder[a] : 99;
                             var ob = (posOrder[b] !== undefined) ? posOrder[b] : 99;
@@ -18158,8 +18155,21 @@ window.__CONFIG__ = {ui_config_json};
 
         function updateBidirectionalHighlights() {
             try { applyOccurrenceView(); } catch (e) {}
+            var tokByVidx = {}, spanByVidx = {}, sentByRowId = {};
+            for (var m = 0; m < tokenMap.length; m++) {
+                var t = tokenMap[m];
+                tokByVidx[String(t.visual_idx)] = t;
+                if (t.row_ids && t.sentence_idx !== undefined && t.sentence_idx !== null) {
+                    for (var r = 0; r < t.row_ids.length; r++) {
+                        var k = String(t.row_ids[r]);
+                        if (!sentByRowId.hasOwnProperty(k)) sentByRowId[k] = t.sentence_idx;
+                    }
+                }
+            }
             for (var i = 0; i < tokenSpans.length; i++) {
                 var span = tokenSpans[i];
+                var sk = String(span.getAttribute('data-word-idx'));
+                if (!spanByVidx.hasOwnProperty(sk)) spanByVidx[sk] = span;
                 try {
                     span.classList.remove('highlight-orange-active');
                     span.classList.remove('highlight-purple-active');
@@ -18168,16 +18178,7 @@ window.__CONFIG__ = {ui_config_json};
                 } catch(e) {}
             }
             
-            var isOverviewTab = !!(window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().index === 0);
-            var cardZid = '';
-            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().zid) {
-                cardZid = String(window.WorkspaceTabs.getActiveCard().zid);
-            } else if (typeof SESSION_ZID !== 'undefined' && SESSION_ZID && SESSION_ZID !== '__SESSION_ZID__') {
-                cardZid = String(SESSION_ZID);
-            } else if (window.__CONFIG__ && window.__CONFIG__.zid) {
-                cardZid = String(window.__CONFIG__.zid);
-            }
-            var isLegacyOverview = isOverviewTab && (cardZid && cardZid < '20261002000000');
+            var isLegacyOverview = isLegacyOverviewContext();
             var hasActiveTokens = !isLegacyOverview && (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
             var isSameLemmaOn = !!(window.AppState && window.AppState.highlightSameLemma);
             
@@ -18204,30 +18205,16 @@ window.__CONFIG__ = {ui_config_json};
                     if (!isNaN(trIdInt)) {
                         activeTargetRowIds[trIdInt] = true;
                         primaryTargetRowIds[trIdInt] = true;
-                        for (var m = 0; m < tokenMap.length; m++) {
-                            if (tokenMap[m].row_ids && tokenMap[m].row_ids.indexOf(trIdInt) !== -1 && tokenMap[m].sentence_idx !== undefined && tokenMap[m].sentence_idx !== null) {
-                                primarySentIdx = tokenMap[m].sentence_idx;
-                                break;
-                            }
-                        }
+                        primarySentIdx = sentByRowId.hasOwnProperty(String(trIdInt)) ? sentByRowId[String(trIdInt)] : null;
                     }
-                    var allAttr = tr.getAttribute('data-all-row-ids');
-                    if (allAttr) {
-                        var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                        for (var p = 0; p < parts.length; p++) {
-                            var pInt = parseInt(parts[p], 10);
-                            if (!isNaN(pInt)) {
-                                activeTargetRowIds[pInt] = true;
-                                var pSentIdx = null;
-                                for (var m = 0; m < tokenMap.length; m++) {
-                                    if (tokenMap[m].row_ids && tokenMap[m].row_ids.indexOf(pInt) !== -1 && tokenMap[m].sentence_idx !== undefined && tokenMap[m].sentence_idx !== null) {
-                                        pSentIdx = tokenMap[m].sentence_idx;
-                                        break;
-                                    }
-                                }
-                                if (primarySentIdx === null || pSentIdx === null || String(pSentIdx) === String(primarySentIdx)) {
-                                    primaryTargetRowIds[pInt] = true;
-                                }
+                    var extraIds = getExtraRowIds(tr);
+                    for (var p = 0; p < extraIds.length; p++) {
+                        var pInt = parseInt(extraIds[p], 10);
+                        if (!isNaN(pInt)) {
+                            activeTargetRowIds[pInt] = true;
+                            var pSentIdx = sentByRowId.hasOwnProperty(String(pInt)) ? sentByRowId[String(pInt)] : null;
+                            if (primarySentIdx === null || pSentIdx === null || String(pSentIdx) === String(primarySentIdx)) {
+                                primaryTargetRowIds[pInt] = true;
                             }
                         }
                     }
@@ -18252,28 +18239,16 @@ window.__CONFIG__ = {ui_config_json};
                     if (item.lemma) {
                         activeLemmas[String(item.lemma).trim().toLowerCase()] = true;
                     }
-                    var vIdxInt = parseInt(item.visual_idx, 10);
-                    for (var m = 0; m < tokenMap.length; m++) {
-                        if (parseInt(tokenMap[m].visual_idx, 10) === vIdxInt) {
-                            var tokRows = tokenMap[m].row_ids || [];
-                            for (var r = 0; r < tokRows.length; r++) {
-                                activeTokenRowIds[String(tokRows[r])] = true;
-                            }
-                            break;
+                    var vTok = tokByVidx[String(item.visual_idx)];
+                    if (vTok && vTok.row_ids) {
+                        for (var r = 0; r < vTok.row_ids.length; r++) {
+                            activeTokenRowIds[String(vTok.row_ids[r])] = true;
                         }
                     }
                 }
                 for (var i = 0; i < curTableRows.length; i++) {
                     var tr = curTableRows[i];
-                    var trId = String(tr.getAttribute('data-row-id'));
-                    var allAttr = tr.getAttribute('data-all-row-ids');
-                    var trGroup = [trId];
-                    if (allAttr) {
-                        var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                        for (var p = 0; p < parts.length; p++) {
-                            if (trGroup.indexOf(parts[p]) === -1) trGroup.push(parts[p]);
-                        }
-                    }
+                    var trGroup = getRowGroupIds(tr);
                     var hasActiveInTr = false;
                     for (var g = 0; g < trGroup.length; g++) {
                         if (activeTokenRowIds[trGroup[g]]) {
@@ -18322,12 +18297,12 @@ window.__CONFIG__ = {ui_config_json};
                                     if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
                                         var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
                                         if (!atClean) {
-                                            var atSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                            var atSpan = spanByVidx[String(atItem.visual_idx)];
                                             if (atSpan) atClean = (atSpan.getAttribute('data-lower-clean') || atSpan.textContent || '').trim().toLowerCase();
                                         }
                                         if (tokClean && atClean && tokClean === atClean) {
-                                            var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
-                                            var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
+                                            var tSpan = spanByVidx[String(token.visual_idx)];
+                                            var aSpan = spanByVidx[String(atItem.visual_idx)];
                                             var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
                                             var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
                                             var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
@@ -18349,8 +18324,8 @@ window.__CONFIG__ = {ui_config_json};
                                 if (!sharesIdenticalAtomic) {
                                     for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                                         var atItem = window.AppState.activeTokenSelections[a];
-                                        var aSpan = document.querySelector('span[data-word-idx="' + atItem.visual_idx + '"]');
-                                        var tSpan = document.querySelector('span[data-word-idx="' + token.visual_idx + '"]');
+                                        var aSpan = spanByVidx[String(atItem.visual_idx)];
+                                        var tSpan = spanByVidx[String(token.visual_idx)];
                                         if (aSpan && tSpan) {
                                             var grp = findCompoundSiblingSpans(aSpan);
                                             if (grp && grp.indexOf(tSpan) !== -1) {
@@ -18395,13 +18370,7 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 
                 if (hasMatchingRow) {
-                    var span = null;
-                    for (var k = 0; k < tokenSpans.length; k++) {
-                        if (tokenSpans[k].getAttribute('data-word-idx') == token.visual_idx) {
-                            span = tokenSpans[k];
-                            break;
-                        }
-                    }
+                    var span = spanByVidx[String(token.visual_idx)] || null;
                     if (span) {
                         try {
                             if (isDirectRowMatch || isTargetedActiveTokenMatch) {
@@ -21470,6 +21439,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{mismatch_info_json}", json.dumps(mismatch_info) if mismatch_info else "null")
     ui_cfg = resolve_ui_config(config)
     html_page = html_page.replace("{ui_config_json}", json.dumps(ui_cfg))
+    html_page = html_page.replace("{pos_display_order_json}", json.dumps(POS_DISPLAY_ORDER))
     html_page = html_page.replace("{same_lemma_active_class}", " active" if ui_cfg.get("highlight_same_lemma") else "")
 
     html_page = html_page.replace("{language}", language)

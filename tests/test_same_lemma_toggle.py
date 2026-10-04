@@ -992,3 +992,223 @@ def test_table_row_click_highlights_all_der_occurrences(page, tmp_path):
     assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
     assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
 
+
+def test_frontend_pos_display_order_injected(page, tmp_path):
+    """Verifies that POS_DISPLAY_ORDER_MAP is injected from Python constants into the desk JS scope."""
+    raw_html = get_desk_page_html(tmp_path)
+    html = inject_mock_fetch(raw_html)
+    html_file = tmp_path / "page_pos_order.html"
+    html_file.write_text(html, encoding="utf-8")
+
+    page.goto(html_file.as_uri())
+    page.wait_for_selector("#source-container span.word")
+
+    pos_order = page.evaluate("() => window.POS_DISPLAY_ORDER_MAP")
+    assert pos_order == {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
+
+
+def test_frontend_row_group_helpers(page, tmp_path):
+    """Verifies window.getRowGroupIds and window.getExtraRowIds parsing and deduplication."""
+    raw_html = get_desk_page_html(tmp_path)
+    html = inject_mock_fetch(raw_html)
+    html_file = tmp_path / "page_row_helpers.html"
+    html_file.write_text(html, encoding="utf-8")
+
+    page.goto(html_file.as_uri())
+    page.wait_for_selector("#source-container span.word")
+
+    result = page.evaluate("""() => {
+        var tr1 = document.createElement('tr');
+        tr1.setAttribute('data-row-id', '10');
+
+        var tr2 = document.createElement('tr');
+        tr2.setAttribute('data-row-id', '20');
+        tr2.setAttribute('data-all-row-ids', '20, 21, 22');
+
+        var tr3 = document.createElement('tr');
+        tr3.setAttribute('data-row-id', '30');
+        tr3.setAttribute('data-all-row-ids', ' 30,  31 , 31, 32  ');
+
+        return {
+            nullTr: window.getRowGroupIds(null),
+            tr1All: window.getRowGroupIds(tr1),
+            tr1Extra: window.getExtraRowIds(tr1),
+            tr2All: window.getRowGroupIds(tr2),
+            tr2Extra: window.getExtraRowIds(tr2),
+            tr3All: window.getRowGroupIds(tr3),
+            tr3Extra: window.getExtraRowIds(tr3),
+        };
+    }""")
+
+    assert result["nullTr"] == []
+    assert result["tr1All"] == ["10"]
+    assert result["tr1Extra"] == []
+    assert result["tr2All"] == ["20", "21", "22"]
+    assert result["tr2Extra"] == ["21", "22"]
+    assert result["tr3All"] == ["30", "31", "32"]
+    assert result["tr3Extra"] == ["31", "32"]
+
+
+def test_frontend_is_legacy_overview_context(page, tmp_path):
+    """Verifies window.isLegacyOverviewContext correctly identifies legacy overview cards (< 20261002000000)."""
+    raw_html = get_desk_page_html(tmp_path)
+    html = inject_mock_fetch(raw_html)
+    html_file = tmp_path / "page_legacy_overview.html"
+    html_file.write_text(html, encoding="utf-8")
+
+    page.goto(html_file.as_uri())
+    page.wait_for_selector("#source-container span.word")
+
+    result = page.evaluate("""() => {
+        var origTabs = window.WorkspaceTabs;
+        var r = {};
+
+        // Case 1: not overview tab (index 1)
+        window.WorkspaceTabs = { getActiveCard: () => ({ index: 1, zid: '20261001120000' }) };
+        r.nonOverview = window.isLegacyOverviewContext();
+
+        // Case 2: overview tab, old zid (< 20261002000000)
+        window.WorkspaceTabs = { getActiveCard: () => ({ index: 0, zid: '20261001120000' }) };
+        r.legacyOverview = window.isLegacyOverviewContext();
+
+        // Case 3: overview tab, new zid (>= 20261002000000)
+        window.WorkspaceTabs = { getActiveCard: () => ({ index: 0, zid: '20261002000000' }) };
+        r.modernOverviewExact = window.isLegacyOverviewContext();
+
+        window.WorkspaceTabs = { getActiveCard: () => ({ index: 0, zid: '20261003153000' }) };
+        r.modernOverviewLater = window.isLegacyOverviewContext();
+
+        // Case 4: No WorkspaceTabs, fallback to SESSION_ZID / __CONFIG__
+        window.WorkspaceTabs = null;
+        r.noTabs = window.isLegacyOverviewContext();
+
+        window.WorkspaceTabs = origTabs;
+        return r;
+    }""")
+
+    assert result["nonOverview"] is False
+    assert result["legacyOverview"] is True
+    assert result["modernOverviewExact"] is False
+    assert result["modernOverviewLater"] is False
+    assert result["noTabs"] is False
+
+
+def test_frontend_decide_token_click_action(page, tmp_path):
+    """Verifies window.decideTokenClickAction decision matrix for both active selection and idle states."""
+    raw_html = get_desk_page_html(tmp_path)
+    html = inject_mock_fetch(raw_html)
+    html_file = tmp_path / "page_click_action.html"
+    html_file.write_text(html, encoding="utf-8")
+
+    page.goto(html_file.as_uri())
+    page.wait_for_selector("#source-container span.word")
+
+    result = page.evaluate("""() => {
+        var r = {};
+
+        // When hasActiveTokens = true:
+        r.active_inSelections = window.decideTokenClickAction({
+            hasActiveTokens: true,
+            isInActiveSelections: true,
+            isTokenPinned: false,
+            isRowSelected: false,
+            isRowBackedByActiveToken: false,
+            isOrphanSelected: false
+        });
+        r.active_pinned = window.decideTokenClickAction({
+            hasActiveTokens: true,
+            isInActiveSelections: false,
+            isTokenPinned: true,
+            isRowSelected: false,
+            isRowBackedByActiveToken: false,
+            isOrphanSelected: false
+        });
+        r.active_tableSelectedToken = window.decideTokenClickAction({
+            hasActiveTokens: true,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isRowSelected: true,
+            isRowBackedByActiveToken: false,
+            isOrphanSelected: false
+        });
+        r.active_orphanSelected = window.decideTokenClickAction({
+            hasActiveTokens: true,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isRowSelected: false,
+            isRowBackedByActiveToken: false,
+            isOrphanSelected: true
+        });
+        r.active_rowBackedByActiveToken_notInSelections = window.decideTokenClickAction({
+            hasActiveTokens: true,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isRowSelected: true,
+            isRowBackedByActiveToken: true,
+            isOrphanSelected: false
+        });
+        r.active_unselectedToken = window.decideTokenClickAction({
+            hasActiveTokens: true,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isRowSelected: false,
+            isRowBackedByActiveToken: false,
+            isOrphanSelected: false
+        });
+
+        // When hasActiveTokens = false:
+        r.idle_visuallyActive = window.decideTokenClickAction({
+            hasActiveTokens: false,
+            isVisuallyActive: true,
+            isRowSelected: false,
+            isLemmaSelected: false,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isOrphanSelected: false
+        });
+        r.idle_rowSelected = window.decideTokenClickAction({
+            hasActiveTokens: false,
+            isVisuallyActive: false,
+            isRowSelected: true,
+            isLemmaSelected: false,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isOrphanSelected: false
+        });
+        r.idle_lemmaSelected = window.decideTokenClickAction({
+            hasActiveTokens: false,
+            isVisuallyActive: false,
+            isRowSelected: false,
+            isLemmaSelected: true,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isOrphanSelected: false
+        });
+        r.idle_inactive = window.decideTokenClickAction({
+            hasActiveTokens: false,
+            isVisuallyActive: false,
+            isRowSelected: false,
+            isLemmaSelected: false,
+            isInActiveSelections: false,
+            isTokenPinned: false,
+            isOrphanSelected: false
+        });
+
+        return r;
+    }""")
+
+    # Active tokens state
+    assert result["active_inSelections"]["shouldDeselect"] is True
+    assert result["active_pinned"]["shouldDeselect"] is True
+    assert result["active_tableSelectedToken"]["shouldDeselect"] is True
+    assert result["active_tableSelectedToken"]["isTableSelectedToken"] is True
+    assert result["active_orphanSelected"]["shouldDeselect"] is True
+    assert result["active_rowBackedByActiveToken_notInSelections"]["shouldDeselect"] is False
+    assert result["active_unselectedToken"]["shouldDeselect"] is False
+
+    # Idle state
+    assert result["idle_visuallyActive"]["shouldDeselect"] is True
+    assert result["idle_rowSelected"]["shouldDeselect"] is True
+    assert result["idle_lemmaSelected"]["shouldDeselect"] is True
+    assert result["idle_inactive"]["shouldDeselect"] is False
+
