@@ -588,5 +588,57 @@ def test_persist_default_language_omits_ahk_mutation(tmp_path):
     assert "DefaultLanguage = de" in ahk_config.read_text(encoding="utf-8")
 
 
+def test_persist_config_value_preserves_comments_and_formatting(tmp_path):
+    from kardenwort_desk import persist_config_value
+
+    desk_dir = tmp_path / "kardenwort-desk"
+    desk_dir.mkdir()
+    desk_config = desk_dir / "config.ini"
+
+    initial_content = (
+        "# Desk Global Configuration\n"
+        "[settings]\n"
+        "# System primary language\n"
+        "default_language = de\n"
+        "\n"
+        "[rendering]\n"
+        "# Toggle same-lemma highlight\n"
+        "highlight_same_lemma = false\n"
+        "# Another comment\n"
+        "theme = dark\n"
+        "\n"
+        "[services]\n"
+        "spacy_port = 8765\n"
+    )
+    desk_config.write_text(initial_content, encoding="utf-8")
+
+    # 1. Update existing key in rendering section
+    ok = persist_config_value("rendering", "highlight_same_lemma", "true", base_dir=desk_dir)
+    assert ok is True
+    content = desk_config.read_text(encoding="utf-8")
+    assert "# Toggle same-lemma highlight\nhighlight_same_lemma = true\n" in content
+    assert "# System primary language\ndefault_language = de" in content
+    assert "spacy_port = 8765" in content
+
+    # 2. Add missing key to existing section
+    ok = persist_config_value("rendering", "new_toggle", "enabled", base_dir=desk_dir)
+    assert ok is True
+    content = desk_config.read_text(encoding="utf-8")
+    assert "new_toggle = enabled" in content
+    assert "\n[services]\n" in content
+
+    # 3. Add missing section and key
+    ok = persist_config_value("custom_section", "custom_key", "custom_val", base_dir=desk_dir)
+    assert ok is True
+    content = desk_config.read_text(encoding="utf-8")
+    assert "[custom_section]\ncustom_key = custom_val" in content
+
+    # 4. Returns False for missing file or empty parameters
+    assert persist_config_value("settings", "key", "val", base_dir=tmp_path / "nonexistent") is False
+    assert persist_config_value("", "key", "val", base_dir=desk_dir) is False
+    assert persist_config_value("settings", "", "val", base_dir=desk_dir) is False
+
+
+
 
 

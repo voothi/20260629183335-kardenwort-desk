@@ -80,10 +80,15 @@ from kardenwort_desk import (
     SEC_TIMEOUTS,
     SEC_CLASSIFICATION,
     persist_default_language,
+    persist_config_value,
     spawn_ahk,
 )
 
 logger = logging.getLogger("kardenwort.desk.controller")
+
+CONFIG_API_WRITABLE_KEYS: Dict[Tuple[str, str], str] = {
+    ('rendering', 'highlight_same_lemma'): 'bool',
+}
 
 ERROR_STATUS_MATRIX = {
     "INVALID_PAYLOAD": 400,
@@ -4470,28 +4475,55 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 self._authenticate_token(body)
                 sec = body.get('section', 'rendering')
                 key = body.get('key')
-                val = str(body.get('value', ''))
+                val = body.get('value')
                 if not key and 'highlight_same_lemma' in body:
                     key = 'highlight_same_lemma'
-                    val = str(body.get('highlight_same_lemma')).lower()
-                if key and hasattr(self.server, 'config') and self.server.config:
+                    val = body.get('highlight_same_lemma')
+
+                target_pair = (str(sec).strip().lower() if sec else '', str(key).strip().lower() if key else '')
+                matched_pair = None
+                expected_type = None
+                for (w_sec, w_key), k_type in CONFIG_API_WRITABLE_KEYS.items():
+                    if (w_sec.lower(), w_key.lower()) == target_pair:
+                        matched_pair = (w_sec, w_key)
+                        expected_type = k_type
+                        break
+
+                if not matched_pair:
+                    raise StructuredError(
+                        ErrorCode.INVALID_PAYLOAD,
+                        f"Field '{key}' in section '{sec}' is not permitted for configuration updates",
+                    )
+
+                sec, key = matched_pair
+                if expected_type == 'bool':
+                    if isinstance(val, bool):
+                        bool_val = val
+                    else:
+                        bool_val = str(val).lower() in ('1', 'true', 'yes')
+                    norm_val = 'true' if bool_val else 'false'
+                else:
+                    norm_val = str(val) if val is not None else ''
+
+                if hasattr(self.server, 'config') and self.server.config:
                     if not self.server.config.has_section(sec):
                         self.server.config.add_section(sec)
-                    self.server.config.set(sec, key, val)
+                    self.server.config.set(sec, key, norm_val)
                     if hasattr(self.server, 'ui_cfg') and self.server.ui_cfg is not None:
-                        self.server.ui_cfg[key] = (val.lower() in ('1', 'true', 'yes'))
-                    cfg_file = getattr(self.server, 'config_path', None)
-                    if not cfg_file and hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
+                        if expected_type == 'bool':
+                            self.server.ui_cfg[key] = bool_val
+                        else:
+                            self.server.ui_cfg[key] = norm_val
+
+                    base_dir = None
+                    if hasattr(self.server, 'resolved_paths') and self.server.resolved_paths:
                         base_dir = self.server.resolved_paths.get('base_dir')
-                        if base_dir:
-                            cfg_file = Path(base_dir) / 'config.ini'
-                    if cfg_file and Path(cfg_file).exists():
-                        try:
-                            with open(cfg_file, 'w', encoding='utf-8') as f:
-                                self.server.config.write(f)
-                        except Exception as e:
-                            logger.warning(f"Failed to write config.ini: {e}")
-                self._send_json(200, {"ok": True, "section": sec, "key": key, "value": val})
+                    if not base_dir and getattr(self.server, 'config_path', None):
+                        base_dir = Path(self.server.config_path).parent
+
+                    persist_config_value(sec, key, norm_val, base_dir=base_dir)
+
+                self._send_json(200, {"ok": True, "section": sec, "key": key, "value": norm_val})
                 return
             else:
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")

@@ -2273,6 +2273,16 @@ def normalize_pos_tag(pos: Optional[str]) -> str:
         return pos_lower
     return pos_clean
 
+
+DE_UNIFIED_ARTICLE_LEMMA = "der"
+DE_UNIFIED_ARTICLE_FORMS = frozenset({"der", "die", "das", "den", "dem", "des"})
+POS_DISPLAY_ORDER = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
+
+
+def sort_pos_tags(tags):
+    return sorted(tags, key=lambda x: (POS_DISPLAY_ORDER.get(x, 99), x))
+
+
 def format_pos_cell(pos_val: Optional[str]) -> str:
     return normalize_pos_tag(pos_val)
 
@@ -4561,6 +4571,9 @@ class SqliteStorageAdapter(StorageAdapter):
                     if w.get("token_order") is not None
                 }
 
+                from kardenwort_db import sanitize_extra_fields
+                unify_article_lemmas = self.config.getboolean(SEC_SETTINGS, "unify_article_pronoun_lemmas", fallback=True) if hasattr(self, 'config') and self.config else True
+
                 updates_list = []
                 for row_idx, r in enumerate(updated_rows):
                     if selected_set is not None and row_idx not in selected_set:
@@ -4583,7 +4596,6 @@ class SqliteStorageAdapter(StorageAdapter):
 
                     if matched_word and target_vidx is not None:
                         ef_raw = matched_word.get("extra_fields")
-                        from kardenwort_db import sanitize_extra_fields
                         ef_dict = sanitize_extra_fields(ef_raw)
 
                         occ_data = ef_dict.get("occurrence_data", {})
@@ -4623,6 +4635,7 @@ class SqliteStorageAdapter(StorageAdapter):
                                 }
 
                         w_lem = (matched_word.get("lemma") or "").strip().lower()
+                        is_unified_der = unify_article_lemmas and (w_lem == DE_UNIFIED_ARTICLE_LEMMA)
                         col_s_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
                         sent_text = ""
                         if col_s_src != -1 and row_idx < len(data_rows) and len(data_rows[row_idx]) > col_s_src:
@@ -4630,17 +4643,16 @@ class SqliteStorageAdapter(StorageAdapter):
 
                         if sent_text and w_lem:
                             try:
-                                import text_tokenizer as tok
                                 all_toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
                                 matched_quot = [f.strip().lower() for f in (matched_word.get("quotation") or "").split(",") if f.strip()]
                                 for st in all_toks:
                                     st_clean = (st.get("lower_clean") or st.get("text") or "").strip().lower()
-                                    is_match = (st_clean == w_lem) or (st_clean in matched_quot) or (w_lem == "der" and st_clean in ("der", "die", "das", "den", "dem", "des"))
+                                    is_match = (st_clean == w_lem) or (st_clean in matched_quot) or (is_unified_der and st_clean in DE_UNIFIED_ARTICLE_FORMS)
                                     if st.get("is_word") and is_match:
                                         st_vidx_str = str(st.get("visual_idx"))
                                         if st_vidx_str not in occ_data:
                                             fallback_pos = matched_word.get("pos") or ""
-                                            if w_lem == "der" and "art." in fallback_pos:
+                                            if is_unified_der and "art." in fallback_pos:
                                                 fallback_pos = "art."
                                             occ_data[st_vidx_str] = {
                                                 "pos": fallback_pos,
@@ -4655,15 +4667,14 @@ class SqliteStorageAdapter(StorageAdapter):
                         morph_items = [(int(k), v.get("morph", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("morph")]
 
                         if len(pos_items) > 1:
-                            if w_lem == "der":
+                            if is_unified_der:
                                 seen_occ_pos = []
                                 for _, p_val in sorted(pos_items, key=lambda x: x[0]):
                                     for p_sub in p_val.split(','):
                                         norm_p = normalize_pos_tag(p_sub).lower()
                                         if norm_p and norm_p not in seen_occ_pos:
                                             seen_occ_pos.append(norm_p)
-                                pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
-                                seen_occ_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
+                                seen_occ_pos = sort_pos_tags(seen_occ_pos)
                                 row_updates[pos_field] = ", ".join(seen_occ_pos)
                             else:
                                 row_updates[pos_field] = aggregate_sequential_distinct(pos_items, delimiter=", ")
@@ -8754,8 +8765,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                                 norm_p = normalize_pos_tag(p).lower()
                                 if norm_p and norm_p not in seen_pos:
                                     seen_pos.append(norm_p)
-                        pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
-                        seen_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
+                        seen_pos = sort_pos_tags(seen_pos)
                         deduped_rows[existing_row_idx][col_pos] = ", ".join(seen_pos)
                     elif not deduplicate_pos_aware and not deduped_rows[existing_row_idx][col_pos].strip() and pos:
                         deduped_rows[existing_row_idx][col_pos] = pos
@@ -9975,9 +9985,9 @@ html, body {{
                 try:
                     db_words = storage_adapter.db.get_words_by_session(str(candidate_zid).strip())
                     if db_words:
+                        from kardenwort_db import sanitize_extra_fields as _san_ef
                         for w in db_words:
                             try:
-                                from kardenwort_db import sanitize_extra_fields as _san_ef
                                 _occ = _san_ef(w.get("extra_fields")).get("occurrence_data")
                                 if isinstance(_occ, dict) and len(_occ) > 0:
                                     row_occurrences[str(w.get("token_order", ""))] = _occ
@@ -10996,7 +11006,7 @@ html, body {{
                 _row_occ = {}
             else:
                 _row_occ = dict(_row_occ)
-            der_forms = {"der", "die", "das", "den", "dem", "des"}
+            der_forms = DE_UNIFIED_ARTICLE_FORMS
             for tok_item in source_tokens:
                 if tok_item.get("is_word") and (tok_item.get("lower_clean") or "").lower() in der_forms:
                     v_key = str(tok_item.get("visual_idx"))
@@ -11406,8 +11416,7 @@ html, body {{
                                 norm_p = normalize_pos_tag(p_sub).lower()
                                 if norm_p and norm_p not in seen_ov_pos:
                                     seen_ov_pos.append(norm_p)
-                        pos_order = {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
-                        seen_ov_pos.sort(key=lambda x: (pos_order.get(x, 99), x))
+                        seen_ov_pos = sort_pos_tags(seen_ov_pos)
                         ov_pos_raw = ", ".join(seen_ov_pos)
                     else:
                         ov_pos_raw = aggregate_sequential_distinct(pos_items, delimiter=", ")
@@ -26250,6 +26259,67 @@ def persist_default_language(language: str, base_dir=None) -> bool:
             logger.warning(f"Failed to update desk config.ini with default_language={language}: {e}")
 
     return success
+
+
+def persist_config_value(section: str, key: str, value: Any, base_dir=None) -> bool:
+    """
+    Persists a configuration section/key/value to config.ini in kardenwort-desk.
+    Preserves comments, formatting, and section scoping via regex patching.
+    """
+    if not section or not key:
+        return False
+
+    if not base_dir:
+        base_dir = Path(__file__).resolve().parent
+    base_dir = Path(base_dir)
+
+    desk_config = base_dir / "config.ini"
+    if not desk_config.exists():
+        return False
+
+    try:
+        content = desk_config.read_text(encoding="utf-8")
+        str_val = str(value)
+
+        sec_pattern = re.compile(rf'^[ \t]*\[[ \t]*{re.escape(section)}[ \t]*\][ \t]*$', re.IGNORECASE | re.MULTILINE)
+        sec_match = sec_pattern.search(content)
+
+        if not sec_match:
+            prefix = "" if (not content or content.endswith("\n")) else "\n"
+            content = f"{content}{prefix}\n[{section}]\n{key} = {str_val}\n"
+        else:
+            sec_start = sec_match.end()
+            next_sec_match = re.search(r'^[ \t]*\[[^\]]+\]', content[sec_start:], re.MULTILINE)
+            if next_sec_match:
+                sec_end = sec_start + next_sec_match.start()
+            else:
+                sec_end = len(content)
+
+            sec_body = content[sec_start:sec_end]
+            key_pattern = re.compile(rf'^([ \t]*{re.escape(key)}[ \t]*=[ \t]*).*$', re.IGNORECASE | re.MULTILINE)
+            key_match = key_pattern.search(sec_body)
+
+            if key_match:
+                new_sec_body = key_pattern.sub(lambda m: m.group(1) + str_val, sec_body, count=1)
+                content = content[:sec_start] + new_sec_body + content[sec_end:]
+            else:
+                lines = sec_body.splitlines(keepends=True)
+                last_non_blank = -1
+                for idx, line in enumerate(lines):
+                    if line.strip():
+                        last_non_blank = idx
+                if last_non_blank == -1:
+                    new_sec_body = f"\n{key} = {str_val}\n" + sec_body.lstrip("\r\n")
+                else:
+                    lines.insert(last_non_blank + 1, f"{key} = {str_val}\n")
+                    new_sec_body = "".join(lines)
+                content = content[:sec_start] + new_sec_body + content[sec_end:]
+
+        desk_config.write_text(content, encoding="utf-8")
+        return True
+    except Exception as e:
+        logger.warning(f"Failed to update desk config.ini with [{section}] {key}={value}: {e}")
+        return False
 
 
 def spawn_ahk(args_list, base_dir=None):

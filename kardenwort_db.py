@@ -2360,11 +2360,10 @@ class KardenwortDB:
             cursor.execute("DELETE FROM words WHERE id = ?;", (word_id,))
             return cursor.rowcount > 0
 
-    def sanitize_all_words_extra_fields(self, zid: Optional[str] = None) -> int:
+    def _sanitize_extra_fields_where(self, predicate, zid: Optional[str] = None) -> int:
         """
-        Scans all records in words table and sanitizes extra_fields,
-        unnesting any recursive extra_fields payloads and reducing bloat.
-        Returns the number of rows updated.
+        Private scanner that queries words with non-empty extra_fields,
+        evaluates `predicate(raw_ef)`, sanitizes matching records, and updates them.
         """
         cleaned_count = 0
         with self.get_connection(zid=zid) as conn:
@@ -2374,13 +2373,26 @@ class KardenwortDB:
             for r in rows:
                 w_id = r["id"]
                 raw_ef = r["extra_fields"]
-                if '"extra_fields"' in raw_ef or '"extrafields"' in raw_ef:
+                if not raw_ef:
+                    continue
+                if predicate(raw_ef):
                     cleaned = sanitize_extra_fields(raw_ef)
                     new_serialized = self._serialize_extra_fields(cleaned)
                     if new_serialized != raw_ef:
                         cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (new_serialized, w_id))
                         cleaned_count += 1
         return cleaned_count
+
+    def sanitize_all_words_extra_fields(self, zid: Optional[str] = None) -> int:
+        """
+        Scans all records in words table and sanitizes extra_fields,
+        unnesting any recursive extra_fields payloads and reducing bloat.
+        Returns the number of rows updated.
+        """
+        return self._sanitize_extra_fields_where(
+            lambda raw: '"extra_fields"' in raw or '"extrafields"' in raw,
+            zid=zid,
+        )
 
     def batch_update_words(
         self,
@@ -2529,25 +2541,10 @@ class KardenwortDB:
         unnests and cleans them using sanitize_extra_fields, and rewrites the record.
         Returns the number of rows repaired.
         """
-        repaired_count = 0
-        with self.get_connection(zid=zid) as conn:
-            cursor = conn.cursor()
-            cursor.execute(
-                "SELECT id, extra_fields FROM words WHERE extra_fields IS NOT NULL AND extra_fields != '' AND extra_fields != '{}';"
-            )
-            rows = cursor.fetchall()
-            for row in rows:
-                w_id = row["id"]
-                raw_ef = row["extra_fields"]
-                if not raw_ef:
-                    continue
-                if '"extra_fields"' in raw_ef or '"extrafields"' in raw_ef or len(raw_ef) > 2048:
-                    sanitized = sanitize_extra_fields(raw_ef)
-                    serialized = self._serialize_extra_fields(sanitized)
-                    if serialized != raw_ef:
-                        cursor.execute("UPDATE words SET extra_fields = ? WHERE id = ?;", (serialized, w_id))
-                        repaired_count += 1
-        return repaired_count
+        return self._sanitize_extra_fields_where(
+            lambda raw: '"extra_fields"' in raw or '"extrafields"' in raw or len(raw) > 2048,
+            zid=zid,
+        )
 
     # ---------------------------------------------------------------------------
     # Atomic Session Bundle Operations

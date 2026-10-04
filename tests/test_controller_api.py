@@ -664,5 +664,58 @@ def test_get_config_api(running_controller):
         assert "default_language" in payload
 
 
+def test_post_config_api_whitelist(running_controller):
+    """
+    Verify POST /api/v1/config accepts whitelisted keys and rejects non-whitelisted keys with HTTP 400.
+    """
+    server_url, server = running_controller
+    headers = {"Content-Type": "application/json", "X-API-Token": server.api_key}
+
+    # 1. Whitelisted key succeeds
+    req_valid = urllib.request.Request(
+        f"{server_url}/api/v1/config",
+        data=json.dumps({"section": "rendering", "key": "highlight_same_lemma", "value": "true"}).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    with urllib.request.urlopen(req_valid, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        payload = data.get("data", data)
+        assert payload.get("ok") is True
+        assert payload.get("section") == "rendering"
+        assert payload.get("key") == "highlight_same_lemma"
+        assert payload.get("value") == "true"
+
+    # 2. Legacy format succeeds
+    req_legacy = urllib.request.Request(
+        f"{server_url}/api/v1/config",
+        data=json.dumps({"highlight_same_lemma": False}).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    with urllib.request.urlopen(req_legacy, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        payload = data.get("data", data)
+        assert payload.get("ok") is True
+        assert payload.get("key") == "highlight_same_lemma"
+        assert payload.get("value") == "false"
+
+    # 3. Non-whitelisted key rejected with HTTP 400 (INVALID_PAYLOAD)
+    req_invalid = urllib.request.Request(
+        f"{server_url}/api/v1/config",
+        data=json.dumps({"section": "settings", "key": "arbitrary_key", "value": "dangerous"}).encode("utf-8"),
+        headers=headers,
+        method="POST"
+    )
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        urllib.request.urlopen(req_invalid, timeout=5.0)
+    assert exc_info.value.code == 400
+    err_body = json.loads(exc_info.value.read().decode("utf-8"))
+    assert err_body.get("error_code") == "INVALID_PAYLOAD"
+
+
+
 
 

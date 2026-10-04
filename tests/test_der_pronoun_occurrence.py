@@ -54,3 +54,19 @@ def test_der_auto_infer_occurrences_relative_clause():
     assert inferred_occ["29"]["pos"] == "art."
     # Visual 38: , der ihm versprochen wurde -> pron.
     assert inferred_occ["38"]["pos"] == "pron."
+
+
+def test_language_constants_and_sort_pos_tags():
+    from kardenwort_desk import (
+        DE_UNIFIED_ARTICLE_LEMMA,
+        DE_UNIFIED_ARTICLE_FORMS,
+        POS_DISPLAY_ORDER,
+        sort_pos_tags,
+    )
+    assert DE_UNIFIED_ARTICLE_LEMMA == "der"
+    assert DE_UNIFIED_ARTICLE_FORMS == frozenset({"der", "die", "das", "den", "dem", "des"})
+    assert POS_DISPLAY_ORDER == {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3}
+
+    tags = ["prep.", "other", "pron.", "art.", "det."]
+    sorted_tags = sort_pos_tags(tags)
+    assert sorted_tags == ["art.", "pron.", "det.", "prep.", "other"]
