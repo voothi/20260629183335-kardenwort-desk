@@ -586,7 +586,15 @@ def test_table_selected_token_click_deselection_and_two_step_esc(page, tmp_path)
     assert "hl-mvp-pin" not in (faengt_span.get_attribute("class") or "")
     assert len(page.evaluate("() => window.getSelectedRowsArray()")) > 0
 
-    # 2nd Esc: removes all remaining selections
+    # 6. Click table-selected word after 1st Esc -> deselects immediately, NO frame added!
+    der_span = page.locator('#source-container span.word:has-text("der")').first
+    der_span.click()
+    assert 0 not in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" not in (der_span.get_attribute("class") or "")
+
+    # 7. Re-select and verify 2nd Esc removes all remaining selections
+    table_der.click()
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) > 0
     page.keyboard.press("Escape")
     assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 0
 
