@@ -599,5 +599,102 @@ def test_table_selected_token_click_deselection_and_two_step_esc(page, tmp_path)
     assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 0
 
 
+def test_table_selected_word_deselection_with_concurrent_active_text_bookmarks(page, tmp_path):
+    """Verifies that:
+    1. Table-selected words in text deselect cleanly on a single click when active text bookmarks exist.
+    2. Clicking table-selected words in text does NOT allocate rainbow bookmark frames.
+    3. Existing active text bookmarks remain intact.
+    4. Sister subtokens sharing an active lemma row perform additive selection.
+    """
+    tsv_path = tmp_path / "test.tsv"
+    tsv_path.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "das, den, der, die\tder\tart., pron.\tтот, который\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt.\tОн начинает сегодня с работы, которая ему нравится.\t0\n"
+        "fängt an\tanfangen\tv.\tначинать\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt.\tОн начинает сегодня с работы, которая ему нравится.\t0\n"
+        "heute\theute\tadv.\tсегодня\t1\tEr fängt heute mit der Arbeit an, die ihm gefällt.\tОн начинает сегодня с работы, которая ему нравится.\t0\n",
+        encoding='utf-8'
+    )
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set(SEC_RENDERING, 'hover_highlight', 'true')
+    config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
+    config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '4')
+
+    html = run_render_flow(
+        text="Er fängt heute mit der Arbeit an, die ihm gefällt.",
+        language="de",
+        zid="20261004150559",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=tsv_path
+    )
+    page.set_content(html)
+    page.evaluate("""
+        window.AppState.applyDeltas({
+            translatedText: "<div>Он начинает сегодня с работы, которая ему нравится.</div>",
+            stage: "finished"
+        });
+    """)
+
+    faengt_span = page.locator('#source-container span.word:has-text("fängt")').first
+    heute_span = page.locator('#source-container span.word:has-text("heute")').first
+    der_span = page.locator('#source-container span.word:has-text("der")').first
+    die_span = page.locator('#source-container span.word:has-text("die")').first
+
+    table_der = page.locator('#lemma-table tbody tr[data-row-id="0"]')
+    table_anf = page.locator('#lemma-table tbody tr[data-row-id="2"]')
+
+    # 1. Select row 0 ('der') and row 2 ('anfangen') from table
+    table_der.click()
+    table_anf.click()
+    selected_rows = page.evaluate("() => window.getSelectedRowsArray()")
+    assert 0 in selected_rows
+    assert 2 in selected_rows
+    assert "hl-mvp-pin" not in (faengt_span.get_attribute("class") or "")
+    assert "hl-mvp-pin" not in (der_span.get_attribute("class") or "")
+
+    # 2. Click 'heute' in text -> acquires rainbow frame and enters activeTokenSelections
+    heute_span.click()
+    assert "hl-mvp-pin" in (heute_span.get_attribute("class") or "")
+    active_tokens_len = page.evaluate("() => window.AppState.activeTokenSelections.length")
+    assert active_tokens_len > 0
+    initial_ring_len = page.evaluate("() => (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections.length : 0")
+
+    # 3. Click table-selected 'fängt' in text while 'heute' bookmark is active
+    # Must cleanly deselect row 2 in a single click, without attaching a rainbow frame
+    faengt_span.click()
+    selected_rows_after = page.evaluate("() => window.getSelectedRowsArray()")
+    assert 2 not in selected_rows_after
+    assert "highlight-purple-active" not in (faengt_span.get_attribute("class") or "")
+    assert "hl-mvp-pin" not in (faengt_span.get_attribute("class") or "")
+
+    # Bookmark ring length should NOT increase (no frame allocated to 'fängt')
+    ring_len_after = page.evaluate("() => (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections.length : 0")
+    assert ring_len_after == initial_ring_len
+
+    # 'heute' bookmark and selection must remain intact
+    assert "hl-mvp-pin" in (heute_span.get_attribute("class") or "")
+
+    # 4. Also verify single-click deselection of table-selected 'der'
+    der_span.click()
+    selected_rows_final = page.evaluate("() => window.getSelectedRowsArray()")
+    assert 0 not in selected_rows_final
+    assert "highlight-orange-active" not in (der_span.get_attribute("class") or "")
+    assert "hl-mvp-pin" not in (der_span.get_attribute("class") or "")
+
+    # 5. Verify sister subtoken additive selection:
+    # Click 'der' in text -> selects and pins
+    der_span.click()
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" in (der_span.get_attribute("class") or "")
+    # Click sister token 'die' in text -> must additively select 'die', NOT deselect row 0
+    die_span.click()
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" in (die_span.get_attribute("class") or "")
+
+
+
 
 

@@ -16702,8 +16702,47 @@ window.__CONFIG__ = {ui_config_json};
                         
                         var isRowBackedByActiveToken = false;
                         if (hasActiveTokens && targetRowIds && targetRowIds.length > 0) {
+                            var clickedLemma = (clickedTokenData && clickedTokenData.lemma) ? String(clickedTokenData.lemma).trim().toLowerCase() : '';
+                            if (!clickedLemma && typeof getWordLemma === 'function') {
+                                var wl = getWordLemma(span);
+                                if (wl) clickedLemma = String(wl).trim().toLowerCase();
+                            }
+                            
+                            var targetMergedRowIds = {};
+                            for (var t = 0; t < targetRowIds.length; t++) {
+                                targetMergedRowIds[String(targetRowIds[t])] = true;
+                            }
+                            for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+                                var tr = tableRows[trIdx];
+                                var trId = String(tr.getAttribute('data-row-id'));
+                                var allAttr = tr.getAttribute('data-all-row-ids');
+                                var pList = [trId];
+                                if (allAttr) {
+                                    var extras = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                                    for (var p = 0; p < extras.length; p++) {
+                                        if (pList.indexOf(extras[p]) === -1) pList.push(extras[p]);
+                                    }
+                                }
+                                var intersects = false;
+                                for (var p = 0; p < pList.length; p++) {
+                                    if (targetMergedRowIds[pList[p]]) {
+                                        intersects = true;
+                                        break;
+                                    }
+                                }
+                                if (intersects) {
+                                    for (var p = 0; p < pList.length; p++) {
+                                        targetMergedRowIds[pList[p]] = true;
+                                    }
+                                }
+                            }
+                            
                             for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                                 var activeItem = window.AppState.activeTokenSelections[a];
+                                if (clickedLemma && activeItem.lemma && String(activeItem.lemma).trim().toLowerCase() === clickedLemma) {
+                                    isRowBackedByActiveToken = true;
+                                    break;
+                                }
                                 var itemRowIds = activeItem.row_ids;
                                 if (!itemRowIds) {
                                     var atd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(activeItem.visual_idx) : null;
@@ -16714,15 +16753,11 @@ window.__CONFIG__ = {ui_config_json};
                                     }
                                 }
                                 if (itemRowIds && itemRowIds.length > 0) {
-                                    for (var r = 0; r < targetRowIds.length; r++) {
-                                        var tid = targetRowIds[r];
-                                        for (var ir = 0; ir < itemRowIds.length; ir++) {
-                                            if (String(itemRowIds[ir]) === String(tid)) {
-                                                isRowBackedByActiveToken = true;
-                                                break;
-                                            }
+                                    for (var ir = 0; ir < itemRowIds.length; ir++) {
+                                        if (targetMergedRowIds[String(itemRowIds[ir])]) {
+                                            isRowBackedByActiveToken = true;
+                                            break;
                                         }
-                                        if (isRowBackedByActiveToken) break;
                                     }
                                 }
                                 if (isRowBackedByActiveToken) break;
