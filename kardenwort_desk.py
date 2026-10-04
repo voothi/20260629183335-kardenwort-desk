@@ -14362,6 +14362,17 @@ window.__CONFIG__ = {ui_config_json};
                     if (window.clearMVPBookmarks) window.clearMVPBookmarks();
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
                     
+                    if (typeof applyOccurrenceView === 'function') {
+                        applyOccurrenceView();
+                    } else if (typeof window.applyOccurrenceView === 'function') {
+                        window.applyOccurrenceView();
+                    }
+                    if (typeof updateBidirectionalHighlights === 'function') {
+                        updateBidirectionalHighlights();
+                    } else if (typeof window.updateBidirectionalHighlights === 'function') {
+                        window.updateBidirectionalHighlights();
+                    }
+
                     if (window.forceRepaint) window.forceRepaint();
                 }
 
@@ -18456,7 +18467,8 @@ window.__CONFIG__ = {ui_config_json};
                 } catch(e) {}
             }
         }
-        
+        window.updateBidirectionalHighlights = updateBidirectionalHighlights;
+
         function getSelectedRowsArray(extractTokenOrders) {
             if (extractTokenOrders) {
                 return getSelectedTokenOrdersArray();
