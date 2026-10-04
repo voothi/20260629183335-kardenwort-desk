@@ -1,0 +1,5 @@
+Quotation	WordSource	WordSourcePOS	WordDestination	SentenceSourceIndex	SentenceSource	SentenceDestination	DeskSelected
+Er	er	pron.	он	1	Er fängt heute mit der Arbeit an.	Он начинает сегодня работу.	0
+fängt an	anfangen	v.	начинать	1	Er fängt heute mit der Arbeit an.	Он начинает сегодня работу.	0
+heute	heute	adv.	сегодня	1	Er fängt heute mit der Arbeit an.	Он начинает сегодня работу.	0
+Arbeit	Arbeit	n.	работа	1	Er fängt heute mit der Arbeit an.	Он начинает сегодня работу.	0
