@@ -18183,7 +18183,10 @@ window.__CONFIG__ = {ui_config_json};
             if (mousedownTargetSpan && mousedownTargetSpan.classList && 
                 (mousedownTargetSpan.classList.contains('highlight-orange-active') || mousedownTargetSpan.classList.contains('highlight-purple-active'))) {
                 try {
-                    mousedownTargetSpan.classList.add('active-subtoken');
+                    var isCompoundSubtoken = typeof findCompoundSiblingSpans === 'function' && findCompoundSiblingSpans(mousedownTargetSpan).length > 1;
+                    if (isCompoundSubtoken) {
+                        mousedownTargetSpan.classList.add('active-subtoken');
+                    }
                 } catch(e) {}
             }
         }
