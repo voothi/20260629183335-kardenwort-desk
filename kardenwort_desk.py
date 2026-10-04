@@ -16698,8 +16698,18 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                         
+                        var isOverviewTab = !!(window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().index === 0);
+                        var cardZid = '';
+                        if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().zid) {
+                            cardZid = String(window.WorkspaceTabs.getActiveCard().zid);
+                        } else if (typeof SESSION_ZID !== 'undefined' && SESSION_ZID && SESSION_ZID !== '__SESSION_ZID__') {
+                            cardZid = String(SESSION_ZID);
+                        } else if (window.__CONFIG__ && window.__CONFIG__.zid) {
+                            cardZid = String(window.__CONFIG__.zid);
+                        }
+                        var isLegacyOverview = isOverviewTab && (cardZid && cardZid < '20261002000000');
                         var isLemmaSelected = false;
-                        if (!hasActiveTokens) {
+                        if (!hasActiveTokens && isLegacyOverview) {
                             var tokLem = (typeof getWordLemma === 'function' ? getWordLemma(span) : null) || (clickedTokenData && clickedTokenData.lemma);
                             if (tokLem && window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[String(tokLem).trim().toLowerCase()]) {
                                 isLemmaSelected = true;
@@ -18052,16 +18062,35 @@ window.__CONFIG__ = {ui_config_json};
                 var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                 if (trSelected) {
                     var trIdInt = parseInt(trId, 10);
+                    var primarySentIdx = null;
                     if (!isNaN(trIdInt)) {
                         activeTargetRowIds[trIdInt] = true;
                         primaryTargetRowIds[trIdInt] = true;
+                        for (var m = 0; m < tokenMap.length; m++) {
+                            if (tokenMap[m].row_ids && tokenMap[m].row_ids.indexOf(trIdInt) !== -1 && tokenMap[m].sentence_idx !== undefined && tokenMap[m].sentence_idx !== null) {
+                                primarySentIdx = tokenMap[m].sentence_idx;
+                                break;
+                            }
+                        }
                     }
                     var allAttr = tr.getAttribute('data-all-row-ids');
                     if (allAttr) {
                         var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
                         for (var p = 0; p < parts.length; p++) {
                             var pInt = parseInt(parts[p], 10);
-                            if (!isNaN(pInt)) activeTargetRowIds[pInt] = true;
+                            if (!isNaN(pInt)) {
+                                activeTargetRowIds[pInt] = true;
+                                var pSentIdx = null;
+                                for (var m = 0; m < tokenMap.length; m++) {
+                                    if (tokenMap[m].row_ids && tokenMap[m].row_ids.indexOf(pInt) !== -1 && tokenMap[m].sentence_idx !== undefined && tokenMap[m].sentence_idx !== null) {
+                                        pSentIdx = tokenMap[m].sentence_idx;
+                                        break;
+                                    }
+                                }
+                                if (primarySentIdx === null || pSentIdx === null || String(pSentIdx) === String(primarySentIdx)) {
+                                    primaryTargetRowIds[pInt] = true;
+                                }
+                            }
                         }
                     }
                 }
