@@ -14359,7 +14359,6 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 
                 if (updated) {
-                    if (window.clearMVPBookmarks) window.clearMVPBookmarks();
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
                     
                     if (typeof applyOccurrenceView === 'function') {
