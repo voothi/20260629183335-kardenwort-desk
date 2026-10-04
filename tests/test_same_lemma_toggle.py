@@ -542,7 +542,7 @@ def test_intra_sentence_duplicate_lemmas_selection_and_highlighting(page, tmp_pa
 
 
 def test_first_click_token_selection_when_table_row_preselected(page, tmp_path):
-    """Verifies that clicking a word span immediately selects it on the first click even if a table row was selected (Task 4.1)."""
+    """Verifies that clicking a table-selected word span immediately deselects it on the first click without adding a frame."""
     raw_html = get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=False)
     html = inject_mock_fetch(raw_html)
     page.set_content(html)
@@ -554,13 +554,14 @@ def test_first_click_token_selection_when_table_row_preselected(page, tmp_path):
     table_row.click()
     assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 0
 
-    # Click "das" in text on first click
+    # Click "das" in text on first click -> deselects immediately on first click
     das_span = page.locator('#source-container span.word:has-text("das")').first
     das_span.click()
 
-    # Must be selected on the very first click
-    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 1
-    assert "highlight-orange-active" in (das_span.get_attribute("class") or "")
+    # Must be cleanly deselected without pinning a frame
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 0
+    assert "highlight-orange-active" not in (das_span.get_attribute("class") or "")
+    assert "hl-mvp-pin" not in (das_span.get_attribute("class") or "")
 
 
 def test_sequential_clicks_shared_lemma_additive_selection(page, tmp_path):
