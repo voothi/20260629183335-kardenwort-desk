@@ -15996,12 +15996,14 @@ window.__CONFIG__ = {ui_config_json};
                     var tOrder = (td && td.token_order !== undefined) ? td.token_order : (s.getAttribute('data-token-order') || '');
                     var aId = (td && td.atomic_id !== undefined) ? td.atomic_id : ((td && td.atomic_row_ids && td.atomic_row_ids.length > 0) ? td.atomic_row_ids[0] : ((td && td.row_ids && td.row_ids.length > 0) ? td.row_ids[0] : null));
                     var lem = (td && td.lemma) ? td.lemma : (getWordLemma(s) || '');
+                    var rIds = (td && td.row_ids) ? td.row_ids.slice() : ((aId !== null && aId !== undefined) ? [aId] : []);
                     window.AppState.activeTokenSelections.push({
                         visual_idx: vIdx,
                         sentence_idx: sIdx,
                         token_order: tOrder,
                         atomic_id: aId,
-                        lemma: lem
+                        lemma: lem,
+                        row_ids: rIds
                     });
                 }
             }
@@ -16671,7 +16673,7 @@ window.__CONFIG__ = {ui_config_json};
                         var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
                         
                         var isRowSelected = false;
-                        if (!hasActiveTokens && targetRowIds && targetRowIds.length > 0) {
+                        if (targetRowIds && targetRowIds.length > 0) {
                             for (var t = 0; t < targetRowIds.length; t++) {
                                 var tidStr = String(targetRowIds[t]);
                                 if (selectedRowIdsMap.hasOwnProperty(tidStr)) {
@@ -16697,6 +16699,36 @@ window.__CONFIG__ = {ui_config_json};
                                 if (isRowSelected) break;
                             }
                         }
+                        
+                        var isRowBackedByActiveToken = false;
+                        if (hasActiveTokens && targetRowIds && targetRowIds.length > 0) {
+                            for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                var activeItem = window.AppState.activeTokenSelections[a];
+                                var itemRowIds = activeItem.row_ids;
+                                if (!itemRowIds) {
+                                    var atd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(activeItem.visual_idx) : null;
+                                    if (atd) {
+                                        itemRowIds = (atd.atomic_row_ids !== undefined) ? atd.atomic_row_ids : (atd.row_ids || []);
+                                    } else if (activeItem.atomic_id !== null && activeItem.atomic_id !== undefined) {
+                                        itemRowIds = [activeItem.atomic_id];
+                                    }
+                                }
+                                if (itemRowIds && itemRowIds.length > 0) {
+                                    for (var r = 0; r < targetRowIds.length; r++) {
+                                        var tid = targetRowIds[r];
+                                        for (var ir = 0; ir < itemRowIds.length; ir++) {
+                                            if (String(itemRowIds[ir]) === String(tid)) {
+                                                isRowBackedByActiveToken = true;
+                                                break;
+                                            }
+                                        }
+                                        if (isRowBackedByActiveToken) break;
+                                    }
+                                }
+                                if (isRowBackedByActiveToken) break;
+                            }
+                        }
+                        var isTableSelectedToken = isRowSelected && !isRowBackedByActiveToken;
                         
                         var isOverviewTab = !!(window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function' && window.WorkspaceTabs.getActiveCard() && window.WorkspaceTabs.getActiveCard().index === 0);
                         var cardZid = '';
@@ -16724,7 +16756,7 @@ window.__CONFIG__ = {ui_config_json};
                         
                         var shouldDeselect = false;
                         if (hasActiveTokens) {
-                            shouldDeselect = isInActiveSelections || isTokenPinned;
+                            shouldDeselect = isInActiveSelections || isTokenPinned || isTableSelectedToken || isOrphanSelected;
                         } else {
                             shouldDeselect = isVisuallyActive || isRowSelected || isLemmaSelected || isInActiveSelections || isTokenPinned || isOrphanSelected;
                         }
