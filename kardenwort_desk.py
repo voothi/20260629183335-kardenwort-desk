@@ -14560,14 +14560,23 @@ window.__CONFIG__ = {ui_config_json};
                     if (!tds[0].classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
                         var div = tds[0].querySelector('.scrollable-cell');
                         var val = rowData.inflected || "";
+                        var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? document.getElementById('source-container').textContent : "");
+                        var infTip = formatInflectedTooltip(sentText, val, rowData.token_order || rowId);
+                        var unrolledHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+                        tds[0].setAttribute('data-orig-html', unrolledHtml);
+                        if (infTip) {
+                            tds[0].setAttribute('data-orig-title', infTip);
+                            if (div && div !== tds[0]) div.setAttribute('data-orig-title', infTip);
+                        } else {
+                            tds[0].removeAttribute('data-orig-title');
+                            if (div && div !== tds[0]) div.removeAttribute('data-orig-title');
+                        }
                         var oldVal = div ? (div.textContent || div.innerText) : (tds[0].classList.contains('editing') ? null : (tds[0].textContent || tds[0].innerText));
                         if (oldVal !== val) {
                             if (div) setCellText(div, val);
                             else if (!tds[0].classList.contains('editing')) setCellText(tds[0], val);
                             updated = true;
                         }
-                        var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? document.getElementById('source-container').textContent : "");
-                        var infTip = formatInflectedTooltip(sentText, val, rowData.token_order || rowId);
                         if (infTip) {
                             tds[0].setAttribute('title', infTip);
                             if (div) div.setAttribute('title', infTip);
@@ -14708,6 +14717,21 @@ window.__CONFIG__ = {ui_config_json};
                                 applyCellProvenance(val);
                             }
                         }
+                        if (transTd) {
+                            var unrolledTrans = ((typeof targetVal !== 'undefined' && targetVal !== undefined) ? targetVal : val) || "";
+                            if (unrolledTrans && unrolledTrans.indexOf('skeleton-loader') === -1) {
+                                var unrolledTransHtml = unrolledTrans ? String(unrolledTrans).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+                                transTd.setAttribute('data-orig-html', unrolledTransHtml);
+                                var curTransTip = transTd.getAttribute('title') || (div ? div.getAttribute('title') : '');
+                                if (curTransTip) {
+                                    transTd.setAttribute('data-orig-title', curTransTip);
+                                    if (div && div !== transTd) div.setAttribute('data-orig-title', curTransTip);
+                                } else {
+                                    transTd.removeAttribute('data-orig-title');
+                                    if (div && div !== transTd) div.removeAttribute('data-orig-title');
+                                }
+                            }
+                        }
                     } else if (!tds[2].classList.contains('dirty') && !tds[2].classList.contains('editing')) {
                         var div = tds[2].querySelector('.scrollable-cell') || tds[2];
                         var curText = (div.textContent || div.innerText || '').trim();
@@ -14761,6 +14785,12 @@ window.__CONFIG__ = {ui_config_json};
                                 }
                                 updated = true;
                             }
+                        }
+                        if (val && val.indexOf('skeleton-loader') === -1) {
+                            var unrolledMorphHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+                            tds[4].setAttribute('data-orig-html', unrolledMorphHtml);
+                            tds[4].setAttribute('data-orig-title', val);
+                            if (div && div !== tds[4]) div.setAttribute('data-orig-title', val);
                         }
                     }
                     if (rowData.hasOwnProperty('classifications') && rowData.classifications !== undefined) {
@@ -14830,6 +14860,15 @@ window.__CONFIG__ = {ui_config_json};
                             if (posTip) {
                                 posCell.setAttribute('title', posTip);
                             }
+                            var unrolledPosHtml = normPos ? String(normPos).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+                            posCell.setAttribute('data-orig-html', unrolledPosHtml);
+                            if (posTip) {
+                                posCell.setAttribute('data-orig-title', posTip);
+                                if (div && div !== posCell) div.setAttribute('data-orig-title', posTip);
+                            } else {
+                                posCell.removeAttribute('data-orig-title');
+                                if (div && div !== posCell) div.removeAttribute('data-orig-title');
+                            }
                         }
                     }
                     var hasGenderProp = rowData.hasOwnProperty('gender') || rowData.hasOwnProperty('WordSourceGender');
@@ -14876,6 +14915,13 @@ window.__CONFIG__ = {ui_config_json};
                                 genderCell.removeAttribute('title');
                             }
                         }
+                    }
+                }
+                if (tr.hasAttribute('data-occ') && window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0) {
+                    if (typeof applyOccurrenceRow === 'function') {
+                        applyOccurrenceRow(tr);
+                    } else if (typeof window.applyOccurrenceRow === 'function') {
+                        window.applyOccurrenceRow(tr);
                     }
                 }
                 return updated;
@@ -17980,8 +18026,8 @@ window.__CONFIG__ = {ui_config_json};
             }
         }
         
-        function applyOccurrenceView() {
-            var rows = document.querySelectorAll('tr[data-occ]');
+        function applyOccurrenceRow(tr) {
+            if (!tr || !tr.hasAttribute('data-occ')) return;
             var sels = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
             var cellMap = { 'col-inflected': 'form', 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
             var posNameMap = {
@@ -17995,95 +18041,101 @@ window.__CONFIG__ = {ui_config_json};
                 'adv.': 'Adverb',
                 'conj.': 'Conjunction'
             };
-            for (var r = 0; r < rows.length; r++) {
-                var tr = rows[r];
-                var occ = null;
-                try { occ = JSON.parse(tr.getAttribute('data-occ')); } catch (e) { occ = null; }
-                var picked = [];
-                if (occ) {
-                    var keys = [];
-                    for (var s = 0; s < sels.length; s++) {
-                        var k = String(sels[s].visual_idx);
-                        if (occ.hasOwnProperty(k) && keys.indexOf(k) === -1) keys.push(k);
-                    }
-                    keys.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
-                    for (var q = 0; q < keys.length; q++) picked.push(occ[keys[q]]);
+            var occ = null;
+            try { occ = JSON.parse(tr.getAttribute('data-occ')); } catch (e) { occ = null; }
+            var picked = [];
+            if (occ) {
+                var keys = [];
+                for (var s = 0; s < sels.length; s++) {
+                    var k = String(sels[s].visual_idx);
+                    if (occ.hasOwnProperty(k) && keys.indexOf(k) === -1) keys.push(k);
                 }
-                for (var cls in cellMap) {
-                    if (!cellMap.hasOwnProperty(cls)) continue;
-                    var td = tr.querySelector('td.' + cls);
-                    if (!td) continue;
-                    var cell = td.querySelector('.scrollable-cell') || td;
-                    if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', cell.innerHTML);
-                    if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', td.getAttribute('title') || '');
-                    if (cell !== td && !cell.hasAttribute('data-orig-title')) cell.setAttribute('data-orig-title', cell.getAttribute('title') || '');
+                keys.sort(function(a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+                for (var q = 0; q < keys.length; q++) picked.push(occ[keys[q]]);
+            }
+            for (var cls in cellMap) {
+                if (!cellMap.hasOwnProperty(cls)) continue;
+                var td = tr.querySelector('td.' + cls);
+                if (!td) continue;
+                var cell = td.querySelector('.scrollable-cell') || td;
+                if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', cell.innerHTML);
+                if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', td.getAttribute('title') || '');
+                if (cell !== td && !cell.hasAttribute('data-orig-title')) cell.setAttribute('data-orig-title', cell.getAttribute('title') || '');
 
-                    if (picked.length === 0) {
-                        if (cell.innerHTML !== td.getAttribute('data-orig-html')) cell.innerHTML = td.getAttribute('data-orig-html');
-                        var origTdTitle = td.getAttribute('data-orig-title');
-                        if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
-                        if (cell !== td) {
-                            var origCellTitle = cell.getAttribute('data-orig-title');
-                            if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
-                        }
-                        continue;
+                if (picked.length === 0) {
+                    if (cell.innerHTML !== td.getAttribute('data-orig-html')) cell.innerHTML = td.getAttribute('data-orig-html');
+                    var origTdTitle = td.getAttribute('data-orig-title');
+                    if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
+                    if (cell !== td) {
+                        var origCellTitle = cell.getAttribute('data-orig-title');
+                        if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
                     }
-                    var vals = [];
-                    for (var p = 0; p < picked.length; p++) {
-                        var v = (picked[p][cellMap[cls]] || '').trim();
-                        if (v && vals.indexOf(v) === -1) vals.push(v);
+                    continue;
+                }
+                var vals = [];
+                for (var p = 0; p < picked.length; p++) {
+                    var v = (picked[p][cellMap[cls]] || '').trim();
+                    if (v && vals.indexOf(v) === -1) vals.push(v);
+                }
+                if (vals.length === 0) {
+                    cell.innerHTML = td.getAttribute('data-orig-html');
+                    var origTdTitle = td.getAttribute('data-orig-title');
+                    if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
+                    if (cell !== td) {
+                        var origCellTitle = cell.getAttribute('data-orig-title');
+                        if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
                     }
-                    if (vals.length === 0) {
-                        cell.innerHTML = td.getAttribute('data-orig-html');
-                        var origTdTitle = td.getAttribute('data-orig-title');
-                        if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
-                        if (cell !== td) {
-                            var origCellTitle = cell.getAttribute('data-orig-title');
-                            if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
+                } else {
+                    var newTooltip = '';
+                    if (cls === 'col-pos') {
+                        var posOrder = { 'art.': 0, 'pron.': 1, 'det.': 2, 'prep.': 3 };
+                        vals.sort(function(a, b) {
+                            var oa = (posOrder[a] !== undefined) ? posOrder[a] : 99;
+                            var ob = (posOrder[b] !== undefined) ? posOrder[b] : 99;
+                            return oa - ob;
+                        });
+                        cell.textContent = vals.join(', ');
+                        newTooltip = vals.map(function(p) {
+                            var lower = p.toLowerCase();
+                            return posNameMap[lower] || p;
+                        }).join(', ');
+                    } else if (cls === 'col-morphology') {
+                        cell.textContent = vals.join('; ');
+                        newTooltip = vals.join('; ');
+                    } else if (cls === 'col-translation') {
+                        cell.textContent = vals.join(', ');
+                        var prov = td.getAttribute('data-provenance');
+                        newTooltip = vals.join(', ');
+                        if (prov) {
+                            newTooltip += ' (' + prov + ')';
                         }
-                    } else {
-                        var newTooltip = '';
-                        if (cls === 'col-pos') {
-                            var posOrder = { 'art.': 0, 'pron.': 1, 'det.': 2, 'prep.': 3 };
-                            vals.sort(function(a, b) {
-                                var oa = (posOrder[a] !== undefined) ? posOrder[a] : 99;
-                                var ob = (posOrder[b] !== undefined) ? posOrder[b] : 99;
-                                return oa - ob;
-                            });
-                            cell.textContent = vals.join(', ');
-                            newTooltip = vals.map(function(p) {
-                                var lower = p.toLowerCase();
-                                return posNameMap[lower] || p;
-                            }).join(', ');
-                        } else if (cls === 'col-morphology') {
-                            cell.textContent = vals.join('; ');
-                            newTooltip = vals.join('; ');
-                        } else if (cls === 'col-translation') {
-                            cell.textContent = vals.join(', ');
-                            var prov = td.getAttribute('data-provenance');
-                            newTooltip = vals.join(', ');
-                            if (prov) {
-                                newTooltip += ' (' + prov + ')';
+                    } else if (cls === 'col-inflected') {
+                        cell.textContent = vals.join(', ');
+                        var tooltips = [];
+                        for (var q = 0; q < picked.length; q++) {
+                            if (picked[q].inflected_tooltip && tooltips.indexOf(picked[q].inflected_tooltip) === -1) {
+                                tooltips.push(picked[q].inflected_tooltip);
                             }
-                        } else if (cls === 'col-inflected') {
-                            cell.textContent = vals.join(', ');
-                            var tooltips = [];
-                            for (var q = 0; q < picked.length; q++) {
-                                if (picked[q].inflected_tooltip && tooltips.indexOf(picked[q].inflected_tooltip) === -1) {
-                                    tooltips.push(picked[q].inflected_tooltip);
-                                }
-                            }
-                            newTooltip = tooltips.length > 0 ? tooltips.join('\\n---\\n') : vals.join(', ');
                         }
+                        newTooltip = tooltips.length > 0 ? tooltips.join('\\n---\\n') : vals.join(', ');
+                    }
 
-                        if (newTooltip) {
-                            td.setAttribute('title', newTooltip);
-                            if (cell !== td) cell.setAttribute('title', newTooltip);
-                        }
+                    if (newTooltip) {
+                        td.setAttribute('title', newTooltip);
+                        if (cell !== td) cell.setAttribute('title', newTooltip);
                     }
                 }
             }
         }
+        window.applyOccurrenceRow = applyOccurrenceRow;
+
+        function applyOccurrenceView() {
+            var rows = document.querySelectorAll('tr[data-occ]');
+            for (var r = 0; r < rows.length; r++) {
+                applyOccurrenceRow(rows[r]);
+            }
+        }
+        window.applyOccurrenceView = applyOccurrenceView;
 
         function updateBidirectionalHighlights() {
             try { applyOccurrenceView(); } catch (e) {}
