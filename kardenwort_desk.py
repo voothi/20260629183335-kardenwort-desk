@@ -13654,47 +13654,18 @@ window.__CONFIG__ = {ui_config_json};
             for (var i = 0; i < mvpBookmarks.length; i++) {
                 if (mvpBookmarks[i].srcSpan === this || mvpBookmarks[i].transSpan === this) { bIdx = i; break; }
             }
+            if (bIdx === -1 && typeof findRelatedTokenSpans === 'function') {
+                var related = findRelatedTokenSpans(this);
+                for (var r = 0; r < related.length; r++) {
+                    for (var i = 0; i < mvpBookmarks.length; i++) {
+                        if (mvpBookmarks[i].srcSpan === related[r]) { bIdx = i; break; }
+                    }
+                    if (bIdx !== -1) break;
+                }
+            }
             var targetIdx = getTargetIdx(idx, isSource);
             var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
             var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
-            if (isSource) {
-                var isCurrentlyActive = false;
-                var vIdxAttr = this.getAttribute('data-word-idx');
-                if (vIdxAttr !== null && typeof isTokenInActiveSelections === 'function') {
-                    isCurrentlyActive = isTokenInActiveSelections(parseInt(vIdxAttr, 10));
-                }
-                if (!isCurrentlyActive && (this.classList.contains('highlight-purple-active') || this.classList.contains('highlight-orange-active') || this.classList.contains('active-subtoken'))) {
-                    isCurrentlyActive = true;
-                }
-
-                if (!isCurrentlyActive) {
-                    if (bIdx !== -1) {
-                        var entry = mvpBookmarks[bIdx];
-                        if (entry.srcSpan) removeClass(entry.srcSpan, 'hl-mvp-hover');
-                        if (entry.transSpan) removeClass(entry.transSpan, 'hl-mvp-hover');
-                        mvpBookmarks.splice(bIdx, 1);
-                    }
-                    if (typeof findRelatedTokenSpans === 'function') {
-                        var related = findRelatedTokenSpans(this);
-                        for (var r = 0; r < related.length; r++) {
-                            var rSpan = related[r];
-                            for (var m = mvpBookmarks.length - 1; m >= 0; m--) {
-                                if (mvpBookmarks[m].srcSpan === rSpan) {
-                                    var rentry = mvpBookmarks[m];
-                                    if (rentry.srcSpan) removeClass(rentry.srcSpan, 'hl-mvp-hover');
-                                    if (rentry.transSpan) removeClass(rentry.transSpan, 'hl-mvp-hover');
-                                    mvpBookmarks.splice(m, 1);
-                                }
-                            }
-                        }
-                    }
-                    refreshBookmarkClasses();
-                    return;
-                } else if (bIdx !== -1) {
-                    refreshBookmarkClasses();
-                    return;
-                }
-            }
 
             if (bIdx !== -1) {
                 var entry = mvpBookmarks[bIdx];
@@ -16640,15 +16611,20 @@ window.__CONFIG__ = {ui_config_json};
                                 tokenDragMode = true;
                             }
                         } else {
-                            if (isTransitionFromTableSelection) {
-                                if (isSameAsTableSelection) {
-                                    tokenDragMode = false;
-                                } else {
-                                    tokenDragMode = true;
-                                    selectedRowIdsMap = {};
+                            var isTokenPinned = span.classList && span.classList.contains('hl-mvp-pin');
+                            if (!isTokenPinned && typeof findRelatedTokenSpans === 'function') {
+                                var rel = findRelatedTokenSpans(span);
+                                for (var r = 0; r < rel.length; r++) {
+                                    if (rel[r].classList && rel[r].classList.contains('hl-mvp-pin')) {
+                                        isTokenPinned = true;
+                                        break;
+                                    }
                                 }
+                            }
+                            if (isTokenPinned || isTokenCurrentlyActive) {
+                                tokenDragMode = false;
                             } else {
-                                tokenDragMode = !isTokenCurrentlyActive;
+                                tokenDragMode = true;
                             }
                         }
                         
@@ -16913,7 +16889,6 @@ window.__CONFIG__ = {ui_config_json};
             }
             if (e.button === 0) {
                 if (window.AppState) window.AppState.activeTokenSelections = [];
-                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
@@ -17503,7 +17478,12 @@ window.__CONFIG__ = {ui_config_json};
                         document.selection.empty();
                     }
                 } catch(e) {}
-                if (window.clearMVPBookmarks) window.clearMVPBookmarks();
+                if (window.clearMVPBookmarks) {
+                    var bCleared = window.clearMVPBookmarks();
+                    if (bCleared) {
+                        return;
+                    }
+                }
                 clearAllSelections();
                 lastClickedVisualIdx = -1;
                 lastClickedRowId = null;

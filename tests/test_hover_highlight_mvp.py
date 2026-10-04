@@ -422,3 +422,74 @@ def test_playwright_unpunctuated_auto_subtitles_cue_alignment(page, tmp_path):
     parent_line_idx = hovered_spans.first.evaluate("el => el.getAttribute('data-line-idx')")
     assert parent_line_idx == "1", f"Hovered translation span must belong to line-idx 1, got {parent_line_idx}"
 
+
+def test_coordinated_single_pass_pinning_and_table_coexistence(page, tmp_path):
+    tsv_path = tmp_path / "test.tsv"
+    tsv_path.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "das, den, der, die\tder\tart., pron.\tтот, который\t1\tEr fängt heute mit der Arbeit an.\tОн начинает сегодня с работы.\t0\n"
+        "fängt an\tanfangen\tv.\tначинать\t1\tEr fängt heute mit der Arbeit an.\tОн начинает сегодня с работы.\t0\n",
+        encoding='utf-8'
+    )
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set(SEC_RENDERING, 'hover_highlight', 'true')
+    config.set(SEC_RENDERING, 'hover_highlight_rainbow', 'true')
+    config.set(SEC_RENDERING, 'hover_highlight_bookmarks', '3')
+
+    html = run_render_flow(
+        text="Er fängt heute mit der Arbeit an.",
+        language="de",
+        zid="20261004113000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=tsv_path
+    )
+    page.set_content(html)
+    page.evaluate("""
+        window.AppState.applyDeltas({
+            translatedText: "<div>Он начинает сегодня с работы.</div>",
+            stage: "finished"
+        });
+    """)
+
+    der_span = page.locator('#source-container span.word:has-text("der")').first
+    faengt_span = page.locator('#source-container span.word:has-text("fängt")').first
+    table_der = page.locator('#lemma-table tbody tr').first
+    table_anf = page.locator('#lemma-table tbody tr').nth(1)
+
+    # 1. Single click on 'der' in text pins bookmark AND highlights in 1 pass
+    der_span.click()
+    assert "hl-mvp-pin" in (der_span.get_attribute("class") or "")
+    assert "hl-mvp-pin-0" in (der_span.get_attribute("class") or "")
+    assert "highlight-orange-active" in (der_span.get_attribute("class") or "") or "highlight-purple-active" in (der_span.get_attribute("class") or "")
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+
+    # 2. Single click on 'der' in text unpins bookmark AND removes highlight in 1 pass
+    der_span.click()
+    assert "hl-mvp-pin" not in (der_span.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (der_span.get_attribute("class") or "")
+
+    # 3. Pin 'der' again
+    der_span.click()
+    assert "hl-mvp-pin" in (der_span.get_attribute("class") or "")
+
+    # 4. Click table row for 'anfangen' -> bookmark on 'der' must be preserved!
+    table_anf.click()
+    assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "hl-mvp-pin" in (der_span.get_attribute("class") or "")
+
+    # 5. Esc clears bookmark ring while preserving table row selection
+    page.keyboard.press("Escape")
+    assert "hl-mvp-pin" not in (der_span.get_attribute("class") or "")
+    assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
+
+    # 6. Click translation word -> toggles cross-block bookmark without affecting selectedRowsArray
+    trans_word = page.locator('#translation-container span.word').first
+    trans_word.click()
+    assert "hl-mvp-pin" in (trans_word.get_attribute("class") or "")
+    assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
+
+
