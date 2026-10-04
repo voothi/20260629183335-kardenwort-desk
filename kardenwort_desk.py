@@ -13645,52 +13645,26 @@ window.__CONFIG__ = {ui_config_json};
             e = e || window.event;
             var btn = (e.button !== undefined) ? e.button : e.which;
             if (btn !== 0 && btn !== 1) return;
+            var isSource = (this.getAttribute('data-mvp-type') === 'source');
+            if (isSource) return;
+
             var idxStr = this.getAttribute('data-mvp-idx');
             if (idxStr === null || idxStr === '') return;
             var idx = parseInt(idxStr, 10);
-            var isSource = (this.getAttribute('data-mvp-type') === 'source');
-            var bKey = (isSource ? 's' : 't') + idxStr;
+            var bKey = 't' + idxStr;
             var bIdx = -1;
             for (var i = 0; i < mvpBookmarks.length; i++) {
-                if (mvpBookmarks[i].srcSpan === this || mvpBookmarks[i].transSpan === this || mvpBookmarks[i].idx === bKey) { bIdx = i; break; }
+                if (mvpBookmarks[i].transSpan === this || mvpBookmarks[i].idx === bKey) { bIdx = i; break; }
             }
-            if (bIdx === -1 && typeof findRelatedTokenSpans === 'function') {
-                var related = findRelatedTokenSpans(this);
-                for (var r = 0; r < related.length; r++) {
-                    for (var i = 0; i < mvpBookmarks.length; i++) {
-                        if (mvpBookmarks[i].srcSpan === related[r] || mvpBookmarks[i].transSpan === related[r]) { bIdx = i; break; }
-                    }
-                    if (bIdx !== -1) break;
-                }
-            }
-            var targetIdx = getTargetIdx(idx, isSource);
-            var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
-            var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
-
             if (bIdx !== -1) {
-                delete this._skipMvpPinOnDeselect;
                 var entry = mvpBookmarks[bIdx];
                 if (entry.srcSpan) removeClass(entry.srcSpan, 'hl-mvp-hover');
                 if (entry.transSpan) removeClass(entry.transSpan, 'hl-mvp-hover');
                 mvpBookmarks.splice(bIdx, 1);
             } else {
-                if (isSource) {
-                    if (this._skipMvpPinOnDeselect) {
-                        delete this._skipMvpPinOnDeselect;
-                        refreshBookmarkClasses();
-                        return;
-                    }
-                    if (typeof findRelatedTokenSpans === 'function') {
-                        var relSpans = findRelatedTokenSpans(this);
-                        for (var rs = 0; rs < relSpans.length; rs++) {
-                            if (relSpans[rs]._skipMvpPinOnDeselect) {
-                                delete relSpans[rs]._skipMvpPinOnDeselect;
-                                refreshBookmarkClasses();
-                                return;
-                            }
-                        }
-                    }
-                }
+                var targetIdx = getTargetIdx(idx, false);
+                var srcSpan = sourceSpansArray[targetIdx];
+                var transSpan = transSpansArray[idx];
                 while (mvpBookmarks.length >= mvpN) {
                     var oldest = mvpBookmarks.shift();
                     if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
@@ -13726,7 +13700,6 @@ window.__CONFIG__ = {ui_config_json};
                     span.setAttribute('data-mvp-wired', '1');
                     addEvent(span, 'mouseover', handleMouseOver);
                     addEvent(span, 'mouseout', handleMouseOut);
-                    addEvent(span, 'click', handleClick);
                 }
             }
         }
@@ -13745,6 +13718,102 @@ window.__CONFIG__ = {ui_config_json};
             }
         }
     }
+
+    function isTokenPinnedInMVP(span) {
+        if (!span || !mvpBookmarks || mvpBookmarks.length === 0) return false;
+        for (var i = 0; i < mvpBookmarks.length; i++) {
+            if (mvpBookmarks[i].srcSpan === span || mvpBookmarks[i].transSpan === span) return true;
+        }
+        if (typeof findRelatedTokenSpans === 'function') {
+            var rel = findRelatedTokenSpans(span);
+            for (var r = 0; r < rel.length; r++) {
+                for (var i = 0; i < mvpBookmarks.length; i++) {
+                    if (mvpBookmarks[i].srcSpan === rel[r] || mvpBookmarks[i].transSpan === rel[r]) return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    function unpinTokenFromMVP(span) {
+        if (!span || !mvpBookmarks || mvpBookmarks.length === 0) return false;
+        var targets = [span];
+        if (typeof findRelatedTokenSpans === 'function') {
+            targets = targets.concat(findRelatedTokenSpans(span));
+        }
+        var removed = false;
+        for (var i = mvpBookmarks.length - 1; i >= 0; i--) {
+            var b = mvpBookmarks[i];
+            if (targets.indexOf(b.srcSpan) !== -1 || targets.indexOf(b.transSpan) !== -1) {
+                if (b.srcSpan) removeClass(b.srcSpan, 'hl-mvp-hover');
+                if (b.transSpan) removeClass(b.transSpan, 'hl-mvp-hover');
+                mvpBookmarks.splice(i, 1);
+                removed = true;
+            }
+        }
+        if (removed) {
+            refreshBookmarkClasses();
+        }
+        return removed;
+    }
+
+    function pinTokenToMVP(span) {
+        if (!span || !mvpHighlightEnabled) return false;
+        if (!isMvpIndexBuilt) buildLcIndex();
+        var idxStr = span.getAttribute('data-mvp-idx');
+        if (idxStr === null || idxStr === '') return false;
+        var idx = parseInt(idxStr, 10);
+        var isSource = (span.getAttribute('data-mvp-type') === 'source');
+        var bKey = (isSource ? 's' : 't') + idxStr;
+
+        for (var i = 0; i < mvpBookmarks.length; i++) {
+            if (mvpBookmarks[i].srcSpan === span || mvpBookmarks[i].transSpan === span || mvpBookmarks[i].idx === bKey) {
+                return false;
+            }
+        }
+        if (typeof findRelatedTokenSpans === 'function') {
+            var related = findRelatedTokenSpans(span);
+            for (var r = 0; r < related.length; r++) {
+                for (var i = 0; i < mvpBookmarks.length; i++) {
+                    if (mvpBookmarks[i].srcSpan === related[r] || mvpBookmarks[i].transSpan === related[r]) return false;
+                }
+            }
+        }
+
+        var targetIdx = getTargetIdx(idx, isSource);
+        var srcSpan = isSource ? sourceSpansArray[idx] : sourceSpansArray[targetIdx];
+        var transSpan = isSource ? transSpansArray[targetIdx] : transSpansArray[idx];
+
+        while (mvpBookmarks.length >= mvpN) {
+            var oldest = mvpBookmarks.shift();
+            if (oldest.srcSpan) removeClass(oldest.srcSpan, 'hl-mvp-hover');
+            if (oldest.transSpan) removeClass(oldest.transSpan, 'hl-mvp-hover');
+        }
+
+        var slot = 0;
+        if (mvpRainbowMode) {
+            var usedSlots = {};
+            for (var i = 0; i < mvpBookmarks.length; i++) {
+                if (mvpBookmarks[i].slot !== undefined) {
+                    usedSlots[mvpBookmarks[i].slot] = true;
+                }
+            }
+            for (var s = 0; s < mvpN; s++) {
+                if (!usedSlots[s]) {
+                    slot = s;
+                    break;
+                }
+            }
+        }
+
+        mvpBookmarks.push({ idx: bKey, srcSpan: srcSpan, transSpan: transSpan, slot: slot });
+        refreshBookmarkClasses();
+        return true;
+    }
+
+    window.isTokenPinnedInMVP = isTokenPinnedInMVP;
+    window.unpinTokenFromMVP = unpinTokenFromMVP;
+    window.pinTokenToMVP = pinTokenToMVP;
 
     window.clearMVPBookmarks = function() {
         var cleared = false;
@@ -16580,7 +16649,7 @@ window.__CONFIG__ = {ui_config_json};
                             span.classList.contains('highlight-purple-active') ||
                             span.classList.contains('active-subtoken')
                         ));
-                        var isTokenPinned = (span.classList && span.classList.contains('hl-mvp-pin'));
+                        var isTokenPinned = (typeof isTokenPinnedInMVP === 'function') ? isTokenPinnedInMVP(span) : (span.classList && span.classList.contains('hl-mvp-pin'));
                         if (typeof findRelatedTokenSpans === 'function') {
                             var relSpans = findRelatedTokenSpans(span);
                             for (var r = 0; r < relSpans.length; r++) {
@@ -16599,9 +16668,10 @@ window.__CONFIG__ = {ui_config_json};
                         }
                         
                         var isInActiveSelections = (clickedTokenData && isTokenInActiveSelections(clickedTokenData.visual_idx));
+                        var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
                         
                         var isRowSelected = false;
-                        if (targetRowIds && targetRowIds.length > 0) {
+                        if (!hasActiveTokens && targetRowIds && targetRowIds.length > 0) {
                             for (var t = 0; t < targetRowIds.length; t++) {
                                 var tidStr = String(targetRowIds[t]);
                                 if (selectedRowIdsMap.hasOwnProperty(tidStr)) {
@@ -16629,9 +16699,11 @@ window.__CONFIG__ = {ui_config_json};
                         }
                         
                         var isLemmaSelected = false;
-                        var tokLem = (typeof getWordLemma === 'function' ? getWordLemma(span) : null) || (clickedTokenData && clickedTokenData.lemma);
-                        if (tokLem && window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[String(tokLem).trim().toLowerCase()]) {
-                            isLemmaSelected = true;
+                        if (!hasActiveTokens) {
+                            var tokLem = (typeof getWordLemma === 'function' ? getWordLemma(span) : null) || (clickedTokenData && clickedTokenData.lemma);
+                            if (tokLem && window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[String(tokLem).trim().toLowerCase()]) {
+                                isLemmaSelected = true;
+                            }
                         }
                         
                         var isOrphanSelected = false;
@@ -16640,19 +16712,23 @@ window.__CONFIG__ = {ui_config_json};
                             isOrphanSelected = true;
                         }
                         
-                        var shouldDeselect = isVisuallyActive || isRowSelected || isLemmaSelected || isInActiveSelections || isTokenPinned || isOrphanSelected;
+                        var shouldDeselect = false;
+                        if (hasActiveTokens) {
+                            shouldDeselect = isInActiveSelections || isTokenPinned;
+                        } else {
+                            shouldDeselect = isVisuallyActive || isRowSelected || isLemmaSelected || isInActiveSelections || isTokenPinned || isOrphanSelected;
+                        }
                         
                         if (shouldDeselect) {
                             tokenDragMode = false;
-                            span._skipMvpPinOnDeselect = true;
-                            if (typeof findRelatedTokenSpans === 'function') {
-                                var relDeselectSpans = findRelatedTokenSpans(span);
-                                for (var rd = 0; rd < relDeselectSpans.length; rd++) {
-                                    relDeselectSpans[rd]._skipMvpPinOnDeselect = true;
-                                }
+                            if (typeof unpinTokenFromMVP === 'function') {
+                                unpinTokenFromMVP(span);
                             }
                         } else {
                             tokenDragMode = true;
+                            if (typeof pinTokenToMVP === 'function') {
+                                pinTokenToMVP(span);
+                            }
                         }
                         
                         if (targetRowIds.length === 0) {
@@ -16776,7 +16852,12 @@ window.__CONFIG__ = {ui_config_json};
                             notifyAHKSelection();
                             return;
                         }
-                        dragOccurred = true;
+                        if (!dragOccurred) {
+                            dragOccurred = true;
+                            if (mousedownTargetSpan && tokenDragMode && typeof unpinTokenFromMVP === 'function') {
+                                unpinTokenFromMVP(mousedownTargetSpan);
+                            }
+                        }
                         
                         var currIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
