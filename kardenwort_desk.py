@@ -15577,15 +15577,8 @@ window.__CONFIG__ = {ui_config_json};
                 : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
             for (var k = 0; k < rows.length; k++) {
                 var tr = rows[k];
-                if (tr.getAttribute('data-row-id') === rIdStr) {
+                if (getRowGroupIds(tr).indexOf(rIdStr) !== -1) {
                     return tr;
-                }
-                var allIds = tr.getAttribute('data-all-row-ids');
-                if (allIds) {
-                    var parts = allIds.split(',').map(function(s) { return s.trim(); });
-                    if (parts.indexOf(rIdStr) !== -1) {
-                        return tr;
-                    }
                 }
             }
             return null;
@@ -15644,14 +15637,7 @@ window.__CONFIG__ = {ui_config_json};
                     var r = rows[i];
                     var rLem = getRowLemma(r);
                     var rIdStr = String(r.getAttribute('data-row-id'));
-                    var pIds = [rIdStr];
-                    var trAll = r.getAttribute('data-all-row-ids');
-                    if (trAll) {
-                        var parts = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                        for (var p = 0; p < parts.length; p++) {
-                            if (pIds.indexOf(parts[p]) === -1) pIds.push(parts[p]);
-                        }
-                    }
+                    var pIds = getRowGroupIds(r);
                     if (rLem && selMap[rLem]) {
                         for (var p = 0; p < pIds.length; p++) selectedRowIdsMap[pIds[p]] = true;
                     } else if (rLem && !selMap[rLem]) {
@@ -15980,15 +15966,7 @@ window.__CONFIG__ = {ui_config_json};
             if (rows && rows.length > 0) {
                 for (var i = 0; i < rows.length; i++) {
                     var tr = rows[i];
-                    var mainId = String(tr.getAttribute('data-row-id'));
-                    var trAll = tr.getAttribute('data-all-row-ids');
-                    var trGroup = [mainId];
-                    if (trAll) {
-                        var pList = trAll.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                        for (var p = 0; p < pList.length; p++) {
-                            if (trGroup.indexOf(pList[p]) === -1) trGroup.push(pList[p]);
-                        }
-                    }
+                    var trGroup = getRowGroupIds(tr);
                     var containsTarget = false;
                     for (var g = 0; g < trGroup.length; g++) {
                         if (trGroup[g] === String(rowIdStr) || (!isNaN(targetRowIdInt) && parseInt(trGroup[g], 10) === targetRowIdInt)) {
@@ -17707,12 +17685,9 @@ window.__CONFIG__ = {ui_config_json};
                         var rowId = String(tableRows[i].getAttribute('data-row-id'));
                         selectedRowIdsMap[rowId] = true;
                         if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) {
-                            var allIds = tableRows[i].getAttribute('data-all-row-ids');
-                            if (allIds) {
-                                var parts = allIds.split(',');
-                                for (var p = 0; p < parts.length; p++) {
-                                    if (parts[p]) selectedRowIdsMap[parts[p]] = true;
-                                }
+                            var extra = getExtraRowIds(tableRows[i]);
+                            for (var p = 0; p < extra.length; p++) {
+                                selectedRowIdsMap[extra[p]] = true;
                             }
                         }
                     }
@@ -17806,11 +17781,7 @@ window.__CONFIG__ = {ui_config_json};
                 if (focusedRowId !== null) {
                     var fRow = (focusedRowId >= 0 && focusedRowId < tableRows.length) ? tableRows[focusedRowId] : null;
                     var fRowId = fRow ? fRow.getAttribute('data-row-id') : String(focusedRowId);
-                    var cIds = [fRowId];
-                    if (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) {
-                        var fAllIds = fRow ? fRow.getAttribute('data-all-row-ids') : null;
-                        if (fAllIds) cIds = fAllIds.split(',').filter(Boolean);
-                    }
+                    var cIds = (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) ? getRowGroupIds(fRow) : [fRowId];
                     var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(fRowId);
                     for (var c = 0; c < cIds.length; c++) {
                         if (isCurrentlySelected) {
@@ -17996,14 +17967,11 @@ window.__CONFIG__ = {ui_config_json};
                 var rowIdStr = String(row.getAttribute('data-row-id'));
                 var isSel = selectedRowIdsMap.hasOwnProperty(rowIdStr);
                 if (!isSel) {
-                    var allIdsAttr = row.getAttribute('data-all-row-ids');
-                    if (allIdsAttr) {
-                        var cIds = allIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                        for (var c = 0; c < cIds.length; c++) {
-                            if (selectedRowIdsMap.hasOwnProperty(cIds[c])) {
-                                isSel = true;
-                                break;
-                            }
+                    var cIds = getExtraRowIds(row);
+                    for (var c = 0; c < cIds.length; c++) {
+                        if (selectedRowIdsMap.hasOwnProperty(cIds[c])) {
+                            isSel = true;
+                            break;
                         }
                     }
                 }
@@ -19737,17 +19705,10 @@ window.__CONFIG__ = {ui_config_json};
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                         if (isTrSel) {
-                            var allAttr = tr.getAttribute('data-all-row-ids');
-                            if (allAttr) {
-                                var parts = allAttr.split(',').map(function(s) { return parseInt(s.trim(), 10); }).filter(function(n) { return !isNaN(n); });
-                                for (var p = 0; p < parts.length; p++) {
-                                    if (rows.indexOf(parts[p]) === -1) rows.push(parts[p]);
-                                }
-                            } else {
-                                var trIdInt = parseInt(trId, 10);
-                                if (!isNaN(trIdInt) && rows.indexOf(trIdInt) === -1) {
-                                    rows.push(trIdInt);
-                                }
+                            var grp = getRowGroupIds(tr);
+                            for (var p = 0; p < grp.length; p++) {
+                                var pInt = parseInt(grp[p], 10);
+                                if (!isNaN(pInt) && rows.indexOf(pInt) === -1) rows.push(pInt);
                             }
                         }
                     }
@@ -19858,17 +19819,10 @@ window.__CONFIG__ = {ui_config_json};
                         var trId = String(tr.getAttribute('data-row-id'));
                         var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                         if (isTrSel) {
-                            var allAttr = tr.getAttribute('data-all-row-ids');
-                            if (allAttr) {
-                                var parts = allAttr.split(',').map(function(s) { return parseInt(s.trim(), 10); }).filter(function(n) { return !isNaN(n); });
-                                for (var p = 0; p < parts.length; p++) {
-                                    if (rows.indexOf(parts[p]) === -1) rows.push(parts[p]);
-                                }
-                            } else {
-                                var trIdInt = parseInt(trId, 10);
-                                if (!isNaN(trIdInt) && rows.indexOf(trIdInt) === -1) {
-                                    rows.push(trIdInt);
-                                }
+                            var grp = getRowGroupIds(tr);
+                            for (var p = 0; p < grp.length; p++) {
+                                var pInt = parseInt(grp[p], 10);
+                                if (!isNaN(pInt) && rows.indexOf(pInt) === -1) rows.push(pInt);
                             }
                         }
                     }
