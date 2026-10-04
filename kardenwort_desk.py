@@ -17937,10 +17937,17 @@ window.__CONFIG__ = {ui_config_json};
             
             var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
             var activeTargetRowIds = {};
+            var primaryTargetRowIds = {};
             for (var rId in selectedRowIdsMap) {
                 if (!selectedRowIdsMap.hasOwnProperty(rId)) continue;
                 var rowId = parseInt(rId, 10);
-                if (!isNaN(rowId)) activeTargetRowIds[rowId] = true;
+                if (!isNaN(rowId)) {
+                    activeTargetRowIds[rowId] = true;
+                }
+            }
+            if (lastClickedRowId !== null && lastClickedRowId !== undefined) {
+                var lcInt = parseInt(lastClickedRowId, 10);
+                if (!isNaN(lcInt)) primaryTargetRowIds[lcInt] = true;
             }
             var curTableRows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
@@ -17950,6 +17957,11 @@ window.__CONFIG__ = {ui_config_json};
                 var trId = String(tr.getAttribute('data-row-id'));
                 var trSelected = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
                 if (trSelected) {
+                    var trIdInt = parseInt(trId, 10);
+                    if (!isNaN(trIdInt)) {
+                        activeTargetRowIds[trIdInt] = true;
+                        primaryTargetRowIds[trIdInt] = true;
+                    }
                     var allAttr = tr.getAttribute('data-all-row-ids');
                     if (allAttr) {
                         var parts = allAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
@@ -18029,7 +18041,7 @@ window.__CONFIG__ = {ui_config_json};
                 } else if (token.row_ids && token.row_ids.length > 0) {
                     for (var r = 0; r < token.row_ids.length; r++) {
                         var rid = token.row_ids[r];
-                        if (activeTargetRowIds.hasOwnProperty(rid)) {
+                        if (primaryTargetRowIds.hasOwnProperty(rid)) {
                             if (!isLemmaActive) {
                                 hasMatchingRow = true;
                                 isDirectRowMatch = true;
@@ -18087,6 +18099,13 @@ window.__CONFIG__ = {ui_config_json};
                                     break;
                                 }
                             }
+                        } else if (activeTargetRowIds.hasOwnProperty(rid)) {
+                            if (!isLemmaActive) {
+                                hasMatchingRow = true;
+                                isDirectRowMatch = false;
+                                matchedRowId = rid;
+                                break;
+                            }
                         }
                     }
                 }
@@ -18118,18 +18137,14 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     if (span) {
                         try {
-                            if (hasActiveTokens) {
-                                if (isDirectRowMatch || isTargetedActiveTokenMatch) {
-                                    if (span.classList.contains('highlight-purple')) {
-                                        span.classList.add('highlight-purple-active');
-                                    } else if (span.classList.contains('highlight-orange')) {
-                                        span.classList.add('highlight-orange-active');
-                                    }
-                                    if (isOrphanSelected) {
-                                        span.classList.add('active-subtoken');
-                                    }
-                                } else if (isSameLemmaOn) {
-                                    span.classList.add('lemma-peer-highlight');
+                            if (isDirectRowMatch || isTargetedActiveTokenMatch) {
+                                if (span.classList.contains('highlight-purple')) {
+                                    span.classList.add('highlight-purple-active');
+                                } else if (span.classList.contains('highlight-orange')) {
+                                    span.classList.add('highlight-orange-active');
+                                }
+                                if (isOrphanSelected) {
+                                    span.classList.add('active-subtoken');
                                 }
                             } else if (isLegacyOverview) {
                                 if (span.classList.contains('highlight-purple')) {
@@ -18140,43 +18155,8 @@ window.__CONFIG__ = {ui_config_json};
                                 if (isOrphanSelected) {
                                     span.classList.add('active-subtoken');
                                 }
-                            } else {
-                                var isExactLemmaMatch = (tokClean && tokLem && tokClean === tokLem);
-                                var isDirectQuotationMatch = false;
-                                
-                                var refRowId = (lastClickedRowId !== null && lastClickedRowId !== undefined) ? lastClickedRowId : matchedRowId;
-                                if (refRowId !== null && refRowId !== undefined) {
-                                    var rTr = document.querySelector('tr[data-row-id="' + refRowId + '"]');
-                                    if (rTr) {
-                                        var lemCell = rTr.querySelector('.col-lemma') || rTr.querySelector('[data-col="WordSource"]');
-                                        var rLemText = (lemCell ? (lemCell.textContent || lemCell.innerText || '') : (rTr.getAttribute('data-lemma') || '')).trim().toLowerCase();
-                                        if (rLemText && tokClean === rLemText) isExactLemmaMatch = true;
-                                        
-                                        var rCell = rTr.querySelector('.col-inflected') || rTr.querySelector('[data-col="WordSourceInflectedForm"]') || rTr.querySelector('[data-col="Quotation"]');
-                                        var rQuot = (rCell ? (rCell.textContent || rCell.innerText || '') : (rTr.getAttribute('data-quotation') || '')).trim().toLowerCase();
-                                        if (rQuot && (refRowId === lastClickedRowId || lastClickedRowId === null)) {
-                                            var qParts = rQuot.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
-                                            for (var q = 0; q < qParts.length; q++) {
-                                                var part = qParts[q];
-                                                var qWords = part.split(/\s+/);
-                                                if (part === tokClean || qWords.indexOf(tokClean) !== -1) {
-                                                    isDirectQuotationMatch = true;
-                                                    break;
-                                                }
-                                            }
-                                        }
-                                    }
-                                }
-
-                                if (isExactLemmaMatch || isDirectQuotationMatch) {
-                                    if (span.classList.contains('highlight-purple')) {
-                                        span.classList.add('highlight-purple-active');
-                                    } else if (span.classList.contains('highlight-orange')) {
-                                        span.classList.add('highlight-orange-active');
-                                    }
-                                } else if (isSameLemmaOn) {
-                                    span.classList.add('lemma-peer-highlight');
-                                }
+                            } else if (isSameLemmaOn) {
+                                span.classList.add('lemma-peer-highlight');
                             }
                         } catch(e) {}
                     }
