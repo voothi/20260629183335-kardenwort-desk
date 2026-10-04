@@ -492,4 +492,22 @@ def test_coordinated_single_pass_pinning_and_table_coexistence(page, tmp_path):
     assert "hl-mvp-pin" in (trans_word.get_attribute("class") or "")
     assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
 
+    # 7. Deselect row for 'der' in table -> text highlight clears
+    table_der.click()
+    assert 0 not in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "highlight-orange-active" not in (der_span.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (der_span.get_attribute("class") or "")
+
+    # Re-select row for 'der' in table -> text highlight activates
+    table_der.click()
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "highlight-orange-active" in (der_span.get_attribute("class") or "") or "highlight-purple-active" in (der_span.get_attribute("class") or "")
+
+    # Deselect row for 'der' in table again -> text highlight clears
+    table_der.click()
+    assert 0 not in page.evaluate("() => window.getSelectedRowsArray()")
+    assert "highlight-orange-active" not in (der_span.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (der_span.get_attribute("class") or "")
+
+
 

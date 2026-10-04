@@ -17018,8 +17018,8 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 
                 lastClickedVisualIdx = rowVisualIdx;
-                lastClickedRowId = rowId;
-                focusedRowId = rowId;
+                lastClickedRowId = dragSelectMode ? rowId : null;
+                focusedRowId = dragSelectMode ? rowId : null;
                 updateRowStyles();
                 updateBidirectionalHighlights();
                 notifyAHKSelection();
@@ -17562,7 +17562,7 @@ window.__CONFIG__ = {ui_config_json};
                             selectedRowIdsMap[cIds[c]] = true;
                         }
                     }
-                    lastClickedRowId = parseInt(fRowId, 10);
+                    lastClickedRowId = isCurrentlySelected ? null : parseInt(fRowId, 10);
                     updateRowStyles();
                     updateBidirectionalHighlights();
                     notifyAHKSelection();
@@ -17925,10 +17925,6 @@ window.__CONFIG__ = {ui_config_json};
                     activeTargetRowIds[rowId] = true;
                 }
             }
-            if (lastClickedRowId !== null && lastClickedRowId !== undefined) {
-                var lcInt = parseInt(lastClickedRowId, 10);
-                if (!isNaN(lcInt)) primaryTargetRowIds[lcInt] = true;
-            }
             var curTableRows = (typeof tableRows !== 'undefined' && tableRows && tableRows.length > 0)
                 ? tableRows
                 : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
@@ -17950,6 +17946,12 @@ window.__CONFIG__ = {ui_config_json};
                             if (!isNaN(pInt)) activeTargetRowIds[pInt] = true;
                         }
                     }
+                }
+            }
+            if (lastClickedRowId !== null && lastClickedRowId !== undefined) {
+                var lcInt = parseInt(lastClickedRowId, 10);
+                if (!isNaN(lcInt) && activeTargetRowIds.hasOwnProperty(lcInt)) {
+                    primaryTargetRowIds[lcInt] = true;
                 }
             }
             
