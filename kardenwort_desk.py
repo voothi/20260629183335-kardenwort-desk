@@ -26172,8 +26172,8 @@ def persist_default_language(language: str, base_dir=None) -> bool:
             content = desk_config.read_text(encoding="utf-8")
             if re.search(r'(?i)^\s*default_language\s*=', content, flags=re.MULTILINE):
                 new_content = re.sub(
-                    r'(?i)^(\s*default_language\s*=\s*).*$',
-                    r'\g<1>' + language,
+                    r'(?i)^(\s*default_language)\s*=\s*.*$',
+                    r'\g<1> = ' + language,
                     content,
                     flags=re.MULTILINE
                 )
