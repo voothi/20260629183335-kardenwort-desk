@@ -91,6 +91,9 @@ default_zoom = 100
 ; Whether to highlight peer occurrences sharing the same lemma in the text (muted tint)
 highlight_same_lemma = false
 
+; Whether to filter table to show only selected rows by default
+filter_selected_only = false
+
 [ui]
 ; Auto-save session deltas immediately after every inline cell edit
 auto_save_on_edit = false

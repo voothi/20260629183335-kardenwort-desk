@@ -2126,6 +2126,7 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
         'default_zoom': 100,
         'auto_inject_updates': True,
         'highlight_same_lemma': False,
+        'filter_selected_only': False,
     }
     if not config:
         return ui_cfg
@@ -2142,6 +2143,7 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
         ui_cfg['default_zoom'] = rend.getint('default_zoom', fallback=100)
         ui_cfg['auto_inject_updates'] = rend.getboolean('auto_inject_updates', fallback=True)
         ui_cfg['highlight_same_lemma'] = rend.getboolean('highlight_same_lemma', fallback=False)
+        ui_cfg['filter_selected_only'] = rend.getboolean('filter_selected_only', fallback=False)
 
     return ui_cfg
 
@@ -12782,7 +12784,7 @@ html, body {{
   </div>
   
   <div class="section">
-    <table id="lemma-table">
+    <table id="lemma-table"{filter_selected_table_class}>
       <thead>
         {table_header_html}
       </thead>
@@ -12794,7 +12796,7 @@ html, body {{
 </div>
 <div class="kw-action-toolbar" id="kw-action-toolbar">
   <button type="button" id="kw-btn-same-lemma" class="btn-toggle{same_lemma_active_class}" title="Toggle Lemma-wide highlighting">Lemma</button>
-  <button type="button" id="kw-btn-filter-selected" title="Toggle view: show only selected words">Selected</button>
+  <button type="button" id="kw-btn-filter-selected" class="{filter_selected_active_class}" title="Toggle view: show only selected words">Selected</button>
   <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
   <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
   <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
@@ -21395,6 +21397,9 @@ setTimeout(function() {{
     html_page = html_page.replace("{ui_config_json}", json.dumps(ui_cfg))
     html_page = html_page.replace("{pos_display_order_json}", json.dumps(POS_DISPLAY_ORDER))
     html_page = html_page.replace("{same_lemma_active_class}", " active" if ui_cfg.get("highlight_same_lemma") else "")
+    filter_selected = bool(ui_cfg.get("filter_selected_only", False))
+    html_page = html_page.replace("{filter_selected_active_class}", "btn-filter-active" if filter_selected else "")
+    html_page = html_page.replace("{filter_selected_table_class}", ' class="kw-filter-selected-only"' if filter_selected else "")
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{target_language}", target_lang)

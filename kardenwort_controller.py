@@ -88,6 +88,7 @@ logger = logging.getLogger("kardenwort.desk.controller")
 
 CONFIG_API_WRITABLE_KEYS: Dict[Tuple[str, str], str] = {
     ('rendering', 'highlight_same_lemma'): 'bool',
+    ('rendering', 'filter_selected_only'): 'bool',
 }
 
 ERROR_STATUS_MATRIX = {
@@ -4479,6 +4480,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 if not key and 'highlight_same_lemma' in body:
                     key = 'highlight_same_lemma'
                     val = body.get('highlight_same_lemma')
+                elif not key and 'filter_selected_only' in body:
+                    key = 'filter_selected_only'
+                    val = body.get('filter_selected_only')
 
                 target_pair = (str(sec).strip().lower() if sec else '', str(key).strip().lower() if key else '')
                 matched_pair = None
