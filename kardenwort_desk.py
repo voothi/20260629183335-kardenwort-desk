@@ -14038,6 +14038,12 @@ window.__CONFIG__ = {ui_config_json};
             if (lsVal !== null) initialSameLemma = (lsVal === 'true');
         } catch(e) {}
 
+        var initialFilterSelectedOnly = (window.__CONFIG__ && window.__CONFIG__.filter_selected_only) ? true : false;
+        try {
+            var lsFilterVal = localStorage.getItem('kw_filter_selected_only');
+            if (lsFilterVal !== null) initialFilterSelectedOnly = (lsFilterVal === 'true');
+        } catch(e) {}
+
         window.AppState = {
             rows: {},
             selectedLemmas: {},
@@ -14050,7 +14056,7 @@ window.__CONFIG__ = {ui_config_json};
             textProvenance: null,
             stage: null,
             isFinished: false,
-            filterSelectedOnly: false,
+            filterSelectedOnly: initialFilterSelectedOnly,
             applyDeltas: function(data) {
                 if (!data) return;
                 
@@ -21081,6 +21087,12 @@ window.__CONFIG__ = {ui_config_json};
             if (window.AppState) {
                 window.AppState.filterSelectedOnly = !!active;
             }
+            if (window.__CONFIG__) {
+                window.__CONFIG__.filter_selected_only = !!active;
+            }
+            try {
+                localStorage.setItem('kw_filter_selected_only', String(!!active));
+            } catch(e) {}
             var lemmaTable = document.getElementById('lemma-table');
             if (lemmaTable) {
                 if (active) {
@@ -21097,18 +21109,43 @@ window.__CONFIG__ = {ui_config_json};
                     removeClass(filterBtn, 'btn-filter-active');
                 }
             }
-            updateEmptySelectionState();
+            if (typeof updateEmptySelectionState === 'function') {
+                updateEmptySelectionState();
+            }
+            try {
+                fetch('/api/v1/config', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(!!active) })
+                }).catch(function() {});
+            } catch(e) {}
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
 
         function toggleFilterSelectedOnly() {
             var cur = (window.AppState && window.AppState.filterSelectedOnly) ? true : false;
-            setFilterSelectedOnly(!cur);
+            var next = !cur;
+            setFilterSelectedOnly(next);
+            if (typeof window.showToast === 'function') {
+                window.showToast(next ? "Selected rows filter enabled" : "Selected rows filter disabled", "info");
+            }
         }
         window.toggleFilterSelectedOnly = toggleFilterSelectedOnly;
 
         var btnFilterSelected = document.getElementById('kw-btn-filter-selected');
         if (btnFilterSelected) {
+            if (window.AppState && window.AppState.filterSelectedOnly) {
+                addClass(btnFilterSelected, 'btn-filter-active');
+                var lemmaTable = document.getElementById('lemma-table');
+                if (lemmaTable) {
+                    addClass(lemmaTable, 'kw-filter-selected-only');
+                }
+                if (typeof updateEmptySelectionState === 'function') {
+                    updateEmptySelectionState();
+                }
+            } else {
+                removeClass(btnFilterSelected, 'btn-filter-active');
+            }
             addEvent(btnFilterSelected, 'click', function() {
                 toggleFilterSelectedOnly();
             });
