@@ -3,8 +3,11 @@ import pytest
 from pathlib import Path
 import kardenwort_desk
 
-def get_desk_page_html(tmp_path, theme="dark", zid="20260912232500", text_mode="multi"):
+def get_desk_page_html(tmp_path, theme="dark", zid="20260912232500", text_mode="multi", filter_selected_only=False):
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("rendering"):
+        config.add_section("rendering")
+    config.set("rendering", "filter_selected_only", "true" if filter_selected_only else "false")
     tsv_file = tmp_path / f"{zid}-filter-test.de.tsv"
     tsv_content = (
         "# comment\n"
@@ -31,6 +34,22 @@ def get_desk_page_html(tmp_path, theme="dark", zid="20260912232500", text_mode="
 
 def inject_mock_fetch(html):
     mock_script = """<script>
+(function() {
+    var _store = {};
+    var _mockStorage = {
+        getItem: function(k) { return Object.prototype.hasOwnProperty.call(_store, k) ? _store[k] : null; },
+        setItem: function(k, v) { _store[k] = String(v); },
+        removeItem: function(k) { delete _store[k]; },
+        clear: function() { _store = {}; }
+    };
+    try {
+        Object.defineProperty(window, 'localStorage', {
+            value: _mockStorage,
+            configurable: true,
+            writable: true
+        });
+    } catch(e) {}
+})();
 window.__fetches = [];
 window.__reloads = 0;
 window.onSessionReload = function() {
@@ -83,6 +102,76 @@ def test_selected_filter_css_rules(tmp_path):
     assert '.kw-empty-selection-row' in html
     assert '#lemma-table.kw-filter-selected-only tbody tr.kw-empty-selection-row.kw-empty-visible' in html
     assert '.kw-empty-selection-cell' in html
+
+
+def test_selected_filter_initial_active_class(tmp_path):
+    """Verifies that active class and table filter class are applied based on filter_selected_only config."""
+    # When false
+    html_off = get_desk_page_html(tmp_path, filter_selected_only=False)
+    assert 'id="kw-btn-filter-selected" class=""' in html_off
+    assert '<table id="lemma-table">' in html_off
+
+    # When true
+    html_on = get_desk_page_html(tmp_path, filter_selected_only=True)
+    assert 'id="kw-btn-filter-selected" class="btn-filter-active"' in html_on
+    assert '<table id="lemma-table" class="kw-filter-selected-only">' in html_on
+
+
+def test_selected_filter_initial_state_playwright(page, tmp_path):
+    """Verifies browser initial state and row visibility when filter_selected_only is enabled in config."""
+    raw_html = get_desk_page_html(tmp_path, filter_selected_only=True, text_mode="single")
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    lemma_table = page.locator("#lemma-table")
+
+    assert filter_btn.is_visible()
+    assert filter_btn.evaluate("el => el.classList.contains('btn-filter-active')")
+    assert lemma_table.evaluate("el => el.classList.contains('kw-filter-selected-only')")
+    assert page.evaluate("() => window.AppState.filterSelectedOnly") is True
+
+    # Row 0 (Haus) data-selected="1", Row 1 (groß) data-selected="0"
+    row0 = page.locator("#lemma-table tbody tr[data-row-id='0']")
+    row1 = page.locator("#lemma-table tbody tr[data-row-id='1']")
+    assert row0.is_visible()
+    assert not row1.is_visible()
+
+
+def test_selected_filter_persistence_request(page, tmp_path):
+    """Verifies that clicking #kw-btn-filter-selected dispatches POST /api/v1/config with new state."""
+    raw_html = get_desk_page_html(tmp_path, filter_selected_only=False, text_mode="single")
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    assert filter_btn.is_visible()
+
+    # Toggle filter ON
+    filter_btn.click()
+    page.wait_for_timeout(50)
+
+    fetches = page.evaluate("() => window.__fetches")
+    assert len(fetches) == 1
+    assert fetches[0]["url"] == "/api/v1/config"
+    assert fetches[0]["body"]["section"] == "rendering"
+    assert fetches[0]["body"]["key"] == "filter_selected_only"
+    assert fetches[0]["body"]["value"] == "true"
+    assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") == "true"
+    assert "Selected rows filter enabled" in page.locator("#kw-toast-container").inner_text()
+
+    # Toggle filter OFF
+    filter_btn.click()
+    page.wait_for_timeout(50)
+
+    fetches = page.evaluate("() => window.__fetches")
+    assert len(fetches) == 2
+    assert fetches[1]["url"] == "/api/v1/config"
+    assert fetches[1]["body"]["section"] == "rendering"
+    assert fetches[1]["body"]["key"] == "filter_selected_only"
+    assert fetches[1]["body"]["value"] == "false"
+    assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") == "false"
+    assert "Selected rows filter disabled" in page.locator("#kw-toast-container").inner_text()
 
 
 def test_selected_filter_toggle_interaction(page, tmp_path):

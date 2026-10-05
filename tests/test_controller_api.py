@@ -687,6 +687,34 @@ def test_post_config_api_whitelist(running_controller):
         assert payload.get("key") == "highlight_same_lemma"
         assert payload.get("value") == "true"
 
+    try:
+        req_valid_filter = urllib.request.Request(
+            f"{server_url}/api/v1/config",
+            data=json.dumps({"section": "rendering", "key": "filter_selected_only", "value": "true"}).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        with urllib.request.urlopen(req_valid_filter, timeout=5.0) as resp:
+            assert resp.status == 200
+            data = json.loads(resp.read().decode("utf-8"))
+            payload = data.get("data", data)
+            assert payload.get("ok") is True
+            assert payload.get("section") == "rendering"
+            assert payload.get("key") == "filter_selected_only"
+            assert payload.get("value") == "true"
+    finally:
+        req_reset_filter = urllib.request.Request(
+            f"{server_url}/api/v1/config",
+            data=json.dumps({"section": "rendering", "key": "filter_selected_only", "value": "false"}).encode("utf-8"),
+            headers=headers,
+            method="POST"
+        )
+        try:
+            with urllib.request.urlopen(req_reset_filter, timeout=5.0) as resp:
+                pass
+        except Exception:
+            pass
+
     # 2. Legacy format succeeds
     req_legacy = urllib.request.Request(
         f"{server_url}/api/v1/config",

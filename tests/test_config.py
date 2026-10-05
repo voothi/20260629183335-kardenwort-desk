@@ -541,6 +541,7 @@ def test_resolve_ui_config():
     assert cfg['launch_in_browser'] is True
     assert cfg['default_zoom'] == 100
     assert cfg['auto_inject_updates'] is True
+    assert cfg['filter_selected_only'] is False
 
     # 2. Explicit [ui] and [rendering]
     cp = configparser.ConfigParser()
@@ -552,6 +553,7 @@ def test_resolve_ui_config():
     cp.add_section(SEC_RENDERING)
     cp.set(SEC_RENDERING, 'default_zoom', '150')
     cp.set(SEC_RENDERING, 'auto_inject_updates', 'false')
+    cp.set(SEC_RENDERING, 'filter_selected_only', 'true')
 
     cfg2 = resolve_ui_config(cp)
     assert cfg2['auto_save_on_edit'] is True
@@ -560,6 +562,7 @@ def test_resolve_ui_config():
     assert cfg2['launch_in_browser'] is False
     assert cfg2['default_zoom'] == 150
     assert cfg2['auto_inject_updates'] is False
+    assert cfg2['filter_selected_only'] is True
 
 
 def test_persist_default_language_omits_ahk_mutation(tmp_path):
