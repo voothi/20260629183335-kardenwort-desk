@@ -573,6 +573,261 @@ def test_skeleton_loader_proportions_unified(mock_clean_context_env):
     assert "height: 1.6em;" in tc_css
 
 
+def test_regression_real_world_anki_mapping_multi_mode_isolation(tmp_path, monkeypatch):
+    """Regression test: Verifies that when anki-mapping.ini maps SentenceDestination2=sentence_destination
+    in [desk_columns], multi-mode sessions with anki_context_mode='single':
+    1. Strictly bypass context padding (pad_sentences and pad_translated_sentences are never called).
+    2. Render clean 1-to-1 line translations in #translation-container without sliding-window context fragments.
+    3. Ensure cards[0]['translated_text'] contains clean line translations.
+    """
+    db_path = tmp_path / "test_reg_multi.db"
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    mapping_path = tmp_path / "anki-mapping.ini"
+
+    # Exact desk_columns mapping from user's anki-mapping.ini
+    mapping_content = """
+[fields]
+Quotation = 1
+WordSource = 2
+WordDestination = 6
+SentenceSource = 10
+SentenceDestination = 13
+SentenceDestination2 = 16
+SentenceSourceIndex = 81
+DeskSelected = 84
+
+[desk_columns]
+SentenceSource = sentence_source
+SentenceDestination2 = sentence_destination
+SentenceSourceIndex = sentence_index
+"""
+    mapping_path.write_text(mapping_content, encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "storage_backend", "sqlite")
+    config.set("settings", "anki_context_mode", "single")
+    config.set("settings", "anki_context_words_before", "5")
+    config.set("settings", "anki_context_words_after", "5")
+    config.set("settings", "anki_translated_context_words_before", "5")
+    config.set("settings", "anki_translated_context_words_after", "5")
+    config.set("settings", "normalize_bracket_spacing", "true")
+    config.set("settings", "default_language", "de")
+    config.set("settings", "default_target_language", "en")
+
+    config.add_section("sentences_mode")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_db_path", str(db_path))
+
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "google")
+    config.set("pipeline", "lemma_base_provider", "google")
+
+    config.add_section("triggers")
+    config.set("triggers", "run_text_translation", "auto")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "auto")
+
+    config.add_section("languages")
+    config.set("languages", "de_prompt", "german")
+    config.set("languages", "en_prompt", "english")
+
+    resolved_paths = {
+        "anki_mapping_file": str(mapping_path),
+        "results_dir": str(results_dir),
+        "sqlite_db_path": str(db_path),
+        "kardenwort_workspace": tmp_path,
+    }
+
+    from kardenwort_db import KardenwortDB
+    KardenwortDB(db_path=db_path).run_migrations()
+    adapter = desk.get_storage_adapter(config, resolved_paths)
+
+    # Test both German and English inputs
+    for lang, text, sents_clean in [
+        ("de", "# Kapitel\nEr ging nach Hause.\nSie las ein Buch.", ["# Kapitel", "He went home.", "She read a book."]),
+        ("en", "# Chapter\nHe went home.\nShe read a book.", ["# Chapter", "Он пошел домой.", "Она читала книгу."])
+    ]:
+        zid = f"2026100612000{lang}"
+        tsv_path = results_dir / f"{zid}-reg.{lang}.tsv"
+
+        pad_calls = []
+        def mock_pad_trans(arr, *args, **kwargs):
+            pad_calls.append(list(arr))
+            return [f"PaddedBefore {x} PaddedAfter" for x in arr]
+        monkeypatch.setattr(desk, "pad_translated_sentences", mock_pad_trans)
+        monkeypatch.setattr(desk, "run_progressive_worker_async", lambda *args, **kwargs: None)
+
+        # Seed session in SQLite with clean sentence_destination and padded sentence_destination2
+        adapter.save_session(
+            session_zid=zid,
+            slug=f"reg-{lang}",
+            source_language=lang,
+            target_language="en" if lang == "de" else "ru",
+            text_mode="multi",
+            source_raw_text=text,
+            headers=["Quotation", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination", "SentenceDestination2", "SentenceSourceIndex", "DeskSelected"],
+            data_rows=[
+                ["", "word1", "trans1", "Sentence 1", sents_clean[1], f"PaddedContext {sents_clean[1]} PaddedContext", "2", "1"],
+                ["", "word2", "trans2", "Sentence 2", sents_clean[2], f"PaddedContext {sents_clean[2]} PaddedContext", "3", "1"],
+            ],
+            sentences=[
+                {"session_zid": zid, "sentence_index": 1, "sentence_source": text.splitlines()[0], "sentence_destination": sents_clean[0], "sentence_destination2": sents_clean[0]},
+                {"session_zid": zid, "sentence_index": 2, "sentence_source": text.splitlines()[1], "sentence_destination": sents_clean[1], "sentence_destination2": f"PaddedContext {sents_clean[1]} PaddedContext"},
+                {"session_zid": zid, "sentence_index": 3, "sentence_source": text.splitlines()[2], "sentence_destination": sents_clean[2], "sentence_destination2": f"PaddedContext {sents_clean[2]} PaddedContext"},
+            ],
+            zid=zid,
+        )
+
+        html = desk._run_render_flow_impl(
+            text=text,
+            language=lang,
+            zid=zid,
+            text_mode="multi",
+            config=config,
+            resolved_paths=resolved_paths,
+            tsv_path=tsv_path,
+        )
+
+        # 1. Padding must NOT be invoked
+        assert len(pad_calls) == 0
+
+        # 2. #translation-container must NOT contain 'PaddedContext'
+        assert "PaddedContext" not in html
+        assert sents_clean[1] in html
+        assert sents_clean[2] in html
+
+        # 3. Check cards JSON
+        cards_match = re.search(r'<script id="sentence-cards" type="application/json">\s*(\[.*?\])\s*</script>', html, re.DOTALL)
+        if cards_match:
+            cards = json.loads(cards_match.group(1))
+            master_card_trans = cards[0].get("translated_text", "")
+            assert "PaddedContext" not in master_card_trans
+            assert sents_clean[1] in master_card_trans
+            assert sents_clean[2] in master_card_trans
+
+
+def test_regression_real_world_anki_mapping_single_mode_isolation(tmp_path, monkeypatch):
+    """Regression test: Verifies that when anki-mapping.ini maps SentenceDestination2=sentence_destination,
+    single-mode sessions with anki_context_mode='single':
+    1. Renders a single continuous paragraph without sliding-window duplicates in #translation-container.
+    2. Keeps padded context strictly in sentence_destination2 in the database for Anki export, never leaking into UI.
+    """
+    db_path = tmp_path / "test_reg_single.db"
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    mapping_path = tmp_path / "anki-mapping.ini"
+
+    mapping_content = """
+[fields]
+Quotation = 1
+WordSource = 2
+WordDestination = 6
+SentenceSource = 10
+SentenceDestination = 13
+SentenceDestination2 = 16
+SentenceSourceIndex = 81
+DeskSelected = 84
+
+[desk_columns]
+SentenceSource = sentence_source
+SentenceDestination2 = sentence_destination
+SentenceSourceIndex = sentence_index
+"""
+    mapping_path.write_text(mapping_content, encoding="utf-8")
+
+    config = configparser.ConfigParser()
+    config.add_section("settings")
+    config.set("settings", "storage_backend", "sqlite")
+    config.set("settings", "anki_context_mode", "single")
+    config.set("settings", "anki_context_words_before", "5")
+    config.set("settings", "anki_context_words_after", "5")
+    config.set("settings", "anki_translated_context_words_before", "5")
+    config.set("settings", "anki_translated_context_words_after", "5")
+    config.set("settings", "normalize_bracket_spacing", "true")
+    config.set("settings", "default_language", "de")
+    config.set("settings", "default_target_language", "en")
+
+    config.add_section("storage")
+    config.set("storage", "backend", "sqlite")
+    config.set("storage", "sqlite_db_path", str(db_path))
+
+    config.add_section("pipeline")
+    config.set("pipeline", "text_base_provider", "google")
+    config.set("pipeline", "lemma_base_provider", "google")
+
+    config.add_section("triggers")
+    config.set("triggers", "run_text_translation", "auto")
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "auto")
+
+    resolved_paths = {
+        "anki_mapping_file": str(mapping_path),
+        "results_dir": str(results_dir),
+        "sqlite_db_path": str(db_path),
+        "kardenwort_workspace": tmp_path,
+    }
+
+    from kardenwort_db import KardenwortDB
+    KardenwortDB(db_path=db_path).run_migrations()
+    adapter = desk.get_storage_adapter(config, resolved_paths)
+
+    zid = "20261006120002"
+    tsv_path = results_dir / f"{zid}-reg-single.de.tsv"
+    text = "Erster Satz. Zweiter Satz."
+
+    adapter.save_session(
+        session_zid=zid,
+        slug="reg-single-de",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text=text,
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination", "SentenceDestination2", "SentenceSourceIndex", "DeskSelected"],
+        data_rows=[
+            ["", "Erste", "first", "Erster Satz.", "First sentence.", "MarginLeft First sentence. MarginRight", "1", "1"],
+            ["", "Zweite", "second", "Zweiter Satz.", "Second sentence.", "MarginLeft Second sentence. MarginRight", "2", "1"],
+        ],
+        sentences=[
+            {"session_zid": zid, "sentence_index": 1, "sentence_source": "Erster Satz.", "sentence_destination": "First sentence.", "sentence_destination2": "MarginLeft First sentence. MarginRight"},
+            {"session_zid": zid, "sentence_index": 2, "sentence_source": "Zweiter Satz.", "sentence_destination": "Second sentence.", "sentence_destination2": "MarginLeft Second sentence. MarginRight"},
+        ],
+        zid=zid,
+    )
+
+    monkeypatch.setattr(desk, "run_progressive_worker_async", lambda *args, **kwargs: None)
+
+    html = desk._run_render_flow_impl(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path,
+    )
+
+    # 1. UI #translation-container must contain the clean unified continuous paragraph
+    assert "MarginLeft" not in html
+    assert "MarginRight" not in html
+    assert "First sentence. Second sentence." in html
+
+    # 2. Database sentences table retains the context-padded SentenceDestination2 for Anki flashcards
+    db_sents = adapter.db.get_sentences_by_session(zid)
+    assert len(db_sents) == 2
+    assert db_sents[0]["sentence_destination"] == "First sentence."
+    assert db_sents[0]["sentence_destination2"] == "MarginLeft First sentence. MarginRight"
+    assert db_sents[1]["sentence_destination"] == "Second sentence."
+    assert db_sents[1]["sentence_destination2"] == "MarginLeft Second sentence. MarginRight"
+
+
+
 
 
 
