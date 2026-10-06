@@ -3868,7 +3868,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     is_single_para = ((synthesized.get("text_mode") or "single") == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
                     joiner = " " if is_single_para else "\n"
                     sentence_translation = joiner.join([
-                        str(s.get("sentence_destination") or s.get("sentence_destination2") or s.get("sentence_source") or "").strip()
+                        (str(s.get("sentence_destination") or "").strip() or str(s.get("sentence_destination2") or "").strip() or str(s.get("sentence_source") or "").strip())
                         for s in synthesized["sentences"]
                     ])
                 fingerprint = compute_content_fingerprint(data_rows)
@@ -3985,9 +3985,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 joiner = " " if is_single_para else "\n"
                 if not sentence_translation and restored.get("sentences"):
                     sentence_translation = joiner.join([
-                        str(s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
+                        (str(s.get("sentence_destination") or "").strip() or str(s.get("sentence_destination2") or "").strip())
                         for s in restored["sentences"]
-                        if (s.get("sentence_destination") or s.get("sentence_destination2"))
+                        if (str(s.get("sentence_destination") or "").strip() or str(s.get("sentence_destination2") or "").strip())
                     ])
                 elif is_single_para and sentence_translation:
                     sentence_translation = " ".join([p.strip() for p in re.split(r'[\r\n]+', sentence_translation) if p.strip()])
@@ -4230,7 +4230,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     is_single_para = ((synthesized.get("text_mode") or "single") == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
                     joiner = " " if is_single_para else "\n"
                     sentence_translation = joiner.join([
-                        str(s.get("sentence_destination") or s.get("sentence_destination2") or s.get("sentence_source") or "").strip()
+                        (str(s.get("sentence_destination") or "").strip() or str(s.get("sentence_destination2") or "").strip() or str(s.get("sentence_source") or "").strip())
                         for s in synthesized["sentences"]
                     ])
                 fingerprint = compute_content_fingerprint(data_rows)

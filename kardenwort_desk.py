@@ -9512,6 +9512,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else -1
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
         col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
+        col_sentence_dest_orig = headers.index('SentenceDestination') if 'SentenceDestination' in headers else -1
         
         # Populate translations back into master TSV using the clean and padded sentences
         for row in data_rows:
@@ -9526,6 +9527,10 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     while len(row) <= col_sentence_source:
                         row.append("")
                     row[col_sentence_source] = padded_source_sentences[row_sent_idx]
+                if col_sentence_dest_orig != -1:
+                    while len(row) <= col_sentence_dest_orig:
+                        row.append("")
+                    row[col_sentence_dest_orig] = translated_sentences[row_sent_idx]
                 if col_sentence_dest != -1:
                     while len(row) <= col_sentence_dest:
                         row.append("")
@@ -10103,7 +10108,15 @@ html, body {{
             source_text_path.write_text(text, encoding='utf-8')
             
     sentence_translated = False
-    dest_cols = [c for c in (col_sentence_dest, col_sentence_dest_orig, col_sentence_dest2) if c != -1]
+    dest_cols = []
+    if col_sentence_dest_orig != -1 and col_sentence_dest_orig not in dest_cols:
+        dest_cols.append(col_sentence_dest_orig)
+    if col_sentence_dest != -1 and col_sentence_dest != col_sentence_dest2 and col_sentence_dest not in dest_cols:
+        dest_cols.append(col_sentence_dest)
+    if col_sentence_dest2 != -1 and col_sentence_dest2 not in dest_cols:
+        dest_cols.append(col_sentence_dest2)
+    elif col_sentence_dest != -1 and col_sentence_dest not in dest_cols:
+        dest_cols.append(col_sentence_dest)
     for c_d in dest_cols:
         if any(len(row) > c_d and row[c_d].strip() for row in data_rows):
             sentence_translated = True
@@ -10272,7 +10285,7 @@ html, body {{
                         for s in db_sents:
                             s_idx = s.get("sentence_index", 1) - 1
                             s_dest = s.get("sentence_destination")
-                            if s_dest and str(s_dest).strip() and (s_idx not in extracted_translations or not extracted_translations[s_idx]):
+                            if s_dest and str(s_dest).strip():
                                 extracted_translations[s_idx] = str(s_dest).strip()
                             elif str(s.get("sentence_source", "")).strip().startswith("#") and (s_idx not in extracted_translations or not extracted_translations[s_idx]):
                                 extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
@@ -24276,7 +24289,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                         logger.error(f"Failed to read clean translation text file in write_update_js: {e}")
 
             if translated_text is None:
-                col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+                col_sentence_dest = headers.index('SentenceDestination') if 'SentenceDestination' in headers else (headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1)
                 col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
                 if col_sentence_dest != -1:
                     idx_to_sentence = {}
