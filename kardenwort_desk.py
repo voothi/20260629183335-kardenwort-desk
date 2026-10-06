@@ -9105,6 +9105,10 @@ def render_verify_language_html(
     exp_code_json = json.dumps(exp_code)
 
     default_selected = det_code if det_code in ("en", "de") else "und"
+    if det_code and det_code not in ("en", "de"):
+        und_label = f"Undefined / Generic (und) - Process {det_name} ({det_code}) without lemmatization"
+    else:
+        und_label = "Undefined / Generic (und)"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -9246,7 +9250,7 @@ body {{
     <div class="kw-verify-title" id="kw-lang-modal-title">Language Verification</div>
     <div class="kw-verify-body" id="kw-lang-modal-body">{prompt_text}</div>
     <select id="kw-verify-lang-select" class="kw-select">
-        <option value="und"{' selected="selected"' if default_selected == "und" else ""}>Undefined / Generic (und)</option>
+        <option value="und"{' selected="selected"' if default_selected == "und" else ""}>{und_label}</option>
         <option value="en"{' selected="selected"' if default_selected == "en" else ""}>English (en)</option>
         <option value="de"{' selected="selected"' if default_selected == "de" else ""}>Deutsch (de)</option>
     </select>
@@ -10356,19 +10360,19 @@ html, body {{
                         if need_dest or need_ipa or need_morph:
                             selected_rows_to_enrich.append(i)
                             
-                if selected_rows_to_enrich:
-                    if is_sqlite:
-                        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-                        storage_adapter.enrich_session_intellifiller(
-                            session_zid=zid, prompt_name=prompt_name, selected_rows=selected_rows_to_enrich, reprocess=True, zid=zid
-                        )
-                        comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
-                    else:
-                        with file_lock(working_tsv_path):
-                            save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
-                        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-                        run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_enrich, reprocess=True)
-                        comments, headers, data_rows = load_tsv_rows(working_tsv_path)
+                if selected_rows_to_enrich and language != 'und':
+                    prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
+                    if prompt_name:
+                        if is_sqlite:
+                            storage_adapter.enrich_session_intellifiller(
+                                session_zid=zid, prompt_name=prompt_name, selected_rows=selected_rows_to_enrich, reprocess=True, zid=zid
+                            )
+                            comments, headers, data_rows = storage_adapter.load_tsv_rows(working_tsv_path)
+                        else:
+                            with file_lock(working_tsv_path):
+                                save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
+                            run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths, selected_rows=selected_rows_to_enrich, reprocess=True)
+                            comments, headers, data_rows = load_tsv_rows(working_tsv_path)
             else:
                 lemmas_to_translate = []
                 for row in data_rows:
@@ -10509,7 +10513,7 @@ html, body {{
             
     worker_launched = False
     if not is_mismatch and not llm_filled:
-        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt')
+        prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
         
         is_master_window = bool(children_tsv_paths)
         
@@ -10519,14 +10523,14 @@ html, body {{
                 needs_worker = True
             if run_base == 'auto' and has_untranslated_lemmas and not is_master_window:
                 needs_worker = True
-            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not is_master_window:
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not is_master_window and language != 'und' and prompt_name:
                 needs_worker = True
             # Master window: launch worker to receive cross-pollinated data from children.
             if is_master_window:
                 needs_worker = True
                 
             if needs_worker:
-                skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none') or is_master_window
+                skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none') or is_master_window or (language == 'und') or not prompt_name
                 try:
                     try:
                         run_progressive_worker_async(
@@ -10548,7 +10552,7 @@ html, body {{
                     worker_launched = False
         else:
             # Monolithic mode enrichment
-            if run_enrich == 'auto' and enrich_provider == 'intellifiller':
+            if run_enrich == 'auto' and enrich_provider == 'intellifiller' and language != 'und' and prompt_name:
                 run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
                 

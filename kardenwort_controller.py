@@ -4560,31 +4560,31 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if action == 'process':
                 raw_lang = body.get('selected_language') or body.get('target_language') or draft.get("language") or "und"
-                target_lang = raw_lang.strip().lower() if raw_lang else "und"
+                chosen_source_lang = raw_lang.strip().lower() if raw_lang else "und"
             elif action == 'switch':
-                target_lang = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
-                if target_lang:
-                    target_lang = target_lang.strip().lower()
+                chosen_source_lang = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
+                if chosen_source_lang:
+                    chosen_source_lang = chosen_source_lang.strip().lower()
                 else:
-                    target_lang = "en"
+                    chosen_source_lang = "en"
 
                 # 1. Update in-memory config
                 if hasattr(self.server, 'config') and self.server.config:
                     if not self.server.config.has_section(SEC_SETTINGS):
                         self.server.config.add_section(SEC_SETTINGS)
-                    self.server.config.set(SEC_SETTINGS, 'default_language', target_lang)
+                    self.server.config.set(SEC_SETTINGS, 'default_language', chosen_source_lang)
 
                 # 2. Persist to desk config.ini
                 base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
-                persist_default_language(target_lang, base_dir=base_dir)
+                persist_default_language(chosen_source_lang, base_dir=base_dir)
 
                 # 3. Notify AutoHotkey process via IPC
-                spawn_ahk(["--set-language", target_lang], base_dir=base_dir)
+                spawn_ahk(["--set-language", chosen_source_lang], base_dir=base_dir)
             else:
-                target_lang = draft.get("language") or "en"
+                chosen_source_lang = draft.get("language") or "en"
 
             raw_tsv = draft.get("tsv_path")
-            if raw_tsv and target_lang != draft.get("language"):
+            if raw_tsv and chosen_source_lang != draft.get("language"):
                 tsv_path_arg = None
             else:
                 tsv_path_arg = Path(raw_tsv) if raw_tsv else None
@@ -4592,7 +4592,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             # Execute run_render_flow
             render_out = render_flow_fn(
                 text=draft.get("text", ""),
-                language=target_lang,
+                language=chosen_source_lang,
                 zid=session_zid,
                 text_mode=draft.get("text_mode", "single"),
                 config=self.server.config,
@@ -4674,7 +4674,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             self._send_json(200, {
                 "ok": True,
                 "action": action,
-                "language": target_lang,
+                "language": chosen_source_lang,
                 "session_zid": session_zid,
                 "urls": spawned_urls,
             })

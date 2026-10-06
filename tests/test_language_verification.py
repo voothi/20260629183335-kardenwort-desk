@@ -324,3 +324,91 @@ def test_generate_und_tsv(tmp_path):
     assert "мир" in content
     assert "Это" in content
 
+
+def test_render_verify_language_html_foreign_dropdown_label():
+    from kardenwort_desk import render_verify_language_html
+
+    # Case 1: Detected Russian (outside en/de) -> explicit informative label
+    mismatch_ru = {
+        "is_mismatch": True,
+        "detected_language": "ru",
+        "expected_language": "en",
+        "detected_name": "Russian",
+        "expected_name": "English",
+        "session_zid": "20261006123456",
+    }
+    html_ru = render_verify_language_html(mismatch_ru)
+    assert 'Undefined / Generic (und) - Process Russian (ru) without lemmatization' in html_ru
+    assert 'value="und" selected="selected"' in html_ru
+
+    # Case 2: Detected German (supported study language) -> clean standard label
+    mismatch_de = {
+        "is_mismatch": True,
+        "detected_language": "de",
+        "expected_language": "en",
+        "detected_name": "German",
+        "expected_name": "English",
+        "session_zid": "20261006123457",
+    }
+    html_de = render_verify_language_html(mismatch_de)
+    assert '<option value="und">Undefined / Generic (und)</option>' in html_de
+    assert 'value="de" selected="selected"' in html_de
+
+
+def test_und_session_enrichment_guard(tmp_path, monkeypatch):
+    import kardenwort_desk
+
+    results_dir = tmp_path / "results"
+    results_dir.mkdir()
+
+    cfg = configparser.ConfigParser()
+    cfg.add_section(kardenwort_desk.SEC_ENVIRONMENT)
+    cfg.set(kardenwort_desk.SEC_ENVIRONMENT, "kardenwort_python", "python")
+    cfg.set(kardenwort_desk.SEC_ENVIRONMENT, "kardenwort_workspace", str(tmp_path))
+    cfg.add_section(kardenwort_desk.SEC_LANGUAGES)
+    cfg.set(kardenwort_desk.SEC_LANGUAGES, "en_prompt", "prompt_en")
+    cfg.set(kardenwort_desk.SEC_LANGUAGES, "de_prompt", "prompt_de")
+    # No und_prompt
+    cfg.add_section(kardenwort_desk.SEC_PIPELINE)
+    cfg.set(kardenwort_desk.SEC_PIPELINE, "lemma_reprocess_provider", "intellifiller")
+    cfg.add_section(kardenwort_desk.SEC_TRIGGERS)
+    cfg.set(kardenwort_desk.SEC_TRIGGERS, "run_lemma_enrichment", "auto")
+    cfg.set(kardenwort_desk.SEC_TRIGGERS, "run_lemma_base_translation", "manual")
+    cfg.set(kardenwort_desk.SEC_TRIGGERS, "run_text_translation", "manual")
+    cfg.add_section(kardenwort_desk.SEC_RENDERING)
+    cfg.set(kardenwort_desk.SEC_RENDERING, "auto_inject_updates", "false")
+    cfg.add_section(kardenwort_desk.SEC_SETTINGS)
+    cfg.set(kardenwort_desk.SEC_SETTINGS, "default_language", "en")
+
+    headless_calls = []
+    monkeypatch.setattr(kardenwort_desk, "run_headless_intellifiller", lambda *args, **kwargs: headless_calls.append(args))
+    monkeypatch.setattr(kardenwort_desk, "run_progressive_worker_async", lambda *args, **kwargs: headless_calls.append(args))
+
+    anki_mapping = tmp_path / "anki-mapping.ini"
+    anki_mapping.write_text("[fields]\nWordSource\nDeskSelected\n", encoding="utf-8")
+
+    tsv_path = results_dir / "20261006123456.und.tsv"
+    tsv_path.write_text("# Test\nWordSource\tDeskSelected\nпривет\t1\n", encoding="utf-8")
+
+    resolved_paths = {
+        "kardenwort_workspace": tmp_path,
+        "results_dir": results_dir,
+        "base_dir": tmp_path,
+        "anki_mapping_file": anki_mapping,
+    }
+
+    # Should run without error and without scheduling intellifiller
+    out = kardenwort_desk._run_render_flow_impl(
+        text="привет",
+        language="und",
+        zid="20261006123456",
+        text_mode="single",
+        config=cfg,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_path),
+        spawn_children=False,
+    )
+    assert out is not None
+    assert len(headless_calls) == 0
+
+
