@@ -421,6 +421,107 @@ def test_confirm_language_switch_and_reverse_tab_spawning(running_controller, mo
     assert "20260827010101-01" in opened_urls[3] and "seq_num=2" in opened_urls[3]  # Opened LAST -> Active focus!
 
 
+def test_confirm_language_process_action(running_controller, monkeypatch):
+    """
+    Verify POST /api/v1/confirm-language with action=process:
+    1. Processes under selected_language='und' without modifying global config.
+    2. Processes under selected_language='de'.
+    """
+    from kardenwort_controller import _DRAFT_SESSIONS, _DRAFT_SESSIONS_LOCK
+    server_url, server = running_controller
+
+    # 1. Test processing under 'und'
+    session_zid = "20261006120101"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid] = {
+            "text": "Произвольный русский текст.",
+            "language": "en",
+            "text_mode": "single",
+            "theme": "dark",
+            "zoom": 100,
+            "mismatch_info": {
+                "is_mismatch": True,
+                "detected_language": "ru",
+                "expected_language": "en",
+                "session_zid": session_zid,
+            }
+        }
+
+    render_calls = []
+    monkeypatch.setattr(
+        "kardenwort_controller.run_render_flow",
+        lambda **kwargs: render_calls.append(kwargs) or ("<html>mock</html>", [])
+    )
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: None)
+
+    orig_default_lang = server.config.get("settings", "default_language") if server.config.has_option("settings", "default_language") else "en"
+
+    req_body = {
+        "session_zid": session_zid,
+        "action": "process",
+        "selected_language": "und"
+    }
+    req_data = json.dumps(req_body).encode("utf-8")
+    req = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=req_data,
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        res = data.get("data", {})
+        assert res.get("ok") is True
+        assert res.get("action") == "process"
+        assert res.get("language") == "und"
+
+    assert len(render_calls) == 1
+    assert render_calls[0]["language"] == "und"
+    # Ensure default_language setting was not touched
+    cur_lang = server.config.get("settings", "default_language") if server.config.has_option("settings", "default_language") else "en"
+    assert cur_lang == orig_default_lang
+
+    # 2. Test processing under 'de'
+    session_zid_de = "20261006120102"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid_de] = {
+            "text": "Das ist ein Haus.",
+            "language": "en",
+            "text_mode": "single",
+            "theme": "dark",
+            "zoom": 100,
+            "mismatch_info": {
+                "is_mismatch": True,
+                "detected_language": "de",
+                "expected_language": "en",
+                "session_zid": session_zid_de,
+            }
+        }
+
+    req_body_de = {
+        "session_zid": session_zid_de,
+        "action": "process",
+        "selected_language": "de"
+    }
+    req_data_de = json.dumps(req_body_de).encode("utf-8")
+    req_de = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=req_data_de,
+        headers={"Content-Type": "application/json"}
+    )
+    with urllib.request.urlopen(req_de, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8"))
+        res = data.get("data", {})
+        assert res.get("ok") is True
+        assert res.get("action") == "process"
+        assert res.get("language") == "de"
+
+    assert len(render_calls) == 2
+    assert render_calls[1]["language"] == "de"
+
+
 def test_confirm_language_validation_errors(running_controller):
     """
     Verify POST /api/v1/confirm-language returns proper error codes on bad input or missing draft.

@@ -887,14 +887,14 @@ def verify_language(text: str, expected_lang: str, config: Any, bypass: bool = F
     lang_cfg = LanguageCheckConfig.from_config(config)
     expected_code = expected_lang.strip().lower() if expected_lang else "en"
 
-    if not lang_cfg.enabled or bypass:
+    if not lang_cfg.enabled or bypass or expected_code == "und":
         return LanguageVerificationResult(
             is_match=True,
             expected_lang=expected_code,
-            detected_lang=None,
+            detected_lang=None if expected_code != "und" else "und",
             confidence=1.0,
             action="proceed",
-            message="Language verification disabled or bypassed."
+            message="Language verification disabled, bypassed, or undefined language."
         )
 
     clean_text = text.strip() if text else ""
@@ -921,11 +921,18 @@ def verify_language(text: str, expected_lang: str, config: Any, bypass: bool = F
             message="lingua library unavailable, verification skipped."
         )
 
-    cache_key = tuple(sorted(lang_cfg.languages))
+    # General world languages to support beyond study languages, including Russian ('ru')
+    # and common international languages.
+    world_detection_langs = {"en", "de", "ru", "fr", "es", "it", "zh", "ja"}
+    detection_langs = set(lang_cfg.languages) | world_detection_langs
+    if expected_code:
+        detection_langs.add(expected_code)
+
+    cache_key = tuple(sorted(detection_langs))
     with _LINGUA_DETECTOR_LOCK:
         if cache_key not in _LINGUA_DETECTOR_CACHE:
             iso_codes = []
-            for l in lang_cfg.languages:
+            for l in cache_key:
                 l_upper = l.strip().upper()
                 if hasattr(IsoCode639_1, l_upper):
                     iso_codes.append(getattr(IsoCode639_1, l_upper))
@@ -936,14 +943,16 @@ def verify_language(text: str, expected_lang: str, config: Any, bypass: bool = F
         detector = _LINGUA_DETECTOR_CACHE[cache_key]
 
     confidence_values = detector.compute_language_confidence_values(clean_text)
-    if not confidence_values:
+    if not confidence_values or confidence_values[0].value <= 0.0:
+        action = lang_cfg.action_on_mismatch
+        msg = f"Language undetermined ('und'): no language detected with confidence, expected '{expected_code}'."
         return LanguageVerificationResult(
-            is_match=True,
+            is_match=False,
             expected_lang=expected_code,
-            detected_lang=None,
+            detected_lang="und",
             confidence=0.0,
-            action="proceed",
-            message="No language detected with confidence."
+            action=action,
+            message=msg
         )
 
     top_result = confidence_values[0]
@@ -951,13 +960,15 @@ def verify_language(text: str, expected_lang: str, config: Any, bypass: bool = F
     confidence = top_result.value
 
     if confidence < lang_cfg.confidence_threshold:
+        action = lang_cfg.action_on_mismatch
+        msg = f"Language confidence ({confidence:.2f}) below threshold ({lang_cfg.confidence_threshold:.2f}): classified as undetermined ('und'), expected '{expected_code}'."
         return LanguageVerificationResult(
-            is_match=True,
+            is_match=False,
             expected_lang=expected_code,
-            detected_lang=detected_code,
+            detected_lang="und",
             confidence=confidence,
-            action="proceed",
-            message=f"Confidence ({confidence:.2f}) below threshold ({lang_cfg.confidence_threshold:.2f})."
+            action=action,
+            message=msg
         )
 
     if detected_code == expected_code:
@@ -4919,6 +4930,7 @@ LANGUAGE_NAMES: Dict[str, str] = {
     "it": "Italian",
     "zh": "Chinese",
     "ja": "Japanese",
+    "und": "Undefined",
 }
 
 
@@ -4936,7 +4948,10 @@ def resolve_project_deck_path(
 
     parts = []
     if language:
-        lang_name = LANGUAGE_NAMES.get(language.lower(), language.capitalize())
+        if language.lower() == "und":
+            lang_name = "Undefined"
+        else:
+            lang_name = LANGUAGE_NAMES.get(language.lower(), language.capitalize())
         parts.append(lang_name)
     parts.extend(titles)
 
@@ -5587,6 +5602,9 @@ def synthesize_project_materials(
 
         for sess in sessions:
             s_zid = sess["session_zid"]
+            sess_meta = db.get_session(s_zid)
+            if sess_meta and sess_meta.get("source_language") == "und" and lang in ("en", "de"):
+                continue
             restored = adapter.restore_session(s_zid, include_overview_selections=True)
             if not headers and restored.get("headers"):
                 headers = list(restored["headers"])
@@ -6576,6 +6594,7 @@ def is_rate_limit_exception(exc: Exception) -> bool:
 
 def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None):
     """Executes translation using a single explicit provider without failover branching."""
+    eff_source = 'auto' if source == 'und' else source
     p_norm = (provider_name or "").strip().lower()
     if is_provider_cooled_down(p_norm):
         cooldown_msg = f"Provider '{p_norm}' is currently cooled down due to rate limiting"
@@ -6591,16 +6610,16 @@ def dispatch_single_provider(provider_name: str, text: str, source: str, target:
         )
     try:
         if p_norm == 'google':
-            return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            return run_google_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif p_norm == 'deepl':
-            return run_deepl_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            return run_deepl_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif p_norm == 'argos':
-            return run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            return run_argos_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif p_norm == 'mock':
             time.sleep(0.01)
             return f"[MOCK] {text}"
         elif p_norm in ('combined', 'intellifiller'):
-            return run_google_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            return run_google_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
         elif p_norm == 'none':
             return ""
         else:
@@ -6615,6 +6634,7 @@ def translate_text(text, source, target, config, resolved_paths, provider=None, 
         return _translate_text_impl(text, source, target, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
 
 def _translate_text_impl(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None):
+    eff_source = 'auto' if source == 'und' else source
     configured_chain, configured_strategy = resolve_provider_chain(config, task_type='text')
     
     if provider and provider != 'default' and (not configured_chain or provider.strip().lower() != configured_chain[0]):
@@ -6645,7 +6665,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
         if not is_network_online_multi(hosts=check_ips):
             logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online providers and going straight to Argos.")
             try:
-                res = run_argos_translation(text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+                res = run_argos_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
                 return ProvenanceString(res, provenance="live:argos") if res is not None else res
             except Exception as ex2:
                 logger.error(f"Argos offline fallback failed: {ex2}")
@@ -6670,7 +6690,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             continue
 
         try:
-            res = dispatch_single_provider(current_provider, text, source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
             if res is not None:
                 return ProvenanceString(res, provenance=f"live:{current_provider}")
             return res
@@ -8240,6 +8260,56 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths, zid=None,
     except subprocess.CalledProcessError as e:
         return False, e.stderr
 
+
+def generate_und_tsv(text: str, text_mode: str, out_file_path: Path, mapping: Dict[str, Any], config: Any, wrap_max_chars: int = 90) -> None:
+    eff_mode = _effective_text_mode(text, text_mode)
+    sbc = SentenceBoundaryConfig.from_config(config)
+    if eff_mode == 'single':
+        sentences = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
+    else:
+        sentences = [ln.strip() for ln in text.splitlines() if ln.strip()]
+    if not sentences:
+        sentences = [text] if text else [""]
+
+    headers = list(mapping['fields'].keys())
+    role_fields = get_role_fields(mapping, headers)
+    col_quot = headers.index(role_fields.get('quotation', 'Quotation')) if role_fields.get('quotation', 'Quotation') in headers else (headers.index('Quotation') if 'Quotation' in headers else -1)
+    col_src = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
+    col_src2 = headers.index('WordSource2') if 'WordSource2' in headers else -1
+    col_inflected = headers.index('WordSourceInflectedForm') if 'WordSourceInflectedForm' in headers else -1
+    col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
+    col_sent_src = headers.index(role_fields.get('sentence_source', 'SentenceSource')) if role_fields.get('sentence_source', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+    col_sent_idx = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else (headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in headers else -1)
+    col_sel = headers.index('DeskSelected') if 'DeskSelected' in headers else -1
+
+    data_rows = []
+    seen_words = set()
+    for s_idx, sentence in enumerate(sentences, start=1):
+        words = re.findall(r'\b\w+\b', sentence, flags=re.UNICODE)
+        for w in words:
+            clean_w = w.strip()
+            if not clean_w:
+                continue
+            w_lower = clean_w.lower()
+            if w_lower in seen_words:
+                continue
+            seen_words.add(w_lower)
+
+            row = ["" for _ in headers]
+            if col_quot != -1: row[col_quot] = clean_w
+            if col_src != -1: row[col_src] = clean_w
+            if col_src2 != -1: row[col_src2] = clean_w
+            if col_inflected != -1: row[col_inflected] = clean_w
+            if col_inflected2 != -1: row[col_inflected2] = clean_w
+            if col_sent_src != -1: row[col_sent_src] = sentence
+            if col_sent_idx != -1: row[col_sent_idx] = str(s_idx)
+            if col_sel != -1: row[col_sel] = "1"
+            data_rows.append(row)
+
+    comments = ["# Generated by Kardenwort Desk (und)"]
+    save_tsv_rows_safely(out_file_path, comments, headers, data_rows)
+
+
 def prepare_lookup_tsv(text, language, target_lang, config, resolved_paths, zid, *, ttl_seconds, cache_key, text_mode='single', will_split=False):
     with TraceTimer("lemmatization", zid, config, resolved_paths):
         return _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths, zid, ttl_seconds=ttl_seconds, cache_key=cache_key, text_mode=text_mode, will_split=will_split)
@@ -8318,11 +8388,14 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     fields = list(mapping['fields'].keys())
     field_mapping = build_field_mapping(mapping, 'word')
     
-    lemma_index_rel = config.get(SEC_LANGUAGES, f'{language}_lemma_index')
-    lemma_override_rel = config.get(SEC_LANGUAGES, f'{language}_lemma_override')
-    
-    lemma_index_file = kardenwort_workspace / lemma_index_rel
-    lemma_override_file = kardenwort_workspace / lemma_override_rel
+    if language == "und":
+        lemma_index_file = None
+        lemma_override_file = None
+    else:
+        lemma_index_rel = config.get(SEC_LANGUAGES, f'{language}_lemma_index')
+        lemma_override_rel = config.get(SEC_LANGUAGES, f'{language}_lemma_override')
+        lemma_index_file = kardenwort_workspace / lemma_index_rel
+        lemma_override_file = kardenwort_workspace / lemma_override_rel
     
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
@@ -8367,113 +8440,116 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                 finally:
                     temp_file.close()
                 text_file_to_pass = temp_file_path
-            
-        use_simplemma_correction = config.getboolean(SEC_SETTINGS, 'use_simplemma_correction', fallback=False)
-        simplemma_after_spacy = config.getboolean(SEC_SETTINGS, 'simplemma_after_spacy', fallback=False)
-        simplemma_pos_aware = config.getboolean(SEC_SETTINGS, 'simplemma_pos_aware', fallback=False)
-        simplemma_smart_fallback = config.getboolean(SEC_SETTINGS, 'simplemma_smart_fallback', fallback=False)
 
-        cmd = [
-            str(python_exe),
-            str(kardenwort_script),
-            "--type", "word",
-            "--language", language,
-            "--deduplication-scope", dedup_scope,
-            "--lemma-index-file", str(lemma_index_file),
-            "--lemma-override-file", str(lemma_override_file),
-            "--sentence-context-size", "0",
-            "--anki-csv-header", json.dumps(fields),
-            "--anki-field-mapping", json.dumps(field_mapping),
-            "--output-file", str(out_file_to_pass),
-            "--text1-file", str(text_file_to_pass),
-            "--tts-destination-lang", target_lang
-        ]
-        
-        if use_simplemma_correction:
-            cmd.append("--use-simplemma-correction")
-        if simplemma_after_spacy:
-            cmd.append("--simplemma-after-spacy")
-        if simplemma_pos_aware:
-            cmd.append("--simplemma-pos-aware")
-        if simplemma_smart_fallback:
-            cmd.append("--simplemma-smart-fallback")
-            
-        force_proper_noun_capitalization = config.getboolean(SEC_SETTINGS, 'force_proper_noun_capitalization', fallback=False)
-        if force_proper_noun_capitalization:
-            cmd.append("--force-proper-noun-capitalization")
-            
-        prefer_shortest_form = config.getboolean(SEC_SETTINGS, 'prefer_shortest_form', fallback=False)
-        if prefer_shortest_form:
-            cmd.append("--prefer-shortest-form")
-            
-        de_force_noun_capitalization = config.getboolean(SEC_SETTINGS, 'de_force_noun_capitalization', fallback=False)
-        if de_force_noun_capitalization:
-            cmd.append("--de-force-noun-capitalization")
-            
-        preserve_composite_tokens = config.getboolean(SEC_SETTINGS, 'preserve_composite_tokens', fallback=False)
-        if preserve_composite_tokens:
-            cmd.append("--preserve-composite-tokens")
-            
-        strip_garbage_characters = config.get(SEC_SETTINGS, 'strip_garbage_characters', fallback=None)
-        if strip_garbage_characters is not None:
-            cmd.extend(["--strip-garbage-characters", strip_garbage_characters])
-        
-        if language == "de":
-            de_dictionary_file = kw_config.get(SEC_LANGUAGE_RESOURCES, 'dictionary_file_de', fallback='german.dic')
-            de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
-            cmd.extend([
-                "--de-dictionary-file", str(de_dict_path),
-            ])
-            
-            de_fix_genitive = config.getboolean(SEC_SETTINGS, 'de_fix_genitive', fallback=True)
-            if de_fix_genitive:
-                cmd.append("--de-fix-genitive")
-                
-            cmd.extend(DeGCSConfig.from_config(config).to_cli_args())
-                
-        # token_cfg, exec_ctx, and combine_source_words are resolved via ModeDispatcher above
-
-        if combine_source_words:
-            cmd.append("--combine-source-words")
-            cmd.extend(["--combine-source-words-order", token_cfg.combine_order])
-            cmd.extend(["--apostrophe-chars", token_cfg.apostrophe_chars])
-
-            
-        if token_cfg.token_mappings_enabled:
-            cmd.append("--token-mappings-enabled")
+        if language == "und":
+            generate_und_tsv(text, eff_mode, out_file_to_pass, mapping, config, wrap_max_chars=wrap_max_chars)
         else:
-            cmd.append("--disable-token-mappings")
+            use_simplemma_correction = config.getboolean(SEC_SETTINGS, 'use_simplemma_correction', fallback=False)
+            simplemma_after_spacy = config.getboolean(SEC_SETTINGS, 'simplemma_after_spacy', fallback=False)
+            simplemma_pos_aware = config.getboolean(SEC_SETTINGS, 'simplemma_pos_aware', fallback=False)
+            simplemma_smart_fallback = config.getboolean(SEC_SETTINGS, 'simplemma_smart_fallback', fallback=False)
 
+            cmd = [
+                str(python_exe),
+                str(kardenwort_script),
+                "--type", "word",
+                "--language", language,
+                "--deduplication-scope", dedup_scope,
+                "--lemma-index-file", str(lemma_index_file),
+                "--lemma-override-file", str(lemma_override_file),
+                "--sentence-context-size", "0",
+                "--anki-csv-header", json.dumps(fields),
+                "--anki-field-mapping", json.dumps(field_mapping),
+                "--output-file", str(out_file_to_pass),
+                "--text1-file", str(text_file_to_pass),
+                "--tts-destination-lang", target_lang
+            ]
             
-        if token_cfg.lemmatize_mapped_tokens:
-            cmd.append("--lemmatize-mapped-tokens")
-        desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
-        if not desk_classification_enabled:
-            cmd.append("--disable-classification")
-
-        # Forward SpaCy HTTP Microservice URL if configured in [services]
-        spacy_server_url = ""
-        if config and hasattr(config, "has_section") and config.has_section(SEC_SERVICES) and config.has_option(SEC_SERVICES, 'spacy_server_url'):
-            spacy_server_url = config.get(SEC_SERVICES, 'spacy_server_url', fallback='').strip()
-        elif kw_config and hasattr(kw_config, "has_section") and kw_config.has_section(SEC_SERVICES) and kw_config.has_option(SEC_SERVICES, 'spacy_server_url'):
-            spacy_server_url = kw_config.get(SEC_SERVICES, 'spacy_server_url', fallback='').strip()
-
-        if spacy_server_url:
-            cmd.extend(["--spacy-server-url", spacy_server_url])
+            if use_simplemma_correction:
+                cmd.append("--use-simplemma-correction")
+            if simplemma_after_spacy:
+                cmd.append("--simplemma-after-spacy")
+            if simplemma_pos_aware:
+                cmd.append("--simplemma-pos-aware")
+            if simplemma_smart_fallback:
+                cmd.append("--simplemma-smart-fallback")
+                
+            force_proper_noun_capitalization = config.getboolean(SEC_SETTINGS, 'force_proper_noun_capitalization', fallback=False)
+            if force_proper_noun_capitalization:
+                cmd.append("--force-proper-noun-capitalization")
+                
+            prefer_shortest_form = config.getboolean(SEC_SETTINGS, 'prefer_shortest_form', fallback=False)
+            if prefer_shortest_form:
+                cmd.append("--prefer-shortest-form")
+                
+            de_force_noun_capitalization = config.getboolean(SEC_SETTINGS, 'de_force_noun_capitalization', fallback=False)
+            if de_force_noun_capitalization:
+                cmd.append("--de-force-noun-capitalization")
+                
+            preserve_composite_tokens = config.getboolean(SEC_SETTINGS, 'preserve_composite_tokens', fallback=False)
+            if preserve_composite_tokens:
+                cmd.append("--preserve-composite-tokens")
+                
+            strip_garbage_characters = config.get(SEC_SETTINGS, 'strip_garbage_characters', fallback=None)
+            if strip_garbage_characters is not None:
+                cmd.extend(["--strip-garbage-characters", strip_garbage_characters])
             
-        kardenwort_timeout = config.getint(SEC_TIMEOUTS, 'kardenwort_timeout', fallback=120)
-        env = os.environ.copy()
-        env["PYTHONIOENCODING"] = "utf-8"
-        
-        logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
-        try:
-            subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
-        except subprocess.TimeoutExpired as e:
-            print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
-            sys.exit(1)
-        except subprocess.CalledProcessError as e:
-            print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
-            sys.exit(1)
+            if language == "de":
+                de_dictionary_file = kw_config.get(SEC_LANGUAGE_RESOURCES, 'dictionary_file_de', fallback='german.dic')
+                de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
+                cmd.extend([
+                    "--de-dictionary-file", str(de_dict_path),
+                ])
+                
+                de_fix_genitive = config.getboolean(SEC_SETTINGS, 'de_fix_genitive', fallback=True)
+                if de_fix_genitive:
+                    cmd.append("--de-fix-genitive")
+                    
+                cmd.extend(DeGCSConfig.from_config(config).to_cli_args())
+                    
+            # token_cfg, exec_ctx, and combine_source_words are resolved via ModeDispatcher above
+
+            if combine_source_words:
+                cmd.append("--combine-source-words")
+                cmd.extend(["--combine-source-words-order", token_cfg.combine_order])
+                cmd.extend(["--apostrophe-chars", token_cfg.apostrophe_chars])
+
+                
+            if token_cfg.token_mappings_enabled:
+                cmd.append("--token-mappings-enabled")
+            else:
+                cmd.append("--disable-token-mappings")
+
+                
+            if token_cfg.lemmatize_mapped_tokens:
+                cmd.append("--lemmatize-mapped-tokens")
+            desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
+            if not desk_classification_enabled:
+                cmd.append("--disable-classification")
+
+            # Forward SpaCy HTTP Microservice URL if configured in [services]
+            spacy_server_url = ""
+            if config and hasattr(config, "has_section") and config.has_section(SEC_SERVICES) and config.has_option(SEC_SERVICES, 'spacy_server_url'):
+                spacy_server_url = config.get(SEC_SERVICES, 'spacy_server_url', fallback='').strip()
+            elif kw_config and hasattr(kw_config, "has_section") and kw_config.has_section(SEC_SERVICES) and kw_config.has_option(SEC_SERVICES, 'spacy_server_url'):
+                spacy_server_url = kw_config.get(SEC_SERVICES, 'spacy_server_url', fallback='').strip()
+
+            if spacy_server_url:
+                cmd.extend(["--spacy-server-url", spacy_server_url])
+                
+            kardenwort_timeout = config.getint(SEC_TIMEOUTS, 'kardenwort_timeout', fallback=120)
+            env = os.environ.copy()
+            env["PYTHONIOENCODING"] = "utf-8"
+            
+            logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
+            try:
+                subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
+            except subprocess.TimeoutExpired as e:
+                print_structured_error("TIMEOUT", f"kardenwort.py timed out after {kardenwort_timeout} seconds")
+                sys.exit(1)
+            except subprocess.CalledProcessError as e:
+                print_structured_error("KARDENWORT_FAILED", f"kardenwort.py failed with exit code {e.returncode}", {"stderr": e.stderr})
+                sys.exit(1)
 
         apply_padding = False
         if sbc.words_before > 0 or sbc.words_after > 0:
@@ -8982,6 +9058,7 @@ LANGUAGE_NAMES_MAP: Dict[str, str] = {
     "nl": "Dutch",
     "pl": "Polish",
     "uk": "Ukrainian",
+    "und": "Undefined / Generic",
 }
 
 
@@ -9012,15 +9089,22 @@ def render_verify_language_html(
     exp_label = f"{exp_name} ({exp_code})" if exp_code else exp_name
 
     if det_label and exp_label:
-        prompt_text = f"The text appears to be {det_label}, but the active profile is {exp_label}.\n\nSwitch language to {det_name}?"
+        prompt_text = (
+            f"The text appears to be {det_label}, but the active profile is {exp_label}.\n"
+            f"Switch language to {det_name}? Select how to process this session:"
+        )
     else:
-        prompt_text = "Language mismatch detected.\n\nProceed with verification?"
+        prompt_text = "Language mismatch detected.\n\nSelect how to process this session:"
 
     is_light = theme in ("light", "white")
     theme_class = "theme-light" if is_light else "theme-dark"
 
     token_json = json.dumps(api_token)
     zid_json = json.dumps(zid)
+    det_code_json = json.dumps(det_code)
+    exp_code_json = json.dumps(exp_code)
+
+    default_selected = det_code if det_code in ("en", "de") else "und"
 
     return f"""<!DOCTYPE html>
 <html lang="en">
@@ -9089,9 +9173,29 @@ body {{
     color: var(--text-main);
     font-size: 13.5px;
     line-height: 1.6;
-    margin-bottom: 22px;
+    margin-bottom: 16px;
     white-space: pre-wrap;
     word-break: break-word;
+}}
+.kw-select {{
+    font-family: inherit;
+    font-size: 13px;
+    height: 28px;
+    padding: 2px 8px;
+    border-radius: 4px;
+    border: 1px solid var(--border-color);
+    background-color: var(--bg-card);
+    color: var(--text-main);
+    width: 100%;
+    margin-bottom: 22px;
+    outline: none;
+    cursor: pointer;
+}}
+.kw-select:hover {{
+    border-color: var(--border-hover);
+}}
+.kw-select:focus {{
+    border-color: var(--text-muted);
 }}
 .kw-verify-actions {{
     display: flex;
@@ -9125,7 +9229,7 @@ body {{
     opacity: 0.4;
     cursor: not-allowed;
 }}
-.kw-btn-yes, .kw-btn-no, .kw-btn-cancel {{
+.kw-btn-yes, .kw-btn-no, .kw-btn-cancel, .kw-btn-process {{
     /* Inherit base .kw-btn design tokens */
 }}
 .kw-status-msg {{
@@ -9141,22 +9245,40 @@ body {{
 <div class="kw-verify-card" id="kw-lang-modal">
     <div class="kw-verify-title" id="kw-lang-modal-title">Language Verification</div>
     <div class="kw-verify-body" id="kw-lang-modal-body">{prompt_text}</div>
+    <select id="kw-verify-lang-select" class="kw-select">
+        <option value="und"{' selected="selected"' if default_selected == "und" else ""}>Undefined / Generic (und)</option>
+        <option value="en"{' selected="selected"' if default_selected == "en" else ""}>English (en)</option>
+        <option value="de"{' selected="selected"' if default_selected == "de" else ""}>Deutsch (de)</option>
+    </select>
     <div class="kw-verify-actions">
-        <button id="kw-btn-lang-yes" class="kw-btn kw-btn-yes" onclick="submitChoice('switch')">Yes</button>
-        <button id="kw-btn-lang-no" class="kw-btn kw-btn-no" onclick="submitChoice('keep')">No</button>
-        <button id="kw-btn-lang-cancel" class="kw-btn kw-btn-cancel" onclick="submitChoice('cancel')">Cancel</button>
+        <button id="kw-btn-verify-process" class="kw-btn kw-btn-process" onclick="submitChoice('process')">Process Session</button>
+        <button id="kw-btn-verify-cancel" class="kw-btn kw-btn-cancel" onclick="submitChoice('cancel')">Cancel</button>
+        <button id="kw-btn-lang-yes" class="kw-btn kw-btn-yes" style="display:none;" onclick="submitChoice('switch')">Yes</button>
+        <button id="kw-btn-lang-no" class="kw-btn kw-btn-no" style="display:none;" onclick="submitChoice('keep')">No</button>
+        <button id="kw-btn-lang-cancel" class="kw-btn kw-btn-cancel" style="display:none;" onclick="submitChoice('cancel')">Cancel</button>
     </div>
     <div id="kw-status-msg" class="kw-status-msg"></div>
 </div>
 <script>
 const sessionZid = {zid_json};
 const apiToken = {token_json};
+const detCode = {det_code_json};
+const expCode = {exp_code_json};
 let submitted = false;
 
 function setButtonsDisabled(disabled) {{
-    document.getElementById('kw-btn-lang-yes').disabled = disabled;
-    document.getElementById('kw-btn-lang-no').disabled = disabled;
-    document.getElementById('kw-btn-lang-cancel').disabled = disabled;
+    const btnProc = document.getElementById('kw-btn-verify-process');
+    if (btnProc) btnProc.disabled = disabled;
+    const btnCanc = document.getElementById('kw-btn-verify-cancel');
+    if (btnCanc) btnCanc.disabled = disabled;
+    const sel = document.getElementById('kw-verify-lang-select');
+    if (sel) sel.disabled = disabled;
+    const byes = document.getElementById('kw-btn-lang-yes');
+    if (byes) byes.disabled = disabled;
+    const bno = document.getElementById('kw-btn-lang-no');
+    if (bno) bno.disabled = disabled;
+    const bcanc = document.getElementById('kw-btn-lang-cancel');
+    if (bcanc) bcanc.disabled = disabled;
 }}
 
 function showFallbackMessage(msg) {{
@@ -9185,15 +9307,31 @@ function submitChoice(action) {{
     submitted = true;
     setButtonsDisabled(true);
 
+    const sel = document.getElementById('kw-verify-lang-select');
+    let selectedLang = sel ? sel.value : 'und';
+    if (action === 'switch') {{
+        selectedLang = detCode || 'de';
+        action = 'process';
+    }} else if (action === 'keep') {{
+        selectedLang = expCode || 'en';
+        action = 'process';
+    }}
+
     const headers = {{ 'Content-Type': 'application/json' }};
     if (apiToken) {{
         headers['X-API-Key'] = apiToken;
     }}
 
+    const payload = {{
+        session_zid: sessionZid,
+        action: action,
+        selected_language: selectedLang
+    }};
+
     fetch('/api/v1/confirm-language', {{
         method: 'POST',
         headers: headers,
-        body: JSON.stringify({{ session_zid: sessionZid, action: action }})
+        body: JSON.stringify(payload)
     }})
     .then(function(res) {{
         return res.json();
@@ -9216,7 +9354,7 @@ function submitChoice(action) {{
 document.addEventListener('keydown', function(e) {{
     if (e.key === 'Enter') {{
         e.preventDefault();
-        submitChoice('switch');
+        submitChoice('process');
     }} else if (e.key === 'Escape') {{
         e.preventDefault();
         submitChoice('cancel');
@@ -22977,7 +23115,7 @@ def core_lookup(
     if not target_lang:
         target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
 
-    if f"{language}_prompt" not in config[SEC_LANGUAGES]:
+    if language != "und" and f"{language}_prompt" not in config[SEC_LANGUAGES]:
         raise StructuredError(ErrorCode.CONFIGURATION_ERROR, f"Missing {language}_prompt in [languages]")
 
     if text_mode == 'single' and '\n' in text.strip():

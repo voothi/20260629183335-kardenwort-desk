@@ -4541,8 +4541,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             action = body.get('action')
             if not session_zid:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required payload field: 'session_zid'")
-            if not action or action not in ('switch', 'keep', 'cancel'):
-                raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Invalid or missing required payload field 'action': '{action}'. Must be 'switch', 'keep', or 'cancel'")
+            if not action or action not in ('process', 'switch', 'keep', 'cancel'):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Invalid or missing required payload field 'action': '{action}'. Must be 'process', 'switch', 'keep', or 'cancel'")
 
             with _DRAFT_SESSIONS_LOCK:
                 draft = _DRAFT_SESSIONS.pop(session_zid, None)
@@ -4558,7 +4558,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if not draft:
                 raise StructuredError(ErrorCode.NOT_FOUND, f"Draft session '{session_zid}' not found or already confirmed")
 
-            if action == 'switch':
+            if action == 'process':
+                raw_lang = body.get('selected_language') or body.get('target_language') or draft.get("language") or "und"
+                target_lang = raw_lang.strip().lower() if raw_lang else "und"
+            elif action == 'switch':
                 target_lang = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
                 if target_lang:
                     target_lang = target_lang.strip().lower()
@@ -4580,6 +4583,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             else:
                 target_lang = draft.get("language") or "en"
 
+            raw_tsv = draft.get("tsv_path")
+            if raw_tsv and target_lang != draft.get("language"):
+                tsv_path_arg = None
+            else:
+                tsv_path_arg = Path(raw_tsv) if raw_tsv else None
+
             # Execute run_render_flow
             render_out = render_flow_fn(
                 text=draft.get("text", ""),
@@ -4590,7 +4599,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 resolved_paths=self.server.resolved_paths,
                 zoom_level=str(draft.get("zoom", "100")),
                 theme=draft.get("theme", "dark"),
-                tsv_path=Path(draft["tsv_path"]) if draft.get("tsv_path") else None,
+                tsv_path=tsv_path_arg,
                 seq_num=int(draft["seq_num"]) if draft.get("seq_num") else None,
                 spawn_children=False,
                 return_children=True,
