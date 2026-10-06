@@ -9484,14 +9484,15 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             translated_sentences.append("")
         translated_sentences = translated_sentences[:len(source_sentences)]
         # Compute padding for the master TSV and all child windows
+        eff_mode = _effective_text_mode(text, text_mode)
         apply_source_padding = False
         apply_translated_padding = False
         if sbc.words_before > 0 or sbc.words_after > 0:
-            if sbc.context_mode in ('both', 'single'):
+            if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
                 apply_source_padding = True
         
         if sbc.translated_words_before > 0 or sbc.translated_words_after > 0:
-            if sbc.context_mode in ('both', 'single'):
+            if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
                 apply_translated_padding = True
 
         padded_source_sentences = source_sentences
