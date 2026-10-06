@@ -2368,6 +2368,73 @@ def test_playwright_container_tab_switching_repeated_words_and_empty_state(page,
     assert page.locator("#lemma-table tbody tr", has_text="cat").count() == 1
 
 
+def test_workspace_tab_container_multi_mode_clean_line_translation(tmp_path, monkeypatch):
+    """Verifies that multi-mode container tabs receive clean 1-to-1 line translations without context padding in cards[0] and child cards."""
+    from kardenwort_db import KardenwortDB
+    db_path = tmp_path / "test_multi_clean_cards.db"
+    KardenwortDB(db_path=db_path).run_migrations()
+
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("settings", "storage_backend", "sqlite")
+    config.set("settings", "anki_context_mode", "single")
+    config.set("settings", "anki_context_words_before", "5")
+    config.set("settings", "anki_context_words_after", "5")
+    config.set("settings", "anki_translated_context_words_before", "5")
+    config.set("settings", "anki_translated_context_words_after", "5")
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    unique_zid = "20261006003003"
+    text = "# Title\nFirst line sentence.\nSecond line sentence."
+    tsv_file = tmp_path / f"{unique_zid}-test.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tSentenceDestination2\tDeskSelected\tTokenOrder\n"
+        "First\tfirst\tfirst\tпервый\t2\tFirst line sentence.\tPadded First line sentence.\t0\t0\n"
+        "Second\tsecond\tsecond\tвторой\t3\tSecond line sentence.\tPadded Second line sentence.\t0\t1\n",
+        encoding="utf-8"
+    )
+
+    pad_called = False
+    def mock_pad(*args, **kwargs):
+        nonlocal pad_called
+        pad_called = True
+        return kardenwort_desk.pad_translated_sentences(*args, **kwargs)
+
+    monkeypatch.setattr(kardenwort_desk, "pad_translated_sentences", mock_pad)
+    monkeypatch.setattr(kardenwort_desk, "run_progressive_worker_async", lambda *args, **kwargs: None)
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=unique_zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    assert not pad_called
+    # Extract sentence-cards JSON
+    import re
+    match = re.search(r'<script id="sentence-cards" type="application/json">\s*(\[.*?\])\s*</script>', html, re.DOTALL)
+    assert match is not None
+    cards = json.loads(match.group(1))
+    assert len(cards) >= 1
+    # Master card must NOT contain padded context fragments
+    master_trans = cards[0].get("translated_text", "")
+    assert "Padded" not in master_trans
+    assert "First line sentence." in master_trans
+    assert "Second line sentence." in master_trans
+
+
+
 
 
 

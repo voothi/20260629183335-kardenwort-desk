@@ -297,3 +297,144 @@ def test_single_mode_punctuation_no_recursion(monkeypatch):
     assert res == {0: text.upper(), "FULL_TEXT": text.upper()}
     assert translate_called == 1
 
+
+def test_multi_mode_line_alignment_without_context_padding_de(tmp_path, monkeypatch):
+    """Verifies that in multi mode with anki_context_mode='single', padding is bypassed and each German line renders 1-to-1."""
+    config, resolved_paths, _, _ = desk.load_config()
+    config.set("settings", "storage_backend", "sqlite")
+    config.set("settings", "anki_context_mode", "single")
+    config.set("settings", "anki_context_words_before", "5")
+    config.set("settings", "anki_context_words_after", "5")
+    config.set("settings", "anki_translated_context_words_before", "5")
+    config.set("settings", "anki_translated_context_words_after", "5")
+    config.set("translation", "translation_split_mode", "newline_join")
+
+    db_path = tmp_path / "test_multi_align_de.db"
+    from kardenwort_db import KardenwortDB
+    KardenwortDB(db_path=db_path).run_migrations()
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    text = "# Kapitel Eins\nDas Haus ist gross.\nDie Katze schlaeft."
+    zid = "20261006003001"
+    tsv_file = tmp_path / f"{zid}-multi-align.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tSentenceDestination2\tDeskSelected\n"
+        "Haus\tHaus\tдом\t2\tDas Haus ist gross.\t\t1\n"
+        "Katze\tKatze\tкошка\t3\tDie Katze schlaeft.\t\t1\n",
+        encoding="utf-8"
+    )
+
+    pad_called = False
+    def mock_pad_translated(*args, **kwargs):
+        nonlocal pad_called
+        pad_called = True
+        return desk.pad_translated_sentences(*args, **kwargs)
+
+    monkeypatch.setattr(desk, "pad_translated_sentences", mock_pad_translated)
+    monkeypatch.setattr(desk, "run_progressive_worker_async", lambda *args, **kwargs: None)
+
+    html = desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+
+    # Context padding must NOT run in multi mode when anki_context_mode is 'single'
+    assert not pad_called
+
+    # Translation container must have separate <div> per line
+    assert '<div class="translation-text" id="translation-container">' in html
+    # Extract translation container inner html
+    import re
+    tc_match = re.search(r'<div class="translation-text" id="translation-container">(.*?)</div>\s*</div>', html, re.DOTALL)
+    assert tc_match is not None
+    tc_content = tc_match.group(1)
+    div_count = len(re.findall(r'<div[^>]*>', tc_content))
+    assert div_count == 3  # Header line + 2 sentence lines
+
+
+def test_multi_mode_line_alignment_without_context_padding_en(tmp_path, monkeypatch):
+    """Verifies that in multi mode with anki_context_mode='single', padding is bypassed for English inputs."""
+    config, resolved_paths, _, _ = desk.load_config()
+    config.set("settings", "storage_backend", "sqlite")
+    config.set("settings", "anki_context_mode", "single")
+    config.set("settings", "anki_context_words_before", "5")
+    config.set("settings", "anki_context_words_after", "5")
+    config.set("settings", "anki_translated_context_words_before", "5")
+    config.set("settings", "anki_translated_context_words_after", "5")
+
+    db_path = tmp_path / "test_multi_align_en.db"
+    from kardenwort_db import KardenwortDB
+    KardenwortDB(db_path=db_path).run_migrations()
+    if not config.has_section("storage"):
+        config.add_section("storage")
+    config.set("storage", "sqlite_db_path", str(db_path))
+    resolved_paths["sqlite_db_path"] = str(db_path)
+
+    text = "# Chapter One\nThe house is large.\nThe cat sleeps."
+    zid = "20261006003002"
+    tsv_file = tmp_path / f"{zid}-multi-align.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceDestination\tSentenceDestination2\tDeskSelected\n"
+        "house\thouse\tдом\t2\tThe house is large.\t\t1\n"
+        "cat\tcat\tкот\t3\tThe cat sleeps.\t\t1\n",
+        encoding="utf-8"
+    )
+
+    pad_called = False
+    def mock_pad_translated(*args, **kwargs):
+        nonlocal pad_called
+        pad_called = True
+        return desk.pad_translated_sentences(*args, **kwargs)
+
+    monkeypatch.setattr(desk, "pad_translated_sentences", mock_pad_translated)
+    monkeypatch.setattr(desk, "run_progressive_worker_async", lambda *args, **kwargs: None)
+
+    html = desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+
+    assert not pad_called
+    assert '<div class="translation-text" id="translation-container">' in html
+
+
+def test_single_mode_unified_paragraph_no_sliding_duplicates_de_and_en():
+    """Verifies that format_translated_html joins multiple sentences into a single continuous block without duplicates for both de and en."""
+    config, _, _, _ = desk.load_config()
+
+    # German test
+    de_sentences = {
+        0: "Das ist der erste Satz.",
+        1: "Das ist der zweite Satz."
+    }
+    de_html = desk.format_translated_html(de_sentences, text_mode="single", text="Erster Satz. Zweiter Satz.", config=config)
+    assert de_html == "<div>Das ist der erste Satz. Das ist der zweite Satz.</div>"
+    assert "<div>Das ist der erste Satz.</div>" not in de_html
+
+    # English test
+    en_sentences = {
+        0: "This is the first sentence.",
+        1: "This is the second sentence."
+    }
+    en_html = desk.format_translated_html(en_sentences, text_mode="single", text="First sentence. Second sentence.", config=config)
+    assert en_html == "<div>This is the first sentence. This is the second sentence.</div>"
+    assert "<div>This is the first sentence.</div>" not in en_html
+
+
