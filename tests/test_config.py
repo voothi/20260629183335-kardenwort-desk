@@ -642,6 +642,81 @@ def test_persist_config_value_preserves_comments_and_formatting(tmp_path):
     assert persist_config_value("settings", "", "val", base_dir=desk_dir) is False
 
 
+def test_load_config_with_utf8_bom(tmp_path):
+    """Verifies that load_config and load_kardenwort_config transparently handle INI files with UTF-8 BOM."""
+    spacy_env = tmp_path / "spacy-env"
+    spacy_env.mkdir()
+    python_exe = spacy_env / "python.exe"
+    python_exe.touch()
+
+    kardenwort_dir = tmp_path / "kardenwort"
+    kardenwort_dir.mkdir()
+
+    desk_dir = tmp_path / "kardenwort-desk"
+    desk_dir.mkdir()
+
+    anki_mapping = desk_dir / "anki-mapping.ini"
+    anki_mapping.write_text("[fields]\nQuotation\n[desk_columns]\nQuotation=quotation\n[desk_editable]\neditable_columns=Quotation")
+
+    # Write config.ini with explicit UTF-8 BOM
+    config_content = (
+        "[environment]\n"
+        "kardenwort_python = ../spacy-env/python.exe\n"
+        "kardenwort_workspace = ../kardenwort\n"
+        "\n"
+        "[settings]\n"
+        "default_language = de\n"
+        "favorites_output_dir = ./favorites\n"
+        "anki_mapping_file = ./anki-mapping.ini\n"
+    )
+    config_file = desk_dir / "config.ini"
+    bom = b"\xef\xbb\xbf"
+    config_file.write_bytes(bom + config_content.encode("utf-8"))
+
+    # 1. load_config must succeed without MissingSectionHeaderError
+    cfg, resolved_paths, _, _ = kardenwort_desk.load_config(config_file)
+    assert cfg.get("settings", "default_language") == "de"
+    assert resolved_paths["kardenwort_workspace"] == kardenwort_dir.resolve()
+
+    # 2. load_kardenwort_config must also succeed with BOM
+    kw_cfg_file = kardenwort_dir / "config.ini"
+    kw_cfg_file.write_bytes(bom + b"[settings]\ndefault_language = en\n")
+    kw_cfg = kardenwort_desk.load_kardenwort_config(kardenwort_dir)
+    assert kw_cfg.get("settings", "default_language") == "en"
+
+
+def test_persist_config_with_utf8_bom(tmp_path):
+    """Verifies that persist_default_language and persist_config_value strip BOM and rewrite cleanly."""
+    desk_dir = tmp_path / "kardenwort-desk"
+    desk_dir.mkdir()
+    desk_config = desk_dir / "config.ini"
+    bom = b"\xef\xbb\xbf"
+
+    initial_content = (
+        "[settings]\n"
+        "default_language = de\n"
+        "\n"
+        "[rendering]\n"
+        "theme = dark\n"
+    )
+    desk_config.write_bytes(bom + initial_content.encode("utf-8"))
+
+    # Update default_language
+    ok = kardenwort_desk.persist_default_language("en", base_dir=desk_dir)
+    assert ok is True
+    # The updated file must not start with BOM
+    raw_bytes = desk_config.read_bytes()
+    assert not raw_bytes.startswith(b"\xef\xbb\xbf")
+    assert "default_language = en" in desk_config.read_text(encoding="utf-8")
+
+    # Update config value
+    ok = kardenwort_desk.persist_config_value("rendering", "theme", "light", base_dir=desk_dir)
+    assert ok is True
+    assert not desk_config.read_bytes().startswith(b"\xef\xbb\xbf")
+    assert "theme = light" in desk_config.read_text(encoding="utf-8")
+
+
+
 
 
 

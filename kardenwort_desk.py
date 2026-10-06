@@ -1990,7 +1990,7 @@ def load_config(config_path=None):
         raise ConfigError(f"Config file not found: {config_path}")
         
     config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
-    config.read(config_path, encoding='utf-8')
+    config.read(config_path, encoding='utf-8-sig')
     
     base_dir = config_path.parent
     resolved_paths = {'base_dir': base_dir}
@@ -2162,7 +2162,7 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
 def load_kardenwort_config(kardenwort_workspace):
     kw_config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     if kardenwort_workspace:
-        kw_config.read(Path(kardenwort_workspace) / "config.ini", encoding='utf-8')
+        kw_config.read(Path(kardenwort_workspace) / "config.ini", encoding='utf-8-sig')
     return kw_config
 
 def resolve_results_dir(resolved_paths, kw_config):
@@ -26363,7 +26363,7 @@ def persist_default_language(language: str, base_dir=None) -> bool:
     desk_config = base_dir / "config.ini"
     if desk_config.exists():
         try:
-            content = desk_config.read_text(encoding="utf-8")
+            content = desk_config.read_text(encoding="utf-8-sig")
             if re.search(r'(?i)^\s*default_language\s*=', content, flags=re.MULTILINE):
                 new_content = re.sub(
                     r'(?i)^(\s*default_language)\s*=\s*.*$',
@@ -26396,7 +26396,7 @@ def persist_config_value(section: str, key: str, value: Any, base_dir=None) -> b
         return False
 
     try:
-        content = desk_config.read_text(encoding="utf-8")
+        content = desk_config.read_text(encoding="utf-8-sig")
         str_val = str(value)
 
         sec_pattern = re.compile(rf'^[ \t]*\[[ \t]*{re.escape(section)}[ \t]*\][ \t]*$', re.IGNORECASE | re.MULTILINE)
