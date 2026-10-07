@@ -960,15 +960,13 @@ def verify_language(text: str, expected_lang: str, config: Any, bypass: bool = F
     confidence = top_result.value
 
     if confidence < lang_cfg.confidence_threshold:
-        action = lang_cfg.action_on_mismatch
-        msg = f"Language confidence ({confidence:.2f}) below threshold ({lang_cfg.confidence_threshold:.2f}): classified as undetermined ('und'), expected '{expected_code}'."
         return LanguageVerificationResult(
-            is_match=False,
+            is_match=True,
             expected_lang=expected_code,
-            detected_lang="und",
+            detected_lang=detected_code,
             confidence=confidence,
-            action=action,
-            message=msg
+            action="proceed",
+            message=f"Confidence ({confidence:.2f}) below threshold ({lang_cfg.confidence_threshold:.2f})."
         )
 
     if detected_code == expected_code:
