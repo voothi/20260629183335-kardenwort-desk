@@ -217,3 +217,64 @@ def test_provider_cooldown_cross_process_persistence(tmp_path):
     # Cleanup
     kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
     assert not kardenwort_desk.is_provider_cooled_down("google", config=config, resolved_paths=resolved_paths)
+
+
+def test_lemma_fast_path_candidate_fallback_on_single_lemma_failure(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(lemma_chain="argos, google", strategy="chain")
+
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None):
+        if provider == "argos":
+            raise RuntimeError("Argos dropped query")
+        elif provider == "google":
+            return "Дом"
+        return ""
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        result = translate_lemmas_fast_path(["Haus"], "de", "ru", config, resolved_paths, provider="argos")
+        assert result == {"Haus": "Дом"}
+        assert getattr(result, "provenance", None) == "live:google"
+
+
+def test_lemma_fast_path_strict_strategy_does_not_fallback(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(lemma_chain="argos, google", strategy="strict")
+
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None):
+        if provider == "argos":
+            raise RuntimeError("Argos dropped query")
+        elif provider == "google":
+            return "Дом"
+        return ""
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        result = translate_lemmas_fast_path(["Haus"], "de", "ru", config, resolved_paths, provider="argos")
+        assert result == {"Haus": ""}
+        assert getattr(result, "provenance", None) == "live:argos"
+
+
+def test_persistence_guard_zero_empty_field_protection(tmp_path):
+    from kardenwort_controller import SessionArbiter
+    arbiter = SessionArbiter(config=None, resolved_paths={"results_dir": tmp_path, "base_dir": tmp_path})
+    session_zid = "20261008120000"
+    arbiter.sessions[session_zid] = {
+        "language": "de",
+        "data_rows": [["Haus", "ExistingTranslation", "1", "0"]],
+        "headers": ["WordSource", "WordDestination", "SentenceIndex", "TokenOrder"],
+        "role_fields": {"lemma": "WordSource", "word_translation": "WordDestination"},
+        "comments": [],
+    }
+
+    # Propagating an empty translation must not wipe existing translation
+    arbiter.propagate_translations_to_siblings({"Haus": ""}, exclude_session_zid=None, language="de")
+    assert arbiter.sessions[session_zid]["data_rows"][0][1] == "ExistingTranslation"
+
+    # Propagating a placeholder or failed row must not wipe if empty
+    arbiter.sessions[session_zid]["data_rows"][0][1] = "[FAILED]"
+    arbiter.propagate_translations_to_siblings({"Haus": ""}, exclude_session_zid=None, language="de")
+    assert arbiter.sessions[session_zid]["data_rows"][0][1] == "[FAILED]"
+
+    # Propagating a valid translation updates properly
+    arbiter.propagate_translations_to_siblings({"Haus": "Дом"}, exclude_session_zid=None, language="de")
+    assert arbiter.sessions[session_zid]["data_rows"][0][1] == "Дом"
+

@@ -6954,16 +6954,28 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             translations.update(chunk_result)
         return ProvenanceDict(translations, provenance=chunk_prov)
 
+    if strategy == 'strict':
+        provider_order = [active_provider]
+    else:
+        provider_order = [active_provider] + [p for p in candidates if p != active_provider]
+
     def _translate_single(lemma):
-        try:
-            val = translate_text(lemma, source, target, config, resolved_paths, active_provider)
-            p = getattr(val, 'provenance', prov_tag)
-            return lemma, val.strip() if val else "", p
-        except Exception as exc:
-            if is_rate_limit_exception(exc):
-                record_provider_cooldown(active_provider, config=config)
-            logger.warning(f"Individual lemma translate failed for '{lemma}': {exc}")
-            return lemma, "", prov_tag
+        for candidate in provider_order:
+            if is_provider_cooled_down(candidate) and strategy != 'strict':
+                continue
+            cand_prov_tag = f"live:{candidate}"
+            try:
+                val = translate_text(lemma, source, target, config, resolved_paths, provider=candidate)
+                p = getattr(val, 'provenance', cand_prov_tag)
+                val_str = (str(val) if val is not None else "").strip()
+                if val_str:
+                    return lemma, val_str, p
+            except Exception as exc:
+                if is_rate_limit_exception(exc):
+                    record_provider_cooldown(candidate, config=config)
+                logger.debug(f"Candidate provider '{candidate}' failed for lemma '{lemma}': {exc}")
+        logger.warning(f"All candidate providers failed for lemma '{lemma}'")
+        return lemma, "", prov_tag
 
     n = len(lemmas)
     translations = {}

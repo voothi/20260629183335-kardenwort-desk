@@ -1366,12 +1366,13 @@ class EnrichmentQueue:
                                 l_val = row[col_lemma].strip()
                                 if l_val in translated_map and col_word_dest != -1:
                                     t_val = translated_map[l_val]
-                                    while len(row) <= col_word_dest:
-                                        row.append("")
-                                    row[col_word_dest] = t_val
-                                    t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                                    updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
-                                    updates.append({"token_order": t_ord, "field": "word_provenance", "value": lemma_prov_tag})
+                                    if t_val and str(t_val).strip():
+                                        while len(row) <= col_word_dest:
+                                            row.append("")
+                                        row[col_word_dest] = t_val
+                                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                                        updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+                                        updates.append({"token_order": t_ord, "field": "word_provenance", "value": lemma_prov_tag})
 
                         if is_sqlite:
                             if updates:
@@ -2335,12 +2336,13 @@ class SessionArbiter:
                                         l_val = row[col_lemma].strip()
                                         if l_val in translated_map and col_w_dest != -1:
                                             t_val = translated_map[l_val]
-                                            while len(row) <= col_w_dest:
-                                                row.append("")
-                                            row[col_w_dest] = t_val
-                                            t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
-                                            updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_destination", "value": t_val})
-                                            updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_provenance", "value": lemma_prov_tag})
+                                            if t_val and str(t_val).strip():
+                                                while len(row) <= col_w_dest:
+                                                    row.append("")
+                                                row[col_w_dest] = t_val
+                                                t_ord_val = int(t_ord) if t_ord.isdigit() else r_idx
+                                                updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_destination", "value": t_val})
+                                                updates.append({"token_order": t_ord_val, "sentence_index": sent_val, "field": "word_provenance", "value": lemma_prov_tag})
 
                             if is_sqlite:
                                 if updates:
@@ -2545,13 +2547,14 @@ class SessionArbiter:
                 lemma_val = row[col_lemma].strip()
                 if lemma_val in lemma_translations:
                     trans_val = lemma_translations[lemma_val]
-                    while len(row) <= col_word_dest:
-                        row.append("")
-                    if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest] or row[col_word_dest] == '[FAILED]':
-                        row[col_word_dest] = trans_val
-                        modified = True
-                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                        updates.append({"token_order": t_ord, "field": "word_destination", "value": trans_val})
+                    if trans_val and str(trans_val).strip():
+                        while len(row) <= col_word_dest:
+                            row.append("")
+                        if not row[col_word_dest].strip() or 'skeleton-loader' in row[col_word_dest] or row[col_word_dest] == '[FAILED]':
+                            row[col_word_dest] = trans_val
+                            modified = True
+                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                            updates.append({"token_order": t_ord, "field": "word_destination", "value": trans_val})
 
             if modified:
                 new_fp = compute_content_fingerprint(data_rows)
@@ -2717,11 +2720,12 @@ class SessionArbiter:
                     l_val = row[col_lemma].strip()
                     if l_val in translated_map:
                         t_val = translated_map[l_val]
-                        while len(row) <= col_word_dest:
-                            row.append("")
-                        row[col_word_dest] = t_val
-                        t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
-                        updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
+                        if t_val and str(t_val).strip():
+                            while len(row) <= col_word_dest:
+                                row.append("")
+                            row[col_word_dest] = t_val
+                            t_ord = int(row[col_token_order]) if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).isdigit() else row_idx
+                            updates.append({"token_order": t_ord, "field": "word_destination", "value": t_val})
 
             if is_sqlite:
                 if updates:
