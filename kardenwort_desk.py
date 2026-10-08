@@ -6987,7 +6987,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
                 continue
 
             # strategy == 'chain'
-            if is_net_fail:
+            if is_net_fail and check_ips and not is_network_online_multi(hosts=check_ips):
                 offline_target_idx = None
                 for future_idx in range(idx + 1, len(providers_to_try)):
                     if providers_to_try[future_idx] in OFFLINE_TRANSLATION_PROVIDERS:
@@ -6995,7 +6995,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
                         break
                 if offline_target_idx is not None:
                     next_cand = providers_to_try[offline_target_idx]
-                    logger.warning(f"Network failure on provider '{current_provider}' ({e}). Bypassing online providers and short-circuiting to offline provider '{next_cand}'...")
+                    logger.warning(f"Confirmed host network failure on provider '{current_provider}' ({e}). Bypassing online providers and short-circuiting to offline provider '{next_cand}'...")
                     notify_provider_failover(eff_task, current_provider, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                     idx = offline_target_idx
                     continue
@@ -7176,7 +7176,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         provider_order = [active_provider] + [p for p in candidates if p != active_provider]
 
     def _call_translate_text(text_val, p_name):
-        kwargs_call = {"provider": p_name}
+        kwargs_call = {"provider": p_name, "task_type": "lemma"}
         if zid is not None:
             kwargs_call["zid"] = zid
         if on_failover is not None:
@@ -7185,9 +7185,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
         except TypeError as te:
             msg = str(te)
-            if "unexpected keyword argument" in msg or "zid" in msg or "on_failover" in msg:
+            if "unexpected keyword argument" in msg or "zid" in msg or "on_failover" in msg or "task_type" in msg:
                 kwargs_call.pop("on_failover", None)
                 kwargs_call.pop("zid", None)
+                kwargs_call.pop("task_type", None)
                 try:
                     return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
                 except TypeError:
@@ -7204,14 +7205,14 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         fallback_provider = None
         is_net = is_network_failure_exception(exc)
         if strategy != 'strict':
-            if is_net:
-                # Network failure: short-circuit directly to first offline provider in candidates
+            if is_net and check_ips and not is_network_online_multi(hosts=check_ips):
+                # Confirmed host network failure: short-circuit directly to first offline provider in candidates
                 for cand in candidates:
                     if cand != active_provider and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand):
                         fallback_provider = cand
                         break
             if not fallback_provider:
-                # Sequential fallback if no offline provider available or for rate limit / api errors
+                # Sequential fallback if host is online, no offline provider available or for rate limit / api errors
                 for cand in candidates:
                     if cand != active_provider and not is_provider_cooled_down(cand):
                         fallback_provider = cand
@@ -7244,8 +7245,8 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                 elif is_provider_unavailable_exception(exc):
                     record_provider_failover(candidate, config=config, resolved_paths=resolved_paths)
                 logger.debug(f"Candidate provider '{candidate}' failed for lemma '{lemma}': {exc}")
-                if is_network_failure_exception(exc) and strategy == 'chain':
-                    # Short-circuit to first offline provider in provider_order
+                if is_network_failure_exception(exc) and strategy == 'chain' and check_ips and not is_network_online_multi(hosts=check_ips):
+                    # Short-circuit to first offline provider in provider_order only on confirmed host network failure
                     off_idx = None
                     for future_idx in range(p_idx + 1, len(provider_order)):
                         if provider_order[future_idx] in OFFLINE_TRANSLATION_PROVIDERS:
