@@ -452,6 +452,8 @@ def test_confirm_language_process_action(running_controller, monkeypatch):
         "kardenwort_controller.run_render_flow",
         lambda **kwargs: render_calls.append(kwargs) or ("<html>mock</html>", [])
     )
+    monkeypatch.setattr("kardenwort_controller.persist_default_language", lambda language, base_dir=None: True)
+    monkeypatch.setattr("kardenwort_controller.spawn_ahk", lambda args, base_dir=None: True)
     import webbrowser
     monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: None)
 
@@ -520,6 +522,130 @@ def test_confirm_language_process_action(running_controller, monkeypatch):
 
     assert len(render_calls) == 2
     assert render_calls[1]["language"] == "de"
+
+
+def test_confirm_language_persistence_and_ahk_sync(running_controller, monkeypatch):
+    """
+    Verify POST /api/v1/confirm-language:
+    1. Confirming a different study language persists configuration and signals AutoHotkey.
+    2. Confirming 'und' bypasses persistence and AutoHotkey signaling.
+    3. Confirming the existing active language avoids redundant writes and process invocations.
+    """
+    from kardenwort_controller import _DRAFT_SESSIONS, _DRAFT_SESSIONS_LOCK
+    server_url, server = running_controller
+
+    spawn_calls = []
+    persist_calls = []
+    monkeypatch.setattr(
+        "kardenwort_controller.spawn_ahk",
+        lambda args, base_dir=None: spawn_calls.append((args, base_dir)) or True,
+    )
+    monkeypatch.setattr(
+        "kardenwort_controller.persist_default_language",
+        lambda language, base_dir=None: persist_calls.append((language, base_dir)) or True,
+    )
+    monkeypatch.setattr(
+        "kardenwort_controller.run_render_flow",
+        lambda **kwargs: ("<html>mock</html>", []),
+    )
+    import webbrowser
+    monkeypatch.setattr(webbrowser, "open_new_tab", lambda url: None)
+
+    # 1. Confirming a different study language (en -> de) persists config and signals AutoHotkey
+    server.config.set("settings", "default_language", "en")
+    session_zid_diff = "20261008143001"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid_diff] = {
+            "text": "Das ist ein deutscher Text.",
+            "language": "en",
+            "text_mode": "single",
+        }
+
+    req_body_diff = {
+        "session_zid": session_zid_diff,
+        "action": "process",
+        "chosen_source_lang": "de",
+    }
+    req_diff = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=json.dumps(req_body_diff).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req_diff, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8")).get("data", {})
+        assert data.get("ok") is True
+        assert data.get("language") == "de"
+
+    assert server.config.get("settings", "default_language") == "de"
+    assert len(persist_calls) == 1
+    assert persist_calls[0][0] == "de"
+    assert len(spawn_calls) == 1
+    assert spawn_calls[0][0] == ["--set-language", "de"]
+
+    # 2. Confirming 'und' bypasses persistence and AutoHotkey signaling
+    persist_calls.clear()
+    spawn_calls.clear()
+    session_zid_und = "20261008143002"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid_und] = {
+            "text": "Generic text without specific grammar.",
+            "language": "de",
+            "text_mode": "single",
+        }
+
+    req_body_und = {
+        "session_zid": session_zid_und,
+        "action": "process",
+        "chosen_source_lang": "und",
+    }
+    req_und = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=json.dumps(req_body_und).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req_und, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8")).get("data", {})
+        assert data.get("ok") is True
+        assert data.get("language") == "und"
+
+    # Settings remain 'de', no persist or spawn_ahk occurred
+    assert server.config.get("settings", "default_language") == "de"
+    assert len(persist_calls) == 0
+    assert len(spawn_calls) == 0
+
+    # 3. Confirming the already-active language avoids redundant writes and process invocations
+    persist_calls.clear()
+    spawn_calls.clear()
+    session_zid_same = "20261008143003"
+    with _DRAFT_SESSIONS_LOCK:
+        _DRAFT_SESSIONS[session_zid_same] = {
+            "text": "Noch ein deutscher Satz.",
+            "language": "de",
+            "text_mode": "single",
+        }
+
+    req_body_same = {
+        "session_zid": session_zid_same,
+        "action": "process",
+        "selected_language": "de",
+    }
+    req_same = urllib.request.Request(
+        f"{server_url}/api/v1/confirm-language",
+        data=json.dumps(req_body_same).encode("utf-8"),
+        headers={"Content-Type": "application/json"},
+    )
+    with urllib.request.urlopen(req_same, timeout=5.0) as resp:
+        assert resp.status == 200
+        data = json.loads(resp.read().decode("utf-8")).get("data", {})
+        assert data.get("ok") is True
+        assert data.get("language") == "de"
+
+    # Redundant write and spawn must be skipped
+    assert server.config.get("settings", "default_language") == "de"
+    assert len(persist_calls) == 0
+    assert len(spawn_calls) == 0
 
 
 def test_confirm_language_validation_errors(running_controller):
