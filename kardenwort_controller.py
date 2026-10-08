@@ -245,6 +245,7 @@ class SidecarService:
         self.managed_by_supervisor: bool = False
         self.consecutive_failures: int = 0
         self.spawn_time: float = 0.0
+        self.health_data: Optional[Dict[str, Any]] = None
 
     def url(self) -> str:
         return f"http://{self.host}:{self.port}"
@@ -438,12 +439,17 @@ class ProcessSupervisor:
             req = urllib.request.Request(url, headers={"User-Agent": "Kardenwort-Supervisor/1.0"})
             with urllib.request.urlopen(req, timeout=timeout) as resp:
                 if resp.status == 200:
+                    try:
+                        service.health_data = json.loads(resp.read().decode('utf-8'))
+                    except Exception:
+                        service.health_data = {}
                     service.is_healthy = True
                     service.last_check = time.time()
                     return True
         except Exception:
             pass
         service.is_healthy = False
+        service.health_data = None
         service.last_check = time.time()
         return False
 
@@ -583,7 +589,7 @@ class ProcessSupervisor:
         report = {}
         for name, svc in self.services.items():
             pid = svc.process.pid if svc.process and svc.process.poll() is None else None
-            report[name] = {
+            entry = {
                 "port": svc.port,
                 "healthy": svc.is_healthy,
                 "pid": pid,
@@ -591,6 +597,17 @@ class ProcessSupervisor:
                 "restart_count": svc.restart_count,
                 "last_check": svc.last_check
             }
+            if name == "translation":
+                argos_status = None
+                if svc.health_data and isinstance(svc.health_data, dict):
+                    providers = svc.health_data.get("providers", {})
+                    if isinstance(providers, dict):
+                        argos_status = providers.get("argos")
+                if argos_status:
+                    entry["argos"] = argos_status
+                elif svc.is_healthy:
+                    entry["argos"] = "available"
+            report[name] = entry
         return report
 
     def get_service_status(self) -> Dict[str, Any]:
@@ -599,11 +616,22 @@ class ProcessSupervisor:
         """
         status = {}
         for name, svc in self.services.items():
-            status[name] = {
+            entry = {
                 "port": svc.port,
                 "healthy": svc.is_healthy,
                 "managed": svc.managed_by_supervisor,
             }
+            if name == "translation":
+                argos_status = None
+                if svc.health_data and isinstance(svc.health_data, dict):
+                    providers = svc.health_data.get("providers", {})
+                    if isinstance(providers, dict):
+                        argos_status = providers.get("argos")
+                if argos_status:
+                    entry["argos"] = argos_status
+                elif svc.is_healthy:
+                    entry["argos"] = "available"
+            status[name] = entry
         return status
 
 
@@ -3074,6 +3102,14 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if ctrl_port is None:
                 ctrl_port = self.server.server_address[1] if hasattr(self.server, 'server_address') else 18335
 
+            # Extract argos warmup status from translation service if available
+            argos_warmup = "unavailable"
+            trans_svc = services_status.get("translation", {})
+            if isinstance(trans_svc, dict) and trans_svc.get("argos"):
+                argos_warmup = trans_svc["argos"]
+            elif isinstance(trans_svc, dict) and trans_svc.get("healthy"):
+                argos_warmup = "available"
+
             self._send_json(200, {
                 "ok": True,
                 "status": "running",
@@ -3082,6 +3118,9 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     "uptime_seconds": uptime
                 },
                 "services": services_status,
+                "models": {
+                    "argos": argos_warmup
+                },
                 "sidecars": supervisor_report,
                 "database": db_status
             })

@@ -540,6 +540,32 @@ def check_endpoint_reachable(server_url: str, connect_timeout: float = MICROSERV
         return False
 
 
+_MICROSERVICE_HTTP_SESSION: Optional[Any] = None
+_MICROSERVICE_HTTP_SESSION_LOCK = threading.Lock()
+
+
+def _get_microservice_http_session():
+    """
+    Returns a shared, thread-safe requests.Session configured with HTTP connection
+    pooling and keep-alive headers for local microservice communication.
+    """
+    global _MICROSERVICE_HTTP_SESSION
+    if _MICROSERVICE_HTTP_SESSION is None:
+        with _MICROSERVICE_HTTP_SESSION_LOCK:
+            if _MICROSERVICE_HTTP_SESSION is None:
+                try:
+                    import requests
+                    from requests.adapters import HTTPAdapter
+                    s = requests.Session()
+                    adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=0)
+                    s.mount("http://", adapter)
+                    s.mount("https://", adapter)
+                    _MICROSERVICE_HTTP_SESSION = s
+                except Exception:
+                    _MICROSERVICE_HTTP_SESSION = False
+    return _MICROSERVICE_HTTP_SESSION if _MICROSERVICE_HTTP_SESSION is not False else None
+
+
 def query_spacy_server(
     text: str,
     language: str = "de",
@@ -568,16 +594,37 @@ def query_spacy_server(
         "trace_id": trace_id,
         "options": options or {}
     }
+    headers = {
+        "Content-Type": "application/json",
+        "X-ZID": str(zid or ""),
+        "X-Trace-ID": str(trace_id or ""),
+        "Connection": "keep-alive"
+    }
+    session = _get_microservice_http_session()
+    if session is not None:
+        try:
+            resp = session.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=(connect_timeout, timeout)
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                if result.get("status") == "success":
+                    record_endpoint_success(server_url)
+                    return result
+        except Exception as e:
+            record_endpoint_failure(server_url)
+            logger.debug(f"SpaCy HTTP microservice unavailable at {server_url}: {e}")
+        return None
+
     try:
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(
             url,
             data=data,
-            headers={
-                "Content-Type": "application/json",
-                "X-ZID": str(zid or ""),
-                "X-Trace-ID": str(trace_id or "")
-            }
+            headers=headers
         )
         with urllib.request.urlopen(req, timeout=timeout) as resp:
             if resp.status == 200:
@@ -608,7 +655,7 @@ def query_translation_server(
     auto_failover: Optional[bool] = None,
 ) -> Optional[dict]:
     """
-    Queries the translation HTTP microservice with clean direct HTTP requests and fast-fail connection probes.
+    Queries the translation HTTP microservice with persistent HTTP connection pooling and keep-alive headers.
     Returns parsed JSON dictionary on success or structured error response, or None on connection refusal/offline.
     """
     if not server_url or not is_endpoint_available(server_url):
@@ -636,17 +683,47 @@ def query_translation_server(
     if auto_failover is not None:
         payload["auto_failover"] = auto_failover
 
+    headers = {
+        "Content-Type": "application/json",
+        "X-ZID": str(zid or ""),
+        "X-Trace-ID": str(trace_id or ""),
+        "Connection": "keep-alive"
+    }
+
+    session = _get_microservice_http_session()
+    if session is not None:
+        try:
+            resp = session.post(
+                url,
+                json=payload,
+                headers=headers,
+                timeout=(connect_timeout, timeout)
+            )
+            if resp.status_code == 200:
+                result = resp.json()
+                if result.get("status") == "success":
+                    record_endpoint_success(server_url)
+                    return result
+            else:
+                try:
+                    err_result = resp.json()
+                    if isinstance(err_result, dict) and (err_result.get("status") == "error" or "code" in err_result):
+                        record_endpoint_success(server_url)
+                        return err_result
+                except Exception:
+                    pass
+                logger.debug(f"Translation HTTP microservice returned status {resp.status_code} at {server_url}")
+        except Exception as e:
+            record_endpoint_failure(server_url)
+            logger.debug(f"Translation HTTP microservice unavailable at {server_url}: {e}")
+        return None
+
     try:
         data = json.dumps(payload).encode('utf-8')
         req = urllib.request.Request(
             url,
             data=data,
-            headers={
-                "Content-Type": "application/json",
-                "X-ZID": str(zid or ""),
-                "X-Trace-ID": str(trace_id or ""),
-                "Connection": "close"
-            }
+            headers=headers
         )
         try:
             with urllib.request.urlopen(req, timeout=timeout) as resp:
