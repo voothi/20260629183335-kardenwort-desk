@@ -40,17 +40,25 @@ progressive_timeout_seconds = 15
 ; Set to true to use the local offline translation database fork/cache if available
 use_local_fork = true
 
-; Automatically fallback to offline argos translation when primary network providers fail
+; [DEPRECATED] Automatically fallback to offline argos translation when primary network providers fail.
+; Superseded by 'failover_strategy' and canonical provider chains below.
 auto_offline_fallback = false
 
-; The provider fallback chain for sentence text translation (comma-separated list, e.g. deepl, google, argos)
+; The provider fallback chain for sentence text translation (comma-separated list, e.g. deepl, google, argos).
+; The head (chain[0]) defines the primary base provider.
 text_provider_chain = deepl, google, argos
 
-; The provider fallback chain for lemma word translation (comma-separated list, e.g. google, argos)
+; The provider fallback chain for lemma word translation (comma-separated list, e.g. google, argos).
+; The head (chain[0]) defines the primary base provider.
 lemma_provider_chain = google, argos
 
 ; Translation failover strategy: 'strict' (primary provider only), 'chain' (sequential fallback), 'offline_fallback' (primary online, argos offline)
 failover_strategy = chain
+
+; [DEPRECATED] Explicit base provider keys (text_base_provider / lemma_base_provider) are superseded by
+; the head of 'text_provider_chain' and 'lemma_provider_chain'.
+; text_base_provider = deepl
+; lemma_base_provider = google
 
 ; The IP addresses to ping for the fast connectivity check before online translation (comma separated, e.g. 8.8.8.8, 1.1.1.1). Leave empty to disable.
 fast_connectivity_check_ips = 
@@ -441,7 +449,8 @@ enable_translation_cache = true
 ; Maximum number of items in the in-memory translation cache
 cache_size = 10000
 
-; Automatic failover to secondary provider (DeepL / Argos) when Google Translate encounters rate limiting
+; [DEPRECATED] Automatic failover to secondary provider when Google Translate encounters rate limiting.
+; Superseded by 'failover_strategy = chain' and provider chains configured under [pipeline].
 auto_provider_failover = true
 
 ; Pre-warm Argos neural models in RAM at translate_server.py startup (eliminates 4s cold-start per request)

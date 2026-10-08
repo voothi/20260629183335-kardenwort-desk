@@ -426,4 +426,33 @@ def test_fast_connectivity_probe_timeouts_bounded():
         assert mock_conn.call_args[1].get("timeout") <= 0.4
 
 
+def test_resolve_provider_chain_canonical_precedence():
+    # Canonical text_provider_chain overrides legacy text_base_provider
+    config = make_config(chain="google, deepl, argos", text_base="argos", strategy="chain")
+    providers, strategy = resolve_provider_chain(config, task_type="text")
+    assert providers == ["google", "deepl", "argos"]
+    assert providers[0] == "google"
+    assert strategy == "chain"
+
+    # Canonical lemma_provider_chain overrides legacy lemma_base_provider
+    config_lemma = configparser.ConfigParser()
+    config_lemma.add_section(SEC_PIPELINE)
+    config_lemma.set(SEC_PIPELINE, "lemma_provider_chain", "deepl, argos")
+    config_lemma.set(SEC_PIPELINE, "lemma_base_provider", "google")
+    l_provs, _ = resolve_provider_chain(config_lemma, task_type="lemma")
+    assert l_provs == ["deepl", "argos"]
+    assert l_provs[0] == "deepl"
+
+    # Explicit failover_strategy overrides legacy auto_offline_fallback
+    config_strat = make_config(chain="google, argos", strategy="chain", auto_fallback=True)
+    _, strategy2 = resolve_provider_chain(config_strat, task_type="text")
+    assert strategy2 == "chain"
+
+    # Legacy text_base_provider works when text_provider_chain is absent
+    config_leg = make_config(text_base="deepl")
+    leg_provs, _ = resolve_provider_chain(config_leg, task_type="text")
+    assert leg_provs == ["deepl"]
+
+
+
 

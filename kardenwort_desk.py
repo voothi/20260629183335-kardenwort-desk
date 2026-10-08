@@ -6522,12 +6522,8 @@ def resolve_provider_chain(config, task_type: str = 'text') -> Tuple[List[str], 
             chain_str = base_override or 'google'
 
     providers = [p.strip().lower() for p in chain_str.split(',') if p.strip()] if chain_str else []
-    if base_override and base_override.strip():
-        b_norm = base_override.strip().lower()
-        if not providers:
-            providers = [b_norm]
-        elif b_norm != providers[0]:
-            providers = [b_norm] + [p for p in providers if p != b_norm]
+    if not providers and base_override and base_override.strip():
+        providers = [base_override.strip().lower()]
 
     if not providers:
         providers = ['google']
