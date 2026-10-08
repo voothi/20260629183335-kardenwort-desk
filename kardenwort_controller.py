@@ -4600,29 +4600,40 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 raise StructuredError(ErrorCode.NOT_FOUND, f"Draft session '{session_zid}' not found or already confirmed")
 
             if action == 'process':
-                raw_lang = body.get('selected_language') or body.get('target_language') or draft.get("language") or "und"
+                raw_lang = body.get('chosen_source_lang') or body.get('selected_language') or body.get('target_language') or draft.get("language") or "und"
                 chosen_source_lang = raw_lang.strip().lower() if raw_lang else "und"
             elif action == 'switch':
-                chosen_source_lang = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
-                if chosen_source_lang:
-                    chosen_source_lang = chosen_source_lang.strip().lower()
-                else:
-                    chosen_source_lang = "en"
-
-                # 1. Update in-memory config
-                if hasattr(self.server, 'config') and self.server.config:
-                    if not self.server.config.has_section(SEC_SETTINGS):
-                        self.server.config.add_section(SEC_SETTINGS)
-                    self.server.config.set(SEC_SETTINGS, 'default_language', chosen_source_lang)
-
-                # 2. Persist to desk config.ini
-                base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
-                persist_default_language(chosen_source_lang, base_dir=base_dir)
-
-                # 3. Notify AutoHotkey process via IPC
-                spawn_ahk(["--set-language", chosen_source_lang], base_dir=base_dir)
+                raw_detected = draft.get("mismatch_info", {}).get("detected_language") or draft.get("language")
+                chosen_source_lang = raw_detected.strip().lower() if raw_detected else "en"
+            elif action == 'keep':
+                raw_exp = draft.get("language") or "en"
+                chosen_source_lang = raw_exp.strip().lower() if raw_exp else "en"
             else:
-                chosen_source_lang = draft.get("language") or "en"
+                raw_exp = draft.get("language") or "en"
+                chosen_source_lang = raw_exp.strip().lower() if raw_exp else "en"
+
+            # Persist and sync AutoHotkey if confirming a concrete study language different from active default
+            if chosen_source_lang and chosen_source_lang != "und":
+                active_default_lang = ""
+                if hasattr(self.server, 'config') and self.server.config:
+                    if self.server.config.has_section(SEC_SETTINGS) and self.server.config.has_option(SEC_SETTINGS, 'default_language'):
+                        active_default_lang = self.server.config.get(SEC_SETTINGS, 'default_language').strip().lower()
+                    else:
+                        active_default_lang = "de"
+
+                if chosen_source_lang != active_default_lang:
+                    # 1. Update in-memory config
+                    if hasattr(self.server, 'config') and self.server.config:
+                        if not self.server.config.has_section(SEC_SETTINGS):
+                            self.server.config.add_section(SEC_SETTINGS)
+                        self.server.config.set(SEC_SETTINGS, 'default_language', chosen_source_lang)
+
+                    # 2. Persist to desk config.ini
+                    base_dir = getattr(self.server, 'resolved_paths', {}).get('base_dir') if hasattr(self.server, 'resolved_paths') else None
+                    persist_default_language(chosen_source_lang, base_dir=base_dir)
+
+                    # 3. Notify AutoHotkey process via IPC
+                    spawn_ahk(["--set-language", chosen_source_lang], base_dir=base_dir)
 
             raw_tsv = draft.get("tsv_path")
             if raw_tsv and chosen_source_lang != draft.get("language"):
