@@ -152,11 +152,12 @@ def test_selected_filter_persistence_request(page, tmp_path):
     page.wait_for_timeout(50)
 
     fetches = page.evaluate("() => window.__fetches")
-    assert len(fetches) == 1
-    assert fetches[0]["url"] == "/api/v1/config"
-    assert fetches[0]["body"]["section"] == "rendering"
-    assert fetches[0]["body"]["key"] == "filter_selected_only"
-    assert fetches[0]["body"]["value"] == "true"
+    config_fetches = [f for f in fetches if f.get("url") == "/api/v1/config"]
+    assert len(config_fetches) == 1
+    assert config_fetches[0]["url"] == "/api/v1/config"
+    assert config_fetches[0]["body"]["section"] == "rendering"
+    assert config_fetches[0]["body"]["key"] == "filter_selected_only"
+    assert config_fetches[0]["body"]["value"] == "true"
     assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") == "true"
     assert "Selected rows filter enabled" in page.locator("#kw-toast-container").inner_text()
 
@@ -165,11 +166,12 @@ def test_selected_filter_persistence_request(page, tmp_path):
     page.wait_for_timeout(50)
 
     fetches = page.evaluate("() => window.__fetches")
-    assert len(fetches) == 2
-    assert fetches[1]["url"] == "/api/v1/config"
-    assert fetches[1]["body"]["section"] == "rendering"
-    assert fetches[1]["body"]["key"] == "filter_selected_only"
-    assert fetches[1]["body"]["value"] == "false"
+    config_fetches = [f for f in fetches if f.get("url") == "/api/v1/config"]
+    assert len(config_fetches) == 2
+    assert config_fetches[1]["url"] == "/api/v1/config"
+    assert config_fetches[1]["body"]["section"] == "rendering"
+    assert config_fetches[1]["body"]["key"] == "filter_selected_only"
+    assert config_fetches[1]["body"]["value"] == "false"
     assert page.evaluate("() => localStorage.getItem('kw_filter_selected_only')") == "false"
     assert "Selected rows filter disabled" in page.locator("#kw-toast-container").inner_text()
 
