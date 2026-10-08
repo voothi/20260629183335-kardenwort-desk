@@ -13682,8 +13682,127 @@ window.__CONFIG__ = {ui_config_json};
             var val = (el.textContent || el.innerText || '').trim();
             if (val) return val;
         }
+        if (window.AppState && (window.AppState.activeTextProvider || window.AppState.active_text_provider)) {
+            return window.AppState.activeTextProvider || window.AppState.active_text_provider;
+        }
         return 'google';
     }
+
+    function getLemmaBaseProvider() {
+        var el = document.getElementById('lemma-base-provider');
+        if (el) {
+            var val = (el.textContent || el.innerText || '').trim();
+            if (val) return val;
+        }
+        if (window.AppState && (window.AppState.activeLemmaProvider || window.AppState.active_lemma_provider)) {
+            return window.AppState.activeLemmaProvider || window.AppState.active_lemma_provider;
+        }
+        return 'google';
+    }
+
+    function updateActiveProvider(taskType, newProvider) {
+        if (!newProvider) return;
+        var provStr = String(newProvider).trim();
+        if (provStr.indexOf('live:') === 0) {
+            provStr = provStr.substring(5).trim();
+        }
+        if (!provStr || provStr.toLowerCase() === 'default') return;
+        var pLower = provStr.toLowerCase();
+        var label = formatProviderSkeletonLabel(pLower);
+        var capProv = pLower.charAt(0).toUpperCase() + pLower.slice(1);
+        if (pLower === 'deepl') capProv = 'DeepL';
+        else if (pLower === 'intellifiller') capProv = 'IntelliFiller';
+
+        var tType = taskType ? String(taskType).trim().toLowerCase() : null;
+        var isText = (!tType || tType === 'text' || tType === 'sentence' || tType === 'all');
+        var isLemma = (!tType || tType === 'lemma' || tType === 'word' || tType === 'all');
+
+        if (!window.AppState) window.AppState = {};
+
+        // 1. Synchronize base provider script tags and AppState
+        if (isText) {
+            var textEl = document.getElementById('text-base-provider');
+            if (textEl) textEl.textContent = pLower;
+            window.AppState.activeTextProvider = pLower;
+            window.AppState.active_text_provider = pLower;
+        }
+        if (isLemma) {
+            var lemmaEl = document.getElementById('lemma-base-provider');
+            if (lemmaEl) lemmaEl.textContent = pLower;
+            window.AppState.activeLemmaProvider = pLower;
+            window.AppState.active_lemma_provider = pLower;
+        }
+        window.AppState.activeProvider = pLower;
+        window.AppState.active_provider = pLower;
+
+        // 2. Dynamically synchronize text translation skeletons
+        if (isText) {
+            var tc = document.getElementById('translation-container');
+            if (tc) {
+                var isPendingTc = tc.classList.contains('skeleton-loader') ||
+                                  tc.getAttribute('data-pending') === 'true' ||
+                                  tc.querySelector('.skeleton-loader') !== null ||
+                                  tc.querySelector('[data-pending="true"]') !== null;
+                if (isPendingTc) {
+                    var childSkels = tc.querySelectorAll('.skeleton-loader, [data-pending="true"]');
+                    if (childSkels.length > 0) {
+                        for (var i = 0; i < childSkels.length; i++) {
+                            childSkels[i].textContent = label;
+                            childSkels[i].setAttribute('title', label);
+                            childSkels[i].setAttribute('data-tooltip', capProv);
+                        }
+                    } else if (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true') {
+                        tc.textContent = label;
+                        tc.setAttribute('title', label);
+                        tc.setAttribute('data-tooltip', capProv);
+                    }
+                }
+            }
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                var cards = window.WorkspaceTabs.getCards();
+                if (cards && cards.length > 0) {
+                    for (var c = 0; c < cards.length; c++) {
+                        if (cards[c].translated_text && cards[c].translated_text.indexOf('skeleton-loader') !== -1) {
+                            cards[c].translated_text = cards[c].translated_text.replace(/>[^<]*\.\.\.<\/span>/g, '>' + escapeHtml(label) + '</span>')
+                                                                             .replace(/title="[^"]*"/g, 'title="' + escapeHtml(label) + '"');
+                        }
+                    }
+                }
+            }
+        }
+
+        // 3. Dynamically synchronize lemma translation skeletons in table rows
+        if (isLemma) {
+            var tableSkels = document.querySelectorAll('td.col-translation .skeleton-loader, td.col-translation[data-pending="true"] .skeleton-loader, td[data-col="WordDestination"] .skeleton-loader, td[data-col="word_translation"] .skeleton-loader');
+            for (var k = 0; k < tableSkels.length; k++) {
+                var tSk = tableSkels[k];
+                tSk.textContent = label;
+                tSk.setAttribute('title', label);
+                tSk.setAttribute('data-tooltip', capProv);
+            }
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                var wCards = window.WorkspaceTabs.getCards();
+                if (wCards && wCards.length > 0) {
+                    for (var wc = 0; wc < wCards.length; wc++) {
+                        if (wCards[wc].words) {
+                            for (var wi = 0; wi < wCards[wc].words.length; wi++) {
+                                var wordObj = wCards[wc].words[wi];
+                                if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1) {
+                                    wordObj.translation = wordObj.translation.replace(/>[^<]*\.\.\.<\/span>/g, '>' + escapeHtml(label) + '</span>')
+                                                                             .replace(/title="[^"]*"/g, 'title="' + escapeHtml(label) + '"');
+                                    wordObj.row_html = null;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    window.getTextBaseProvider = getTextBaseProvider;
+    window.getLemmaBaseProvider = getLemmaBaseProvider;
+    window.updateActiveProvider = updateActiveProvider;
 
     var mvpBookmarks = [];
     var sourceSpansArray = [];
@@ -14526,7 +14645,24 @@ window.__CONFIG__ = {ui_config_json};
                     window.AppState.stage = data.stage;
                 }
                 var rawProv = data.provider || data.provider_name || data.active_provider;
-                if (rawProv) {
+                var rawTextProv = data.active_text_provider || data.activeTextProvider;
+                var rawLemmaProv = data.active_lemma_provider || data.activeLemmaProvider;
+                if (data.status) {
+                    if (!rawTextProv && (data.status.active_text_provider || data.status.activeTextProvider)) {
+                        rawTextProv = data.status.active_text_provider || data.status.activeTextProvider;
+                    }
+                    if (!rawLemmaProv && (data.status.active_lemma_provider || data.status.activeLemmaProvider)) {
+                        rawLemmaProv = data.status.active_lemma_provider || data.status.activeLemmaProvider;
+                    }
+                    if (!rawProv && (data.status.active_provider || data.status.activeProvider)) {
+                        rawProv = data.status.active_provider || data.status.activeProvider;
+                    }
+                }
+                if (typeof window.updateActiveProvider === 'function') {
+                    if (rawTextProv) window.updateActiveProvider('text', rawTextProv);
+                    if (rawLemmaProv) window.updateActiveProvider('lemma', rawLemmaProv);
+                    if (rawProv && !rawTextProv && !rawLemmaProv) window.updateActiveProvider(null, rawProv);
+                } else if (rawProv) {
                     var provStr = String(rawProv).trim();
                     if (provStr.indexOf('live:') === 0) {
                         provStr = provStr.substring(5).trim();
@@ -15960,6 +16096,19 @@ window.__CONFIG__ = {ui_config_json};
                         })
                         .then(function(resObj) {
                             var data = (resObj && resObj.data) ? resObj.data : resObj;
+                            if (data && typeof window.updateActiveProvider === 'function') {
+                                var sTextP = data.active_text_provider || data.activeTextProvider;
+                                var sLemmaP = data.active_lemma_provider || data.activeLemmaProvider;
+                                var sGenP = data.active_provider || data.activeProvider;
+                                if (data.status) {
+                                    sTextP = sTextP || data.status.active_text_provider || data.status.activeTextProvider;
+                                    sLemmaP = sLemmaP || data.status.active_lemma_provider || data.status.activeLemmaProvider;
+                                    sGenP = sGenP || data.status.active_provider || data.status.activeProvider;
+                                }
+                                if (sTextP) window.updateActiveProvider('text', sTextP);
+                                if (sLemmaP) window.updateActiveProvider('lemma', sLemmaP);
+                                if (sGenP && !sTextP && !sLemmaP) window.updateActiveProvider(null, sGenP);
+                            }
                             if (data) {
                                 var isBusy = ((data.stage === 'translating' || (data.status && data.status.stage === 'translating') || data.worker_status === 'running') &&
                                     data.is_finished !== true &&
@@ -16114,6 +16263,21 @@ window.__CONFIG__ = {ui_config_json};
                         var evtSource = new EventSource(sseUrl);
                         window._kwEvtSource = evtSource;
 
+                        if (evtSource.addEventListener) {
+                            evtSource.addEventListener('provider_failover', function(e) {
+                                try {
+                                    var failoverData = JSON.parse(e.data);
+                                    if (failoverData && typeof window.updateActiveProvider === 'function') {
+                                        var tType = failoverData.task_type || failoverData.task;
+                                        var nProv = failoverData.new_provider || failoverData.to || failoverData.provider;
+                                        if (nProv) {
+                                            window.updateActiveProvider(tType, nProv);
+                                        }
+                                    }
+                                } catch(err) {}
+                            });
+                        }
+
                         if (window._kwSseSafetyTimer) {
                             clearTimeout(window._kwSseSafetyTimer);
                             window._kwSseSafetyTimer = null;
@@ -16147,6 +16311,13 @@ window.__CONFIG__ = {ui_config_json};
                             sseBackoffMs = 1000;
                             try {
                                 var parsed = JSON.parse(e.data);
+                                if (parsed && parsed.type === 'provider_failover' && typeof window.updateActiveProvider === 'function') {
+                                    var pfType = parsed.task_type || parsed.task;
+                                    var pfProv = parsed.new_provider || parsed.to || parsed.provider;
+                                    if (pfProv) {
+                                        window.updateActiveProvider(pfType, pfProv);
+                                    }
+                                }
                                 if (parsed && (parsed.type === 'stage' || parsed.type === 'update' || parsed.rows || parsed.stage || parsed.is_finished)) {
                                     if (window.receiveUpdate) {
                                         window.receiveUpdate(parsed);
@@ -20814,7 +20985,7 @@ window.__CONFIG__ = {ui_config_json};
             }
 
             function getTranslationHtml(tText) {
-                if (tText && tText.trim()) {
+                if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1) {
                     var clean = tText.trim();
                     var lines = [];
                     if (clean.indexOf('<div') !== -1 || clean.indexOf('</div') !== -1 || clean.indexOf('<p') !== -1 || clean.indexOf('<br') !== -1) {
@@ -21225,7 +21396,7 @@ window.__CONFIG__ = {ui_config_json};
                         }
                         tText = tText || '';
                         cards[c].translated_text = tText;
-                        if (tText && tText.trim()) {
+                        if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1) {
                             transContainer.classList.remove('skeleton-loader');
                             transContainer.removeAttribute('data-pending');
                         }
