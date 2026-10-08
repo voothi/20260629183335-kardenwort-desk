@@ -7133,15 +7133,22 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         provider_order = [active_provider] + [p for p in candidates if p != active_provider]
 
     def _call_translate_text(text_val, p_name):
-        kwargs_call = {"provider": p_name, "zid": zid}
+        kwargs_call = {"provider": p_name}
+        if zid is not None:
+            kwargs_call["zid"] = zid
         if on_failover is not None:
             kwargs_call["on_failover"] = on_failover
         try:
             return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
         except TypeError as te:
-            if "on_failover" in str(te):
+            msg = str(te)
+            if "unexpected keyword argument" in msg or "zid" in msg or "on_failover" in msg:
                 kwargs_call.pop("on_failover", None)
-                return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
+                kwargs_call.pop("zid", None)
+                try:
+                    return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
+                except TypeError:
+                    return translate_text(text_val, source, target, config, resolved_paths, p_name)
             raise
 
     def _translate_single(lemma):
