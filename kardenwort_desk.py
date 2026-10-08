@@ -15284,6 +15284,87 @@ window.__CONFIG__ = {ui_config_json};
             }
         } catch(e) {}
 
+        var _cachedSentenceCards = null;
+        function getCardModels() {
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+                var c = window.WorkspaceTabs.getCards();
+                if (c && c.length > 0) return c;
+            }
+            if (window._kwSentenceCards && window._kwSentenceCards.length > 0) {
+                return window._kwSentenceCards;
+            }
+            if (_cachedSentenceCards && _cachedSentenceCards.length > 0) {
+                return _cachedSentenceCards;
+            }
+            var scriptEl = document.getElementById('sentence-cards');
+            if (scriptEl) {
+                try {
+                    _cachedSentenceCards = JSON.parse(scriptEl.textContent || scriptEl.innerText || '[]');
+                } catch(e) {
+                    _cachedSentenceCards = [];
+                }
+                return _cachedSentenceCards;
+            }
+            return [];
+        }
+        window.getCardModels = getCardModels;
+
+        function countPendingSkeletons() {
+            var domCount = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+            var cards = getCardModels();
+            if (!cards || cards.length === 0) {
+                return domCount;
+            }
+            var count = domCount;
+            var activeSeq = null;
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveTabSeq === 'function') {
+                activeSeq = window.WorkspaceTabs.getActiveTabSeq();
+            } else if (window._kwActiveTabSeq !== undefined && window._kwActiveTabSeq !== null) {
+                activeSeq = window._kwActiveTabSeq;
+            } else {
+                var activeChip = document.querySelector('.kw-tab-chip.active');
+                if (activeChip) {
+                    var parsed = parseInt(activeChip.getAttribute('data-tab-seq'), 10);
+                    if (!isNaN(parsed)) activeSeq = parsed;
+                }
+            }
+            if (activeSeq === null && cards.length > 0) {
+                activeSeq = (cards[0].seq_num !== undefined) ? cards[0].seq_num : 1;
+            }
+
+            var isFinished = !!(window.AppState && (window.AppState.isFinished === true || window.AppState.stage === 'finished' || (window.AppState.status && (window.AppState.status.isFinished === true || window.AppState.status === 'finished'))));
+            var isFailed = !!(window.AppState && (window.AppState.textTranslationFailed || window.AppState.textTranslationStatus === 'failed'));
+
+            var tc = document.getElementById('translation-container');
+            var tcHasSkel = !!(tc && (tc.classList.contains('skeleton-loader') || tc.getAttribute('data-pending') === 'true' || tc.querySelector('.skeleton-loader, [data-pending="true"]')));
+
+            for (var i = 0; i < cards.length; i++) {
+                var card = cards[i];
+                var isActive = (activeSeq !== null) ? (card.seq_num === activeSeq) : false;
+                if (!isActive) {
+                    if (card.words && card.words.length > 0) {
+                        for (var w = 0; w < card.words.length; w++) {
+                            var word = card.words[w];
+                            var hasTransSkel = word.translation && (word.translation.indexOf('skeleton-loader') !== -1 || word.translation.indexOf('data-pending') !== -1);
+                            var hasRowSkel = word.row_html && (word.row_html.indexOf('skeleton-loader') !== -1 || word.row_html.indexOf('data-pending') !== -1);
+                            if (hasTransSkel || hasRowSkel) {
+                                count += 1;
+                            }
+                        }
+                    }
+                    if (card.sentence_idx > 0 && !card.translated_text && !isFinished && !isFailed) {
+                        count += 1;
+                    }
+                } else {
+                    if (card.sentence_idx > 0 && !card.translated_text && !isFinished && !isFailed && !tcHasSkel) {
+                        count += 1;
+                    }
+                }
+            }
+            return count;
+        }
+        window.countPendingSkeletons = countPendingSkeletons;
+
         // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling + 30s Safety Timeout)
         function initWatchdog() {
             if (window._kwSkeletonPollTimer) {
@@ -15314,7 +15395,7 @@ window.__CONFIG__ = {ui_config_json};
                 curZid = document.body.getAttribute('data-zid');
             }
 
-            var hasSkeletons = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0;
+            var hasSkeletons = countPendingSkeletons() > 0;
 
             if (isWebMode && curZid && hasSkeletons) {
                 var maxBudgetMs = 30000; // 30-second initial safety budget
@@ -15363,7 +15444,7 @@ window.__CONFIG__ = {ui_config_json};
                     var currentElapsed = getActiveElapsedMs();
                     var remaining = maxBudgetMs - currentElapsed;
                     if (remaining <= 0) {
-                        var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        var pendings = countPendingSkeletons();
                         if (pendings > 0) {
                             enterHeartbeatFallback();
                             cleanupOrphanSkeletons();
@@ -15375,7 +15456,7 @@ window.__CONFIG__ = {ui_config_json};
                     } else {
                         window._kwWatchdogMaxTimer = setTimeout(function() {
                             if (!resolved) {
-                                var pendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                                var pendings = countPendingSkeletons();
                                 if (pendings > 0) {
                                     enterHeartbeatFallback();
                                     cleanupOrphanSkeletons();
@@ -15423,7 +15504,7 @@ window.__CONFIG__ = {ui_config_json};
 
                 var enterHeartbeatFallback = function() {
                     if (resolved) return;
-                    var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                    var remaining = countPendingSkeletons();
                     if (remaining === 0) return;
                     window._kwIsHeartbeat = true;
                     pollIntervalMs = 3000;
@@ -15545,7 +15626,7 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     var currentElapsed = getActiveElapsedMs();
                     if (currentElapsed >= maxBudgetMs) {
-                        var remainingPendings = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        var remainingPendings = countPendingSkeletons();
                         if (remainingPendings > 0 && !window._kwIsHeartbeat) {
                             enterHeartbeatFallback();
                             cleanupOrphanSkeletons();
@@ -15594,8 +15675,9 @@ window.__CONFIG__ = {ui_config_json};
                                 if ((data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
                                     window.receiveUpdate(data);
                                 }
-                                var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
-                                if (remaining === 0 || data.is_finished || data.stage === 'finished' || (data.status && (data.status.is_finished || data.status === 'finished'))) {
+                                var remaining = countPendingSkeletons();
+                                var isDone = (data.is_finished === true || data.stage === 'finished' || (data.status && (data.status.is_finished === true || data.status === 'finished' || data.status.stage === 'finished')));
+                                if (isDone || remaining === 0) {
                                     resolved = true;
                                     if (window._kwWatchdogMaxTimer) {
                                         clearTimeout(window._kwWatchdogMaxTimer);
@@ -15625,7 +15707,7 @@ window.__CONFIG__ = {ui_config_json};
                             fetch(renderCheckUrl, rcOpts)
                                 .then(function(res) { return res.text(); })
                                 .then(function(htmlText) {
-                                    if (htmlText && htmlText.indexOf('skeleton-loader') === -1) {
+                                    if (htmlText && htmlText.indexOf('skeleton-loader') === -1 && countPendingSkeletons() === 0) {
                                         resolved = true;
                                         if (window._kwWatchdogMaxTimer) {
                                             clearTimeout(window._kwWatchdogMaxTimer);
@@ -15652,7 +15734,7 @@ window.__CONFIG__ = {ui_config_json};
                 var startWatchdogPolling = function(restart) {
                     if (resolved) return;
                     if (typeof fetch === 'undefined') return;
-                    var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                    var remaining = countPendingSkeletons();
                     if (remaining === 0) return;
                     if (restart && window._kwSkeletonPollTimer) {
                         clearInterval(window._kwSkeletonPollTimer);
@@ -15675,7 +15757,7 @@ window.__CONFIG__ = {ui_config_json};
                         stopPolling();
                     } else {
                         resumeWatchdogTimer();
-                        var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        var remaining = countPendingSkeletons();
                         if (remaining > 0 && !resolved) {
                             startWatchdogPolling();
                             pollSessionStatus();
@@ -15726,14 +15808,14 @@ window.__CONFIG__ = {ui_config_json};
                         evtSource.onerror = function(err) {
                             closeEvtSource();
                             if (resolved) return;
-                            var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                            var remaining = countPendingSkeletons();
                             if (remaining === 0) return;
                             if (!window._kwSseReconnectTimer) {
                                 var delay = sseBackoffMs;
                                 sseBackoffMs = Math.min(sseBackoffMs * 2, 16000);
                                 window._kwSseReconnectTimer = setTimeout(function() {
                                     window._kwSseReconnectTimer = null;
-                                    if (!resolved && document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length > 0) {
+                                    if (!resolved && countPendingSkeletons() > 0) {
                                         connectSse(true);
                                     }
                                 }, delay);
@@ -15748,8 +15830,9 @@ window.__CONFIG__ = {ui_config_json};
                                     if (window.receiveUpdate) {
                                         window.receiveUpdate(parsed);
                                     }
-                                    var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
-                                    if (remaining === 0 || parsed.is_finished || parsed.stage === 'finished') {
+                                    var remaining = countPendingSkeletons();
+                                    var isDone = (parsed.is_finished === true || parsed.stage === 'finished' || (parsed.status && (parsed.status.is_finished === true || parsed.status === 'finished' || parsed.status.stage === 'finished')));
+                                    if (isDone || remaining === 0) {
                                         resolved = true;
                                         if (window._kwWatchdogMaxTimer) {
                                             clearTimeout(window._kwWatchdogMaxTimer);
@@ -15780,7 +15863,7 @@ window.__CONFIG__ = {ui_config_json};
                 if (!window._kwNetworkListenersAttached) {
                     window._kwNetworkListenersAttached = true;
                     window.addEventListener('online', function() {
-                        var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        var remaining = countPendingSkeletons();
                         if (remaining > 0) {
                             if (typeof window._kwStartWatchdogPolling === 'function') {
                                 window._kwStartWatchdogPolling(true);
@@ -15796,7 +15879,7 @@ window.__CONFIG__ = {ui_config_json};
 
                     var focusDebounceTimer = null;
                     window.addEventListener('focus', function() {
-                        var remaining = document.querySelectorAll('.skeleton-loader, [data-pending="true"]').length;
+                        var remaining = countPendingSkeletons();
                         if (remaining > 0) {
                             if (focusDebounceTimer) clearTimeout(focusDebounceTimer);
                             focusDebounceTimer = setTimeout(function() {
@@ -20458,11 +20541,14 @@ window.__CONFIG__ = {ui_config_json};
                 var scriptEl = document.getElementById('sentence-cards');
                 if (scriptEl) {
                     try {
-                        cards = JSON.parse(scriptEl.textContent || scriptEl.innerText || '[]');
+                        cards = (_cachedSentenceCards && _cachedSentenceCards.length > 0) ? _cachedSentenceCards : JSON.parse(scriptEl.textContent || scriptEl.innerText || '[]');
                     } catch(e) {
                         cards = [];
                     }
+                } else if (_cachedSentenceCards && _cachedSentenceCards.length > 0) {
+                    cards = _cachedSentenceCards;
                 }
+                _cachedSentenceCards = cards;
                 window._kwSentenceCards = cards;
 
                 var srcContainer = document.getElementById('source-container');
