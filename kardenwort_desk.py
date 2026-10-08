@@ -6621,7 +6621,10 @@ def is_provider_cooled_down(provider: str, config=None, resolved_paths=None, tas
                     pass
             return exp
 
-        keys_to_check = [scoped_key, p_norm] if scoped_key else [p_norm]
+        if scoped_key:
+            keys_to_check = [scoped_key, p_norm]
+        else:
+            keys_to_check = [p_norm, f"text:{p_norm}", f"lemma:{p_norm}"]
         for k in keys_to_check:
             expire_at = _get_exp(k)
             if expire_at is not None:
@@ -6668,7 +6671,10 @@ def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=N
                     pass
             return exp
 
-        keys_to_check = [scoped_key, p_norm] if scoped_key else [p_norm]
+        if scoped_key:
+            keys_to_check = [scoped_key, p_norm]
+        else:
+            keys_to_check = [p_norm, f"text:{p_norm}", f"lemma:{p_norm}"]
         max_remaining = 0.0
         for k in keys_to_check:
             expire_at = _get_exp(k)
@@ -6973,7 +6979,13 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             continue
 
         try:
-            res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id, task_type=eff_task)
+            try:
+                res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id, task_type=eff_task)
+            except TypeError as te:
+                if "task_type" in str(te):
+                    res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+                else:
+                    raise
             if res is not None:
                 return ProvenanceString(res, provenance=f"live:{current_provider}")
             return res

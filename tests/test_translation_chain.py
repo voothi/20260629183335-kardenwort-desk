@@ -467,7 +467,8 @@ def test_network_failure_fast_path_text_bypasses_intermediate_online_providers(t
     mock_deepl = MagicMock(return_value="DeepL should not be called")
     mock_argos = MagicMock(return_value="Argos translated sentence")
 
-    with patch("kardenwort_desk.run_google_translation", mock_google), \
+    with patch("kardenwort_desk.is_network_online_multi", return_value=False), \
+         patch("kardenwort_desk.run_google_translation", mock_google), \
          patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
          patch("kardenwort_desk.run_argos_translation", mock_argos):
         res = _translate_text_impl("Test text", "en", "de", config, resolved_paths)
@@ -481,7 +482,7 @@ def test_network_failure_fast_path_lemmas_bypasses_intermediate_online_providers
     resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
     config = make_config(lemma_chain="google, deepl, argos", strategy="chain")
 
-    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None):
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None, task_type='lemma'):
         if provider == "google":
             raise ConnectionError("Host unreachable")
         elif provider == "deepl":
@@ -490,10 +491,89 @@ def test_network_failure_fast_path_lemmas_bypasses_intermediate_online_providers
             return "Haus"
         return ""
 
-    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+    with patch("kardenwort_desk.is_network_online_multi", return_value=False), \
+         patch("kardenwort_desk.translate_text", side_effect=mock_translate):
         res = translate_lemmas_fast_path(["House"], "en", "de", config, resolved_paths, provider="google")
         assert res == {"House": "Haus"}
         assert getattr(res, "provenance", None) == "live:argos"
+
+
+def test_single_provider_timeout_while_host_online_sequential_failover(tmp_path):
+    """Task 3.1: When host is online and Google times out, failover sequentially to DeepL (not Argos)."""
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl, argos", strategy="chain")
+
+    # Text pipeline verification
+    mock_google = MagicMock(side_effect=TimeoutError("Connection timeout to Google"))
+    mock_deepl = MagicMock(return_value="DeepL translated sentence")
+    mock_argos = MagicMock(return_value="Argos sentence")
+
+    with patch("kardenwort_desk.is_network_online_multi", return_value=True), \
+         patch("kardenwort_desk.run_google_translation", mock_google), \
+         patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
+         patch("kardenwort_desk.run_argos_translation", mock_argos):
+        res = _translate_text_impl("Test text", "en", "de", config, resolved_paths)
+        assert res == "DeepL translated sentence"
+        mock_google.assert_called_once()
+        mock_deepl.assert_called_once()
+        mock_argos.assert_not_called()
+
+    # Lemma pipeline verification
+    lemma_config = make_config(lemma_chain="google, deepl, argos", strategy="chain")
+
+    def mock_translate_lemma(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None, task_type='lemma'):
+        if provider == "google":
+            raise TimeoutError("Google timed out")
+        elif provider == "deepl":
+            return "Haus"
+        elif provider == "argos":
+            raise RuntimeError("Argos should not be called when DeepL is available")
+        return ""
+
+    with patch("kardenwort_desk.is_network_online_multi", return_value=True), \
+         patch("kardenwort_desk.translate_text", side_effect=mock_translate_lemma):
+        res_lemma = translate_lemmas_fast_path(["House"], "en", "de", lemma_config, resolved_paths, provider="google")
+        assert res_lemma == {"House": "Haus"}
+        assert getattr(res_lemma, "provenance", None) == "live:deepl"
+
+
+def test_task_scoped_cooldown_isolation_text_and_lemma(tmp_path):
+    """Task 3.3: Verify text translation cooldowns do not prevent lemma translation from attempting the same provider."""
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl", lemma_chain="google, argos", strategy="chain")
+
+    kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
+
+    # Place Google into cooldown specifically for sentence text
+    kardenwort_desk.record_provider_cooldown("google", duration=60.0, config=config, resolved_paths=resolved_paths, task_type="text")
+
+    # Text check must show cooled down; lemma check must NOT show cooled down
+    assert kardenwort_desk.is_provider_cooled_down("google", config=config, resolved_paths=resolved_paths, task_type="text")
+    assert not kardenwort_desk.is_provider_cooled_down("google", config=config, resolved_paths=resolved_paths, task_type="lemma")
+
+    # Sentence translation should bypass Google and execute DeepL
+    mock_google_text = MagicMock(side_effect=RuntimeError("Google should be bypassed for text"))
+    mock_deepl_text = MagicMock(return_value="DeepL text")
+
+    with patch("kardenwort_desk.run_google_translation", mock_google_text), \
+         patch("kardenwort_desk.run_deepl_translation", mock_deepl_text):
+        res_text = _translate_text_impl("Sentence", "en", "de", config, resolved_paths, task_type="text")
+        assert res_text == "DeepL text"
+        mock_google_text.assert_not_called()
+        mock_deepl_text.assert_called_once()
+
+    # Lemma translation with provider="google" must NOT bypass Google
+    def mock_lemma_call(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None, task_type='lemma'):
+        if provider == "google":
+            return "Wort"
+        raise RuntimeError(f"Unexpected provider call: {provider}")
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_lemma_call):
+        res_lemma = translate_lemmas_fast_path(["Word"], "en", "de", config, resolved_paths, provider="google")
+        assert res_lemma == {"Word": "Wort"}
+        assert getattr(res_lemma, "provenance", None) == "live:google"
+
+    kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
 
 
 def test_rate_limit_sequential_fallback_text_tries_next_provider(tmp_path):
