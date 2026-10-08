@@ -65,6 +65,8 @@ from kardenwort_desk import (
     get_session_active_providers,
     register_failover_callback,
     record_session_active_provider,
+    record_provider_failover,
+    is_network_online_multi,
     format_translated_html,
     format_update_rows_dict,
     SessionLogger,
@@ -1738,10 +1740,28 @@ class SessionArbiter:
                     init_text_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
             except Exception:
                 pass
+        text_chain, text_strat = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
+        main_text_provider = text_chain[0] if text_chain else 'google'
+        lemma_chain, lemma_strat = resolve_provider_chain(self.config, task_type='lemma') if self.config else (['google'], 'chain')
+        main_lemma_provider = lemma_chain[0] if lemma_chain else 'google'
+
+        check_ips_str = self.config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=self.config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1')) if self.config and self.config.has_section(SEC_PIPELINE) else ''
+        check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
+
+        active_text_p = main_text_provider
+        active_lemma_p = main_lemma_provider
+        if (text_strat == 'offline_fallback' or lemma_strat == 'offline_fallback') and check_ips:
+            if not is_network_online_multi(hosts=check_ips):
+                if text_strat == 'offline_fallback' and active_text_p != 'argos':
+                    active_text_p = 'argos'
+                    record_provider_failover(main_text_provider, config=self.config, resolved_paths=self.resolved_paths)
+                if lemma_strat == 'offline_fallback' and active_lemma_p != 'argos':
+                    active_lemma_p = 'argos'
+                    record_provider_failover(main_lemma_provider, config=self.config, resolved_paths=self.resolved_paths)
+                record_session_active_provider(session_zid, text=active_text_p, lemma=active_lemma_p, provider=active_lemma_p or active_text_p, config=self.config, resolved_paths=self.resolved_paths)
+
         if not init_text_prov and res.get("sentence_translation"):
-            text_chain, _ = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
-            main_text_provider = text_chain[0] if text_chain else 'google'
-            init_text_prov = f"live:{main_text_provider}"
+            init_text_prov = f"live:{active_text_p}"
 
         with self._lock:
             self.sessions[session_zid] = {
@@ -1754,6 +1774,9 @@ class SessionArbiter:
                 "headers": res["headers"],
                 "data_rows": res["data_rows"],
                 "sentence_translation": res["sentence_translation"],
+                "active_text_provider": active_text_p,
+                "active_lemma_provider": active_lemma_p,
+                "active_provider": active_lemma_p or active_text_p,
                 "text_provenance": init_text_prov,
                 "textProvenance": init_text_prov,
                 "row_provenances": init_row_provenances,
@@ -1762,6 +1785,9 @@ class SessionArbiter:
                 "created_at": time.time(),
             }
 
+        res["active_text_provider"] = active_text_p
+        res["active_lemma_provider"] = active_lemma_p
+        res["active_provider"] = active_lemma_p or active_text_p
         res["row_provenances"] = init_row_provenances
         res["rowProvenances"] = init_row_provenances
         if init_text_prov:
@@ -1773,6 +1799,9 @@ class SessionArbiter:
             "type": "stage",
             "stage": "source",
             "status": "success",
+            "active_text_provider": active_text_p,
+            "active_lemma_provider": active_lemma_p,
+            "active_provider": active_lemma_p or active_text_p,
             "rows": res["data_rows"],
             "row_provenances": init_row_provenances,
             "rowProvenances": init_row_provenances,

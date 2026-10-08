@@ -7113,6 +7113,20 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             translations.update(chunk_result)
         return ProvenanceDict(translations, provenance=chunk_prov)
 
+    check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1')) if config and config.has_section(SEC_PIPELINE) else ''
+    check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
+
+    if strategy == 'offline_fallback' and check_ips and active_provider != 'argos' and 'argos' in candidates:
+        if not is_network_online_multi(hosts=check_ips):
+            logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online lemma providers and switching to Argos.")
+            from_lp = active_provider
+            for p in candidates:
+                if p != 'argos':
+                    record_provider_failover(p, config=config, resolved_paths=resolved_paths)
+            notify_provider_failover('lemma', from_lp, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+            active_provider = 'argos'
+            prov_tag = "live:argos"
+
     if strategy == 'strict':
         provider_order = [active_provider]
     else:
@@ -10376,11 +10390,25 @@ html, body {{
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
     
-    text_chain, _ = resolve_provider_chain(config, task_type='text')
+    text_chain, text_strat = resolve_provider_chain(config, task_type='text')
     main_text_provider = text_chain[0] if text_chain else config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
-    text_base_provider = main_text_provider
-    lemma_chain, _ = resolve_provider_chain(config, task_type='lemma')
+    lemma_chain, lemma_strat = resolve_provider_chain(config, task_type='lemma')
     lemma_base_provider = lemma_chain[0] if lemma_chain else config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google')
+
+    check_ips_str = config.get(SEC_PIPELINE, 'fast_connectivity_check_ips', fallback=config.get(SEC_PIPELINE, 'fast_connectivity_check_ip', fallback='8.8.8.8, 1.1.1.1')) if config and config.has_section(SEC_PIPELINE) else ''
+    check_ips = [ip.strip() for ip in check_ips_str.split(',') if ip.strip()]
+
+    if (text_strat == 'offline_fallback' or lemma_strat == 'offline_fallback') and check_ips:
+        if not is_network_online_multi(hosts=check_ips):
+            if text_strat == 'offline_fallback' and main_text_provider != 'argos':
+                record_provider_failover(main_text_provider, config=config, resolved_paths=resolved_paths)
+                main_text_provider = 'argos'
+            if lemma_strat == 'offline_fallback' and lemma_base_provider != 'argos':
+                record_provider_failover(lemma_base_provider, config=config, resolved_paths=resolved_paths)
+                lemma_base_provider = 'argos'
+            record_session_active_provider(zid, text=main_text_provider, lemma=lemma_base_provider, provider=lemma_base_provider or main_text_provider, config=config, resolved_paths=resolved_paths)
+
+    text_base_provider = main_text_provider
     role_fields = get_role_fields(mapping, headers)
     col_lemma_check = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     if col_lemma_check != -1:
