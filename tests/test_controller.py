@@ -225,6 +225,78 @@ def test_controller_session_lifecycle_and_sse_streaming(running_controller):
     assert latency_ms < 50.0, f"Expected sub-50ms event delivery, got {latency_ms:.2f}ms"
 
 
+def test_controller_sse_stream_dynamic_skeleton_provider_labels(running_controller):
+    server_url, server = running_controller
+    test_zid = "20261008141500"
+
+    received_events = []
+    sse_connected = threading.Event()
+    stop_listener = threading.Event()
+
+    def sse_listener():
+        import http.client
+        import urllib.parse
+        parsed = urllib.parse.urlparse(server_url)
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
+        conn.request("GET", f"/events?zid={test_zid}")
+        resp = conn.getresponse()
+        sse_connected.set()
+
+        while not stop_listener.is_set() and len(received_events) < 4:
+            line = resp.fp.readline().decode('utf-8')
+            if not line:
+                break
+            line = line.strip()
+            if line.startswith("data: "):
+                raw_json = line[6:]
+                try:
+                    received_events.append(json.loads(raw_json))
+                except Exception:
+                    pass
+        conn.close()
+
+    listener_thread = threading.Thread(target=sse_listener, daemon=True)
+    listener_thread.start()
+    assert sse_connected.wait(timeout=2.0)
+    time.sleep(0.1)
+
+    # 1. Emit text_translation stage with primary provider (e.g. argos)
+    server.arbiter.emit_event(test_zid, {
+        "type": "stage",
+        "stage": "text_translation",
+        "status": "in_progress",
+        "provider": "argos",
+    })
+    # 2. Emit lemma_translation stage with fallback provider (e.g. google)
+    server.arbiter.emit_event(test_zid, {
+        "type": "stage",
+        "stage": "lemma_translation",
+        "status": "in_progress",
+        "provider": "google",
+    })
+    # 3. Emit translated update
+    server.arbiter.emit_event(test_zid, {
+        "type": "update",
+        "stage": "translated",
+        "status": "success",
+        "provider": "google",
+    })
+
+    listener_thread.join(timeout=3.0)
+    stop_listener.set()
+
+    # Verify event stream delivers provider metadata
+    assert len(received_events) >= 4
+    assert received_events[0]["type"] == "connected"
+    assert received_events[1]["stage"] == "text_translation"
+    assert received_events[1]["provider"] == "argos"
+    assert received_events[2]["stage"] == "lemma_translation"
+    assert received_events[2]["provider"] == "google"
+    assert received_events[3]["stage"] == "translated"
+    assert received_events[3]["provider"] == "google"
+
+
+
 def test_controller_session_create_and_status(running_controller):
     server_url, server = running_controller
 

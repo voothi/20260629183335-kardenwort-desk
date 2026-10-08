@@ -1174,6 +1174,12 @@ class EnrichmentQueue:
             if not sentence_translated and run_text == 'auto' and text:
                 text_chain, _ = resolve_provider_chain(self.config, task_type='text') if self.config else (['google'], 'chain')
                 main_text_provider = text_chain[0] if text_chain else 'google'
+                arbiter.emit_event(session_zid, {
+                    "type": "stage",
+                    "stage": "text_translation",
+                    "status": "in_progress",
+                    "provider": main_text_provider,
+                })
                 try:
                     sentence_translations_raw = translate_source_text(
                         text, sess_lang, sess_target, text_mode, self.config, self.resolved_paths, main_text_provider, zid=req_zid, trace_id=eff_trace_id
@@ -1254,6 +1260,7 @@ class EnrichmentQueue:
                         "type": "update",
                         "stage": "translated_text",
                         "status": "success",
+                        "provider": main_text_provider,
                         "text_translation_status": "success",
                         "textTranslationStatus": "success",
                         "text_translation_failed": False,
@@ -1339,6 +1346,12 @@ class EnrichmentQueue:
                         chunk_size = self.config.getint(SEC_TRANSLATION, 'lemma_batch_size', fallback=15)
                     chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
                     lemma_prov_tag = f"live:{lemma_provider}"
+                    arbiter.emit_event(session_zid, {
+                        "type": "stage",
+                        "stage": "lemma_translation",
+                        "status": "in_progress",
+                        "provider": lemma_provider,
+                    })
                     for chunk in chunks:
                         if is_sqlite and hasattr(storage_adapter, 'db'):
                             try:
@@ -1357,6 +1370,15 @@ class EnrichmentQueue:
                             chunk_prov = getattr(chunk_trans, 'provenance', None)
                             if chunk_prov:
                                 lemma_prov_tag = chunk_prov
+                                prov_cand = chunk_prov.split(':', 1)[1] if ':' in chunk_prov else chunk_prov
+                                if prov_cand and prov_cand != lemma_provider:
+                                    lemma_provider = prov_cand
+                                    arbiter.emit_event(session_zid, {
+                                        "type": "stage",
+                                        "stage": "lemma_translation",
+                                        "status": "in_progress",
+                                        "provider": lemma_provider,
+                                    })
                             translated_map.update(chunk_trans)
 
                     if translated_map:
@@ -1416,6 +1438,7 @@ class EnrichmentQueue:
                     "type": "update",
                     "stage": "translated",
                     "status": "success",
+                    "provider": lemma_provider,
                     "fingerprint": new_fp,
                     "rows": structured_rows,
                     "row_provenances": sess_row_provs,

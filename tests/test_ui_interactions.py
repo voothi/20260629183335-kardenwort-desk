@@ -5880,6 +5880,65 @@ def test_format_gender_badge_suppresses_none_noise(page):
     assert row1_cell.inner_text().strip() == ""
 
 
+def test_dynamic_skeleton_provider_label_update_in_dom(page):
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div id="session-zid">20261008141500</div>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true" title="Google...">Google...</span>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" title="Google...">Google...</span></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    skels = page.locator(".skeleton-loader")
+    assert skels.count() == 2
+
+    # 1. Progressive broadcast: provider routes to argos
+    page.evaluate("""() => {
+        window.receiveUpdate({
+            type: 'stage',
+            stage: 'lemma_translation',
+            provider: 'argos'
+        });
+    }""")
+
+    # Verify all skeleton loaders are dynamically updated to "Argos..."
+    for i in range(skels.count()):
+        el = skels.nth(i)
+        assert el.inner_text() == "Argos..."
+        assert "Argos" in (el.get_attribute("title") or "")
+
+    # 2. Subsequent failover broadcast: switches to fallback provider deepl
+    page.evaluate("""() => {
+        window.receiveUpdate({
+            type: 'stage',
+            stage: 'lemma_translation',
+            provider: 'deepl'
+        });
+    }""")
+
+    # Verify all skeleton loaders are dynamically updated to "DeepL..."
+    for i in range(skels.count()):
+        el = skels.nth(i)
+        assert el.inner_text() == "DeepL..."
+        assert "DeepL" in (el.get_attribute("title") or "")
+
+
+
 
 
 

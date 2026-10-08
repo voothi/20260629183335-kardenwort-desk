@@ -2916,7 +2916,7 @@ class SessionLogger:
     def debug(self, message, trace_id=None):
         self._write_entry("DEBUG", message, trace_id)
 
-def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, sentences=None, **extra_kwargs):
+def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, sentences=None, provider=None, **extra_kwargs):
     if not tsv_path:
         return None
     import inspect
@@ -2937,6 +2937,7 @@ def safe_write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, 
         "row_provenances": row_provenances,
         "provenance": provenance,
         "sentences": sentences,
+        "provider": provider,
     }
     kwargs.update(extra_kwargs)
     try:
@@ -14329,6 +14330,27 @@ window.__CONFIG__ = {ui_config_json};
                 if (data.stage) {
                     window.AppState.stage = data.stage;
                 }
+                var rawProv = data.provider || data.provider_name || data.active_provider;
+                if (rawProv) {
+                    var provStr = String(rawProv).trim();
+                    if (provStr.indexOf('live:') === 0) {
+                        provStr = provStr.substring(5).trim();
+                    }
+                    if (provStr && provStr.toLowerCase() !== 'default') {
+                        var pLower = provStr.toLowerCase();
+                        var capProv = pLower.charAt(0).toUpperCase() + pLower.slice(1);
+                        if (pLower === 'deepl') capProv = 'DeepL';
+                        else if (pLower === 'intellifiller') capProv = 'IntelliFiller';
+                        var label = capProv + '...';
+                        var skels = document.querySelectorAll('.skeleton-loader');
+                        for (var ski = 0; ski < skels.length; ski++) {
+                            var skEl = skels[ski];
+                            skEl.textContent = label;
+                            skEl.setAttribute('title', label);
+                            skEl.setAttribute('data-tooltip', capProv);
+                        }
+                    }
+                }
                 if (data.textTranslationStatus !== undefined) {
                     window.AppState.textTranslationStatus = data.textTranslationStatus;
                 } else if (data.text_translation_status !== undefined) {
@@ -24400,7 +24422,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
 
     return rows_data
 
-def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, sentences=None, **extra_kwargs):
+def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, status="success", source_text=None, translated_text=None, class_cols=None, empty_payload=False, config=None, error=None, zid=None, trace_id=None, text_translation_status=None, text_translation_failed=None, text_provenance=None, row_provenances=None, provenance=None, sentences=None, provider=None, **extra_kwargs):
     import time
     global _update_seq_counter
     _update_seq_counter += 1
@@ -24619,7 +24641,15 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                 update_data["zid"] = zid
             if trace_id is not None:
                 update_data["trace_id"] = trace_id
-        
+
+    eff_prov_label = provider or extra_kwargs.get("provider")
+    if not eff_prov_label:
+        eff_p = text_provenance or provenance
+        if eff_p and str(eff_p).startswith("live:"):
+            eff_prov_label = str(eff_p).split(":", 1)[1]
+    if eff_prov_label:
+        update_data["provider"] = eff_prov_label
+
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
     temp_path = update_js_path.with_name(update_js_path.name + '.tmp')
