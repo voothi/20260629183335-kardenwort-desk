@@ -6008,6 +6008,57 @@ def test_network_failover_provider_label_sync_preserves_populated_cells(page):
     assert page.locator("tr[data-row-id='0'] td.col-translation .scrollable-cell").inner_text().strip() == "Дом"
 
 
+def test_update_active_provider_synchronizes_workspace_cards_and_preserves_titles(page):
+    cards = [
+        {
+            "seq_num": 1,
+            "sentence_idx": 0,
+            "translated_text": '<span class="badge" title="OriginalBadge">Badge</span> <span class="skeleton-loader" title="Google...">Google...</span>',
+            "words": [
+                {
+                    "row_id": "0",
+                    "token_order": 0,
+                    "lemma": "Haus",
+                    "translation": '<span class="skeleton-loader" data-pending="true" title="Google...">Google...</span>',
+                    "row_html": '<tr><td>Haus</td><td><span class="skeleton-loader" title="Google...">Google...</span></td></tr>'
+                }
+            ]
+        }
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <div id="translation-container"><span class="badge" title="OriginalBadge">Badge</span> <span class="skeleton-loader" title="Google...">Google...</span></div>
+</div>
+<script id="sentence-cards" type="application/json">{json.dumps(cards)}</script>
+<script id="text-base-provider" type="text/plain">google</script>
+<script id="lemma-base-provider" type="text/plain">google</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Switch provider to Argos
+    page.evaluate("window.updateActiveProvider('all', 'argos');")
+
+    card = page.evaluate("window.WorkspaceTabs ? window.WorkspaceTabs.getCards()[0] : null")
+    assert card is not None
+    # Skeleton was updated to Argos...
+    assert 'title="Argos..."' in card["translated_text"]
+    assert ">Argos...</span>" in card["translated_text"]
+    # Non-skeleton badge title was strictly preserved and NOT overwritten
+    assert 'title="OriginalBadge"' in card["translated_text"]
+
+    # Word translation skeleton was updated and row_html invalidated
+    word = card["words"][0]
+    assert 'title="Argos..."' in word["translation"]
+    assert ">Argos...</span>" in word["translation"]
+    assert word["row_html"] is None
+
+
+
 
 
 

@@ -278,3 +278,58 @@ def test_persistence_guard_zero_empty_field_protection(tmp_path):
     arbiter.propagate_translations_to_siblings({"Haus": "Дом"}, exclude_session_zid=None, language="de")
     assert arbiter.sessions[session_zid]["data_rows"][0][1] == "Дом"
 
+
+def test_record_session_active_provider_keyword_signatures_and_persistence(tmp_path):
+    import kardenwort_desk
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config()
+    test_zid = "20261008215501"
+
+    # 1. Positional calls
+    kardenwort_desk.record_session_active_provider(test_zid, "text", "google", config=config, resolved_paths=resolved_paths)
+    provs = kardenwort_desk.get_session_active_providers(test_zid, config=config, resolved_paths=resolved_paths)
+    assert provs.get("active_text_provider") == "google"
+    assert provs.get("active_provider") == "google"
+
+    # 2. Keyword calls as used during offline fast connectivity check in desk and controller
+    # (previously crashed with TypeError: got unexpected keyword argument 'text')
+    kardenwort_desk.record_session_active_provider(
+        test_zid,
+        text="argos",
+        lemma="argos",
+        provider="argos",
+        config=config,
+        resolved_paths=resolved_paths,
+    )
+    provs = kardenwort_desk.get_session_active_providers(test_zid, config=config, resolved_paths=resolved_paths)
+    assert provs.get("active_text_provider") == "argos"
+    assert provs.get("active_lemma_provider") == "argos"
+    assert provs.get("active_provider") == "argos"
+
+    # 3. Verify file persistence and reloading from disk
+    kardenwort_desk._active_session_providers.clear()
+    provs_reloaded = kardenwort_desk.get_session_active_providers(test_zid, config=config, resolved_paths=resolved_paths)
+    assert provs_reloaded.get("active_text_provider") == "argos"
+    assert provs_reloaded.get("active_lemma_provider") == "argos"
+    assert provs_reloaded.get("active_provider") == "argos"
+
+
+def test_offline_fast_connectivity_probes_records_session_active_provider(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, argos", strategy="offline_fallback")
+    config.set(SEC_PIPELINE, "fast_connectivity_check_ips", "8.8.8.8")
+    test_zid = "20261008215502"
+
+    mock_argos = MagicMock(return_value="Offline translated text")
+
+    with patch("kardenwort_desk.is_network_online_multi", return_value=False), \
+         patch("kardenwort_desk.run_argos_translation", mock_argos):
+        res = _translate_text_impl("Test offline text", "en", "de", config, resolved_paths, zid=test_zid)
+        assert res == "Offline translated text"
+
+    # Session active provider was recorded via failover callback without TypeError
+    import kardenwort_desk
+    provs = kardenwort_desk.get_session_active_providers(test_zid, config=config, resolved_paths=resolved_paths)
+    assert provs.get("active_text_provider") == "argos"
+
+

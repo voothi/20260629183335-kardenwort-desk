@@ -6755,17 +6755,32 @@ def unregister_failover_callback(cb) -> None:
         if cb in _failover_callbacks:
             _failover_callbacks.remove(cb)
 
-def record_session_active_provider(zid: str, task: str, provider: str, config=None, resolved_paths=None) -> None:
+def record_session_active_provider(
+    zid: str,
+    task: Optional[str] = None,
+    provider: Optional[str] = None,
+    text: Optional[str] = None,
+    lemma: Optional[str] = None,
+    config=None,
+    resolved_paths=None,
+    **kwargs
+) -> None:
     if not zid:
         return
-    p_norm = (provider or "").strip().lower()
     with _session_providers_lock:
         entry = _active_session_providers.setdefault(str(zid), {})
-        if task == 'text':
-            entry['active_text_provider'] = p_norm
-        elif task == 'lemma':
-            entry['active_lemma_provider'] = p_norm
-        entry['active_provider'] = p_norm
+        if text:
+            entry['active_text_provider'] = str(text).strip().lower()
+        if lemma:
+            entry['active_lemma_provider'] = str(lemma).strip().lower()
+        if task == 'text' and provider:
+            entry['active_text_provider'] = str(provider).strip().lower()
+        elif task == 'lemma' and provider:
+            entry['active_lemma_provider'] = str(provider).strip().lower()
+
+        p_val = provider or kwargs.get('active_provider') or entry.get('active_provider') or lemma or text
+        if p_val:
+            entry['active_provider'] = str(p_val).strip().lower()
     try:
         results_dir = resolve_results_dir(resolved_paths, config) if 'resolve_results_dir' in globals() else None
         if results_dir:
@@ -13771,6 +13786,22 @@ window.__CONFIG__ = {ui_config_json};
         window.AppState.active_provider = pLower;
 
         // 2. Dynamically synchronize text translation skeletons
+        var updateSkeletonHtml = function(html) {
+            if (!html || html.indexOf('skeleton-loader') === -1) return html;
+            return html.replace(/(<span[^>]*class="[^"]*skeleton-loader[^"]*"[^>]*>)([\s\S]*?)(<\/span>)/gi, function(match, openTag, innerText, closeTag) {
+                var newOpenTag = openTag;
+                if (newOpenTag.indexOf('title=') !== -1) {
+                    newOpenTag = newOpenTag.replace(/title="[^"]*"/i, 'title="' + escapeHtml(label) + '"');
+                } else {
+                    newOpenTag = newOpenTag.replace(/<span/i, '<span title="' + escapeHtml(label) + '"');
+                }
+                if (newOpenTag.indexOf('data-tooltip=') !== -1) {
+                    newOpenTag = newOpenTag.replace(/data-tooltip="[^"]*"/i, 'data-tooltip="' + escapeHtml(capProv) + '"');
+                }
+                return newOpenTag + escapeHtml(label) + closeTag;
+            });
+        };
+
         if (isText) {
             var tc = document.getElementById('translation-container');
             if (tc) {
@@ -13798,8 +13829,7 @@ window.__CONFIG__ = {ui_config_json};
                 if (cards && cards.length > 0) {
                     for (var c = 0; c < cards.length; c++) {
                         if (cards[c].translated_text && cards[c].translated_text.indexOf('skeleton-loader') !== -1) {
-                            cards[c].translated_text = cards[c].translated_text.replace(/>[^<]*\.\.\.<\/span>/g, '>' + escapeHtml(label) + '</span>')
-                                                                             .replace(/title="[^"]*"/g, 'title="' + escapeHtml(label) + '"');
+                            cards[c].translated_text = updateSkeletonHtml(cards[c].translated_text);
                         }
                     }
                 }
@@ -13823,8 +13853,7 @@ window.__CONFIG__ = {ui_config_json};
                             for (var wi = 0; wi < wCards[wc].words.length; wi++) {
                                 var wordObj = wCards[wc].words[wi];
                                 if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1) {
-                                    wordObj.translation = wordObj.translation.replace(/>[^<]*\.\.\.<\/span>/g, '>' + escapeHtml(label) + '</span>')
-                                                                             .replace(/title="[^"]*"/g, 'title="' + escapeHtml(label) + '"');
+                                    wordObj.translation = updateSkeletonHtml(wordObj.translation);
                                     wordObj.row_html = null;
                                 }
                             }
