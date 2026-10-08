@@ -15365,8 +15365,105 @@ window.__CONFIG__ = {ui_config_json};
         }
         window.countPendingSkeletons = countPendingSkeletons;
 
+        function normalizeCardSkeletons(mode) {
+            var cards = getCardModels();
+            if (cards && cards.length > 0) {
+                for (var c = 0; c < cards.length; c++) {
+                    var card = cards[c];
+                    if (card.words && card.words.length > 0) {
+                        for (var w = 0; w < card.words.length; w++) {
+                            var word = card.words[w];
+                            var hasTransSkel = word.translation && (word.translation.indexOf('skeleton-loader') !== -1 || word.translation.indexOf('data-pending') !== -1);
+                            var hasRowSkel = word.row_html && (word.row_html.indexOf('skeleton-loader') !== -1 || word.row_html.indexOf('data-pending') !== -1);
+                            if (hasTransSkel || hasRowSkel) {
+                                word.row_html = null;
+                                var rIdStr = String(word.row_id !== undefined && word.row_id !== null ? word.row_id : '');
+                                var tOrdStr = String(word.token_order !== undefined && word.token_order !== null ? word.token_order : rIdStr);
+                                var appRow = (window.AppState && window.AppState.rows) ? ((tOrdStr && window.AppState.rows[tOrdStr]) || (rIdStr && window.AppState.rows[rIdStr])) : null;
+                                var resolvedTrans = appRow ? (appRow.trans !== undefined && appRow.trans !== "" ? appRow.trans : (appRow.WordDestination !== undefined && appRow.WordDestination !== "" ? appRow.WordDestination : (appRow.word_translation || ''))) : '';
+                                if (resolvedTrans && resolvedTrans.indexOf('skeleton-loader') === -1 && resolvedTrans !== '[FAILED]') {
+                                    word.translation = resolvedTrans;
+                                    if (appRow.lemma) word.lemma = appRow.lemma;
+                                    if (appRow.ipa) word.ipa = appRow.ipa;
+                                    var updatedMorph = (appRow.morphology !== undefined && appRow.morphology !== "") ? appRow.morphology : ((appRow.morph !== undefined && appRow.morph !== "") ? appRow.morph : appRow.WordSourceMorphologyAI);
+                                    if (updatedMorph) word.morphology = updatedMorph;
+                                    if (appRow.pos !== undefined) word.pos = appRow.pos;
+                                    else if (appRow.WordSourcePOS !== undefined) word.pos = appRow.WordSourcePOS;
+                                    if (appRow.gender !== undefined) word.gender = appRow.gender;
+                                    else if (appRow.WordSourceGender !== undefined) word.gender = appRow.WordSourceGender;
+                                    if (appRow.provenance) word.provenance = appRow.provenance;
+                                } else if (hasTransSkel) {
+                                    word.translation = '';
+                                }
+                            }
+                        }
+                    }
+                    if (card.translated_text && (card.translated_text.indexOf('skeleton-loader') !== -1 || card.translated_text.indexOf('data-pending') !== -1)) {
+                        card.translated_text = '';
+                    }
+                }
+            }
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.rebindActiveTab === 'function') {
+                window.WorkspaceTabs.rebindActiveTab();
+            }
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.updateActiveTabTranslation === 'function') {
+                window.WorkspaceTabs.updateActiveTabTranslation();
+            }
+        }
+        window.normalizeCardSkeletons = normalizeCardSkeletons;
+
+        var _lastEnsureRestartTime = 0;
+        var _ensureDebounceTimer = null;
+        function ensureWatchdogActive(reason) {
+            var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
+            var sessZidEl = document.getElementById('session-zid');
+            var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
+            if (!curZid) {
+                var params = new URLSearchParams(window.location.search);
+                curZid = params.get('session_zid') || params.get('zid') || "";
+            }
+            if (!curZid && document.body && document.body.getAttribute('data-zid')) {
+                curZid = document.body.getAttribute('data-zid');
+            }
+            if (!isWebMode || !curZid) return;
+
+            var isRunning = !!(window._kwSkeletonPollTimer || (window._kwEvtSource && window._kwEvtSource.readyState !== 2));
+            if (isRunning && !window._kwWatchdogResolved) {
+                if (_ensureDebounceTimer) clearTimeout(_ensureDebounceTimer);
+                _ensureDebounceTimer = setTimeout(function() {
+                    _ensureDebounceTimer = null;
+                    if (typeof window._kwPollSessionStatus === 'function') {
+                        window._kwPollSessionStatus();
+                    }
+                }, 150);
+                return;
+            }
+
+            var pending = (typeof window.countPendingSkeletons === 'function') ? window.countPendingSkeletons() : 0;
+            if (pending === 0) return;
+
+            var isFinished = !!(window.AppState && (window.AppState.isFinished === true || window.AppState.stage === 'finished' || (window.AppState.status && (window.AppState.status.isFinished === true || window.AppState.status === 'finished'))));
+            if (isFinished) {
+                if (typeof window.normalizeCardSkeletons === 'function') {
+                    window.normalizeCardSkeletons('finished');
+                }
+                return;
+            }
+
+            var now = Date.now();
+            if (now - _lastEnsureRestartTime < 5000) {
+                return;
+            }
+            _lastEnsureRestartTime = now;
+            if (typeof window.initWatchdog === 'function') {
+                window.initWatchdog();
+            }
+        }
+        window.ensureWatchdogActive = ensureWatchdogActive;
+
         // Progressive Skeleton Auto-Resolution Hook (SSE + Short-interval Watchdog Polling + 30s Safety Timeout)
         function initWatchdog() {
+            window._kwWatchdogResolved = false;
             if (window._kwSkeletonPollTimer) {
                 clearInterval(window._kwSkeletonPollTimer);
                 window._kwSkeletonPollTimer = null;
@@ -15484,21 +15581,24 @@ window.__CONFIG__ = {ui_config_json};
                             el.classList.remove("skeleton-loader");
                             el.removeAttribute("data-pending");
                         }
-                        if (typeof window.showToast === 'function') {
-                            window.showToast("Background loading timed out. Restored table editing.", "warning");
-                        }
-                        if (typeof fetch !== 'undefined' && curZid) {
-                            var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
-                            fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
-                                .then(function(res) { if (res.ok) return res.json(); })
-                                .then(function(resObj) {
-                                    var data = (resObj && resObj.data) ? resObj.data : resObj;
-                                    if (data && (data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
-                                        window.receiveUpdate(data);
-                                    }
-                                })
-                                .catch(function() {});
-                        }
+                    }
+                    if (typeof window.normalizeCardSkeletons === 'function') {
+                        window.normalizeCardSkeletons('timeout');
+                    }
+                    if (typeof window.showToast === 'function') {
+                        window.showToast("Background loading timed out. Restored table editing.", "warning");
+                    }
+                    if (typeof fetch !== 'undefined' && curZid) {
+                        var recoveryUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                        fetch(recoveryUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                            .then(function(res) { if (res.ok) return res.json(); })
+                            .then(function(resObj) {
+                                var data = (resObj && resObj.data) ? resObj.data : resObj;
+                                if (data && (data.rows || data.translatedText || data.translated_text || data.sentences) && window.receiveUpdate) {
+                                    window.receiveUpdate(data);
+                                }
+                            })
+                            .catch(function() {});
                     }
                 };
 
@@ -15561,6 +15661,7 @@ window.__CONFIG__ = {ui_config_json};
                                 var isDone = sData ? (sData.is_finished === true || sData.stage === 'finished' || (sData.status && (sData.status.is_finished === true || sData.status === 'finished'))) : false;
                                 if (isDone) {
                                     resolved = true;
+                                    window._kwWatchdogResolved = true;
                                     closeEvtSource();
                                     stopPolling();
                                     if (window._kwWatchdogMaxTimer) {
@@ -15569,6 +15670,9 @@ window.__CONFIG__ = {ui_config_json};
                                     }
                                     if ((sData.rows || sData.translatedText || sData.translated_text || sData.sentences) && window.receiveUpdate) {
                                         window.receiveUpdate(sData);
+                                    }
+                                    if (typeof window.normalizeCardSkeletons === 'function') {
+                                        window.normalizeCardSkeletons('finished');
                                     }
                                     if (window.onSessionReload) {
                                         window.onSessionReload();
@@ -15679,12 +15783,16 @@ window.__CONFIG__ = {ui_config_json};
                                 var isDone = (data.is_finished === true || data.stage === 'finished' || (data.status && (data.status.is_finished === true || data.status === 'finished' || data.status.stage === 'finished')));
                                 if (isDone || remaining === 0) {
                                     resolved = true;
+                                    window._kwWatchdogResolved = true;
                                     if (window._kwWatchdogMaxTimer) {
                                         clearTimeout(window._kwWatchdogMaxTimer);
                                         window._kwWatchdogMaxTimer = null;
                                     }
                                     closeEvtSource();
                                     stopPolling();
+                                    if (isDone && typeof window.normalizeCardSkeletons === 'function') {
+                                        window.normalizeCardSkeletons('finished');
+                                    }
                                     if (window.onSessionReload) {
                                         window.onSessionReload();
                                     }
@@ -15751,7 +15859,7 @@ window.__CONFIG__ = {ui_config_json};
                 }
 
                 // Visibility-aware listener: pause polling & watchdog timer when hidden, resume & probe on tab activation
-                document.addEventListener('visibilitychange', function() {
+                var onVisibilityChange = function() {
                     if (document.hidden) {
                         pauseWatchdogTimer();
                         stopPolling();
@@ -15763,7 +15871,17 @@ window.__CONFIG__ = {ui_config_json};
                             pollSessionStatus();
                         }
                     }
-                });
+                };
+                window._kwWatchdogOnVisibility = onVisibilityChange;
+
+                if (!window._kwVisibilityListenerAttached) {
+                    window._kwVisibilityListenerAttached = true;
+                    document.addEventListener('visibilitychange', function() {
+                        if (typeof window._kwWatchdogOnVisibility === 'function') {
+                            window._kwWatchdogOnVisibility();
+                        }
+                    });
+                }
 
                 // Start concurrent watchdog polling if visible
                 if (!document.hidden) {
@@ -15834,12 +15952,16 @@ window.__CONFIG__ = {ui_config_json};
                                     var isDone = (parsed.is_finished === true || parsed.stage === 'finished' || (parsed.status && (parsed.status.is_finished === true || parsed.status === 'finished' || parsed.status.stage === 'finished')));
                                     if (isDone || remaining === 0) {
                                         resolved = true;
+                                        window._kwWatchdogResolved = true;
                                         if (window._kwWatchdogMaxTimer) {
                                             clearTimeout(window._kwWatchdogMaxTimer);
                                             window._kwWatchdogMaxTimer = null;
                                         }
                                         closeEvtSource();
                                         stopPolling();
+                                        if (isDone && typeof window.normalizeCardSkeletons === 'function') {
+                                            window.normalizeCardSkeletons('finished');
+                                        }
                                         if (window.onSessionReload) {
                                             window.onSessionReload();
                                         }
