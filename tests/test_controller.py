@@ -296,6 +296,81 @@ def test_controller_sse_stream_dynamic_skeleton_provider_labels(running_controll
     assert received_events[3]["provider"] == "google"
 
 
+def test_controller_session_status_and_sse_provider_failover(running_controller):
+    server_url, server = running_controller
+    test_zid = "20261008200009"
+
+    # Pre-register session in arbiter
+    with server.arbiter._lock:
+        server.arbiter.sessions[test_zid] = {
+            "session_zid": test_zid,
+            "language": "de",
+            "target_lang": "ru",
+            "text": "Das Haus ist gross.",
+            "tsv_path": "dummy.tsv",
+            "comments": [],
+            "headers": ["WordSource", "WordDestination"],
+            "data_rows": [["Haus", ""]],
+            "sentence_translation": "",
+            "active_text_provider": "google",
+            "active_lemma_provider": "google",
+            "active_provider": "google",
+            "fingerprint": "fp123",
+            "lock": threading.Lock(),
+            "created_at": time.time(),
+        }
+
+    received_lines = []
+    sse_connected = threading.Event()
+    stop_listener = threading.Event()
+
+    def sse_listener():
+        import http.client
+        import urllib.parse
+        parsed = urllib.parse.urlparse(server_url)
+        conn = http.client.HTTPConnection(parsed.hostname, parsed.port, timeout=5.0)
+        conn.request("GET", f"/events?zid={test_zid}")
+        resp = conn.getresponse()
+        sse_connected.set()
+
+        while not stop_listener.is_set():
+            line = resp.fp.readline().decode('utf-8')
+            if not line:
+                break
+            line = line.strip()
+            if line:
+                received_lines.append(line)
+        conn.close()
+
+    listener_thread = threading.Thread(target=sse_listener, daemon=True)
+    listener_thread.start()
+    assert sse_connected.wait(timeout=2.0)
+    time.sleep(0.1)
+
+    # 1. Trigger text failover from google to argos
+    from kardenwort_desk import notify_provider_failover
+    notify_provider_failover('text', 'google', 'argos', zid=test_zid)
+
+    # 2. Trigger lemma failover from google to argos
+    notify_provider_failover('lemma', 'google', 'argos', zid=test_zid)
+
+    time.sleep(0.3)
+    stop_listener.set()
+
+    # Query /session/status endpoint
+    url = f"{server_url}/session/status?zid={test_zid}"
+    req = urllib.request.Request(url, headers={"Accept": "application/json"})
+    with urllib.request.urlopen(req) as resp:
+        data = json.loads(resp.read().decode('utf-8'))
+
+    status_obj = data.get("data") or data.get("status") or data
+    assert status_obj.get("active_text_provider") == "argos"
+    assert status_obj.get("active_lemma_provider") == "argos"
+
+    # Verify SSE received provider_failover events
+    failover_lines = [l for l in received_lines if "provider_failover" in l or "argos" in l]
+    assert len(failover_lines) > 0
+
 
 def test_controller_session_create_and_status(running_controller):
     server_url, server = running_controller

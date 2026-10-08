@@ -5938,6 +5938,77 @@ def test_dynamic_skeleton_provider_label_update_in_dom(page):
         assert "DeepL" in (el.get_attribute("title") or "")
 
 
+def test_network_failover_provider_label_sync_preserves_populated_cells(page):
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <script id="session-zid" type="text/plain">20261008200009</script>
+  <script id="text-base-provider" type="text/plain">google</script>
+  <script id="lemma-base-provider" type="text/plain">google</script>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true" title="Google...">Google...</span>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td class="col-translation" data-col="WordDestination"><div class="scrollable-cell">Дом</div></td>
+      </tr>
+      <tr data-row-id="1">
+        <td data-col="WordSource"><div class="scrollable-cell">Baum</div></td>
+        <td class="col-translation" data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" title="Google...">Google...</span></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Pre-condition check:
+    tc_skel = page.locator("#translation-container .skeleton-loader")
+    assert tc_skel.inner_text() == "Google..."
+    assert page.locator("tr[data-row-id='0'] td.col-translation .scrollable-cell").inner_text().strip() == "Дом"
+    row1_skel = page.locator("tr[data-row-id='1'] td.col-translation .skeleton-loader")
+    assert row1_skel.inner_text() == "Google..."
+
+    # 1. Trigger text failover: updateActiveProvider('text', 'argos')
+    page.evaluate("window.updateActiveProvider('text', 'argos');")
+    assert tc_skel.inner_text() == "Argos..."
+    assert "Argos" in (tc_skel.get_attribute("title") or "")
+    # Populated table cells and row 1 remain untouched by text-only failover
+    assert page.locator("tr[data-row-id='0'] td.col-translation .scrollable-cell").inner_text().strip() == "Дом"
+    assert row1_skel.inner_text() == "Google..."
+
+    # 2. Trigger lemma failover: updateActiveProvider('lemma', 'argos')
+    page.evaluate("window.updateActiveProvider('lemma', 'argos');")
+    # Row 1 pending skeleton is now updated to Argos...
+    assert row1_skel.inner_text() == "Argos..."
+    assert "Argos" in (row1_skel.get_attribute("title") or "")
+    # Already populated row 0 "Дом" is STRICTLY preserved and NEVER erased
+    assert page.locator("tr[data-row-id='0'] td.col-translation .scrollable-cell").inner_text().strip() == "Дом"
+
+    # 3. Text base provider script element is synchronized
+    text_prov = page.evaluate("document.getElementById('text-base-provider').textContent")
+    assert text_prov == "argos"
+
+    # 4. When real translation arrives, skeleton is replaced cleanly
+    page.evaluate("""() => {
+        window.receiveUpdate({
+            stage: 'translated_text',
+            translated_text: 'Дом большой.'
+        });
+    }""")
+    assert page.locator("#translation-container").inner_text().strip() == "Дом большой."
+    assert page.locator("#translation-container .skeleton-loader").count() == 0
+    # Table cell 0 still intact
+    assert page.locator("tr[data-row-id='0'] td.col-translation .scrollable-cell").inner_text().strip() == "Дом"
+
+
+
 
 
 
