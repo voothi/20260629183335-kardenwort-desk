@@ -6573,11 +6573,13 @@ def _save_shared_cooldowns(cooldowns: Dict[str, float], config=None, resolved_pa
     except Exception:
         pass
 
-def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_COOLDOWN_SECONDS, config = None, resolved_paths = None) -> None:
+def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_COOLDOWN_SECONDS, config = None, resolved_paths = None, task_type: Optional[str] = None) -> None:
     """Record that a translation provider is in cooldown until time.time() + duration, synced across processes."""
     if not provider:
         return
     p_norm = provider.strip().lower()
+    t_norm = task_type.strip().lower() if task_type else None
+    key = f"{t_norm}:{p_norm}" if t_norm else p_norm
     eff_duration = float(duration)
     if config and config.has_section(SEC_PIPELINE):
         try:
@@ -6586,39 +6588,48 @@ def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_C
             pass
     expire_at = time.time() + eff_duration
     with _cooldown_lock:
-        _provider_cooldowns[p_norm] = expire_at
+        _provider_cooldowns[key] = expire_at
         try:
             shared = _load_shared_cooldowns(config, resolved_paths)
-            shared[p_norm] = expire_at
+            shared[key] = expire_at
             now = time.time()
             clean_shared = {k: v for k, v in shared.items() if v > now}
             _save_shared_cooldowns(clean_shared, config, resolved_paths)
         except Exception:
             pass
-    logger.warning(f"Provider '{p_norm}' placed in cooldown for {eff_duration:.1f}s due to rate limit/quota.")
+    logger.warning(f"Provider '{key}' placed in cooldown for {eff_duration:.1f}s due to rate limit/quota.")
 
-def is_provider_cooled_down(provider: str, config=None, resolved_paths=None) -> bool:
+def is_provider_cooled_down(provider: str, config=None, resolved_paths=None, task_type: Optional[str] = None) -> bool:
     """Check whether a provider is currently cooled down, checking in-memory and shared process store."""
     if not provider:
         return False
     p_norm = provider.strip().lower()
+    t_norm = task_type.strip().lower() if task_type else None
+    scoped_key = f"{t_norm}:{p_norm}" if t_norm else None
     now = time.time()
     with _cooldown_lock:
-        expire_at = _provider_cooldowns.get(p_norm)
-        if expire_at is None:
-            try:
-                shared = _load_shared_cooldowns(config, resolved_paths)
-                for k, exp in shared.items():
-                    if exp > now:
-                        _provider_cooldowns[k] = exp
-                expire_at = _provider_cooldowns.get(p_norm)
-            except Exception:
-                pass
-        if expire_at is None:
-            return False
-        if now < expire_at:
-            return True
-        del _provider_cooldowns[p_norm]
+        def _get_exp(k):
+            exp = _provider_cooldowns.get(k)
+            if exp is None:
+                try:
+                    shared = _load_shared_cooldowns(config, resolved_paths)
+                    for sk, sexp in shared.items():
+                        if sexp > now:
+                            _provider_cooldowns[sk] = sexp
+                    exp = _provider_cooldowns.get(k)
+                except Exception:
+                    pass
+            return exp
+
+        keys_to_check = [scoped_key, p_norm] if scoped_key else [p_norm]
+        for k in keys_to_check:
+            expire_at = _get_exp(k)
+            if expire_at is not None:
+                if now < expire_at:
+                    return True
+                else:
+                    if k in _provider_cooldowns:
+                        del _provider_cooldowns[k]
         return False
 
 def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
@@ -6635,30 +6646,41 @@ def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
     except Exception:
         pass
 
-def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=None) -> float:
+def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=None, task_type: Optional[str] = None) -> float:
     """Get remaining cooldown duration in seconds, or 0.0 if not cooled down."""
     if not provider:
         return 0.0
     p_norm = provider.strip().lower()
+    t_norm = task_type.strip().lower() if task_type else None
+    scoped_key = f"{t_norm}:{p_norm}" if t_norm else None
     now = time.time()
     with _cooldown_lock:
-        expire_at = _provider_cooldowns.get(p_norm)
-        if expire_at is None:
-            try:
-                shared = _load_shared_cooldowns(config, resolved_paths)
-                for k, exp in shared.items():
-                    if exp > now:
-                        _provider_cooldowns[k] = exp
-                expire_at = _provider_cooldowns.get(p_norm)
-            except Exception:
-                pass
-        if expire_at is None:
-            return 0.0
-        remaining = expire_at - now
-        if remaining > 0:
-            return remaining
-        del _provider_cooldowns[p_norm]
-        return 0.0
+        def _get_exp(k):
+            exp = _provider_cooldowns.get(k)
+            if exp is None:
+                try:
+                    shared = _load_shared_cooldowns(config, resolved_paths)
+                    for sk, sexp in shared.items():
+                        if sexp > now:
+                            _provider_cooldowns[sk] = sexp
+                    exp = _provider_cooldowns.get(k)
+                except Exception:
+                    pass
+            return exp
+
+        keys_to_check = [scoped_key, p_norm] if scoped_key else [p_norm]
+        max_remaining = 0.0
+        for k in keys_to_check:
+            expire_at = _get_exp(k)
+            if expire_at is not None:
+                remaining = expire_at - now
+                if remaining > 0:
+                    if remaining > max_remaining:
+                        max_remaining = remaining
+                else:
+                    if k in _provider_cooldowns:
+                        del _provider_cooldowns[k]
+        return max_remaining
 
 def is_rate_limit_exception(exc: Exception) -> bool:
     if exc is None:
@@ -6735,7 +6757,7 @@ def is_provider_unavailable_exception(exc: Exception) -> bool:
 
 DEFAULT_PROVIDER_FAILOVER_SECONDS = 60.0
 
-def record_provider_failover(provider: str, duration: float = DEFAULT_PROVIDER_FAILOVER_SECONDS, config=None, resolved_paths=None) -> None:
+def record_provider_failover(provider: str, duration: float = DEFAULT_PROVIDER_FAILOVER_SECONDS, config=None, resolved_paths=None, task_type: Optional[str] = None) -> None:
     """Record that a provider is temporarily unavailable due to network/timeout error."""
     eff_duration = duration
     if config and config.has_section(SEC_PIPELINE):
@@ -6743,7 +6765,7 @@ def record_provider_failover(provider: str, duration: float = DEFAULT_PROVIDER_F
             eff_duration = config.getfloat(SEC_PIPELINE, 'provider_failover_seconds', fallback=duration)
         except Exception:
             pass
-    record_provider_cooldown(provider, duration=eff_duration, config=None, resolved_paths=resolved_paths)
+    record_provider_cooldown(provider, duration=eff_duration, config=config, resolved_paths=resolved_paths, task_type=task_type)
 
 _failover_callbacks = []
 _active_session_providers = {}
@@ -6839,11 +6861,11 @@ def notify_provider_failover(task: str, from_provider: str, to_provider: str, zi
         except Exception as e:
             logger.debug(f"Error invoking global failover callback: {e}")
 
-def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None):
+def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None, task_type: Optional[str] = None):
     """Executes translation using a single explicit provider without failover branching."""
     eff_source = 'auto' if source == 'und' else source
     p_norm = (provider_name or "").strip().lower()
-    if is_provider_cooled_down(p_norm):
+    if is_provider_cooled_down(p_norm, config=config, resolved_paths=resolved_paths, task_type=task_type):
         cooldown_msg = f"Provider '{p_norm}' is currently cooled down due to rate limiting"
         raise TranslationException(
             cooldown_msg,
@@ -6873,9 +6895,9 @@ def dispatch_single_provider(provider_name: str, text: str, source: str, target:
             raise Exception(f"Unsupported translation provider: {provider_name}")
     except Exception as exc:
         if is_rate_limit_exception(exc):
-            record_provider_cooldown(p_norm, config=config)
+            record_provider_cooldown(p_norm, config=config, resolved_paths=resolved_paths, task_type=task_type)
         elif is_network_failure_exception(exc):
-            record_provider_failover(p_norm, config=config, resolved_paths=resolved_paths)
+            record_provider_failover(p_norm, config=config, resolved_paths=resolved_paths, task_type=task_type)
         raise
 
 def translate_text(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None, on_failover=None, task_type='text'):
@@ -6917,7 +6939,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             from_p = providers_to_try[0]
             for p in providers_to_try:
                 if p != 'argos':
-                    record_provider_failover(p, config=config, resolved_paths=resolved_paths)
+                    record_provider_failover(p, config=config, resolved_paths=resolved_paths, task_type=eff_task)
             notify_provider_failover(eff_task, from_p, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
             try:
                 res = run_argos_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
@@ -6931,7 +6953,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
     while idx < len(providers_to_try):
         current_provider = providers_to_try[idx]
         is_last = (idx == len(providers_to_try) - 1)
-        if is_provider_cooled_down(current_provider):
+        if is_provider_cooled_down(current_provider, config=config, resolved_paths=resolved_paths, task_type=eff_task):
             logger.warning(f"Provider '{current_provider}' is currently cooled down. Bypassing...")
             if not is_last:
                 next_cand = providers_to_try[idx + 1]
@@ -6951,7 +6973,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             continue
 
         try:
-            res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+            res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id, task_type=eff_task)
             if res is not None:
                 return ProvenanceString(res, provenance=f"live:{current_provider}")
             return res
@@ -6960,9 +6982,9 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             is_unavail = is_provider_unavailable_exception(e)
             is_net_fail = is_network_failure_exception(e)
             if is_rate_limit_exception(e):
-                record_provider_cooldown(current_provider, config=config)
+                record_provider_cooldown(current_provider, config=config, resolved_paths=resolved_paths, task_type=eff_task)
             elif is_unavail:
-                record_provider_failover(current_provider, config=config, resolved_paths=resolved_paths)
+                record_provider_failover(current_provider, config=config, resolved_paths=resolved_paths, task_type=eff_task)
 
             if strategy == 'strict':
                 logger.warning(f"Provider '{current_provider}' failed under strict strategy: {e}. Aborting failover.")
@@ -7120,9 +7142,9 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         candidates = [norm_p] + [p for p in chain if p != norm_p]
         active_provider = provider
 
-    if is_provider_cooled_down(active_provider) and strategy != 'strict':
+    if is_provider_cooled_down(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma') and strategy != 'strict':
         for cand in candidates:
-            if not is_provider_cooled_down(cand):
+            if not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                 logger.warning(f"Lemma provider '{active_provider}' is in cooldown. Switching fast-path to '{cand}'...")
                 notify_provider_failover('lemma', active_provider, cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                 active_provider = cand
@@ -7165,7 +7187,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             from_lp = active_provider
             for p in candidates:
                 if p != 'argos':
-                    record_provider_failover(p, config=config, resolved_paths=resolved_paths)
+                    record_provider_failover(p, config=config, resolved_paths=resolved_paths, task_type='lemma')
             notify_provider_failover('lemma', from_lp, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
             active_provider = 'argos'
             prov_tag = "live:argos"
@@ -7198,9 +7220,9 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     def _handle_tier_exception(tier_name, exc):
         is_unavail = is_provider_unavailable_exception(exc)
         if is_rate_limit_exception(exc):
-            record_provider_cooldown(active_provider, config=config)
+            record_provider_cooldown(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
         elif is_unavail:
-            record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths)
+            record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
 
         fallback_provider = None
         is_net = is_network_failure_exception(exc)
@@ -7208,13 +7230,13 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             if is_net and check_ips and not is_network_online_multi(hosts=check_ips):
                 # Confirmed host network failure: short-circuit directly to first offline provider in candidates
                 for cand in candidates:
-                    if cand != active_provider and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand):
+                    if cand != active_provider and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                         fallback_provider = cand
                         break
             if not fallback_provider:
                 # Sequential fallback if host is online, no offline provider available or for rate limit / api errors
                 for cand in candidates:
-                    if cand != active_provider and not is_provider_cooled_down(cand):
+                    if cand != active_provider and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                         fallback_provider = cand
                         break
 
@@ -7229,7 +7251,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         p_idx = 0
         while p_idx < len(provider_order):
             candidate = provider_order[p_idx]
-            if is_provider_cooled_down(candidate) and strategy != 'strict':
+            if is_provider_cooled_down(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma') and strategy != 'strict':
                 p_idx += 1
                 continue
             cand_prov_tag = f"live:{candidate}"
@@ -7241,9 +7263,9 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     return lemma, val_str, p
             except Exception as exc:
                 if is_rate_limit_exception(exc):
-                    record_provider_cooldown(candidate, config=config)
+                    record_provider_cooldown(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma')
                 elif is_provider_unavailable_exception(exc):
-                    record_provider_failover(candidate, config=config, resolved_paths=resolved_paths)
+                    record_provider_failover(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma')
                 logger.debug(f"Candidate provider '{candidate}' failed for lemma '{lemma}': {exc}")
                 if is_network_failure_exception(exc) and strategy == 'chain' and check_ips and not is_network_online_multi(hosts=check_ips):
                     # Short-circuit to first offline provider in provider_order only on confirmed host network failure

@@ -67,6 +67,7 @@ from kardenwort_desk import (
     record_session_active_provider,
     record_provider_failover,
     is_network_online_multi,
+    is_provider_cooled_down,
     format_translated_html,
     format_update_rows_dict,
     SessionLogger,
@@ -1754,11 +1755,23 @@ class SessionArbiter:
             if not is_network_online_multi(hosts=check_ips):
                 if text_strat == 'offline_fallback' and active_text_p != 'argos':
                     active_text_p = 'argos'
-                    record_provider_failover(main_text_provider, config=self.config, resolved_paths=self.resolved_paths)
+                    record_provider_failover(main_text_provider, config=self.config, resolved_paths=self.resolved_paths, task_type='text')
                 if lemma_strat == 'offline_fallback' and active_lemma_p != 'argos':
                     active_lemma_p = 'argos'
-                    record_provider_failover(main_lemma_provider, config=self.config, resolved_paths=self.resolved_paths)
+                    record_provider_failover(main_lemma_provider, config=self.config, resolved_paths=self.resolved_paths, task_type='lemma')
                 record_session_active_provider(session_zid, text=active_text_p, lemma=active_lemma_p, provider=active_lemma_p or active_text_p, config=self.config, resolved_paths=self.resolved_paths)
+
+        if text_strat != 'strict' and is_provider_cooled_down(active_text_p, config=self.config, resolved_paths=self.resolved_paths, task_type='text'):
+            for cand in text_chain:
+                if not is_provider_cooled_down(cand, config=self.config, resolved_paths=self.resolved_paths, task_type='text'):
+                    active_text_p = cand
+                    break
+
+        if lemma_strat != 'strict' and is_provider_cooled_down(active_lemma_p, config=self.config, resolved_paths=self.resolved_paths, task_type='lemma'):
+            for cand in lemma_chain:
+                if not is_provider_cooled_down(cand, config=self.config, resolved_paths=self.resolved_paths, task_type='lemma'):
+                    active_lemma_p = cand
+                    break
 
         if not init_text_prov and res.get("sentence_translation"):
             init_text_prov = f"live:{active_text_p}"
