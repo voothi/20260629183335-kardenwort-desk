@@ -15872,7 +15872,11 @@ window.__CONFIG__ = {ui_config_json};
                         var remaining = countPendingSkeletons();
                         if (remaining > 0 && !resolved) {
                             startWatchdogPolling();
-                            pollSessionStatus();
+                            if (typeof window._kwPollSessionStatus === 'function') {
+                                window._kwPollSessionStatus();
+                            } else {
+                                pollSessionStatus();
+                            }
                         }
                     }
                 };
