@@ -154,3 +154,55 @@ def test_connect_timeout_does_not_abort_slow_computation():
     finally:
         server.shutdown()
         server.server_close()
+
+
+def test_microservice_session_transparent_reconnect_on_dropped_socket():
+    import kardenwort_desk
+    kardenwort_desk._MICROSERVICE_HTTP_SESSION = None
+
+    server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    server_sock.bind(('127.0.0.1', 0))
+    port = server_sock.getsockname()[1]
+    server_sock.listen(5)
+
+    def srv():
+        # Attempt 0: check_endpoint_reachable probe
+        conn, _ = server_sock.accept()
+        conn.close()
+
+        # Attempt 1: session.post - drop connection abruptly
+        conn, _ = server_sock.accept()
+        _ = conn.recv(1024)
+        conn.close()
+
+        # Attempt 2: session.post retry - serve valid HTTP response
+        conn, _ = server_sock.accept()
+        _ = conn.recv(1024)
+        body = json.dumps({'status': 'success', 'translated_text': 'Reconnected'}).encode()
+        resp = (
+            b'HTTP/1.1 200 OK\r\n'
+            b'Content-Type: application/json\r\n'
+            b'Connection: close\r\n'
+            b'Content-Length: ' + str(len(body)).encode() + b'\r\n\r\n' + body
+        )
+        conn.sendall(resp)
+        try:
+            conn.shutdown(socket.SHUT_WR)
+        except OSError:
+            pass
+        conn.close()
+
+    server_thread = threading.Thread(target=srv, daemon=True)
+    server_thread.start()
+    time.sleep(0.05)
+
+    url = f"http://127.0.0.1:{port}"
+    try:
+        res = query_translation_server("Haus", "de", "en", server_url=url)
+        assert res is not None
+        assert res.get("status") == "success"
+        assert res.get("translated_text") == "Reconnected"
+        assert is_endpoint_available(url) is True
+    finally:
+        server_sock.close()
+

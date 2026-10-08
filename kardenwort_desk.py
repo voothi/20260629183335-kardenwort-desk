@@ -556,8 +556,20 @@ def _get_microservice_http_session():
                 try:
                     import requests
                     from requests.adapters import HTTPAdapter
+                    from urllib3.util import Retry
+                    retry_strategy = Retry(
+                        total=1,
+                        connect=1,
+                        read=1,
+                        status=0,
+                        allowed_methods=None,
+                    )
                     s = requests.Session()
-                    adapter = HTTPAdapter(pool_connections=20, pool_maxsize=20, max_retries=0)
+                    adapter = HTTPAdapter(
+                        pool_connections=20,
+                        pool_maxsize=20,
+                        max_retries=retry_strategy,
+                    )
                     s.mount("http://", adapter)
                     s.mount("https://", adapter)
                     _MICROSERVICE_HTTP_SESSION = s
