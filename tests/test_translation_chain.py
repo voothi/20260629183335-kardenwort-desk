@@ -427,21 +427,26 @@ def test_fast_connectivity_probe_timeouts_bounded():
 
 
 def test_resolve_provider_chain_canonical_precedence():
-    # Canonical text_provider_chain overrides legacy text_base_provider
+    # Legacy text_base_provider aligns chain head while preserving remaining fallback chain
     config = make_config(chain="google, deepl, argos", text_base="argos", strategy="chain")
     providers, strategy = resolve_provider_chain(config, task_type="text")
-    assert providers == ["google", "deepl", "argos"]
-    assert providers[0] == "google"
+    assert providers == ["argos", "google", "deepl"]
+    assert providers[0] == "argos"
     assert strategy == "chain"
 
-    # Canonical lemma_provider_chain overrides legacy lemma_base_provider
+    # Canonical chain without base override maintains configured order
+    config_clean = make_config(chain="google, deepl, argos", strategy="chain")
+    clean_provs, _ = resolve_provider_chain(config_clean, task_type="text")
+    assert clean_provs == ["google", "deepl", "argos"]
+
+    # Legacy lemma_base_provider aligns lemma chain head while preserving remaining fallback chain
     config_lemma = configparser.ConfigParser()
     config_lemma.add_section(SEC_PIPELINE)
     config_lemma.set(SEC_PIPELINE, "lemma_provider_chain", "deepl, argos")
     config_lemma.set(SEC_PIPELINE, "lemma_base_provider", "google")
     l_provs, _ = resolve_provider_chain(config_lemma, task_type="lemma")
-    assert l_provs == ["deepl", "argos"]
-    assert l_provs[0] == "deepl"
+    assert l_provs == ["google", "deepl", "argos"]
+    assert l_provs[0] == "google"
 
     # Explicit failover_strategy overrides legacy auto_offline_fallback
     config_strat = make_config(chain="google, argos", strategy="chain", auto_fallback=True)

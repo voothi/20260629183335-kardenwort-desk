@@ -6522,8 +6522,12 @@ def resolve_provider_chain(config, task_type: str = 'text') -> Tuple[List[str], 
             chain_str = base_override or 'google'
 
     providers = [p.strip().lower() for p in chain_str.split(',') if p.strip()] if chain_str else []
-    if not providers and base_override and base_override.strip():
-        providers = [base_override.strip().lower()]
+    if base_override and base_override.strip():
+        b_norm = base_override.strip().lower()
+        if not providers:
+            providers = [b_norm]
+        elif b_norm != providers[0]:
+            providers = [b_norm] + [p for p in providers if p != b_norm]
 
     if not providers:
         providers = ['google']
@@ -6995,9 +6999,6 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
                     notify_provider_failover(eff_task, current_provider, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                     idx = offline_target_idx
                     continue
-                else:
-                    logger.warning(f"Network failure on provider '{current_provider}' ({e}) and no offline providers remain in chain")
-                    raise e
 
             if is_last:
                 logger.warning(f"Final provider '{current_provider}' in chain failed: {e}")
@@ -7209,8 +7210,8 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     if cand != active_provider and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand):
                         fallback_provider = cand
                         break
-            else:
-                # Rate limit or other error: sequential iteration
+            if not fallback_provider:
+                # Sequential fallback if no offline provider available or for rate limit / api errors
                 for cand in candidates:
                     if cand != active_provider and not is_provider_cooled_down(cand):
                         fallback_provider = cand
@@ -7253,8 +7254,6 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     if off_idx is not None:
                         p_idx = off_idx
                         continue
-                    else:
-                        break
             p_idx += 1
         logger.warning(f"All candidate providers failed for lemma '{lemma}'")
         return lemma, "", prov_tag
