@@ -425,7 +425,8 @@ def test_cmd_server_launches_supervisor_and_serves_session_endpoints():
             assert qdata.get("status") == "success"
 
         # 3. Session status query is active (returns 404 for unknown ZID rather than unknown route)
-        status_req = urllib.request.Request(f"http://127.0.0.1:{port}/session/status?zid=99999999999999")
+        non_existent_zid = f"999999{kardenwort_desk.generate_unique_zid()[6:]}"
+        status_req = urllib.request.Request(f"http://127.0.0.1:{port}/session/status?zid={non_existent_zid}")
         with pytest.raises(urllib.error.HTTPError) as exc_info:
             urllib.request.urlopen(status_req, timeout=5.0)
         assert exc_info.value.code == 404

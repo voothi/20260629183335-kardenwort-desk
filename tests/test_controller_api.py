@@ -110,7 +110,8 @@ def test_session_status_fallback_to_persistent_storage(running_controller):
     sess_zid = kardenwort_desk.generate_unique_zid()
 
     # 1. Non-existent ZID returns 404
-    req_404 = urllib.request.Request(f"{server_url}/session/status?zid=99999999999999")
+    non_existent_zid = f"999999{kardenwort_desk.generate_unique_zid()[6:]}"
+    req_404 = urllib.request.Request(f"{server_url}/session/status?zid={non_existent_zid}")
     with pytest.raises(urllib.error.HTTPError) as exc_info:
         urllib.request.urlopen(req_404, timeout=5.0)
     assert exc_info.value.code == 404
@@ -676,9 +677,10 @@ def test_confirm_language_validation_errors(running_controller):
     assert exc_info.value.code == 400
 
     # Non-existent draft
+    non_existent_zid = f"999999{kardenwort_desk.generate_unique_zid()[6:]}"
     req = urllib.request.Request(
         f"{server_url}/api/v1/confirm-language",
-        data=json.dumps({"session_zid": "99999999999999", "action": "switch"}).encode("utf-8"),
+        data=json.dumps({"session_zid": non_existent_zid, "action": "switch"}).encode("utf-8"),
         headers={"Content-Type": "application/json"}
     )
     with pytest.raises(urllib.error.HTTPError) as exc_info:
