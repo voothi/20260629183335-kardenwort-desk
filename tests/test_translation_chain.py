@@ -394,3 +394,36 @@ def test_task_scoped_failover_state_tracking(tmp_path):
     assert sess.get("active_lemma_provider") == "argos"
 
 
+def test_standardized_provider_timeout_calculation(tmp_path):
+    config = make_config(chain="google, deepl, argos", strategy="chain")
+    config.set(SEC_PIPELINE, "provider_call_timeout", "4.0")
+    resolved_paths = {
+        "results_dir": tmp_path,
+        "base_dir": tmp_path,
+        "deep_translator_python": "python",
+        "translate_google_script": "dummy_google.py"
+    }
+
+    mock_run = MagicMock(return_value=MagicMock(returncode=0, stdout="Translated\n"))
+    with patch("subprocess.run", mock_run):
+        res = kardenwort_desk.run_google_translation("Hello", "en", "de", config, resolved_paths)
+        assert res == "Translated"
+        cmd_args = mock_run.call_args[0][0]
+        max_idx = cmd_args.index("--max-total-time")
+        assert cmd_args[max_idx + 1] == "4.0"
+        t_idx = cmd_args.index("--timeout")
+        assert cmd_args[t_idx + 1] == "3.0"
+        subproc_timeout = mock_run.call_args[1].get("timeout")
+        assert subproc_timeout == 6.0  # 4.0 + 2.0 buffer
+
+
+def test_fast_connectivity_probe_timeouts_bounded():
+    assert kardenwort_desk.MICROSERVICE_CONNECT_TIMEOUT_DEFAULT < 0.5
+    # verify check_endpoint_reachable caps effective timeout
+    with patch("socket.create_connection") as mock_conn:
+        kardenwort_desk.check_endpoint_reachable("http://127.0.0.1:8080", connect_timeout=5.0)
+        assert mock_conn.called
+        assert mock_conn.call_args[1].get("timeout") <= 0.4
+
+
+

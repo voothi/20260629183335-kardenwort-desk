@@ -526,15 +526,16 @@ def record_endpoint_success(server_url: str) -> None:
 
 def check_endpoint_reachable(server_url: str, connect_timeout: float = MICROSERVICE_CONNECT_TIMEOUT_DEFAULT) -> bool:
     """
-    Fast-probes TCP connectivity to the endpoint host:port within connect_timeout (<= 200ms).
+    Fast-probes TCP connectivity to the endpoint host:port within connect_timeout (<= 200ms, bounded < 0.5s).
     """
     if not server_url:
         return False
+    effective_timeout = min(connect_timeout, 0.4)
     parsed = urllib.parse.urlparse(server_url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     try:
-        with socket.create_connection((host, port), timeout=connect_timeout):
+        with socket.create_connection((host, port), timeout=effective_timeout):
             return True
     except Exception:
         return False
@@ -6154,7 +6155,7 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
 
     if server_url:
         deepl_key = get_deepl_key(config, resolved_paths['base_dir']) if (resolved_paths and 'base_dir' in resolved_paths and 'get_deepl_key' in globals()) else None
-        server_timeout = max(call_timeout + 3.0, 7.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
+        server_timeout = (call_timeout + 2.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
         resp = query_translation_server(
             text, source, target, provider="google", server_url=server_url, zid=zid, trace_id=trace_id,
             deepl_api_key=deepl_key, timeout=server_timeout, chain=chain, strategy=strategy
@@ -6194,7 +6195,7 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
     call_timeout = config.getfloat(SEC_PIPELINE, 'provider_call_timeout', fallback=default_call_timeout) if config else default_call_timeout
     if call_timeout and call_timeout > 0:
         cmd.extend(["--max-total-time", str(call_timeout), "--timeout", str(max(1.0, call_timeout - 1.0))])
-        subproc_timeout = max(call_timeout + 3.0, 7.0)
+        subproc_timeout = call_timeout + 2.0
     else:
         subproc_timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
 
@@ -6279,7 +6280,7 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
     call_timeout = config.getfloat(SEC_PIPELINE, 'provider_call_timeout', fallback=default_call_timeout) if config else default_call_timeout
 
     if server_url:
-        server_timeout = max(call_timeout + 3.0, 7.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
+        server_timeout = (call_timeout + 2.0) if is_chained else (config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60)
         resp = query_translation_server(
             text, source, target, provider="deepl", server_url=server_url, zid=zid, trace_id=trace_id,
             deepl_api_key=deepl_key, timeout=server_timeout, chain=chain, strategy=strategy
@@ -6320,7 +6321,7 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
     call_timeout = config.getfloat(SEC_PIPELINE, 'provider_call_timeout', fallback=default_call_timeout) if config else default_call_timeout
     if call_timeout and call_timeout > 0:
         cmd.extend(["--max-total-time", str(call_timeout), "--timeout", str(max(1.0, call_timeout - 1.0))])
-        subproc_timeout = max(call_timeout + 3.0, 7.0)
+        subproc_timeout = call_timeout + 2.0
     else:
         subproc_timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
     
@@ -6466,9 +6467,10 @@ def run_argos_translation(text, source, target, config, resolved_paths, zid=None
             sess_logger.error(f"[{err_envelope['code']}] {err_envelope['message']}")
         raise TranslationException(err_envelope["message"], envelope=err_envelope)
 
-def is_network_online_multi(hosts, port=53, timeout=1.0):
+def is_network_online_multi(hosts, port=53, timeout=0.3):
     if not hosts:
         return True
+    timeout = min(timeout, 0.4)
         
     def check_host(host):
         try:
