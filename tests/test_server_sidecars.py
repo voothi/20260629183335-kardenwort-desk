@@ -299,6 +299,33 @@ def test_supervisor_translation_cli_args_parsing():
     assert "--auto-failover" in cmd
 
 
+def test_supervisor_translation_cli_args_argos_warmup_and_concurrency():
+    config = configparser.ConfigParser()
+    config.add_section("services")
+    config.set("services", "translation_server_url", "http://127.0.0.1:8082")
+    config.add_section("translation")
+    config.set("translation", "warmup_argos", "true")
+    config.set("translation", "argos_concurrency", "4")
+
+    sup = ProcessSupervisor(config, {}, enabled=False)
+    cmd = sup.services["translation"].launch_cmd
+    assert "--warmup-argos" in cmd
+    assert "--argos-concurrency" in cmd
+    assert cmd[cmd.index("--argos-concurrency") + 1] == "4"
+
+    # Test opt-out with warmup_argos = false
+    config_nowarm = configparser.ConfigParser()
+    config_nowarm.add_section("services")
+    config_nowarm.set("services", "translation_server_url", "http://127.0.0.1:8082")
+    config_nowarm.add_section("translation")
+    config_nowarm.set("translation", "warmup_argos", "false")
+
+    sup_nowarm = ProcessSupervisor(config_nowarm, {}, enabled=False)
+    cmd_nowarm = sup_nowarm.services["translation"].launch_cmd
+    assert "--no-warmup-argos" in cmd_nowarm
+    assert "--warmup-argos" not in cmd_nowarm
+
+
 def test_simulated_swarm_concurrent_translation_requests():
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent / "20241122093311-deep-translator"))
     import translate_server

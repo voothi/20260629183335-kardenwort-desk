@@ -372,16 +372,18 @@ class ProcessSupervisor:
 
             try:
                 if hasattr(self.config, 'getboolean'):
-                    warmup_argos = self.config.getboolean(SEC_TRANSLATION, 'warmup_argos', fallback=False)
+                    warmup_argos = self.config.getboolean(SEC_TRANSLATION, 'warmup_argos', fallback=True)
                 else:
-                    warmup_argos = False
+                    warmup_argos = True
                 if warmup_argos:
                     trans_cmd.append("--warmup-argos")
+                else:
+                    trans_cmd.append("--no-warmup-argos")
             except Exception:
                 pass
 
             try:
-                argos_conc = self.config.get(SEC_TRANSLATION, 'argos_concurrency', fallback=None)
+                argos_conc = self.config.get(SEC_TRANSLATION, 'argos_concurrency', fallback='2')
                 if argos_conc is not None and str(argos_conc).strip():
                     trans_cmd.extend(["--argos-concurrency", str(argos_conc).strip()])
             except Exception:
