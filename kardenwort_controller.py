@@ -62,6 +62,9 @@ from kardenwort_desk import (
     aggregate_project_materials,
     resolve_project_deck_path,
     safe_write_update_js,
+    get_session_active_providers,
+    register_failover_callback,
+    record_session_active_provider,
     format_translated_html,
     format_update_rows_dict,
     SessionLogger,
@@ -1243,6 +1246,9 @@ class EnrichmentQueue:
                             })
 
                     new_fp = compute_content_fingerprint(data_rows)
+                    eff_tp_name = main_text_provider
+                    if active_text_prov and str(active_text_prov).startswith("live:"):
+                        eff_tp_name = str(active_text_prov)[5:].strip().lower()
                     with arbiter._lock:
                         if session_zid in arbiter.sessions:
                             arbiter.sessions[session_zid]["data_rows"] = data_rows
@@ -1251,16 +1257,20 @@ class EnrichmentQueue:
                             arbiter.sessions[session_zid]["sentences"] = sentences_list
                             arbiter.sessions[session_zid]["text_provenance"] = active_text_prov
                             arbiter.sessions[session_zid]["textProvenance"] = active_text_prov
+                            arbiter.sessions[session_zid]["active_text_provider"] = eff_tp_name
+                            arbiter.sessions[session_zid]["active_provider"] = eff_tp_name
 
                     translated_html = format_translated_html(sentence_translations_raw, text_mode=text_mode, text=text, config=self.config)
                     sorted_rows = sort_session_data_rows(data_rows, headers, sess_lang, self.config, self.resolved_paths, role_fields=role_fields)
                     structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=session_zid, trace_id=eff_trace_id, translated_text=translated_html, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov, sentences=sentences_list, provider=eff_tp_name)
                     arbiter.emit_event(session_zid, {
                         "type": "update",
                         "stage": "translated_text",
                         "status": "success",
-                        "provider": main_text_provider,
+                        "provider": eff_tp_name,
+                        "active_text_provider": eff_tp_name,
+                        "active_provider": eff_tp_name,
                         "text_translation_status": "success",
                         "textTranslationStatus": "success",
                         "text_translation_failed": False,
@@ -1365,6 +1375,7 @@ class EnrichmentQueue:
                             config=self.config,
                             resolved_paths=self.resolved_paths,
                             provider=lemma_provider,
+                            zid=session_zid,
                         )
                         if chunk_trans:
                             chunk_prov = getattr(chunk_trans, 'provenance', None)
@@ -1373,11 +1384,17 @@ class EnrichmentQueue:
                                 prov_cand = chunk_prov.split(':', 1)[1] if ':' in chunk_prov else chunk_prov
                                 if prov_cand and prov_cand != lemma_provider:
                                     lemma_provider = prov_cand
+                                    with arbiter._lock:
+                                        if session_zid in arbiter.sessions:
+                                            arbiter.sessions[session_zid]["active_lemma_provider"] = lemma_provider
+                                            arbiter.sessions[session_zid]["active_provider"] = lemma_provider
                                     arbiter.emit_event(session_zid, {
                                         "type": "stage",
                                         "stage": "lemma_translation",
                                         "status": "in_progress",
                                         "provider": lemma_provider,
+                                        "active_lemma_provider": lemma_provider,
+                                        "active_provider": lemma_provider,
                                     })
                             translated_map.update(chunk_trans)
 
@@ -1584,6 +1601,40 @@ class SessionArbiter:
         self.subscribers: Dict[str, List[queue.Queue]] = {}
         self._lock = threading.Lock()
         self.enrichment_queue = EnrichmentQueue(config, resolved_paths)
+        try:
+            register_failover_callback(self._on_global_failover)
+        except Exception:
+            pass
+
+    def _on_global_failover(self, task: str, from_p: str, to_p: str, zid: Optional[str] = None):
+        if zid:
+            self.notify_provider_failover(zid, task, from_p, to_p)
+
+    def notify_provider_failover(self, session_zid: str, task: str, from_provider: str, to_provider: str):
+        from_p = (from_provider or "").strip().lower()
+        to_p = (to_provider or "").strip().lower()
+        with self._lock:
+            sess = self.sessions.get(session_zid)
+            if sess is not None:
+                if task == 'text':
+                    sess['active_text_provider'] = to_p
+                elif task == 'lemma':
+                    sess['active_lemma_provider'] = to_p
+                sess['active_provider'] = to_p
+
+        event = {
+            "type": "provider_failover",
+            "task": task,
+            "from": from_p,
+            "to": to_p,
+            "provider": to_p,
+            "active_provider": to_p,
+        }
+        if task == 'text':
+            event['active_text_provider'] = to_p
+        elif task == 'lemma':
+            event['active_lemma_provider'] = to_p
+        self.emit_event(session_zid, event)
 
     def register_subscriber(self, session_zid: str) -> queue.Queue:
         q = queue.Queue(maxsize=1000)
@@ -3418,9 +3469,33 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 safe_sess["session_zid"] = zid
                 safe_sess["is_finished"] = not is_busy
                 safe_sess["stage"] = "translating" if is_busy else "finished"
+
+                stored_provs = get_session_active_providers(zid, config=self.server.config, resolved_paths=self.server.resolved_paths) if 'get_session_active_providers' in globals() else {}
+                active_text_p = safe_sess.get("active_text_provider") or stored_provs.get("active_text_provider")
+                active_lemma_p = safe_sess.get("active_lemma_provider") or stored_provs.get("active_lemma_provider")
+                active_p = safe_sess.get("active_provider") or stored_provs.get("active_provider")
+
+                if not active_text_p:
+                    tp = safe_sess.get("text_provenance") or safe_sess.get("textProvenance")
+                    if tp and str(tp).startswith("live:"):
+                        active_text_p = str(tp)[5:].strip().lower()
+                if not active_lemma_p:
+                    for rp in sess_row_provs.values():
+                        if rp and str(rp).startswith("live:"):
+                            active_lemma_p = str(rp)[5:].strip().lower()
+                            break
+                if not active_p:
+                    active_p = active_lemma_p or active_text_p
+
+                safe_sess["active_text_provider"] = active_text_p
+                safe_sess["active_lemma_provider"] = active_lemma_p
+                safe_sess["active_provider"] = active_p
                 safe_sess["status"] = {
                     "is_finished": not is_busy,
-                    "stage": "translating" if is_busy else "finished"
+                    "stage": "translating" if is_busy else "finished",
+                    "active_provider": active_p,
+                    "active_text_provider": active_text_p,
+                    "active_lemma_provider": active_lemma_p,
                 }
 
                 if "sentences" not in safe_sess or not safe_sess["sentences"]:
@@ -3631,15 +3706,36 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 except Exception:
                     pass
 
+            stored_provs = get_session_active_providers(zid, config=self.server.config, resolved_paths=self.server.resolved_paths) if 'get_session_active_providers' in globals() else {}
+            active_text_p = stored_provs.get("active_text_provider")
+            active_lemma_p = stored_provs.get("active_lemma_provider")
+            active_p = stored_provs.get("active_provider")
+
+            if not active_text_p and eff_text_prov and str(eff_text_prov).startswith("live:"):
+                active_text_p = str(eff_text_prov)[5:].strip().lower()
+            if not active_lemma_p:
+                for rp in fallback_row_provs.values():
+                    if rp and str(rp).startswith("live:"):
+                        active_lemma_p = str(rp)[5:].strip().lower()
+                        break
+            if not active_p:
+                active_p = active_lemma_p or active_text_p
+
             self._send_json(200, {
                 "ok": True,
                 "zid": zid,
                 "session_zid": zid,
                 "is_finished": not session_is_busy,
                 "stage": "translating" if session_is_busy else "finished",
+                "active_provider": active_p,
+                "active_text_provider": active_text_p,
+                "active_lemma_provider": active_lemma_p,
                 "status": {
                     "is_finished": not session_is_busy,
-                    "stage": "translating" if session_is_busy else "finished"
+                    "stage": "translating" if session_is_busy else "finished",
+                    "active_provider": active_p,
+                    "active_text_provider": active_text_p,
+                    "active_lemma_provider": active_lemma_p,
                 },
                 "rows": rows_dict,
                 "row_provenances": fallback_row_provs,

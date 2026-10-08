@@ -6627,6 +6627,11 @@ def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
             _save_shared_cooldowns({}, config, resolved_paths)
         except Exception:
             pass
+    try:
+        with _session_providers_lock:
+            _active_session_providers.clear()
+    except Exception:
+        pass
 
 def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=None) -> float:
     """Get remaining cooldown duration in seconds, or 0.0 if not cooled down."""
@@ -6680,6 +6685,141 @@ def is_rate_limit_exception(exc: Exception) -> bool:
 
     return False
 
+def is_network_failure_exception(exc: Exception) -> bool:
+    if exc is None:
+        return False
+    if isinstance(exc, (ConnectionError, TimeoutError, OSError)):
+        return True
+    code = getattr(exc, 'code', None)
+    envelope = getattr(exc, 'envelope', None) or {}
+    net_codes = {
+        "ERR_NETWORK_UNREACHABLE",
+        "ERR_CONNECTION_FAILED",
+        "ERR_NETWORK_ERROR",
+        "ERR_TIMEOUT",
+        "ERR_DNS_FAILED",
+        "ERR_HOST_UNREACHABLE",
+    }
+    if code in net_codes or envelope.get("code") in net_codes:
+        return True
+    msg = str(exc).lower()
+    net_terms = (
+        "network unreachable",
+        "network failure",
+        "network error",
+        "connection refused",
+        "connection error",
+        "connection reset",
+        "failed to establish a new connection",
+        "timed out",
+        "timeout",
+        "name or service not known",
+        "getaddrinfo failed",
+        "host is unreachable",
+        "temporary failure in name resolution",
+        "winerror 10060",
+        "winerror 10061",
+        "winerror 10054",
+        "winerror 10051",
+        "err_network_unreachable",
+        "network is offline",
+    )
+    return any(t in msg for t in net_terms)
+
+def is_provider_unavailable_exception(exc: Exception) -> bool:
+    return is_rate_limit_exception(exc) or is_network_failure_exception(exc)
+
+DEFAULT_PROVIDER_FAILOVER_SECONDS = 60.0
+
+def record_provider_failover(provider: str, duration: float = DEFAULT_PROVIDER_FAILOVER_SECONDS, config=None, resolved_paths=None) -> None:
+    """Record that a provider is temporarily unavailable due to network/timeout error."""
+    eff_duration = duration
+    if config and config.has_section(SEC_PIPELINE):
+        try:
+            eff_duration = config.getfloat(SEC_PIPELINE, 'provider_failover_seconds', fallback=duration)
+        except Exception:
+            pass
+    record_provider_cooldown(provider, duration=eff_duration, config=None, resolved_paths=resolved_paths)
+
+_failover_callbacks = []
+_active_session_providers = {}
+_session_providers_lock = threading.Lock()
+
+def register_failover_callback(cb) -> None:
+    with _session_providers_lock:
+        if cb not in _failover_callbacks:
+            _failover_callbacks.append(cb)
+
+def unregister_failover_callback(cb) -> None:
+    with _session_providers_lock:
+        if cb in _failover_callbacks:
+            _failover_callbacks.remove(cb)
+
+def record_session_active_provider(zid: str, task: str, provider: str, config=None, resolved_paths=None) -> None:
+    if not zid:
+        return
+    p_norm = (provider or "").strip().lower()
+    with _session_providers_lock:
+        entry = _active_session_providers.setdefault(str(zid), {})
+        if task == 'text':
+            entry['active_text_provider'] = p_norm
+        elif task == 'lemma':
+            entry['active_lemma_provider'] = p_norm
+        entry['active_provider'] = p_norm
+    try:
+        results_dir = resolve_results_dir(resolved_paths, config) if 'resolve_results_dir' in globals() else None
+        if results_dir:
+            results_dir.mkdir(parents=True, exist_ok=True)
+            meta_path = results_dir / f"{zid}.active_provider.json"
+            tmp_path = meta_path.with_suffix(f".tmp.{os.getpid()}")
+            with open(tmp_path, 'w', encoding='utf-8') as f:
+                json.dump(entry, f)
+            tmp_path.replace(meta_path)
+    except Exception:
+        pass
+
+def get_session_active_providers(zid: str, config=None, resolved_paths=None) -> Dict[str, str]:
+    if not zid:
+        return {}
+    with _session_providers_lock:
+        entry = dict(_active_session_providers.get(str(zid), {}))
+    if not entry:
+        try:
+            results_dir = resolve_results_dir(resolved_paths, config) if 'resolve_results_dir' in globals() else None
+            if results_dir:
+                meta_path = results_dir / f"{zid}.active_provider.json"
+                if meta_path.exists():
+                    with open(meta_path, 'r', encoding='utf-8') as f:
+                        data = json.load(f)
+                        if isinstance(data, dict):
+                            with _session_providers_lock:
+                                _active_session_providers[str(zid)] = data
+                            return data
+        except Exception:
+            pass
+    return entry
+
+def notify_provider_failover(task: str, from_provider: str, to_provider: str, zid: Optional[str] = None, config=None, resolved_paths=None, on_failover=None) -> None:
+    from_p = (from_provider or "").strip().lower()
+    to_p = (to_provider or "").strip().lower()
+    if from_p == to_p:
+        return
+    logger.warning(f"Translation failover [{task}]: switching provider '{from_p}' -> '{to_p}' (zid={zid})")
+    if zid:
+        record_session_active_provider(zid, task, to_p, config=config, resolved_paths=resolved_paths)
+    if callable(on_failover):
+        try:
+            on_failover(task, from_p, to_p, zid=zid)
+        except Exception as e:
+            logger.debug(f"Error invoking on_failover callback: {e}")
+    with _session_providers_lock:
+        cbs = list(_failover_callbacks)
+    for cb in cbs:
+        try:
+            cb(task, from_p, to_p, zid=zid)
+        except Exception as e:
+            logger.debug(f"Error invoking global failover callback: {e}")
+
 def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None):
     """Executes translation using a single explicit provider without failover branching."""
     eff_source = 'auto' if source == 'und' else source
@@ -6715,13 +6855,15 @@ def dispatch_single_provider(provider_name: str, text: str, source: str, target:
     except Exception as exc:
         if is_rate_limit_exception(exc):
             record_provider_cooldown(p_norm, config=config)
+        elif is_network_failure_exception(exc):
+            record_provider_failover(p_norm, config=config, resolved_paths=resolved_paths)
         raise
 
-def translate_text(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None):
+def translate_text(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None, on_failover=None):
     with TraceTimer("translate_text", zid or "unknown", config, resolved_paths):
-        return _translate_text_impl(text, source, target, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
+        return _translate_text_impl(text, source, target, config, resolved_paths, provider, zid=zid, trace_id=trace_id, on_failover=on_failover)
 
-def _translate_text_impl(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None):
+def _translate_text_impl(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None, on_failover=None):
     eff_source = 'auto' if source == 'und' else source
     configured_chain, configured_strategy = resolve_provider_chain(config, task_type='text')
     
@@ -6752,6 +6894,11 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
     if strategy == 'offline_fallback' and check_ips and providers_to_try[0] != 'argos':
         if not is_network_online_multi(hosts=check_ips):
             logger.warning(f"Fast connectivity check to {check_ips} failed. Bypassing online providers and going straight to Argos.")
+            from_p = providers_to_try[0]
+            for p in providers_to_try:
+                if p != 'argos':
+                    record_provider_failover(p, config=config, resolved_paths=resolved_paths)
+            notify_provider_failover('text', from_p, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
             try:
                 res = run_argos_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
                 return ProvenanceString(res, provenance="live:argos") if res is not None else res
@@ -6764,6 +6911,9 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
         is_last = (idx == len(providers_to_try) - 1)
         if is_provider_cooled_down(current_provider):
             logger.warning(f"Provider '{current_provider}' is currently cooled down. Bypassing...")
+            if not is_last:
+                next_cand = providers_to_try[idx + 1]
+                notify_provider_failover('text', current_provider, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
             if is_last:
                 if last_exception:
                     raise last_exception
@@ -6784,8 +6934,11 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             return res
         except Exception as e:
             last_exception = e
+            is_unavail = is_provider_unavailable_exception(e)
             if is_rate_limit_exception(e):
                 record_provider_cooldown(current_provider, config=config)
+            elif is_unavail:
+                record_provider_failover(current_provider, config=config, resolved_paths=resolved_paths)
 
             if strategy == 'strict':
                 logger.warning(f"Provider '{current_provider}' failed under strict strategy: {e}. Aborting failover.")
@@ -6793,11 +6946,9 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             
             if strategy == 'offline_fallback':
                 if current_provider != 'argos' and 'argos' in providers_to_try:
-                    if is_rate_limit_exception(e):
-                        logger.warning(f"Primary provider '{current_provider}' rate-limited: {e}. Falling back to Argos...")
-                        continue
-                    if check_ips and not is_network_online_multi(hosts=check_ips):
-                        logger.warning(f"Primary provider '{current_provider}' failed: {e}. Network offline. Falling back to Argos...")
+                    if is_rate_limit_exception(e) or is_unavail or (check_ips and not is_network_online_multi(hosts=check_ips)):
+                        logger.warning(f"Primary provider '{current_provider}' failed: {e}. Falling back to Argos...")
+                        notify_provider_failover('text', current_provider, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                         continue
                     else:
                         logger.warning(f"Primary provider '{current_provider}' failed: {e}. Network is online. Raising exception...")
@@ -6810,7 +6961,9 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             if is_last:
                 logger.warning(f"Final provider '{current_provider}' in chain failed: {e}")
                 raise e
-            logger.warning(f"Provider '{current_provider}' failed ({e}), falling back to next provider '{providers_to_try[idx+1]}'...")
+            next_cand = providers_to_try[idx + 1]
+            logger.warning(f"Provider '{current_provider}' failed ({e}), falling back to next provider '{next_cand}'...")
+            notify_provider_failover('text', current_provider, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
 
     if last_exception:
         raise last_exception
@@ -6904,7 +7057,7 @@ def _parse_numbered_response(response_text, n):
     return None
 
 
-def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider):
+def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider, zid=None, on_failover=None, **kwargs):
     """
     Translate a list of lemmas using a multi-tier batch strategy.
 
@@ -6928,6 +7081,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         for cand in candidates:
             if not is_provider_cooled_down(cand):
                 logger.warning(f"Lemma provider '{active_provider}' is in cooldown. Switching fast-path to '{cand}'...")
+                notify_provider_failover('lemma', active_provider, cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                 active_provider = cand
                 break
 
@@ -6949,9 +7103,13 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         chunks = [lemmas[i:i + batch_size] for i in range(0, len(lemmas), batch_size)]
         chunk_prov = prov_tag
         for chunk in chunks:
-            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider)
+            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, **kwargs)
             if hasattr(chunk_result, 'provenance') and chunk_result.provenance:
                 chunk_prov = chunk_result.provenance
+                if str(chunk_prov).startswith("live:"):
+                    cand_p = str(chunk_prov)[5:].strip().lower()
+                    if cand_p and cand_p != active_provider:
+                        active_provider = cand_p
             translations.update(chunk_result)
         return ProvenanceDict(translations, provenance=chunk_prov)
 
@@ -6960,13 +7118,25 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     else:
         provider_order = [active_provider] + [p for p in candidates if p != active_provider]
 
+    def _call_translate_text(text_val, p_name):
+        kwargs_call = {"provider": p_name, "zid": zid}
+        if on_failover is not None:
+            kwargs_call["on_failover"] = on_failover
+        try:
+            return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
+        except TypeError as te:
+            if "on_failover" in str(te):
+                kwargs_call.pop("on_failover", None)
+                return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
+            raise
+
     def _translate_single(lemma):
         for candidate in provider_order:
             if is_provider_cooled_down(candidate) and strategy != 'strict':
                 continue
             cand_prov_tag = f"live:{candidate}"
             try:
-                val = translate_text(lemma, source, target, config, resolved_paths, provider=candidate)
+                val = _call_translate_text(lemma, candidate)
                 p = getattr(val, 'provenance', cand_prov_tag)
                 val_str = (str(val) if val is not None else "").strip()
                 if val_str:
@@ -6974,6 +7144,8 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             except Exception as exc:
                 if is_rate_limit_exception(exc):
                     record_provider_cooldown(candidate, config=config)
+                elif is_provider_unavailable_exception(exc):
+                    record_provider_failover(candidate, config=config, resolved_paths=resolved_paths)
                 logger.debug(f"Candidate provider '{candidate}' failed for lemma '{lemma}': {exc}")
         logger.warning(f"All candidate providers failed for lemma '{lemma}'")
         return lemma, "", prov_tag
@@ -6984,7 +7156,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     # --- Tier 0: Semicolon join (fastest, works for providers that preserve punctuation) ---
     try:
         semicolon_input = "; ".join(lemmas)
-        translated_sc = translate_text(semicolon_input, source, target, config, resolved_paths, active_provider)
+        translated_sc = _call_translate_text(semicolon_input, active_provider)
         sc_parts = [p.strip() for p in translated_sc.split(';') if p.strip()]
         if len(sc_parts) != n:
             # Try secondary delimiters from the semicolon response before giving up on Tier 0
@@ -7006,8 +7178,13 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             logger.debug(f"Fast-path semicolon alignment failed ({n} lemmas), trying numbered prefix.")
     except Exception as e:
         logger.warning(f"Fast-path semicolon batch failed: {e}")
+        is_unavail = is_provider_unavailable_exception(e)
         if is_rate_limit_exception(e):
             record_provider_cooldown(active_provider, config=config)
+        elif is_unavail:
+            record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths)
+
+        if is_rate_limit_exception(e) or is_unavail:
             fallback_provider = None
             if strategy != 'strict':
                 for cand in candidates:
@@ -7015,13 +7192,14 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                         fallback_provider = cand
                         break
             if fallback_provider:
-                logger.warning(f"Fast-path Tier 0 rate-limited for '{active_provider}'. Short-circuiting directly to fallback provider '{fallback_provider}'...")
-                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider)
+                logger.warning(f"Fast-path Tier 0 failed for '{active_provider}'. Short-circuiting directly to fallback provider '{fallback_provider}'...")
+                notify_provider_failover('lemma', active_provider, fallback_provider, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, **kwargs)
 
     # --- Tier 1: Numbered prefix batch (robust against Argos semicolon mutations) ---
     try:
         numbered_input = "\n".join(f"{i + 1}. {lemma}" for i, lemma in enumerate(lemmas))
-        translated_numbered = translate_text(numbered_input, source, target, config, resolved_paths, active_provider)
+        translated_numbered = _call_translate_text(numbered_input, active_provider)
         parsed = _parse_numbered_response(translated_numbered, n)
         if parsed is not None:
             # Echo guard: if every translation is identical to its source lemma, the engine echoed the input.
@@ -7041,8 +7219,13 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             logger.debug(f"Fast-path numbered alignment failed ({n} lemmas), trying newline join.")
     except Exception as e:
         logger.warning(f"Fast-path numbered batch failed: {e}")
+        is_unavail = is_provider_unavailable_exception(e)
         if is_rate_limit_exception(e):
             record_provider_cooldown(active_provider, config=config)
+        elif is_unavail:
+            record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths)
+
+        if is_rate_limit_exception(e) or is_unavail:
             fallback_provider = None
             if strategy != 'strict':
                 for cand in candidates:
@@ -7050,13 +7233,14 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                         fallback_provider = cand
                         break
             if fallback_provider:
-                logger.warning(f"Fast-path numbered tier rate-limited for '{active_provider}'. Short-circuiting to '{fallback_provider}'...")
-                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider)
+                logger.warning(f"Fast-path numbered tier failed for '{active_provider}'. Short-circuiting to '{fallback_provider}'...")
+                notify_provider_failover('lemma', active_provider, fallback_provider, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, **kwargs)
 
     # --- Tier 2: Plain newline join ---
     try:
         newline_input = "\n".join(lemmas)
-        translated_newline = translate_text(newline_input, source, target, config, resolved_paths, active_provider)
+        translated_newline = _call_translate_text(newline_input, active_provider)
         parts = [p.strip() for p in translated_newline.splitlines() if p.strip()]
         if len(parts) == n:
             # Echo guard: if every translation is identical to its source lemma, the engine echoed the input.
@@ -7076,8 +7260,13 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             logger.debug(f"Fast-path newline alignment failed (got {len(parts)} parts for {n} lemmas), falling back to concurrent individual calls.")
     except Exception as e:
         logger.warning(f"Fast-path newline batch failed: {e}")
+        is_unavail = is_provider_unavailable_exception(e)
         if is_rate_limit_exception(e):
             record_provider_cooldown(active_provider, config=config)
+        elif is_unavail:
+            record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths)
+
+        if is_rate_limit_exception(e) or is_unavail:
             fallback_provider = None
             if strategy != 'strict':
                 for cand in candidates:
@@ -7085,8 +7274,9 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                         fallback_provider = cand
                         break
             if fallback_provider:
-                logger.warning(f"Fast-path newline tier rate-limited for '{active_provider}'. Short-circuiting to '{fallback_provider}'...")
-                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider)
+                logger.warning(f"Fast-path newline tier failed for '{active_provider}'. Short-circuiting to '{fallback_provider}'...")
+                notify_provider_failover('lemma', active_provider, fallback_provider, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, **kwargs)
 
     # --- Tier 3: Concurrent individual calls (bounded pool, max 4 workers) ---
     logger.warning(f"Fast-path alignment failed for all batch strategies ({n} lemmas). Using concurrent individual calls.")
@@ -7099,6 +7289,11 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             translations[lemma] = val
             if p:
                 tier3_prov = p
+
+    if tier3_prov and str(tier3_prov).startswith("live:"):
+        cand_p = str(tier3_prov)[5:].strip().lower()
+        if cand_p and cand_p != active_provider:
+            notify_provider_failover('lemma', active_provider, cand_p, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
 
     return ProvenanceDict(translations, provenance=tier3_prov)
 
@@ -24911,6 +25106,16 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     if eff_prov_label:
         update_data["provider"] = eff_prov_label
 
+    active_tp = extra_kwargs.get("active_text_provider")
+    active_lp = extra_kwargs.get("active_lemma_provider") or provider
+    active_ap = extra_kwargs.get("active_provider") or eff_prov_label
+    if active_tp:
+        update_data["active_text_provider"] = active_tp
+    if active_lp:
+        update_data["active_lemma_provider"] = active_lp
+    if active_ap:
+        update_data["active_provider"] = active_ap
+
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
     temp_path = update_js_path.with_name(update_js_path.name + '.tmp')
@@ -25178,8 +25383,12 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
                     for chunk in chunks:
                         record_worker_heartbeat(zid, getattr(storage_adapter, 'db', None), min_interval_seconds=hb_interval)
-                        lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), target_l, config, resolved_paths, provider)
+                        lemma_translations = translate_lemmas_fast_path(chunk, getattr(args, 'language', 'en'), target_l, config, resolved_paths, provider, zid=zid)
                         fast_prov = getattr(lemma_translations, 'provenance', f"live:{provider}")
+                        if str(fast_prov).startswith("live:"):
+                            p_from_prov = str(fast_prov)[5:].strip().lower()
+                            if p_from_prov and p_from_prov != provider:
+                                provider = p_from_prov
                         
                         if is_sqlite:
                             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
@@ -25223,13 +25432,13 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                 data_rows = current_rows
                         
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances)
+                        safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances, provider=provider)
                         
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov)
+                    safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider)
             else:
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
-                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov)
+                safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider)
         else:
             lang = getattr(args, 'language', 'en')
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
