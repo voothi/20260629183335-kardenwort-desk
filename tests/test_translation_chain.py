@@ -333,3 +333,64 @@ def test_offline_fast_connectivity_probes_records_session_active_provider(tmp_pa
     assert provs.get("active_text_provider") == "argos"
 
 
+def test_orthogonal_chains_execute_independently(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="deepl, argos", lemma_chain="google, argos", strategy="chain")
+
+    text_providers, text_strat = resolve_provider_chain(config, task_type="text")
+    lemma_providers, lemma_strat = resolve_provider_chain(config, task_type="lemma")
+
+    assert text_providers == ["deepl", "argos"]
+    assert lemma_providers == ["google", "argos"]
+
+    mock_deepl = MagicMock(return_value="DeepL sentence")
+    mock_google = MagicMock(return_value="Google sentence")
+
+    with patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
+         patch("kardenwort_desk.run_google_translation", mock_google):
+        text_res = _translate_text_impl("Test sentence", "en", "de", config, resolved_paths)
+        assert text_res == "DeepL sentence"
+        mock_deepl.assert_called_once()
+        mock_google.assert_not_called()
+
+    # Fast path lemma translation queries google, not deepl
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None):
+        if provider == "google":
+            return "Apfel"
+        elif provider == "deepl":
+            raise RuntimeError("DeepL should not be invoked for lemma chain")
+        return ""
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        lemma_res = translate_lemmas_fast_path(["Apple"], "en", "de", config, resolved_paths, provider="google")
+        assert lemma_res == {"Apple": "Apfel"}
+
+
+def test_task_scoped_failover_state_tracking(tmp_path):
+    from kardenwort_controller import SessionArbiter
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, argos", lemma_chain="deepl, argos", strategy="chain")
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    test_zid = "20261008223900"
+
+    arbiter.sessions[test_zid] = {
+        "language": "de",
+        "data_rows": [],
+        "headers": [],
+        "role_fields": {},
+        "comments": [],
+    }
+
+    # Text failover must update active_text_provider independently
+    arbiter.notify_provider_failover(test_zid, task="text", from_provider="google", to_provider="argos")
+    sess = arbiter.sessions[test_zid]
+    assert sess.get("active_text_provider") == "argos"
+    assert sess.get("active_lemma_provider") is None
+
+    # Lemma failover must update active_lemma_provider independently
+    arbiter.notify_provider_failover(test_zid, task="lemma", from_provider="deepl", to_provider="argos")
+    sess = arbiter.sessions[test_zid]
+    assert sess.get("active_text_provider") == "argos"
+    assert sess.get("active_lemma_provider") == "argos"
+
+
