@@ -160,12 +160,14 @@ def test_microservice_session_transparent_reconnect_on_dropped_socket():
     import kardenwort_desk
     kardenwort_desk._MICROSERVICE_HTTP_SESSION = None
 
+    server_ready = threading.Event()
     server_sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server_sock.bind(('127.0.0.1', 0))
     port = server_sock.getsockname()[1]
     server_sock.listen(5)
 
     def srv():
+        server_ready.set()
         # Attempt 0: check_endpoint_reachable probe
         conn, _ = server_sock.accept()
         conn.close()
@@ -194,11 +196,11 @@ def test_microservice_session_transparent_reconnect_on_dropped_socket():
 
     server_thread = threading.Thread(target=srv, daemon=True)
     server_thread.start()
-    time.sleep(0.05)
+    assert server_ready.wait(timeout=2.0)
 
     url = f"http://127.0.0.1:{port}"
     try:
-        res = query_translation_server("Haus", "de", "en", server_url=url)
+        res = query_translation_server("Haus", "de", "en", server_url=url, connect_timeout=1.0)
         assert res is not None
         assert res.get("status") == "success"
         assert res.get("translated_text") == "Reconnected"
