@@ -179,6 +179,7 @@ def test_microservice_session_transparent_reconnect_on_dropped_socket():
 
         # Attempt 2: session.post retry - serve valid HTTP response
         conn, _ = server_sock.accept()
+        conn.settimeout(2.0)
         _ = conn.recv(1024)
         body = json.dumps({'status': 'success', 'translated_text': 'Reconnected'}).encode()
         resp = (
@@ -190,6 +191,8 @@ def test_microservice_session_transparent_reconnect_on_dropped_socket():
         conn.sendall(resp)
         try:
             conn.shutdown(socket.SHUT_WR)
+            while conn.recv(1024):
+                pass
         except OSError:
             pass
         conn.close()
