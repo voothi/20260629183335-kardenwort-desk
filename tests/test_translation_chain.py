@@ -454,5 +454,103 @@ def test_resolve_provider_chain_canonical_precedence():
     assert leg_provs == ["deepl"]
 
 
+def test_network_failure_fast_path_text_bypasses_intermediate_online_providers(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl, argos", strategy="chain")
+
+    mock_google = MagicMock(side_effect=ConnectionError("Network unreachable"))
+    mock_deepl = MagicMock(return_value="DeepL should not be called")
+    mock_argos = MagicMock(return_value="Argos translated sentence")
+
+    with patch("kardenwort_desk.run_google_translation", mock_google), \
+         patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
+         patch("kardenwort_desk.run_argos_translation", mock_argos):
+        res = _translate_text_impl("Test text", "en", "de", config, resolved_paths)
+        assert res == "Argos translated sentence"
+        mock_google.assert_called_once()
+        mock_deepl.assert_not_called()
+        mock_argos.assert_called_once()
+
+
+def test_network_failure_fast_path_lemmas_bypasses_intermediate_online_providers(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(lemma_chain="google, deepl, argos", strategy="chain")
+
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None):
+        if provider == "google":
+            raise ConnectionError("Host unreachable")
+        elif provider == "deepl":
+            raise RuntimeError("DeepL should not be attempted on network disconnect")
+        elif provider == "argos":
+            return "Haus"
+        return ""
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        res = translate_lemmas_fast_path(["House"], "en", "de", config, resolved_paths, provider="google")
+        assert res == {"House": "Haus"}
+        assert getattr(res, "provenance", None) == "live:argos"
+
+
+def test_rate_limit_sequential_fallback_text_tries_next_provider(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl, argos", strategy="chain")
+
+    mock_google = MagicMock(side_effect=Exception("HTTP 429 Too Many Requests"))
+    mock_deepl = MagicMock(return_value="DeepL translated sentence")
+    mock_argos = MagicMock(return_value="Argos translated sentence")
+
+    with patch("kardenwort_desk.run_google_translation", mock_google), \
+         patch("kardenwort_desk.run_deepl_translation", mock_deepl), \
+         patch("kardenwort_desk.run_argos_translation", mock_argos):
+        res = _translate_text_impl("Test text", "en", "de", config, resolved_paths)
+        assert res == "DeepL translated sentence"
+        mock_google.assert_called_once()
+        mock_deepl.assert_called_once()
+        mock_argos.assert_not_called()
+
+
+def test_rate_limit_sequential_fallback_lemmas_tries_next_provider(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(lemma_chain="google, deepl, argos", strategy="chain")
+
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None):
+        if provider == "google":
+            raise Exception("HTTP 429 Too Many Requests")
+        elif provider == "deepl":
+            return "Haus"
+        elif provider == "argos":
+            return "Argos Haus"
+        return ""
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        res = translate_lemmas_fast_path(["House"], "en", "de", config, resolved_paths, provider="google")
+        assert res == {"House": "Haus"}
+        assert getattr(res, "provenance", None) == "live:deepl"
+
+
+def test_orthogonal_chains_disparate_configurations(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl", lemma_chain="argos", strategy="chain")
+
+    mock_google = MagicMock(return_value="Google text")
+    mock_argos = MagicMock(return_value="Argos lemma")
+
+    with patch("kardenwort_desk.run_google_translation", mock_google):
+        text_res = _translate_text_impl("Sentence", "en", "de", config, resolved_paths)
+        assert text_res == "Google text"
+        mock_google.assert_called_once()
+
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None):
+        if provider == "argos":
+            return "Wort"
+        raise RuntimeError(f"Unexpected provider: {provider}")
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        lemma_res = translate_lemmas_fast_path(["Word"], "en", "de", config, resolved_paths, provider="argos")
+        assert lemma_res == {"Word": "Wort"}
+        assert getattr(lemma_res, "provenance", None) == "live:argos"
+
+
+
 
 
