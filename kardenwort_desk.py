@@ -14453,8 +14453,10 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
                 function applyCardProgressiveUpdate(rowsData) {
-                    if (!rowsData || !window.WorkspaceTabs || !window.WorkspaceTabs.getCards) return;
-                    var wCards = window.WorkspaceTabs.getCards();
+                    if (!rowsData) return;
+                    var wCards = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
+                        ? window.WorkspaceTabs.getCards()
+                        : (typeof getCardModels === 'function' ? getCardModels() : null);
                     if (!wCards || wCards.length === 0) return;
                     var deltasByTokenOrder = {};
                     var deltasByRowId = {};
@@ -14464,6 +14466,8 @@ window.__CONFIG__ = {ui_config_json};
                             if (d) {
                                 if (d.token_order !== undefined && d.token_order !== null && String(d.token_order) !== "") {
                                     deltasByTokenOrder[String(d.token_order)] = d;
+                                } else if (rk !== undefined && rk !== null && String(rk) !== "") {
+                                    deltasByTokenOrder[String(rk)] = d;
                                 }
                                 if (d.row_id !== undefined && d.row_id !== null && String(d.row_id) !== "") {
                                     deltasByRowId[String(d.row_id)] = d;
@@ -20756,6 +20760,47 @@ window.__CONFIG__ = {ui_config_json};
                 if (cards && cards.length > 0) {
                     switchToTab(initialSeq, true);
                 }
+
+                if (typeof window.ensureWatchdogActive === 'function') {
+                    window.ensureWatchdogActive('tab-init');
+                }
+
+                var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true');
+                var sessZidEl = document.getElementById('session-zid');
+                var curZid = sessZidEl ? (sessZidEl.textContent || sessZidEl.innerText || "").trim() : "";
+                if (!curZid) {
+                    var params = new URLSearchParams(window.location.search);
+                    curZid = params.get('session_zid') || params.get('zid') || "";
+                }
+                if (!curZid && document.body && document.body.getAttribute('data-zid')) {
+                    curZid = document.body.getAttribute('data-zid');
+                }
+
+                var pendingCount = (typeof window.countPendingSkeletons === 'function') ? window.countPendingSkeletons() : 0;
+                if (isWebMode && curZid && cards && cards.length > 1 && pendingCount === 0) {
+                    if (typeof fetch !== 'undefined') {
+                        var probeUrl = "/session/status?zid=" + encodeURIComponent(curZid);
+                        fetch(probeUrl, { method: 'GET', headers: { 'Accept': 'application/json' } })
+                            .then(function(res) { if (res.ok) return res.json(); throw new Error("probe failed"); })
+                            .then(function(resObj) {
+                                var sData = (resObj && resObj.data) ? resObj.data : resObj;
+                                if (sData) {
+                                    var isBusy = ((sData.stage === 'translating' || (sData.status && sData.status.stage === 'translating') || sData.worker_status === 'running') &&
+                                        sData.is_finished !== true &&
+                                        (!sData.status || sData.status.is_finished !== true));
+                                    if (isBusy) {
+                                        if (typeof window.initWatchdog === 'function') {
+                                            window.initWatchdog();
+                                        }
+                                    }
+                                    if ((sData.rows || sData.translatedText || sData.translated_text || sData.sentences) && window.receiveUpdate) {
+                                        window.receiveUpdate(sData);
+                                    }
+                                }
+                            })
+                            .catch(function() {});
+                    }
+                }
             }
 
             function updateNavButtons() {
@@ -21182,6 +21227,10 @@ window.__CONFIG__ = {ui_config_json};
                 if (typeof window.updateToolbarState === 'function') window.updateToolbarState();
                 else if (typeof updateToolbarState === 'function') updateToolbarState();
                 if (window.forceRepaint) window.forceRepaint();
+
+                if (!isImmediate && typeof window.ensureWatchdogActive === 'function') {
+                    window.ensureWatchdogActive('tab-switch');
+                }
             }
 
             function updateTitle(targetCard) {
