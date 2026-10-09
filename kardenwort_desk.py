@@ -2589,53 +2589,17 @@ def to_unicode_bold(text: str) -> str:
             result.append(ch)
     return "".join(result)
 
-def format_inflected_sentence_tooltip(
-    sentence_text: Optional[Union[str, List[Any]]] = None,
+def _format_single_inflected_sentence_context(
+    sentence_text: str,
     inflected_val: Optional[str] = None,
     token_order: Optional[Union[str, int]] = None,
-    sentences: Optional[List[Any]] = None,
+    lemma: Optional[str] = None,
 ) -> str:
-    items = sentences if sentences is not None else (sentence_text if isinstance(sentence_text, list) else None)
-    if items is not None:
-        formatted_lines = []
-        seen_lines = set()
-        for item in items:
-            s_txt, i_val, t_ord = "", "", None
-            if isinstance(item, (list, tuple)):
-                if len(item) == 1:
-                    s_txt = item[0]
-                elif len(item) == 2:
-                    s_txt, i_val = item[0], item[1]
-                elif len(item) >= 3:
-                    s_txt, i_val, t_ord = item[0], item[1], item[2]
-            elif isinstance(item, dict):
-                s_txt = item.get("sentence") or item.get("sentence_source") or ""
-                i_val = item.get("inflected") or item.get("inflected_val") or inflected_val or ""
-                t_ord = item.get("token_order", token_order)
-            elif isinstance(item, str):
-                s_txt = item
-                i_val = inflected_val or ""
-                t_ord = token_order
-
-            s_clean = (s_txt or "").strip()
-            if not s_clean:
-                continue
-            line = format_inflected_sentence_tooltip(sentence_text=s_clean, inflected_val=i_val, token_order=t_ord)
-            if line and line not in seen_lines:
-                seen_lines.add(line)
-                formatted_lines.append(line)
-
-        if len(formatted_lines) > 1:
-            return "\n".join(f"[{idx + 1}] {line}" for idx, line in enumerate(formatted_lines))
-        elif len(formatted_lines) == 1:
-            return formatted_lines[0]
-        return (inflected_val or "").strip()
-
     if not sentence_text:
-        return (inflected_val or "").strip()
+        return ""
     if not inflected_val:
         return str(sentence_text).strip()
-    
+
     target_indices = set()
     if token_order is not None:
         t_str = str(token_order).strip()
@@ -2644,13 +2608,39 @@ def format_inflected_sentence_tooltip(
                 p_clean = p.strip()
                 if p_clean.isdigit():
                     target_indices.add(int(p_clean))
-    
-    target_words = set(re.findall(r'[\w]+', inflected_val.lower()))
-    
+
+    raw_tokens = re.findall(r'[\w]+', (inflected_val or "").lower())
+    filtered_tokens = [t for t in raw_tokens if not re.match(r'^\d{14}$', t)]
+
+    is_slug_or_compound = bool(
+        ('+' not in inflected_val)
+        and ('-' in inflected_val or '_' in inflected_val or re.search(r'\b\d{14}\b', inflected_val))
+    )
+
+    if is_slug_or_compound and lemma and str(lemma).strip():
+        lemma_clean = str(lemma).strip().lower()
+        exact_matches = [t for t in filtered_tokens if t == lemma_clean]
+        if exact_matches:
+            target_words = set(exact_matches)
+        else:
+            stem_matches = [
+                t for t in filtered_tokens
+                if (len(t) >= 3 and (t.startswith(lemma_clean) or lemma_clean.startswith(t)))
+            ]
+            if stem_matches:
+                target_words = set(stem_matches)
+            else:
+                target_words = set(filtered_tokens)
+        target_words.add(lemma_clean)
+    else:
+        target_words = set(filtered_tokens)
+        if lemma and str(lemma).strip():
+            target_words.add(str(lemma).strip().lower())
+
     parts = re.split(r'(\w+)', str(sentence_text))
     word_idx = 0
     has_indices = bool(target_indices)
-    
+
     for i, part in enumerate(parts):
         if re.match(r'^\w+$', part):
             should_bold = False
@@ -2658,12 +2648,104 @@ def format_inflected_sentence_tooltip(
                 should_bold = True
             elif part.lower() in target_words:
                 should_bold = True
-            
+
             if should_bold:
                 parts[i] = to_unicode_bold(part)
             word_idx += 1
-            
-    return "".join(parts)
+
+    return "".join(parts).strip()
+
+def format_inflected_sentence_tooltip(
+    sentence_text: Optional[Union[str, List[Any]]] = None,
+    inflected_val: Optional[str] = None,
+    token_order: Optional[Union[str, int]] = None,
+    sentences: Optional[List[Any]] = None,
+    lemma: Optional[str] = None,
+) -> str:
+    items = sentences if sentences is not None else (sentence_text if isinstance(sentence_text, list) else None)
+    if items is not None:
+        formatted_lines = []
+        seen_lines = set()
+        collected_forms = []
+        for item in items:
+            s_txt, i_val, t_ord, item_lemma = "", "", None, lemma
+            if isinstance(item, (list, tuple)):
+                if len(item) == 1:
+                    s_txt = item[0]
+                elif len(item) == 2:
+                    s_txt, i_val = item[0], item[1]
+                elif len(item) == 3:
+                    s_txt, i_val, t_ord = item[0], item[1], item[2]
+                elif len(item) >= 4:
+                    s_txt, i_val, t_ord, item_lemma = item[0], item[1], item[2], item[3]
+            elif isinstance(item, dict):
+                s_txt = item.get("sentence") or item.get("sentence_source") or ""
+                i_val = item.get("inflected") or item.get("inflected_val") or inflected_val or ""
+                t_ord = item.get("token_order", token_order)
+                item_lemma = item.get("lemma") or lemma
+            elif isinstance(item, str):
+                s_txt = item
+                i_val = inflected_val or ""
+                t_ord = token_order
+                item_lemma = lemma
+
+            item_lemma = item_lemma or lemma
+
+            s_clean = (s_txt or "").strip()
+            if not s_clean:
+                continue
+
+            eff_inf = (i_val if i_val is not None and str(i_val).strip() else inflected_val) or ""
+            if eff_inf and str(eff_inf).strip():
+                collected_forms.append(str(eff_inf).strip())
+
+            line = _format_single_inflected_sentence_context(
+                sentence_text=s_clean,
+                inflected_val=eff_inf,
+                token_order=t_ord,
+                lemma=item_lemma,
+            )
+            if line and line not in seen_lines:
+                seen_lines.add(line)
+                formatted_lines.append(line)
+
+        header_raw = ""
+        if inflected_val and str(inflected_val).strip():
+            header_raw = str(inflected_val).strip()
+        elif collected_forms:
+            seen_f = set()
+            unique_forms = []
+            for f in collected_forms:
+                if f not in seen_f:
+                    seen_f.add(f)
+                    unique_forms.append(f)
+            header_raw = ", ".join(unique_forms)
+
+        header = to_unicode_bold(header_raw) if header_raw else ""
+
+        if len(formatted_lines) > 1:
+            body = "\n".join(f"[{idx + 1}] {line}" for idx, line in enumerate(formatted_lines))
+            return f"{header}\n{body}" if header else body
+        elif len(formatted_lines) == 1:
+            body = formatted_lines[0]
+            return f"{header}\n{body}" if header else body
+        return (inflected_val or "").strip()
+
+    if not sentence_text:
+        return (inflected_val or "").strip()
+    if not inflected_val:
+        return str(sentence_text).strip()
+
+    formatted_sentence = _format_single_inflected_sentence_context(
+        sentence_text=str(sentence_text),
+        inflected_val=inflected_val,
+        token_order=token_order,
+        lemma=lemma,
+    )
+    header = to_unicode_bold(str(inflected_val).strip())
+    if header and formatted_sentence:
+        return f"{header}\n{formatted_sentence}"
+    return formatted_sentence or header
 
 def format_lemma_article_tooltip(
     lemma: Optional[str],
