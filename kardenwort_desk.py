@@ -11664,7 +11664,7 @@ html, body {{
         if not row_sentence:
             row_sentence = text
 
-        inflected_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val)
+        inflected_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val, lemma=lemma_val)
         inflected_title_attr = f' title="{html.escape(inflected_tooltip)}"' if inflected_tooltip else ''
 
         lemma_tooltip = format_lemma_article_tooltip(lemma_val, gender_raw, lang=language)
@@ -11734,7 +11734,7 @@ html, body {{
                     trans_inferred = "который" if pos_inferred == "pron." else "тот"
                     if raw_w == "die" and pos_inferred == "pron.":
                         trans_inferred = "которая"
-                    inf_tooltip = format_inflected_sentence_tooltip(row_sentence, raw_w, token_order=token_order_val)
+                    inf_tooltip = format_inflected_sentence_tooltip(row_sentence, raw_w, token_order=token_order_val, lemma=lemma_val)
                     if v_key not in _row_occ:
                         _row_occ[v_key] = {
                             "form": raw_w,
@@ -12162,13 +12162,13 @@ html, body {{
                         inf_form = resolve_row_inflected_form(r_item, col_inflected, col_inflected2, col_quotation, col_lemma)
                         t_ord_item = r_item[col_token_order] if col_token_order != -1 and len(r_item) > col_token_order else ""
                         if sent_txt:
-                            ov_sent_tuples.append((sent_txt, inf_form, t_ord_item))
+                            ov_sent_tuples.append((sent_txt, inf_form, t_ord_item, ov_lemma))
                 if ov_sent_tuples:
-                    ov_inf_tooltip = format_inflected_sentence_tooltip(sentences=ov_sent_tuples)
+                    ov_inf_tooltip = format_inflected_sentence_tooltip(sentences=ov_sent_tuples, inflected_val=ov_inflected, lemma=ov_lemma)
                 else:
-                    ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
+                    ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order, lemma=ov_lemma)
             else:
-                ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
+                ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order, lemma=ov_lemma)
             ov_inf_title = f' title="{html.escape(ov_inf_tooltip)}"' if ov_inf_tooltip else ''
 
             ov_lemma_tooltip = format_lemma_article_tooltip(ov_lemma, ov_gender_raw, lang=language)
@@ -23318,7 +23318,9 @@ def render_section(token, ctx):
                 if isinstance(val, str):
                     val = val.replace('\r', '')
                 if t == "inflected":
-                    inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val)
+                    lem_idx = col_indices.get('lemma', -1)
+                    lem_v = row[lem_idx] if lem_idx != -1 and len(row) > lem_idx else ""
+                    inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val, lemma=lem_v)
                     inf_title_attr = f' title="{html.escape(inf_tooltip)}"' if inf_tooltip else ''
                     html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
                 elif t == "lemma":
