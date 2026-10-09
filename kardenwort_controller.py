@@ -3475,10 +3475,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 data_rows = safe_sess.get("data_rows", [])
                 sess_lang = safe_sess.get("language") or safe_sess.get("lang") or "de"
                 role_fields = get_role_fields(mapping, headers) if mapping else {}
-                if data_rows and headers:
-                    data_rows = sort_rows_by_frequency(
-                        data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
-                    )
                 sess_row_provs = safe_sess.get("row_provenances")
                 if sess_row_provs is None:
                     sess_row_provs = {}
@@ -3716,10 +3712,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             session_is_busy = is_busy or (has_untranslated_lemmas and is_recent)
 
-            if data_rows and headers:
-                data_rows = sort_rows_by_frequency(
-                    data_rows, headers, sess_lang, self.server.config, self.server.resolved_paths, role_fields=role_fields
-                )
 
             fallback_row_provs = {}
             if is_sqlite:
