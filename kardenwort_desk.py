@@ -530,7 +530,8 @@ def check_endpoint_reachable(server_url: str, connect_timeout: float = MICROSERV
     """
     if not server_url:
         return False
-    effective_timeout = connect_timeout if (connect_timeout is not None and connect_timeout > 0) else MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
+    raw_timeout = connect_timeout if (connect_timeout is not None and connect_timeout > 0) else MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
+    effective_timeout = min(raw_timeout, 0.4)
     parsed = urllib.parse.urlparse(server_url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -21602,13 +21603,17 @@ window.__CONFIG__ = {ui_config_json};
                             isSingleMode = false;
                         }
                         if (activeSentenceIdx === 0 && !isSingleMode) {
+                            var filledCount = 0;
                             var maxSentenceIdx = 0;
                             for (var sc = 0; sc < cards.length; sc++) {
                                 if (cards[sc].sentence_idx > maxSentenceIdx) {
                                     maxSentenceIdx = cards[sc].sentence_idx;
                                 }
+                                if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
+                                    filledCount++;
+                                }
                             }
-                            if (maxSentenceIdx > 1) {
+                            if (filledCount > 1) {
                                 var slots = new Array(maxSentenceIdx);
                                 for (var si = 0; si < maxSentenceIdx; si++) {
                                     slots[si] = "";
@@ -21619,10 +21624,7 @@ window.__CONFIG__ = {ui_config_json};
                                         slots[cIdx - 1] = (cards[sc].translated_text || "").trim();
                                     }
                                 }
-                                var hasAnyText = slots.some(function(txt) { return txt.length > 0; });
-                                if (hasAnyText) {
-                                    tText = slots.join(String.fromCharCode(10));
-                                }
+                                tText = slots.join(String.fromCharCode(10));
                             }
                         }
                         tText = tText || '';
@@ -21919,13 +21921,17 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 for (var c = 0; c < cards.length; c++) {
                     if (cards[c].sentence_idx === 0) {
+                        var filledCount = 0;
                         var maxSentenceIdx = 0;
                         for (var sc = 0; sc < cards.length; sc++) {
                             if (cards[sc].sentence_idx > maxSentenceIdx) {
                                 maxSentenceIdx = cards[sc].sentence_idx;
                             }
+                            if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
+                                filledCount++;
+                            }
                         }
-                        if (maxSentenceIdx > 0 && !isSingleMode) {
+                        if (filledCount > 1 && !isSingleMode) {
                             var slots = new Array(maxSentenceIdx);
                             for (var si = 0; si < maxSentenceIdx; si++) {
                                 slots[si] = "";
@@ -21936,11 +21942,13 @@ window.__CONFIG__ = {ui_config_json};
                                     slots[cIdx - 1] = (cards[sc].translated_text || "").trim();
                                 }
                             }
-                            var hasAnyText = slots.some(function(txt) { return txt.length > 0; });
-                            if (hasAnyText) {
-                                cards[c].translated_text = slots.join(String.fromCharCode(10));
-                            } else if (window.AppState && window.AppState.translatedText) {
-                                cards[c].translated_text = window.AppState.translatedText;
+                            cards[c].translated_text = slots.join(String.fromCharCode(10));
+                        } else if (filledCount === 1 && !isSingleMode && (!cards[c].translated_text || !cards[c].translated_text.trim())) {
+                            for (var sc = 0; sc < cards.length; sc++) {
+                                if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
+                                    cards[c].translated_text = cards[sc].translated_text.trim();
+                                    break;
+                                }
                             }
                         } else if (window.AppState && window.AppState.translatedText) {
                             cards[c].translated_text = window.AppState.translatedText;
