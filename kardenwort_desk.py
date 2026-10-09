@@ -19310,6 +19310,30 @@ window.__CONFIG__ = {ui_config_json};
                                     var sameSentence = (tSent && aSent) ? (tSent === aSent) : true;
                                     if (!sameSentence) continue;
 
+                                    var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
+                                    var sharesIdenticalAtomic = false;
+                                    if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
+                                        var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
+                                        if (!atClean && aSpan) {
+                                            atClean = (aSpan.getAttribute('data-lower-clean') || aSpan.textContent || '').trim().toLowerCase();
+                                        }
+                                        if (tokClean && atClean && tokClean === atClean) {
+                                            var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
+                                            var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
+                                            var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
+                                            var hasCompoundContext = (token.compound_row_ids && token.compound_row_ids.length > 0) ||
+                                                (aTd && aTd.compound_row_ids && aTd.compound_row_ids.length > 0) ||
+                                                (atItem.compound_row_ids && atItem.compound_row_ids.length > 0) ||
+                                                (tSpan && tSpan.hasAttribute('data-compound-id')) ||
+                                                (aSpan && aSpan.hasAttribute('data-compound-id')) ||
+                                                (tGrp && tGrp.length > 1) ||
+                                                (aGrp && aGrp.length > 1);
+                                            if (hasCompoundContext) {
+                                                sharesIdenticalAtomic = true;
+                                            }
+                                        }
+                                    }
+
                                     var sameCompoundId = (tSpan.hasAttribute('data-compound-id') && aSpan.hasAttribute('data-compound-id'))
                                         ? (tSpan.getAttribute('data-compound-id') === aSpan.getAttribute('data-compound-id'))
                                         : false;
@@ -19329,7 +19353,7 @@ window.__CONFIG__ = {ui_config_json};
                                         }
                                     }
 
-                                    if (sameCompoundId || isCompoundSibling || isRelatedPartner) {
+                                    if (sharesIdenticalAtomic || sameCompoundId || isCompoundSibling || isRelatedPartner) {
                                         isSameOccurrence = true;
                                         break;
                                     }
