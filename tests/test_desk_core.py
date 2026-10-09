@@ -3628,12 +3628,29 @@ def test_suspension_hyphens_deduplicate_and_render_clean_lemmas():
     assert deduped_by_lemma[1][1] == "-basiert"
 
 
+def test_resolve_contraction_constituent_pos_en_and_de():
+    import kardenwort_desk as desk
 
+    # English verbal constituents resolve to "v."
+    for verb_lem in ["be", "have", "will", "would", "had"]:
+        assert desk.resolve_contraction_constituent_pos(verb_lem) == "v."
+    for verb_raw in ["'re", "'ve", "'ll", "'d", "are", "have"]:
+        assert desk.resolve_contraction_constituent_pos("", raw_target_token=verb_raw) == "v."
 
+    # English negative constituents resolve to "part."
+    for neg in ["not", "n't", "nt"]:
+        assert desk.resolve_contraction_constituent_pos(neg) == "part."
+        assert desk.resolve_contraction_constituent_pos("", raw_target_token=neg) == "part."
 
+    # English pronoun constituents resolve to "pron."
+    for pron in ["i", "you", "he", "she", "it", "we", "they"]:
+        assert desk.resolve_contraction_constituent_pos(pron) == "pron."
 
+    # German contraction constituents
+    assert desk.resolve_contraction_constituent_pos("zu") == "prep."
+    assert desk.resolve_contraction_constituent_pos("der") == "art."
+    assert desk.resolve_contraction_constituent_pos("es") == "pron."
 
-
-
-
+    # Fallback to default_pos for unmapped tokens
+    assert desk.resolve_contraction_constituent_pos("custom_word", default_pos="adj.") == "adj."
 
