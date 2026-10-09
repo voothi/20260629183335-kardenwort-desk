@@ -49,6 +49,16 @@
       "type": "boolean",
       "default": true,
       "description": "Whether German article and pronoun variants sharing base lemma 'der' are consolidated into a single row."
+    },
+    "sentence_deduplicate_pos_aware": {
+      "type": "boolean",
+      "default": true,
+      "description": "Whether individual sentence cards (Tabs 2..N) segregate vocabulary rows by (lemma, pos)."
+    },
+    "overview_deduplicate_pos_aware": {
+      "type": "boolean",
+      "default": false,
+      "description": "Whether Master Overview (Tab 1) segregates cross-sentence vocabulary rows by (lemma, pos)."
     }
   },
   "required": [
@@ -60,7 +70,9 @@
     "token_mappings_enabled",
     "lemmatize_mapped_tokens",
     "deduplicate_pos_aware",
-    "unify_article_pronoun_lemmas"
+    "unify_article_pronoun_lemmas",
+    "sentence_deduplicate_pos_aware",
+    "overview_deduplicate_pos_aware"
   ],
   "additionalProperties": false
 }

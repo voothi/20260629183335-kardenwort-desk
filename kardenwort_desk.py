@@ -1093,6 +1093,8 @@ class RuntimeTokenConfig:
     lemmatize_mapped_tokens: bool = True
     deduplicate_pos_aware: bool = True
     unify_article_pronoun_lemmas: bool = True
+    sentence_deduplicate_pos_aware: bool = True
+    overview_deduplicate_pos_aware: bool = False
 
     @property
     def combine_source_words_order(self) -> str:
@@ -1114,6 +1116,12 @@ class RuntimeTokenConfig:
             lemmatize_mapped_tokens = config.getboolean(SEC_TOKEN_MAPPINGS, "lemmatize_mapped_tokens", fallback=True)
             deduplicate_pos_aware = config.getboolean(SEC_SETTINGS, "deduplicate_pos_aware", fallback=True)
             unify_article_pronoun_lemmas = config.getboolean(SEC_SETTINGS, "unify_article_pronoun_lemmas", fallback=True)
+            sentence_deduplicate_pos_aware = config.getboolean(
+                SEC_SENTENCES_MODE, "sentence_deduplicate_pos_aware", fallback=deduplicate_pos_aware
+            )
+            overview_deduplicate_pos_aware = config.getboolean(
+                SEC_SENTENCES_MODE, "overview_deduplicate_pos_aware", fallback=False
+            )
         else:
             filter_by_window = True
             combine_source_words = False
@@ -1121,6 +1129,8 @@ class RuntimeTokenConfig:
             lemmatize_mapped_tokens = True
             deduplicate_pos_aware = True
             unify_article_pronoun_lemmas = True
+            sentence_deduplicate_pos_aware = True
+            overview_deduplicate_pos_aware = False
 
         if config and hasattr(config, "get"):
             combine_order = config.get(
@@ -1156,6 +1166,8 @@ class RuntimeTokenConfig:
             lemmatize_mapped_tokens=lemmatize_mapped_tokens,
             deduplicate_pos_aware=deduplicate_pos_aware,
             unify_article_pronoun_lemmas=unify_article_pronoun_lemmas,
+            sentence_deduplicate_pos_aware=sentence_deduplicate_pos_aware,
+            overview_deduplicate_pos_aware=overview_deduplicate_pos_aware,
         )
 
 
@@ -9317,7 +9329,7 @@ def get_desk_token_mappings(resolved_paths=None, language=None, config=None) -> 
     return mappings
 
 
-def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None, col_quotation=-1, col_word_dest=-1):
+def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None, col_quotation=-1, col_word_dest=-1, deduplicate_pos_aware=None):
     deduped_rows = []
     seen_words = {}
 
@@ -9328,7 +9340,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
     prefer_lowercase_cfg = token_config.prefer_lowercase
     filter_by_window = token_config.filter_by_window
-    deduplicate_pos_aware = token_config.deduplicate_pos_aware
+    if deduplicate_pos_aware is None:
+        deduplicate_pos_aware = token_config.deduplicate_pos_aware
     unify_article_pronoun_lemmas = token_config.unify_article_pronoun_lemmas
 
     is_filtering_window = False
@@ -9428,13 +9441,14 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                     deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
 
                 if col_pos != -1 and len(deduped_rows[existing_row_idx]) > col_pos:
-                    if is_unified_der:
+                    if is_unified_der or not deduplicate_pos_aware:
                         existing_pos_raw = deduped_rows[existing_row_idx][col_pos].strip()
                         seen_pos = []
-                        for p in existing_pos_raw.split(','):
-                            norm_p = normalize_pos_tag(p).lower()
-                            if norm_p and norm_p not in seen_pos:
-                                seen_pos.append(norm_p)
+                        if existing_pos_raw:
+                            for p in existing_pos_raw.split(','):
+                                norm_p = normalize_pos_tag(p).lower()
+                                if norm_p and norm_p not in seen_pos:
+                                    seen_pos.append(norm_p)
                         if pos:
                             for p in pos.split(','):
                                 norm_p = normalize_pos_tag(p).lower()
@@ -9442,16 +9456,14 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
                                     seen_pos.append(norm_p)
                         seen_pos = sort_pos_tags(seen_pos)
                         deduped_rows[existing_row_idx][col_pos] = ", ".join(seen_pos)
-                    elif not deduplicate_pos_aware and not deduped_rows[existing_row_idx][col_pos].strip() and pos:
-                        deduped_rows[existing_row_idx][col_pos] = pos
 
                 eff_col_dest = col_word_dest
-                if eff_col_dest == -1 and is_unified_der:
+                if eff_col_dest == -1 and (is_unified_der or not deduplicate_pos_aware):
                     remaining_cols = [c for c in range(min(len(deduped_rows[existing_row_idx]), len(row))) if c not in (col_word_source, col_pos, col_inflected, col_quotation)]
                     if len(remaining_cols) == 1:
                         eff_col_dest = remaining_cols[0]
 
-                if is_unified_der and eff_col_dest != -1 and len(deduped_rows[existing_row_idx]) > eff_col_dest and len(row) > eff_col_dest:
+                if (is_unified_der or not deduplicate_pos_aware) and eff_col_dest != -1 and len(deduped_rows[existing_row_idx]) > eff_col_dest and len(row) > eff_col_dest:
                     existing_trans = str(deduped_rows[existing_row_idx][eff_col_dest] or "").strip()
                     new_trans = str(row[eff_col_dest] or "").strip()
                     seen_trans = []
@@ -9466,7 +9478,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
 
                 for c in range(min(len(deduped_rows[existing_row_idx]), len(row))):
                     if c not in (col_inflected, col_quotation):
-                        if is_unified_der and eff_col_dest != -1 and c == eff_col_dest:
+                        if (is_unified_der or not deduplicate_pos_aware) and eff_col_dest != -1 and c == eff_col_dest:
                             continue
                         if not str(deduped_rows[existing_row_idx][c]).strip() and str(row[c]).strip():
                             deduped_rows[existing_row_idx][c] = row[c]
@@ -10287,6 +10299,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
         
         dedup_scope_cfg = smc.deduplication_scope
+        token_config = RuntimeTokenConfig.from_config(config)
         if col_word_source != -1 and dedup_scope_cfg != 'none':
             if smc.delivery_mode == 'container' and dedup_scope_cfg == 'sentence' and len(source_sentences) >= 2:
                 # Retain sentence-local lemma rows for each child card in container mode,
@@ -10306,7 +10319,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                             if any(f in sub_words for f in forms) or (row_lem.lower() in sub_words):
                                 s_rows.append(list(row))
                     s_text = source_sentences[s_i]
-                    s_dedup = deduplicate_rows(s_rows, col_word_source, col_pos, col_inflected, config, window_text=s_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest)
+                    s_dedup = deduplicate_rows(s_rows, col_word_source, col_pos, col_inflected, config, window_text=s_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest, deduplicate_pos_aware=token_config.sentence_deduplicate_pos_aware)
                     s_dedup = sort_rows_by_frequency(s_dedup, headers, language, config, resolved_paths, role_fields=role_fields)
                     master_data_rows.extend(s_dedup)
             else:
@@ -10454,7 +10467,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         sub_rows.append(sub_row)
                         
                 if col_word_source != -1 and dedup_scope_cfg == 'sentence':
-                    sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest)
+                    sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest, deduplicate_pos_aware=token_config.sentence_deduplicate_pos_aware)
 
                 # Pre-sort child sentence rows by lemma frequency so restore_session() is an immediate O(1) load
                 sub_rows = sort_rows_by_frequency(
@@ -12048,11 +12061,13 @@ html, body {{
         col_ws_dedup = col_lemma if col_lemma != -1 else (headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1)
         col_pos_dedup = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
         dedup_scope_val = smc.deduplication_scope
+        token_config = RuntimeTokenConfig.from_config(config)
         if col_ws_dedup != -1 and dedup_scope_val != 'none':
             overview_rows = deduplicate_rows(
                 data_rows, col_ws_dedup, col_pos_dedup, col_inflected, config,
                 window_text=text, language=language, resolved_paths=resolved_paths,
-                col_quotation=col_quotation, col_word_dest=col_word_dest
+                col_quotation=col_quotation, col_word_dest=col_word_dest,
+                deduplicate_pos_aware=token_config.overview_deduplicate_pos_aware
             )
             overview_rows = sort_rows_by_frequency(
                 overview_rows, headers, language, config, resolved_paths, role_fields=role_fields
@@ -12062,14 +12077,13 @@ html, body {{
                 [list(r) for r in data_rows], headers, language, config, resolved_paths, role_fields=role_fields
             )
         
-        token_config = RuntimeTokenConfig.from_config(config)
         lemma_pos_to_row_ids = {}
         for r_id, r in enumerate(data_rows):
             lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
             pos_val = r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(r) > col_pos_dedup else ""
 
             is_unified_der = token_config.unify_article_pronoun_lemmas and lem == "der"
-            if not token_config.deduplicate_pos_aware:
+            if not token_config.overview_deduplicate_pos_aware:
                 eff_pos = ""
             elif is_unified_der and any(p.strip() in ("art.", "pron.", "det.", "prep.") for p in pos_val.split(',')):
                 eff_pos = "art."
@@ -12126,7 +12140,7 @@ html, body {{
             ov_pos_clean = ov_r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(ov_r) > col_pos_dedup else ""
 
             is_ov_unified_der = token_config.unify_article_pronoun_lemmas and ov_lem_clean == "der"
-            if not token_config.deduplicate_pos_aware:
+            if not token_config.overview_deduplicate_pos_aware:
                 ov_eff_pos = ""
             elif is_ov_unified_der and any(p.strip() in ("art.", "pron.", "det.", "prep.") for p in ov_pos_clean.split(',')):
                 ov_eff_pos = "art."
@@ -12179,7 +12193,7 @@ html, body {{
                         if p_val:
                             pos_items.append((mid, p_val))
                 if pos_items:
-                    if is_ov_unified_der:
+                    if is_ov_unified_der or not token_config.overview_deduplicate_pos_aware:
                         seen_ov_pos = []
                         for _, p_val in pos_items:
                             for p_sub in p_val.split(','):

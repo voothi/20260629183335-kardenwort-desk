@@ -3654,3 +3654,66 @@ def test_resolve_contraction_constituent_pos_en_and_de():
     # Fallback to default_pos for unmapped tokens
     assert desk.resolve_contraction_constituent_pos("custom_word", default_pos="adj.") == "adj."
 
+
+def test_deduplicate_rows_pos_rollup_when_not_pos_aware():
+    import kardenwort_desk as desk
+    import configparser
+
+    config = configparser.ConfigParser()
+    config.add_section(desk.SEC_SETTINGS)
+    config.set(desk.SEC_SETTINGS, "deduplicate_pos_aware", "true")
+
+    rows = [
+        ["to", "to", "prep.", "к"],
+        ["to", "to", "part.", "чтобы"]
+    ]
+
+    # When deduplicate_pos_aware is False (e.g. Master Overview default)
+    deduped_false = desk.deduplicate_rows(
+        rows, col_word_source=1, col_pos=2, col_inflected=0, config=config,
+        col_word_dest=3, deduplicate_pos_aware=False
+    )
+    assert len(deduped_false) == 1
+    assert deduped_false[0][1] == "to"
+    assert deduped_false[0][2] == "prep., part."
+    assert "к" in deduped_false[0][3] and "чтобы" in deduped_false[0][3]
+
+    # When deduplicate_pos_aware is True (e.g. strict sentence cards)
+    deduped_true = desk.deduplicate_rows(
+        rows, col_word_source=1, col_pos=2, col_inflected=0, config=config,
+        col_word_dest=3, deduplicate_pos_aware=True
+    )
+    assert len(deduped_true) == 2
+
+
+def test_runtime_token_config_decoupled_pos_resolution():
+    import kardenwort_desk as desk
+    import configparser
+
+    # Default fallback: settings true, overview false
+    cp = configparser.ConfigParser()
+    cp.add_section(desk.SEC_SETTINGS)
+    cfg = desk.RuntimeTokenConfig.from_config(cp)
+    assert cfg.deduplicate_pos_aware is True
+    assert cfg.sentence_deduplicate_pos_aware is True
+    assert cfg.overview_deduplicate_pos_aware is False
+
+    # Explicit sentence_mode overrides
+    cp2 = configparser.ConfigParser()
+    cp2.add_section(desk.SEC_SETTINGS)
+    cp2.add_section(desk.SEC_SENTENCES_MODE)
+    cp2.set(desk.SEC_SENTENCES_MODE, "sentence_deduplicate_pos_aware", "false")
+    cp2.set(desk.SEC_SENTENCES_MODE, "overview_deduplicate_pos_aware", "true")
+    cfg2 = desk.RuntimeTokenConfig.from_config(cp2)
+    assert cfg2.sentence_deduplicate_pos_aware is False
+    assert cfg2.overview_deduplicate_pos_aware is True
+
+    # Backward compatibility: settings false propagates to sentence cards
+    cp3 = configparser.ConfigParser()
+    cp3.add_section(desk.SEC_SETTINGS)
+    cp3.set(desk.SEC_SETTINGS, "deduplicate_pos_aware", "false")
+    cfg3 = desk.RuntimeTokenConfig.from_config(cp3)
+    assert cfg3.deduplicate_pos_aware is False
+    assert cfg3.sentence_deduplicate_pos_aware is False
+    assert cfg3.overview_deduplicate_pos_aware is False
+
