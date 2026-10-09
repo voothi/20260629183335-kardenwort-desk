@@ -1773,6 +1773,9 @@ class SessionArbiter:
                     active_lemma_p = cand
                     break
 
+        if active_text_p != main_text_provider or active_lemma_p != main_lemma_provider:
+            record_session_active_provider(session_zid, text=active_text_p, lemma=active_lemma_p, provider=active_lemma_p or active_text_p, config=self.config, resolved_paths=self.resolved_paths)
+
         if not init_text_prov and res.get("sentence_translation"):
             init_text_prov = f"live:{active_text_p}"
 
@@ -1825,6 +1828,8 @@ class SessionArbiter:
             res["html_b64"] = encode(res["html"])
 
         return res
+
+    start_session = create_session
 
     def save_session(
         self,
