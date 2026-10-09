@@ -7487,9 +7487,33 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
                 if re.match(r'^[a-zA-Z]$', clean_word_no_dot):
                     continue
                 if clean_word_no_dot.isdigit():
-                    continue
+                    tokens_before = preceding_part.strip().split()
+                    if len(tokens_before) < 2:
+                        continue
+                    prev_token = tokens_before[-2].lower().rstrip('.,;:!?')
+                    
+                    following_text = text[m.end():].lstrip()
+                    next_match = re.match(r'^([^\s]+)', following_text)
+                    next_token = next_match.group(1) if next_match else ''
+                    next_word_clean = re.sub(r'^[^\w]+|[^\w]+$', '', next_token).lower()
+                    
+                    month_names = {
+                        "januar", "februar", "märz", "maerz", "april", "mai", "juni",
+                        "juli", "august", "september", "oktober", "november", "dezember",
+                        "january", "february", "march", "may", "june",
+                        "july", "august", "september", "october", "november", "december"
+                    }
+                    ordinal_indicators = {
+                        "am", "im", "vom", "beim", "zum", "zur", "der", "die", "das", "den", "dem", "des",
+                        "ein", "eine", "einer", "einem", "einen", "eines", "the", "on", "in", "at"
+                    }
+                    is_ordinal_date = (prev_token in ordinal_indicators) or (next_word_clean in month_names)
+                    is_capitalized_start = bool(next_token and next_token[0].isupper())
+                    if is_ordinal_date or not is_capitalized_start:
+                        continue
         
         splits.append(split_pos)
+        last_idx = m.end()
         
     sentences = []
     start = 0
@@ -16852,9 +16876,14 @@ window.__CONFIG__ = {ui_config_json};
                 }
 
                 var shared = false;
-                for (var r = 0; r < targetRowIds.length; r++) {
-                    if (otd.row_ids.indexOf(targetRowIds[r]) !== -1) {
-                        if (otd.sentence_idx === undefined || td.sentence_idx === undefined || otd.sentence_idx === td.sentence_idx) {
+                var spanSent = span.getAttribute('data-sentence-idx');
+                var otherSent = otherSpan.getAttribute('data-sentence-idx');
+                var sameSent = (spanSent && otherSent)
+                    ? (spanSent === otherSent)
+                    : (otd.sentence_idx === undefined || td.sentence_idx === undefined || String(otd.sentence_idx) === String(td.sentence_idx));
+                if (sameSent) {
+                    for (var r = 0; r < targetRowIds.length; r++) {
+                        if (otd.row_ids.indexOf(targetRowIds[r]) !== -1) {
                             shared = true;
                             break;
                         }
@@ -19251,54 +19280,52 @@ window.__CONFIG__ = {ui_config_json};
                                 matchedRowId = rid;
                                 break;
                             } else {
-                                var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
-                                var sharesIdenticalAtomic = false;
+                                var tSpan = spanByVidx[String(token.visual_idx)];
+                                var isSameOccurrence = false;
                                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                                     var atItem = window.AppState.activeTokenSelections[a];
-                                    if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
-                                        var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
-                                        if (!atClean) {
-                                            var atSpan = spanByVidx[String(atItem.visual_idx)];
-                                            if (atSpan) atClean = (atSpan.getAttribute('data-lower-clean') || atSpan.textContent || '').trim().toLowerCase();
-                                        }
-                                        if (tokClean && atClean && tokClean === atClean) {
-                                            var tSpan = spanByVidx[String(token.visual_idx)];
-                                            var aSpan = spanByVidx[String(atItem.visual_idx)];
-                                            var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
-                                            var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
-                                            var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
-                                            var hasCompoundContext = (token.compound_row_ids && token.compound_row_ids.length > 0) ||
-                                                (aTd && aTd.compound_row_ids && aTd.compound_row_ids.length > 0) ||
-                                                (atItem.compound_row_ids && atItem.compound_row_ids.length > 0) ||
-                                                (tSpan && tSpan.hasAttribute('data-compound-id')) ||
-                                                (aSpan && aSpan.hasAttribute('data-compound-id')) ||
-                                                (tGrp && tGrp.length > 1) ||
-                                                (aGrp && aGrp.length > 1);
-                                            if (hasCompoundContext) {
-                                                sharesIdenticalAtomic = true;
-                                                break;
-                                            }
+                                    var aSpan = spanByVidx[String(atItem.visual_idx)];
+                                    if (!aSpan || !tSpan) continue;
+
+                                    var tSent = (tSpan && tSpan.getAttribute('data-sentence-idx')) || (token.sentence_idx !== undefined ? String(token.sentence_idx) : '');
+                                    var aSent = (aSpan && aSpan.getAttribute('data-sentence-idx')) || (atItem.sentence_idx !== undefined ? String(atItem.sentence_idx) : '');
+                                    var sameSentence = (tSent && aSent) ? (tSent === aSent) : true;
+                                    if (!sameSentence) continue;
+
+                                    var sameCompoundId = (tSpan.hasAttribute('data-compound-id') && aSpan.hasAttribute('data-compound-id'))
+                                        ? (tSpan.getAttribute('data-compound-id') === aSpan.getAttribute('data-compound-id'))
+                                        : false;
+
+                                    var isCompoundSibling = false;
+                                    if (typeof findCompoundSiblingSpans === 'function') {
+                                        var grp = findCompoundSiblingSpans(aSpan);
+                                        if (grp && grp.indexOf(tSpan) !== -1) {
+                                            isCompoundSibling = true;
                                         }
                                     }
-                                }
-                                var isCompoundSibling = false;
-                                if (!sharesIdenticalAtomic) {
-                                    for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
-                                        var atItem = window.AppState.activeTokenSelections[a];
-                                        var aSpan = spanByVidx[String(atItem.visual_idx)];
-                                        var tSpan = spanByVidx[String(token.visual_idx)];
-                                        if (aSpan && tSpan) {
-                                            var grp = findCompoundSiblingSpans(aSpan);
-                                            if (grp && grp.indexOf(tSpan) !== -1) {
-                                                isCompoundSibling = true;
-                                                break;
-                                            }
+                                    var isRelatedPartner = false;
+                                    if (typeof findRelatedTokenSpans === 'function') {
+                                        var relGrp = findRelatedTokenSpans(aSpan);
+                                        if (relGrp && relGrp.indexOf(tSpan) !== -1) {
+                                            isRelatedPartner = true;
                                         }
                                     }
+
+                                    if (sameCompoundId || isCompoundSibling || isRelatedPartner) {
+                                        isSameOccurrence = true;
+                                        break;
+                                    }
                                 }
-                                if (sharesIdenticalAtomic || isCompoundSibling) {
+
+                                if (isSameOccurrence) {
                                     hasMatchingRow = true;
                                     isTargetedActiveTokenMatch = true;
+                                    break;
+                                } else {
+                                    hasMatchingRow = true;
+                                    isDirectRowMatch = false;
+                                    isTargetedActiveTokenMatch = false;
+                                    matchedRowId = rid;
                                     break;
                                 }
                             }

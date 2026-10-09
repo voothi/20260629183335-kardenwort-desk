@@ -438,3 +438,43 @@ def test_single_mode_unified_paragraph_no_sliding_duplicates_de_and_en():
     assert "<div>This is the first sentence.</div>" not in en_html
 
 
+def test_numeric_sentence_termination_splitting():
+    """Verifies that trailing numbers with periods followed by capitalized words split as sentence boundaries."""
+    text = (
+        "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde 1. "
+        "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde 2."
+    )
+    res = desk.split_single_mode_text(text)
+    assert len(res) == 2
+    assert res[0] == "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde 1."
+    assert res[1] == "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde 2."
+
+    simple_num = "Er wurde 1. Er fängt an."
+    res_simple = desk.split_single_mode_text(simple_num)
+    assert res_simple == ["Er wurde 1.", "Er fängt an."]
+
+
+def test_ordinal_and_date_retention_no_split():
+    """Verifies that ordinal dates and article-preceded numbers do not split inappropriately."""
+    # Ordinal followed by lowercase continuation
+    assert desk.split_single_mode_text("am 1. mai") == ["am 1. mai"]
+
+    # Date phrase followed by capitalized month name
+    date_text = "Wir treffen uns am 1. Mai. Das Wetter ist schön."
+    assert desk.split_single_mode_text(date_text) == [
+        "Wir treffen uns am 1. Mai.",
+        "Das Wetter ist schön."
+    ]
+
+    # Article preceding ordinal number
+    chapter_text = "Das 1. Kapitel ist lang."
+    assert desk.split_single_mode_text(chapter_text) == ["Das 1. Kapitel ist lang."]
+
+    # Numbered list prefixes preserved at sentence start
+    list_text = "1. Er fängt an. 2. Er hört auf."
+    assert desk.split_single_mode_text(list_text) == [
+        "1. Er fängt an.",
+        "2. Er hört auf."
+    ]
+
+

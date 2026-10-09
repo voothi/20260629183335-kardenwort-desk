@@ -1212,3 +1212,79 @@ def test_frontend_decide_token_click_action(page, tmp_path):
     assert result["idle_lemmaSelected"]["shouldDeselect"] is True
     assert result["idle_inactive"]["shouldDeselect"] is False
 
+
+def test_separable_verb_peer_highlight_across_sentences(page, tmp_path):
+    """Verifies that secondary occurrences of a separable verb receive lemma-peer-highlight when Lemma toggle is ON."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261009102500"
+    tsv_file = tmp_path / f"{zid}-separable-peer.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "fängt + an\tanfangen\tverb\tначинать\t1\tEr fängt heute an 1. Er fängt morgen wieder an 2.\tОн начинает сегодня. Он начинает снова завтра.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "Er fängt heute an 1. Er fängt morgen wieder an 2."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    faengt_spans = page.locator('#source-container span.word:has-text("fängt")')
+    assert faengt_spans.count() >= 2
+    first_faengt = faengt_spans.nth(0)
+    second_faengt = faengt_spans.nth(1)
+
+    an_spans = page.locator('#source-container span.word:has-text("an")')
+    assert an_spans.count() >= 2
+    first_an = an_spans.nth(0)
+    second_an = an_spans.nth(1)
+
+    # 1. Click first 'fängt' in text (sentence 1)
+    first_faengt.click()
+
+    # 2. Sentence 1 verb and particle receive active highlight; sentence 2 occurrences do not
+    assert "highlight-purple-active" in (first_faengt.get_attribute("class") or "")
+    assert "highlight-purple-active" in (first_an.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (second_faengt.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (second_an.get_attribute("class") or "")
+
+    # 3. Toggle Same Lemma ON -> sentence 2 occurrences receive lemma-peer-highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is True
+    assert "highlight-purple-active" in (first_faengt.get_attribute("class") or "")
+    assert "highlight-purple-active" in (first_an.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (second_faengt.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (second_an.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (second_faengt.get_attribute("class") or "")
+    assert "highlight-purple-active" not in (second_an.get_attribute("class") or "")
+
+    # 4. Toggle Same Lemma OFF -> sentence 2 occurrences lose peer highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is False
+    assert "highlight-purple-active" in (first_faengt.get_attribute("class") or "")
+    assert "highlight-purple-active" in (first_an.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (second_faengt.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (second_an.get_attribute("class") or "")
+
