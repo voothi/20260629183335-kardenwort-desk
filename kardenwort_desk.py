@@ -19545,18 +19545,62 @@ window.__CONFIG__ = {ui_config_json};
             var activeLemmas = {};
             var activeTokenRowIds = {};
             if (hasActiveTokens) {
+                var addLem = function(lVal) {
+                    if (lVal) {
+                        var c = String(lVal).trim().toLowerCase();
+                        if (c) activeLemmas[c] = true;
+                    }
+                };
+                var addRowLem = function(rVal) {
+                    if (rVal !== undefined && rVal !== null) {
+                        var rStr = String(rVal);
+                        activeTokenRowIds[rStr] = true;
+                        if (typeof getLemmaByRowId === 'function') {
+                            var rL = getLemmaByRowId(rVal);
+                            if (rL) addLem(rL);
+                        }
+                    }
+                };
+
                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                     var item = window.AppState.activeTokenSelections[a];
                     if (item.visual_idx !== undefined && item.visual_idx !== null) {
                         activeVisualIdxs[String(item.visual_idx)] = true;
                     }
                     if (item.lemma) {
-                        activeLemmas[String(item.lemma).trim().toLowerCase()] = true;
+                        addLem(item.lemma);
                     }
+                    if (item.atomic_id !== undefined && item.atomic_id !== null) {
+                        addRowLem(item.atomic_id);
+                    }
+                    if (item.atomic_row_ids) {
+                        for (var r = 0; r < item.atomic_row_ids.length; r++) {
+                            addRowLem(item.atomic_row_ids[r]);
+                        }
+                    }
+                    if (item.row_ids) {
+                        for (var r = 0; r < item.row_ids.length; r++) {
+                            addRowLem(item.row_ids[r]);
+                        }
+                    }
+                    if (item.row_id !== undefined && item.row_id !== null) {
+                        addRowLem(item.row_id);
+                    }
+
                     var vTok = tokByVidx[String(item.visual_idx)];
-                    if (vTok && vTok.row_ids) {
-                        for (var r = 0; r < vTok.row_ids.length; r++) {
-                            activeTokenRowIds[String(vTok.row_ids[r])] = true;
+                    if (vTok) {
+                        if (vTok.lemma) {
+                            addLem(vTok.lemma);
+                        }
+                        if (vTok.atomic_row_ids) {
+                            for (var r = 0; r < vTok.atomic_row_ids.length; r++) {
+                                addRowLem(vTok.atomic_row_ids[r]);
+                            }
+                        }
+                        if (vTok.row_ids) {
+                            for (var r = 0; r < vTok.row_ids.length; r++) {
+                                addRowLem(vTok.row_ids[r]);
+                            }
                         }
                     }
                 }
@@ -19580,7 +19624,20 @@ window.__CONFIG__ = {ui_config_json};
             for (var i = 0; i < tokenMap.length; i++) {
                 var token = tokenMap[i];
                 var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
-                if ((!token.row_ids || token.row_ids.length === 0) && !isOrphanSelected) continue;
+                var tokRowIds = [];
+                if (token.atomic_row_ids && token.atomic_row_ids.length > 0) {
+                    for (var tri = 0; tri < token.atomic_row_ids.length; tri++) {
+                        tokRowIds.push(token.atomic_row_ids[tri]);
+                    }
+                }
+                if (token.row_ids && token.row_ids.length > 0) {
+                    for (var tri = 0; tri < token.row_ids.length; tri++) {
+                        if (tokRowIds.indexOf(token.row_ids[tri]) === -1) {
+                            tokRowIds.push(token.row_ids[tri]);
+                        }
+                    }
+                }
+                if (tokRowIds.length === 0 && !isOrphanSelected) continue;
                 
                 var hasMatchingRow = false;
                 var isDirectRowMatch = false;
@@ -19589,14 +19646,29 @@ window.__CONFIG__ = {ui_config_json};
 
                 var tokClean = (token.lower_clean || token.text || '').trim().toLowerCase();
                 var tokLem = (token.lemma || tokClean).trim().toLowerCase();
-                var isLemmaActive = hasActiveTokens && activeLemmas.hasOwnProperty(tokLem);
+                var isLemmaActive = false;
+                if (hasActiveTokens) {
+                    if (tokLem && activeLemmas.hasOwnProperty(tokLem)) {
+                        isLemmaActive = true;
+                    } else {
+                        for (var cr = 0; cr < tokRowIds.length; cr++) {
+                            if (typeof getLemmaByRowId === 'function') {
+                                var candLem = getLemmaByRowId(tokRowIds[cr]);
+                                if (candLem && activeLemmas.hasOwnProperty(String(candLem).trim().toLowerCase())) {
+                                    isLemmaActive = true;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
 
                 if (hasActiveTokens && (isOrphanSelected || !!activeVisualIdxs[String(token.visual_idx)])) {
                     hasMatchingRow = true;
                     isTargetedActiveTokenMatch = true;
-                } else if (token.row_ids && token.row_ids.length > 0) {
-                    for (var r = 0; r < token.row_ids.length; r++) {
-                        var rid = token.row_ids[r];
+                } else if (tokRowIds.length > 0) {
+                    for (var r = 0; r < tokRowIds.length; r++) {
+                        var rid = tokRowIds[r];
                         if (primaryTargetRowIds.hasOwnProperty(rid)) {
                             if (!isLemmaActive) {
                                 hasMatchingRow = true;
@@ -19759,10 +19831,26 @@ window.__CONFIG__ = {ui_config_json};
                     if (s.classList.contains('highlight-orange-active') || s.classList.contains('highlight-purple-active')) continue;
                     var sLem = (getWordLemma(s) || s.getAttribute('data-lower-clean') || '').trim().toLowerCase();
                     if (!sLem) {
-                        var td = findTokenData(s);
+                        var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
                         if (td && td.lemma) sLem = String(td.lemma).trim().toLowerCase();
                     }
-                    if (sLem && activeLemmas[sLem]) {
+                    var sMatchesLemma = (sLem && activeLemmas[sLem]);
+                    if (!sMatchesLemma) {
+                        var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
+                        if (td) {
+                            var tdRows = (td.atomic_row_ids && td.atomic_row_ids.length > 0) ? td.atomic_row_ids : (td.row_ids || []);
+                            for (var tr = 0; tr < tdRows.length; tr++) {
+                                if (typeof getLemmaByRowId === 'function') {
+                                    var tdLem = getLemmaByRowId(tdRows[tr]);
+                                    if (tdLem && activeLemmas[String(tdLem).trim().toLowerCase()]) {
+                                        sMatchesLemma = true;
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    if (sMatchesLemma) {
                         try {
                             s.classList.add('lemma-peer-highlight');
                         } catch(e) {}
