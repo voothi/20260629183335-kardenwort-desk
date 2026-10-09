@@ -1289,3 +1289,99 @@ def test_separable_verb_peer_highlight_across_sentences(page, tmp_path):
     assert "lemma-peer-highlight" not in (second_faengt.get_attribute("class") or "")
     assert "lemma-peer-highlight" not in (second_an.get_attribute("class") or "")
 
+
+def test_contraction_peer_highlight_across_sentences(page, tmp_path):
+    """Verifies that secondary occurrences of constituent lemmas from a contraction token
+    (e.g. 'you're' decomposed into 'you' and 'be', and 'be' in a subsequent sentence) receive
+    lemma-peer-highlight when Lemma toggle is ON, and baseline styling when OFF."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    if not config.has_section("sentences_mode"):
+        config.add_section("sentences_mode")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261010002101"
+    tsv_file = tmp_path / f"{zid}-contraction-peer.en.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "you're\tyou\tPRON\tты\t1\tYou're here 1. We may be able 2.\tТы здесь. Мы можем.\t0\n"
+        "you're\tbe\tVERB\tбыть\t1\tYou're here 1. We may be able 2.\tТы здесь. Мы можем.\t0\n"
+        "be\tbe\tVERB\tбыть\t2\tYou're here 1. We may be able 2.\tТы здесь. Мы можем.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "You're here 1. We may be able 2."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    you_span = page.locator('#source-container span.word[data-lower-clean="you\'re"]')
+    be_span = page.locator('#source-container span.word[data-lower-clean="be"]')
+
+    # 1. Click you're with Lemma toggle OFF
+    you_span.click()
+    you_cls = you_span.get_attribute("class") or ""
+    be_cls = be_span.get_attribute("class") or ""
+    assert "highlight-orange-active" in you_cls
+    assert "highlight-orange-active" not in be_cls
+    assert "lemma-peer-highlight" not in be_cls
+
+    # 2. Toggle Lemma ON -> be receives lemma-peer-highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is True
+    you_cls = you_span.get_attribute("class") or ""
+    be_cls = be_span.get_attribute("class") or ""
+    assert "highlight-orange-active" in you_cls
+    assert "highlight-orange-active" not in be_cls
+    assert "lemma-peer-highlight" in be_cls
+
+    # 3. Toggle Lemma OFF -> be loses lemma-peer-highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is False
+    be_cls = be_span.get_attribute("class") or ""
+    assert "lemma-peer-highlight" not in be_cls
+    assert "highlight-orange-active" not in be_cls
+
+    # 4. Deselect you're
+    you_span.click()
+    assert page.evaluate("() => window.AppState.activeTokenSelections.length") == 0
+
+    # 5. Toggle Lemma ON and click 'be' -> you're receives lemma-peer-highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is True
+    be_span.click()
+    you_cls = you_span.get_attribute("class") or ""
+    be_cls = be_span.get_attribute("class") or ""
+    assert "highlight-orange-active" in be_cls
+    assert "lemma-peer-highlight" in you_cls
+    assert "highlight-orange-active" not in you_cls
+
+    # 6. Toggle Lemma OFF while 'be' is selected -> you're loses lemma-peer-highlight
+    page.locator("#kw-btn-same-lemma").click()
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is False
+    you_cls = you_span.get_attribute("class") or ""
+    be_cls = be_span.get_attribute("class") or ""
+    assert "highlight-orange-active" in be_cls
+    assert "lemma-peer-highlight" not in you_cls
+    assert "highlight-orange-active" not in you_cls
+
+
