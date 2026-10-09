@@ -5360,6 +5360,68 @@ def test_workspace_tabs_dynamic_translation_and_render_translated_text(page):
     assert "Первое предложение. Второе предложение." in tc.inner_text()
 
 
+def test_container_translation_slot_preserving_assembly(page):
+    """
+    Verify that updateSentences() and updateActiveTabTranslation() preserve indexed line slots
+    for child sentences 1..N in container delivery mode, preventing line shifts when an intermediate
+    child card is empty or pending.
+    """
+    html = """<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body data-web-mode="true" data-zid="20261009131247">
+<div class="container">
+  <div id="session-zid">20261009131247</div>
+  <div id="kw-workspace-tab-bar">
+    <div id="kw-tab-track">
+      <button class="kw-tab-chip active" data-tab-seq="1" data-sentence-idx="0">All</button>
+      <button class="kw-tab-chip" data-tab-seq="2" data-sentence-idx="1">1</button>
+      <button class="kw-tab-chip" data-tab-seq="3" data-sentence-idx="2">2</button>
+      <button class="kw-tab-chip" data-tab-seq="4" data-sentence-idx="3">3</button>
+    </div>
+  </div>
+  <div class="source-text" id="source-container">
+    Line 1 source.
+Line 2 source.
+Line 3 source.
+  </div>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true">Loading translation...</span>
+  </div>
+  <table id="lemma-table"><tbody></tbody></table>
+</div>
+<script id="sentence-cards" type="application/json">
+[
+  {"index": 0, "seq_num": 1, "sentence_idx": 0, "label": "All", "source_text": "Line 1 source.\\nLine 2 source.\\nLine 3 source.", "translated_text": ""},
+  {"index": 1, "seq_num": 2, "sentence_idx": 1, "label": "1", "source_text": "Line 1 source.", "translated_text": ""},
+  {"index": 2, "seq_num": 3, "sentence_idx": 2, "label": "2", "source_text": "Line 2 source.", "translated_text": ""},
+  {"index": 3, "seq_num": 4, "sentence_idx": 3, "label": "3", "source_text": "Line 3 source.", "translated_text": ""}
+]
+</script>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Update only sentence 1 and sentence 3 (sentence 2 remains empty / pending)
+    page.evaluate("""
+        window.WorkspaceTabs.updateSentences([
+            { sentence_index: 1, sentence_destination: "Line 1 translated" },
+            { sentence_index: 3, sentence_destination: "Line 3 translated" }
+        ]);
+    """)
+
+    cards = page.evaluate("window.WorkspaceTabs.getCards()")
+    overview_card = cards[0]
+    expected_translation = "Line 1 translated\\n\\nLine 3 translated"
+    assert overview_card["translated_text"] == "Line 1 translated\n\nLine 3 translated"
+
+    tc = page.locator("#translation-container")
+    tc_text = tc.inner_text().strip()
+    assert "Line 1 translated" in tc_text
+    assert "Line 3 translated" in tc_text
+
+
 def test_compound_subtoken_selection_and_highlight_isolation_across_shared_subtokens(page, tmp_path, monkeypatch):
     import configparser
     import sys

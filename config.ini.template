@@ -61,7 +61,7 @@ failover_strategy = chain
 ; lemma_base_provider = google
 
 ; The IP addresses to ping for the fast connectivity check before online translation (comma separated, e.g. 8.8.8.8, 1.1.1.1). Leave empty to disable.
-fast_connectivity_check_ips = 
+fast_connectivity_check_ips = 8.8.8.8, 1.1.1.1 
 
 ; The provider for text reprocessing via Re-text (deepl, google, argos)
 text_reprocess_provider = google

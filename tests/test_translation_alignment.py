@@ -478,3 +478,20 @@ def test_ordinal_and_date_retention_no_split():
     ]
 
 
+def test_article_free_german_ordinal_retention():
+    """Verifies that German ordinals without preceding articles do not split inappropriately."""
+    # Ordinal directly preceding noun without article
+    res1 = desk.split_single_mode_text("Sie wurde 2. Siegerin im Wettbewerb. Danach feierte sie.")
+    assert res1 == [
+        "Sie wurde 2. Siegerin im Wettbewerb.",
+        "Danach feierte sie."
+    ]
+
+    res2 = desk.split_single_mode_text("Er belegte 3. Platz im Rennen.")
+    assert res2 == ["Er belegte 3. Platz im Rennen."]
+
+    # Sentence starter pronoun following number splits correctly
+    res_pron = desk.split_single_mode_text("Er wurde 1. Er fängt an.")
+    assert res_pron == ["Er wurde 1.", "Er fängt an."]
+
+

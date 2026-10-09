@@ -530,7 +530,7 @@ def check_endpoint_reachable(server_url: str, connect_timeout: float = MICROSERV
     """
     if not server_url:
         return False
-    effective_timeout = min(connect_timeout, 0.4)
+    effective_timeout = connect_timeout if (connect_timeout is not None and connect_timeout > 0) else MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
     parsed = urllib.parse.urlparse(server_url)
     host = parsed.hostname or "127.0.0.1"
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
@@ -6470,12 +6470,12 @@ def run_argos_translation(text, source, target, config, resolved_paths, zid=None
 def is_network_online_multi(hosts, port=53, timeout=0.3):
     if not hosts:
         return True
-    timeout = min(timeout, 0.4)
+    effective_timeout = timeout if (timeout is not None and timeout > 0) else 0.3
         
     def check_host(host):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-            s.settimeout(timeout)
+            s.settimeout(effective_timeout)
             s.connect((host.strip(), port))
             s.close()
             return True
@@ -7463,6 +7463,37 @@ def _split_long_line(line, max_chars=90):
     out.append(cur)
     return out
 
+GERMAN_CALENDAR_MONTHS: FrozenSet[str] = frozenset({
+    "januar", "februar", "märz", "maerz", "april", "mai", "juni",
+    "juli", "august", "september", "oktober", "november", "dezember",
+    "january", "february", "march", "may", "june",
+    "july", "august", "september", "october", "november", "december"
+})
+
+GERMAN_ORDINAL_INDICATORS: FrozenSet[str] = frozenset({
+    "am", "im", "vom", "beim", "zum", "zur", "der", "die", "das", "den", "dem", "des",
+    "ein", "eine", "einer", "einem", "einen", "eines", "the", "on", "in", "at"
+})
+
+GERMAN_SENTENCE_STARTER_WORDS: FrozenSet[str] = frozenset({
+    "ich", "du", "er", "sie", "es", "wir", "ihr", "man", "jemand", "niemand",
+    "mein", "meine", "dein", "deine", "sein", "seine", "ihr", "ihre", "unser", "unsere", "euer", "eure",
+    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "einem", "einen", "eines",
+    "dieser", "diese", "dieses", "diesen", "diesem", "dieser", "jener", "jene", "jenes",
+    "wer", "was", "wie", "wo", "wann", "warum", "weshalb", "wieso", "wohin", "woher", "welcher", "welche", "welches",
+    "und", "oder", "aber", "denn", "doch", "jedoch", "allerdings",
+    "weil", "da", "dass", "daß", "wenn", "falls", "obwohl", "ob", "während", "bevor", "nachdem", "als", "seit",
+    "hier", "dort", "da", "nun", "jetzt", "damals", "heute", "gestern", "morgen",
+    "dann", "danach", "dabei", "darauf", "daran", "daraus", "dazu", "dafür", "damit",
+    "zudem", "außerdem", "zuerst", "schließlich", "endlich", "plötzlich", "leider", "vielleicht",
+    "nicht", "kein", "keine", "keiner", "keinem", "keinen", "keines",
+    "ist", "sind", "war", "waren", "wird", "werden", "wurde", "wurden",
+    "hat", "haben", "hatte", "hatten", "kann", "können", "konnte", "konnten",
+    "muss", "müssen", "musste", "mussten", "soll", "sollen", "sollte", "sollten",
+    "will", "wollen", "wollte", "wollten", "darf", "dürfen", "durfte", "durften"
+})
+
+
 def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:", punctuation_marks=".,;:!?()\"[]{}—–"):
     import re
     if not text or not str(text).strip() or str(text).strip().lower() == 'none':
@@ -7515,19 +7546,10 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
                     next_token = next_match.group(1) if next_match else ''
                     next_word_clean = re.sub(r'^[^\w]+|[^\w]+$', '', next_token).lower()
                     
-                    month_names = {
-                        "januar", "februar", "märz", "maerz", "april", "mai", "juni",
-                        "juli", "august", "september", "oktober", "november", "dezember",
-                        "january", "february", "march", "may", "june",
-                        "july", "august", "september", "october", "november", "december"
-                    }
-                    ordinal_indicators = {
-                        "am", "im", "vom", "beim", "zum", "zur", "der", "die", "das", "den", "dem", "des",
-                        "ein", "eine", "einer", "einem", "einen", "eines", "the", "on", "in", "at"
-                    }
-                    is_ordinal_date = (prev_token in ordinal_indicators) or (next_word_clean in month_names)
+                    is_ordinal_date = (prev_token in GERMAN_ORDINAL_INDICATORS) or (next_word_clean in GERMAN_CALENDAR_MONTHS)
                     is_capitalized_start = bool(next_token and next_token[0].isupper())
-                    if is_ordinal_date or not is_capitalized_start:
+                    is_ordinal_noun = is_capitalized_start and (next_word_clean not in GERMAN_SENTENCE_STARTER_WORDS)
+                    if is_ordinal_date or is_ordinal_noun or not is_capitalized_start:
                         continue
         
         splits.append(split_pos)
@@ -21580,15 +21602,27 @@ window.__CONFIG__ = {ui_config_json};
                             isSingleMode = false;
                         }
                         if (activeSentenceIdx === 0 && !isSingleMode) {
-                            var sortedChildren = cards.filter(function(card) {
-                                return card.sentence_idx > 0 && card.translated_text && card.translated_text.trim();
-                            }).sort(function(a, b) {
-                                return (a.sentence_idx || 0) - (b.sentence_idx || 0);
-                            });
-                            if (sortedChildren.length > 1) {
-                                tText = sortedChildren.map(function(card) {
-                                    return card.translated_text.trim();
-                                }).join(String.fromCharCode(10));
+                            var maxSentenceIdx = 0;
+                            for (var sc = 0; sc < cards.length; sc++) {
+                                if (cards[sc].sentence_idx > maxSentenceIdx) {
+                                    maxSentenceIdx = cards[sc].sentence_idx;
+                                }
+                            }
+                            if (maxSentenceIdx > 1) {
+                                var slots = new Array(maxSentenceIdx);
+                                for (var si = 0; si < maxSentenceIdx; si++) {
+                                    slots[si] = "";
+                                }
+                                for (var sc = 0; sc < cards.length; sc++) {
+                                    var cIdx = cards[sc].sentence_idx;
+                                    if (cIdx > 0 && cIdx <= maxSentenceIdx) {
+                                        slots[cIdx - 1] = (cards[sc].translated_text || "").trim();
+                                    }
+                                }
+                                var hasAnyText = slots.some(function(txt) { return txt.length > 0; });
+                                if (hasAnyText) {
+                                    tText = slots.join(String.fromCharCode(10));
+                                }
                             }
                         }
                         tText = tText || '';
@@ -21885,15 +21919,29 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 for (var c = 0; c < cards.length; c++) {
                     if (cards[c].sentence_idx === 0) {
-                        var sortedChildren = cards.filter(function(card) {
-                            return card.sentence_idx > 0 && card.translated_text && card.translated_text.trim();
-                        }).sort(function(a, b) {
-                            return (a.sentence_idx || 0) - (b.sentence_idx || 0);
-                        });
-                        if (sortedChildren.length > 0 && !isSingleMode) {
-                            cards[c].translated_text = sortedChildren.map(function(card) {
-                                return card.translated_text.trim();
-                            }).join(String.fromCharCode(10));
+                        var maxSentenceIdx = 0;
+                        for (var sc = 0; sc < cards.length; sc++) {
+                            if (cards[sc].sentence_idx > maxSentenceIdx) {
+                                maxSentenceIdx = cards[sc].sentence_idx;
+                            }
+                        }
+                        if (maxSentenceIdx > 0 && !isSingleMode) {
+                            var slots = new Array(maxSentenceIdx);
+                            for (var si = 0; si < maxSentenceIdx; si++) {
+                                slots[si] = "";
+                            }
+                            for (var sc = 0; sc < cards.length; sc++) {
+                                var cIdx = cards[sc].sentence_idx;
+                                if (cIdx > 0 && cIdx <= maxSentenceIdx) {
+                                    slots[cIdx - 1] = (cards[sc].translated_text || "").trim();
+                                }
+                            }
+                            var hasAnyText = slots.some(function(txt) { return txt.length > 0; });
+                            if (hasAnyText) {
+                                cards[c].translated_text = slots.join(String.fromCharCode(10));
+                            } else if (window.AppState && window.AppState.translatedText) {
+                                cards[c].translated_text = window.AppState.translatedText;
+                            }
                         } else if (window.AppState && window.AppState.translatedText) {
                             cards[c].translated_text = window.AppState.translatedText;
                         }
