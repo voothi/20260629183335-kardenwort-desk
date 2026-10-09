@@ -636,6 +636,106 @@ def test_orthogonal_chains_disparate_configurations(tmp_path):
         assert getattr(lemma_res, "provenance", None) == "live:argos"
 
 
+def test_cyclic_multi_provider_generic_errors_terminate_without_recursion_error(tmp_path):
+    """Task 3.1: Verify cyclic multi-provider generic errors terminate safely without RecursionError."""
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(lemma_chain="google, deepl", strategy="chain")
+
+    failover_calls = []
+
+    def on_failover(task, from_p, to_p, zid=None):
+        failover_calls.append((task, from_p, to_p))
+
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None, task_type='lemma', **kwargs):
+        raise RuntimeError(f"Simulated non-rate-limit generic failure on {provider}")
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        # Must terminate safely without raising RecursionError
+        res = translate_lemmas_fast_path(
+            ["House"], "en", "de", config, resolved_paths, provider="google", on_failover=on_failover
+        )
+        assert res == {"House": ""}
+        # Non-rate-limit generic exceptions must not trigger failover switching
+        assert failover_calls == []
+
+        # Calling with active_provider already in visited set terminates cleanly
+        res_visited = translate_lemmas_fast_path(
+            ["House"], "en", "de", config, resolved_paths, provider="google", visited_providers={"google", "deepl"}
+        )
+        assert res_visited == {}
+
+
+def test_tier0_delimiter_mismatch_cascades_to_tier1_same_provider(tmp_path):
+    """Task 3.2: Verify Tier 0 delimiter mismatch cascades to Tier 1 on same provider without failover."""
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(lemma_chain="google, deepl", strategy="chain")
+
+    failover_calls = []
+
+    def on_failover(task, from_p, to_p, zid=None):
+        failover_calls.append((task, from_p, to_p))
+
+    def mock_translate(text, source, target, cfg, paths, provider=None, zid=None, trace_id=None, task_type='lemma', **kwargs):
+        assert provider == "google", f"Expected provider 'google', but got '{provider}'"
+        if "; " in text:
+            # Tier 0 semicolon join: return response missing semicolon (delimiter mismatch)
+            return "House and Book"
+        elif "1. " in text:
+            # Tier 1 numbered prefix: return valid numbered response
+            return "1. House\n2. Book"
+        return ""
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_translate):
+        res = translate_lemmas_fast_path(
+            ["Haus", "Buch"], "de", "en", config, resolved_paths, provider="google", on_failover=on_failover
+        )
+        assert res == {"Haus": "House", "Buch": "Book"}
+        assert getattr(res, "provenance", None) == "live:google"
+        assert failover_calls == []
+
+
+def test_session_arbiter_updates_record_session_active_provider_on_cooldown(tmp_path):
+    """Task 3.3: Verify SessionArbiter updates record_session_active_provider on cooldown re-selection."""
+    from kardenwort_controller import SessionArbiter
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl", lemma_chain="google, deepl", strategy="chain")
+    test_zid = "20261009140001"
+
+    kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
+    try:
+        # Place primary provider 'google' into cooldown for both text and lemma
+        kardenwort_desk.record_provider_cooldown("google", duration=60.0, config=config, resolved_paths=resolved_paths, task_type="text")
+        kardenwort_desk.record_provider_cooldown("google", duration=60.0, config=config, resolved_paths=resolved_paths, task_type="lemma")
+
+        arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+
+        mock_lookup_res = {
+            "session_zid": test_zid,
+            "tsv_path": str(tmp_path / "session.tsv"),
+            "comments": [],
+            "headers": ["Front", "Back"],
+            "data_rows": [["Haus", "House"]],
+            "sentence_translation": "Das ist ein Haus.",
+            "fingerprint": "mock_fp_123",
+        }
+
+        with patch("kardenwort_controller.core_lookup", return_value=mock_lookup_res):
+            sess = arbiter.start_session("Das ist ein Haus.", "de", zid=test_zid)
+
+        assert sess["active_text_provider"] == "deepl"
+        assert sess["active_lemma_provider"] == "deepl"
+        assert sess["active_provider"] == "deepl"
+
+        # Check recorded active provider state on disk and registry
+        active_rec = kardenwort_desk.get_session_active_providers(test_zid, config=config, resolved_paths=resolved_paths)
+        assert active_rec.get("active_text_provider") == "deepl"
+        assert active_rec.get("active_lemma_provider") == "deepl"
+        assert active_rec.get("active_provider") == "deepl"
+    finally:
+        kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
+
+
+
 
 
 
