@@ -7134,7 +7134,7 @@ def _parse_numbered_response(response_text, n):
     return None
 
 
-def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider, zid=None, on_failover=None, **kwargs):
+def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider, zid=None, on_failover=None, visited_providers=None, **kwargs):
     """
     Translate a list of lemmas using a multi-tier batch strategy.
 
@@ -7145,6 +7145,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
     """
     import concurrent.futures
 
+    if visited_providers is None:
+        visited_providers = kwargs.pop('visited_providers', None)
+    visited = set(visited_providers or ())
+
     chain, strategy = resolve_provider_chain(config, task_type='lemma')
     norm_p = (provider or "").strip().lower()
     if not norm_p or norm_p == 'default' or (chain and norm_p == chain[0]):
@@ -7154,9 +7158,18 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         candidates = [norm_p] + [p for p in chain if p != norm_p]
         active_provider = provider
 
+    if active_provider in visited:
+        logger.warning(f"Fast-path cycle detected for provider '{active_provider}' (visited: {visited}). Terminating fast-path recursion.")
+        unvisited = [c for c in candidates if c not in visited and not is_provider_cooled_down(c, config=config, resolved_paths=resolved_paths, task_type='lemma')]
+        if unvisited and strategy != 'strict':
+            active_provider = unvisited[0]
+        else:
+            prov_tag = f"live:{active_provider}" if active_provider else "live:unknown"
+            return ProvenanceDict({}, provenance=prov_tag)
+
     if is_provider_cooled_down(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma') and strategy != 'strict':
         for cand in candidates:
-            if not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
+            if cand not in visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                 logger.warning(f"Lemma provider '{active_provider}' is in cooldown. Switching fast-path to '{cand}'...")
                 notify_provider_failover('lemma', active_provider, cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                 active_provider = cand
@@ -7180,7 +7193,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
         chunks = [lemmas[i:i + batch_size] for i in range(0, len(lemmas), batch_size)]
         chunk_prov = prov_tag
         for chunk in chunks:
-            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, **kwargs)
+            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, visited_providers=visited, **kwargs)
             if hasattr(chunk_result, 'provenance') and chunk_result.provenance:
                 chunk_prov = chunk_result.provenance
                 if str(chunk_prov).startswith("live:"):
@@ -7230,32 +7243,37 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
             raise
 
     def _handle_tier_exception(tier_name, exc):
+        is_rate = is_rate_limit_exception(exc)
         is_unavail = is_provider_unavailable_exception(exc)
-        if is_rate_limit_exception(exc):
+        if not (is_rate or is_unavail):
+            return None
+
+        if is_rate:
             record_provider_cooldown(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
         elif is_unavail:
             record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
 
         fallback_provider = None
         is_net = is_network_failure_exception(exc)
+        next_visited = set(visited) | {active_provider}
         if strategy != 'strict':
             if is_net and check_ips and not is_network_online_multi(hosts=check_ips):
                 # Confirmed host network failure: short-circuit directly to first offline provider in candidates
                 for cand in candidates:
-                    if cand != active_provider and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
+                    if cand != active_provider and cand not in next_visited and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                         fallback_provider = cand
                         break
             if not fallback_provider:
                 # Sequential fallback if host is online, no offline provider available or for rate limit / api errors
                 for cand in candidates:
-                    if cand != active_provider and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
+                    if cand != active_provider and cand not in next_visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                         fallback_provider = cand
                         break
 
         if fallback_provider:
             logger.warning(f"Fast-path {tier_name} failed for '{active_provider}' ({exc}). Short-circuiting to fallback provider '{fallback_provider}'...")
             notify_provider_failover('lemma', active_provider, fallback_provider, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
-            return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, **kwargs)
+            return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, visited_providers=next_visited, **kwargs)
 
         return None
 
