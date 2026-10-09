@@ -12594,6 +12594,14 @@ html, body {{
   body.theme-dark #translation-container span.word.hl-mvp-pin-6 { border: 2px solid #ff7b72 !important; border-radius: 4px !important; margin: -2px !important; }
   body.theme-dark #source-container span.word.hl-mvp-pin-7,
   body.theme-dark #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #a5b4fc !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left: 4px solid #39d353 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left: 4px solid #b78cf7 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left: 4px solid #ff9c3a !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left: 4px solid #ff79c6 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left: 4px solid #f2ca30 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left: 4px solid #39c5ff !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left: 4px solid #ff7b72 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left: 4px solid #a5b4fc !important; }
   body.theme-light #source-container span.word.hl-mvp-pin-0,
   body.theme-light #translation-container span.word.hl-mvp-pin-0,
   body.theme-white #source-container span.word.hl-mvp-pin-0,
@@ -12626,6 +12634,22 @@ html, body {{
   body.theme-light #translation-container span.word.hl-mvp-pin-7,
   body.theme-white #source-container span.word.hl-mvp-pin-7,
   body.theme-white #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #7c3aed !important; border-radius: 4px !important; margin: -2px !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-0 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left: 4px solid #1a7f37 !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-1 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left: 4px solid #8250df !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-2 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left: 4px solid #bc4c00 !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-3 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left: 4px solid #cf222e !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-4 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left: 4px solid #b08800 !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-5 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left: 4px solid #0891b2 !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-6 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left: 4px solid #e11d48 !important; }
+  body.theme-light #lemma-table tbody tr.hl-mvp-pin-7 td:first-child,
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left: 4px solid #7c3aed !important; }
   body.text-selection-mode-active,
   body.text-selection-mode-active * {
     cursor: text !important;
@@ -14171,12 +14195,35 @@ window.__CONFIG__ = {ui_config_json};
                 removeClass(span, 'hl-mvp-pin-' + k);
             }
         }
+        var tRows = document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+        for (var rIdx = 0; rIdx < tRows.length; rIdx++) {
+            var rEl = tRows[rIdx];
+            removeClass(rEl, 'hl-mvp-pin');
+            for (var k = 0; k < 8; k++) {
+                removeClass(rEl, 'hl-mvp-pin-' + k);
+            }
+        }
         for (var m = 0; m < mvpBookmarks.length; m++) {
             var b = mvpBookmarks[m];
+            var mappedRowIds = [];
             if (b.srcSpan) {
                 addClass(b.srcSpan, 'hl-mvp-pin');
                 if (mvpRainbowMode && b.slot !== undefined) {
                     addClass(b.srcSpan, 'hl-mvp-pin-' + b.slot);
+                }
+                var td = (typeof findTokenData === 'function') ? findTokenData(b.srcSpan) : ((window.findTokenData) ? window.findTokenData(b.srcSpan) : null);
+                if (!td && window.findTokenDataByVisualIdx) {
+                    var wIdxAttr = b.srcSpan.getAttribute('data-word-idx');
+                    if (wIdxAttr !== null) td = window.findTokenDataByVisualIdx(wIdxAttr);
+                }
+                if (td) {
+                    if (td.atomic_row_ids && td.atomic_row_ids.length > 0) {
+                        mappedRowIds = mappedRowIds.concat(td.atomic_row_ids);
+                    } else if (td.row_ids && td.row_ids.length > 0) {
+                        mappedRowIds = mappedRowIds.concat(td.row_ids);
+                    } else if (td.atomic_id !== undefined && td.atomic_id !== null) {
+                        mappedRowIds.push(td.atomic_id);
+                    }
                 }
             }
             if (b.transSpan) {
@@ -14185,8 +14232,32 @@ window.__CONFIG__ = {ui_config_json};
                     addClass(b.transSpan, 'hl-mvp-pin-' + b.slot);
                 }
             }
+            if (mappedRowIds.length > 0) {
+                for (var rIdx = 0; rIdx < tRows.length; rIdx++) {
+                    var rEl = tRows[rIdx];
+                    var rIdStr = String(rEl.getAttribute('data-row-id'));
+                    var rIdInt = parseInt(rIdStr, 10);
+                    var matched = (mappedRowIds.indexOf(rIdInt) !== -1 || mappedRowIds.indexOf(rIdStr) !== -1);
+                    if (!matched && window.getRowGroupIds) {
+                        var pList = window.getRowGroupIds(rEl);
+                        for (var p = 0; p < pList.length; p++) {
+                            if (mappedRowIds.indexOf(parseInt(pList[p], 10)) !== -1 || mappedRowIds.indexOf(pList[p]) !== -1) {
+                                matched = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (matched) {
+                        addClass(rEl, 'hl-mvp-pin');
+                        if (mvpRainbowMode && b.slot !== undefined) {
+                            addClass(rEl, 'hl-mvp-pin-' + b.slot);
+                        }
+                    }
+                }
+            }
         }
     }
+    window.refreshBookmarkClasses = refreshBookmarkClasses;
 
     function tokenizeText(text) {
         var rx = /([a-zA-Z0-9'\u00C0-\u024F\u0400-\u04FF\u0500-\u052F\u1E00-\u1EFF]+)/g;
@@ -14573,6 +14644,22 @@ window.__CONFIG__ = {ui_config_json};
                 var entry = mvpBookmarks[bIdx];
                 if (entry.srcSpan) removeClass(entry.srcSpan, 'hl-mvp-hover');
                 if (entry.transSpan) removeClass(entry.transSpan, 'hl-mvp-hover');
+                if (entry.srcSpan && typeof window.findTokenData === 'function') {
+                    var sTd = window.findTokenData(entry.srcSpan);
+                    if (sTd) {
+                        var sRowIds = (sTd.atomic_row_ids !== undefined && sTd.atomic_row_ids !== null)
+                            ? sTd.atomic_row_ids.slice()
+                            : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
+                        if (typeof selectedRowIdsMap !== 'undefined') {
+                            for (var sr = 0; sr < sRowIds.length; sr++) {
+                                delete selectedRowIdsMap[String(sRowIds[sr])];
+                            }
+                        }
+                        if (typeof removeTokenFromActiveSelections === 'function') removeTokenFromActiveSelections(entry.srcSpan);
+                        if (typeof syncSelectionsToCardsAndState === 'function') syncSelectionsToCardsAndState();
+                        if (typeof updateRowStyles === 'function') updateRowStyles();
+                    }
+                }
                 mvpBookmarks.splice(bIdx, 1);
             } else {
                 var targetIdx = getTargetIdx(idx, false);
@@ -14599,6 +14686,22 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
                 mvpBookmarks.push({ idx: bKey, srcSpan: srcSpan, transSpan: transSpan, slot: slot });
+                if (srcSpan && typeof window.findTokenData === 'function') {
+                    var sTd = window.findTokenData(srcSpan);
+                    if (sTd) {
+                        var sRowIds = (sTd.atomic_row_ids !== undefined && sTd.atomic_row_ids !== null)
+                            ? sTd.atomic_row_ids.slice()
+                            : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
+                        if (typeof selectedRowIdsMap !== 'undefined') {
+                            for (var sr = 0; sr < sRowIds.length; sr++) {
+                                selectedRowIdsMap[String(sRowIds[sr])] = true;
+                            }
+                        }
+                        if (typeof addTokenToActiveSelections === 'function') addTokenToActiveSelections(srcSpan);
+                        if (typeof syncSelectionsToCardsAndState === 'function') syncSelectionsToCardsAndState();
+                        if (typeof updateRowStyles === 'function') updateRowStyles();
+                    }
+                }
             }
             refreshBookmarkClasses();
         };
@@ -17909,6 +18012,8 @@ window.__CONFIG__ = {ui_config_json};
             return getSingleTokenWordsToPlay(span, 'inflection');
         }
 
+        window.findTokenData = findTokenData;
+        window.findTokenDataByVisualIdx = findTokenDataByVisualIdx;
         window.findTableRowById = findTableRowById;
         window.getRawRowTranslations = getRawRowTranslations;
         window.getWordTranslation = getWordTranslation;
@@ -18121,12 +18226,15 @@ window.__CONFIG__ = {ui_config_json};
                             if (!isNaN(rvIdx)) vIdxsToRemove[rvIdx] = true;
                         }
                         
+                        var currentTableRows = (tableRows && tableRows.length > 0)
+                            ? tableRows
+                            : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
                         for (var j = 0; j < targetRowIds.length; j++) {
                             var tid = String(targetRowIds[j]);
                             if (tokenDragMode) {
                                 selectedRowIdsMap[tid] = true;
-                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                    var tr = tableRows[trIdx];
+                                for (var trIdx = 0; trIdx < currentTableRows.length; trIdx++) {
+                                    var tr = currentTableRows[trIdx];
                                     var pList = getRowGroupIds(tr);
                                     if (pList.indexOf(tid) !== -1) {
                                         selectedRowIdsMap[pList[0]] = true;
@@ -18137,8 +18245,8 @@ window.__CONFIG__ = {ui_config_json};
                             } else {
                                 if (!isRowStillNeededByOtherActiveTokens(tid, vIdxsToRemove)) {
                                     delete selectedRowIdsMap[tid];
-                                    for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
-                                        var tr = tableRows[trIdx];
+                                    for (var trIdx = 0; trIdx < currentTableRows.length; trIdx++) {
+                                        var tr = currentTableRows[trIdx];
                                         var pList = getRowGroupIds(tr);
                                         if (pList.indexOf(tid) !== -1) {
                                             for (var p = 0; p < pList.length; p++) {
@@ -18162,6 +18270,9 @@ window.__CONFIG__ = {ui_config_json};
                         syncSelectionsToCardsAndState();
                         updateRowStyles();
                         updateBidirectionalHighlights();
+                        if (typeof refreshBookmarkClasses === 'function') {
+                            refreshBookmarkClasses();
+                        }
                         
                         if (e.preventDefault) {
                             e.preventDefault();
@@ -18657,6 +18768,9 @@ window.__CONFIG__ = {ui_config_json};
         syncSelectionsToCardsAndState();
         updateRowStyles();
         updateBidirectionalHighlights();
+        if (typeof refreshBookmarkClasses === 'function') {
+            refreshBookmarkClasses();
+        }
     }
     window.rebindTableRows = rebindTableRows;
     rebindTableRows();
@@ -19164,12 +19278,19 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
             }
-            if (typeof tableRows === 'undefined' || !tableRows) {
+            if (typeof tableRows === 'undefined' || !tableRows || tableRows.length === 0) {
                 var lt = document.getElementById('lemma-table');
                 if (lt) {
                     var tbodies = lt.getElementsByTagName('tbody');
                     var rowsContainer = tbodies.length > 0 ? tbodies[0] : lt;
-                    tableRows = rowsContainer.getElementsByTagName('tr');
+                    var trs = rowsContainer.getElementsByTagName('tr');
+                    var freshRows = [];
+                    for (var r = 0; r < trs.length; r++) {
+                        if (trs[r].getAttribute('data-row-id') !== null) {
+                            freshRows.push(trs[r]);
+                        }
+                    }
+                    tableRows = freshRows;
                 } else {
                     return;
                 }
@@ -21866,6 +21987,10 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 if (!targetCard) return;
 
+                if (typeof window.clearMVPBookmarks === 'function') {
+                    window.clearMVPBookmarks();
+                }
+
                 // 1. Ensure selection state is synchronized across all cards and AppState
                 syncSelectionsToCardsAndState();
 
@@ -21983,6 +22108,11 @@ window.__CONFIG__ = {ui_config_json};
                 buildLcIndex();
                 updateBidirectionalHighlights();
                 updateRowStyles();
+                if (typeof refreshBookmarkClasses === 'function') {
+                    refreshBookmarkClasses();
+                } else if (typeof window.refreshBookmarkClasses === 'function') {
+                    window.refreshBookmarkClasses();
+                }
                 if (window.AppState && window.AppState.filterSelectedOnly) {
                     var lt = document.getElementById('lemma-table');
                     if (lt) addClass(lt, 'kw-filter-selected-only');

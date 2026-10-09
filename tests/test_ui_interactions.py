@@ -6120,6 +6120,153 @@ def test_update_active_provider_synchronizes_workspace_cards_and_preserves_title
     assert word["row_html"] is None
 
 
+def test_token_pinning_and_table_row_selection_unification(page):
+    manifest = [
+        {"text": "have", "is_word": True, "visual_idx": 0, "lower_clean": "have", "row_ids": [8], "atomic_row_ids": [8]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div id="source-container">
+  <span class="word highlight-orange" data-word-idx="0" data-line-idx="0" data-lower-clean="have" data-mvp-type="source" data-mvp-idx="0">have</span>
+</div>
+<div id="translation-container">
+  <span class="word hl-mvp" data-word-idx="0" data-line-idx="0" data-mvp-type="trans" data-mvp-idx="0">иметь</span>
+</div>
+<div id="table-container">
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="8">
+        <td class="editable col-inflected">have</td>
+        <td class="editable col-lemma" data-col="WordSource">have</td>
+        <td class="editable col-translation" data-col="WordDestination">иметь</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="hl-mvp-script" type="text/plain" data-bookmarks="8" data-rainbow="true" data-enabled="true"></script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    token = page.locator("span[data-word-idx='0']")
+    row = page.locator("tr[data-row-id='8']")
+
+    # Initially, row is unselected and not pinned
+    assert "kw-row-selected" not in (row.get_attribute("class") or "")
+    assert "hl-mvp-pin" not in (row.get_attribute("class") or "")
+    assert "hl-mvp-pin" not in (token.get_attribute("class") or "")
+
+    # 1. Primary click on source token pins token and selects table row simultaneously
+    token.click()
+
+    assert "hl-mvp-pin" in (token.get_attribute("class") or "")
+    assert "hl-mvp-pin-0" in (token.get_attribute("class") or "")
+    assert "kw-row-selected" in (row.get_attribute("class") or "")
+    assert "hl-mvp-pin" in (row.get_attribute("class") or "")
+    assert "hl-mvp-pin-0" in (row.get_attribute("class") or "")
+
+    # 2. Deselecting token clears both pin and table row selection
+    token.click()
+
+    assert "hl-mvp-pin" not in (token.get_attribute("class") or "")
+    assert "hl-mvp-pin-0" not in (token.get_attribute("class") or "")
+    assert "kw-row-selected" not in (row.get_attribute("class") or "")
+    assert "hl-mvp-pin" not in (row.get_attribute("class") or "")
+    assert "hl-mvp-pin-0" not in (row.get_attribute("class") or "")
+
+
+def test_workspace_tabs_tab_switch_clears_mvp_bookmarks(page):
+    cards = [
+        {
+            "seq_num": 1,
+            "sentence_idx": 1,
+            "translated_text": "дом",
+            "words": [
+                {
+                    "row_id": "1",
+                    "token_order": 0,
+                    "lemma": "Haus",
+                    "translation": "дом"
+                }
+            ]
+        },
+        {
+            "seq_num": 2,
+            "sentence_idx": 2,
+            "translated_text": "дерево",
+            "words": [
+                {
+                    "row_id": "2",
+                    "token_order": 1,
+                    "lemma": "Baum",
+                    "translation": "дерево"
+                }
+            ]
+        }
+    ]
+    manifest = [
+        {"text": "Haus", "is_word": True, "visual_idx": 0, "lower_clean": "haus", "row_ids": [1], "atomic_row_ids": [1]}
+    ]
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div id="source-container">
+  <span class="kw-sentence-chunk" data-sentence-idx="1">
+    <span class="word highlight-orange" data-word-idx="0" data-sentence-idx="1" data-mvp-type="source" data-mvp-idx="0">Haus</span>
+  </span>
+  <span class="kw-sentence-chunk" data-sentence-idx="2" style="display:none;">
+    <span class="word highlight-orange" data-word-idx="1" data-sentence-idx="2" data-mvp-type="source" data-mvp-idx="1">Baum</span>
+  </span>
+</div>
+<div id="translation-container">
+  <span class="word hl-mvp" data-word-idx="0" data-mvp-type="trans" data-mvp-idx="0">дом</span>
+</div>
+<div id="table-container">
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="1">
+        <td class="editable col-inflected">Haus</td>
+        <td class="editable col-lemma" data-col="WordSource">Haus</td>
+        <td class="editable col-translation" data-col="WordDestination">дом</td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+<script id="sentence-cards" type="application/json">{json.dumps(cards)}</script>
+<script id="token-map" type="application/json">{json.dumps(manifest)}</script>
+<script id="hl-mvp-script" type="text/plain" data-bookmarks="8" data-rainbow="true" data-enabled="true"></script>
+</body>
+</html>"""
+
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    # Pin token on card 1
+    token1 = page.locator("span[data-word-idx='0']")
+    token1.click()
+
+    assert "hl-mvp-pin-0" in (token1.get_attribute("class") or "")
+    row1 = page.locator("tr[data-row-id='1']")
+    assert "hl-mvp-pin-0" in (row1.get_attribute("class") or "")
+
+    # Switch to tab 2
+    page.evaluate("window.WorkspaceTabs.switchToTab(2);")
+
+    # Inactive card span and active state should have bookmarks cleared
+    assert "hl-mvp-pin" not in (token1.get_attribute("class") or "")
+    assert "hl-mvp-pin-0" not in (token1.get_attribute("class") or "")
+
+    # New card row for Baum should not have stale pin
+    row2 = page.locator("tr[data-row-id='2']")
+    assert "hl-mvp-pin" not in (row2.get_attribute("class") or "")
+
+
 
 
 
