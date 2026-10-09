@@ -1149,15 +1149,15 @@ def test_session_status_hydrated_rows_and_translated_text(running_controller):
             data = res.get("data", res)
             assert "rows" in data
             assert isinstance(data["rows"], dict)
-            # In German frequency index, Hund ranks higher than Katze, so row 0 is Hund, row 1 is Katze
+            # Canonical row order is preserved without frequency-sorting drift: row 0 is Katze, row 1 is Hund
             row0 = data["rows"].get("0") or data["rows"].get(0)
             assert row0 is not None
-            assert row0.get("lemma") == "Hund"
-            assert row0.get("trans") == "dog"
+            assert row0.get("lemma") == "Katze"
+            assert row0.get("trans") == "cat"
             row1 = data["rows"].get("1") or data["rows"].get(1)
             assert row1 is not None
-            assert row1.get("lemma") == "Katze"
-            assert row1.get("trans") == "cat"
+            assert row1.get("lemma") == "Hund"
+            assert row1.get("trans") == "dog"
             assert "translatedText" in data
             assert "The cat sleeps" in data["translatedText"]
     finally:
@@ -1285,16 +1285,16 @@ def test_controller_session_status_worker_lock_held_reports_busy(running_control
             pass
 
 
-def test_session_status_multi_sentence_global_frequency_sort(running_controller):
+def test_session_status_multi_sentence_preserves_stable_row_indices(running_controller):
     """
-    Verify GET /session/status orders rows globally across multi-sentence boundaries
-    so that common words from later sentences precede rare words from earlier sentences.
+    Verify GET /session/status preserves stable canonical row indices matching data_rows
+    and card manifests without frequency-sorting drift.
     """
     server_url, server = running_controller
     arbiter = server.arbiter
     sess_zid = kardenwort_desk.generate_unique_zid()
 
-    # 1. In-memory arbiter session: Sentence 1 has rare word ("Transporter"), Sentence 2 has common word ("der")
+    # 1. In-memory arbiter session: Sentence 1 has "Transporter" at index 0, Sentence 2 has "der" at index 1
     headers = ["WordSource", "WordDestination", "TokenOrder", "SentenceSourceIndex", "SentenceDestination"]
     data_rows = [
         ["Transporter", "transporter", "0", "1", "Ein seltener Transporter."],
@@ -1321,10 +1321,10 @@ def test_session_status_multi_sentence_global_frequency_sort(running_controller)
             data = res.get("data", res)
             assert "rows" in data
             rows = data["rows"]
-            # Row 0 should be the most frequent word ("der")
-            # Row 1 should be the rarer word ("Transporter")
-            assert (rows.get("0") or rows.get(0))["lemma"] == "der"
-            assert (rows.get("1") or rows.get(1))["lemma"] == "Transporter"
+            # Row 0 should preserve stable canonical order ("Transporter")
+            # Row 1 should preserve stable canonical order ("der")
+            assert (rows.get("0") or rows.get(0))["lemma"] == "Transporter"
+            assert (rows.get("1") or rows.get(1))["lemma"] == "der"
     finally:
         with arbiter._lock:
             arbiter.sessions.pop(sess_zid, None)
@@ -1358,8 +1358,8 @@ def test_session_status_multi_sentence_global_frequency_sort(running_controller)
             assert data.get("ok") is True
             assert "rows" in data
             rows = data["rows"]
-            assert (rows.get("0") or rows.get(0))["lemma"] == "der"
-            assert (rows.get("1") or rows.get(1))["lemma"] == "Transporter"
+            assert (rows.get("0") or rows.get(0))["lemma"] == "Transporter"
+            assert (rows.get("1") or rows.get(1))["lemma"] == "der"
     finally:
         try:
             storage_adapter.delete_session(storage_zid)

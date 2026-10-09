@@ -2499,6 +2499,91 @@ def test_container_multi_translation_order_preserved_when_spawn_order_reverse(pa
     ]
 
 
+def test_container_multi_occurrence_rollup_ignores_disparate_lemma_keys(page, tmp_path):
+    """
+    Verifies that client-side multi-occurrence rollup on overview cards
+    strictly enforces lemma matching across all_row_ids and ignores
+    conflicting AppState.rows entries that have disparate lemmas.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "normal")
+
+    text = "First task done.\nSecond task begins."
+    zid = "20261009204000"
+    tsv_file = tmp_path / f"{zid}-sample.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tTokenOrder\tSentenceSourceIndex\n"
+        "First\tFirst\t\t0\t1\n"
+        "task\ttask\t\t1\t1\n"
+        "done\tdone\t\t2\t1\n"
+        "Second\tSecond\t\t3\t2\n"
+        "task\ttask\t\t4\t2\n"
+        "begins\tbegin\t\t5\t2\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num="1"
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Click tab 1 (overview card) to ensure it is active
+    page.locator('button.kw-tab-chip[data-tab-seq="1"]').click()
+
+    # Find row for 'task' on overview card and inspect all_row_ids
+    task_tr = page.locator('#lemma-table tbody tr').filter(has_text="task")
+    assert task_tr.count() >= 1
+    task_elem = task_tr.first
+    all_row_ids = [s.strip() for s in task_elem.get_attribute("data-all-row-ids").split(",") if s.strip()]
+    assert len(all_row_ids) == 2
+    id1, id2 = all_row_ids[0], all_row_ids[1]
+
+    # Simulate update where id1 ('task') has trans 'задача',
+    # but id2 has a scrambled / disparate lemma 'commit' with trans 'совершить'
+    status_payload = {
+        "ok": True,
+        "rows": {
+            id1: {"token_order": "1", "sentence_idx": "1", "lemma": "task", "trans": "задача"},
+            id2: {"token_order": "4", "sentence_idx": "2", "lemma": "commit", "trans": "совершить"},
+        }
+    }
+    page.evaluate("(payload) => window.receiveUpdate(payload)", status_payload)
+
+    # The rolled up translation must include 'задача' and MUST NOT contain 'совершить'
+    task_trans_cell = task_elem.locator('td.col-translation')
+    trans_text = task_trans_cell.inner_text()
+    assert "задача" in trans_text
+    assert "совершить" not in trans_text
+
+    # Now simulate a legitimate matching update where id2 also has lemma 'task' with trans 'задание'
+    matching_payload = {
+        "ok": True,
+        "rows": {
+            id1: {"token_order": "1", "sentence_idx": "1", "lemma": "task", "trans": "задача"},
+            id2: {"token_order": "4", "sentence_idx": "2", "lemma": "task", "trans": "задание"},
+        }
+    }
+    page.evaluate("(payload) => window.receiveUpdate(payload)", matching_payload)
+
+    trans_text_after = task_trans_cell.inner_text()
+    assert "задача" in trans_text_after
+    assert "задание" in trans_text_after
+
+
+
 
 
 
