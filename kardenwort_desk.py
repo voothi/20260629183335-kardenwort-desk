@@ -13702,7 +13702,7 @@ window.__CONFIG__ = {ui_config_json};
         return res;
     }
 
-    function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder) {
+    function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma) {
         if (!sentenceText) return (inflectedVal || "").trim();
         if (!inflectedVal) return sentenceText.trim();
         var targetIndices = {};
@@ -13718,8 +13718,44 @@ window.__CONFIG__ = {ui_config_json};
         }
         var targetWords = {};
         var infWords = (inflectedVal.toLowerCase().match(/[\\p{L}\\p{N}]+/gu) || inflectedVal.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
+        var filteredWords = [];
         for (var j = 0; j < infWords.length; j++) {
-            if (infWords[j]) targetWords[infWords[j]] = true;
+            if (infWords[j] && !/^\\d{14}$/.test(infWords[j])) {
+                filteredWords.push(infWords[j]);
+            }
+        }
+
+        var isSlugOrCompound = (inflectedVal.indexOf('+') === -1) && (inflectedVal.indexOf('-') !== -1 || inflectedVal.indexOf('_') !== -1 || /\\b\\d{14}\\b/.test(inflectedVal));
+        if (isSlugOrCompound && lemma && String(lemma).trim()) {
+            var lemmaClean = String(lemma).trim().toLowerCase();
+            var exactMatches = [];
+            for (var m = 0; m < filteredWords.length; m++) {
+                if (filteredWords[m] === lemmaClean) exactMatches.push(filteredWords[m]);
+            }
+            if (exactMatches.length > 0) {
+                for (var e = 0; e < exactMatches.length; e++) targetWords[exactMatches[e]] = true;
+            } else {
+                var stemMatches = [];
+                for (var s = 0; s < filteredWords.length; s++) {
+                    var fw = filteredWords[s];
+                    if (fw.length >= 3 && (fw.indexOf(lemmaClean) === 0 || lemmaClean.indexOf(fw) === 0)) {
+                        stemMatches.push(fw);
+                    }
+                }
+                if (stemMatches.length > 0) {
+                    for (var sm = 0; sm < stemMatches.length; sm++) targetWords[stemMatches[sm]] = true;
+                } else {
+                    for (var f = 0; f < filteredWords.length; f++) targetWords[filteredWords[f]] = true;
+                }
+            }
+            targetWords[lemmaClean] = true;
+        } else {
+            for (var fwIdx = 0; fwIdx < filteredWords.length; fwIdx++) {
+                targetWords[filteredWords[fwIdx]] = true;
+            }
+            if (lemma && String(lemma).trim()) {
+                targetWords[String(lemma).trim().toLowerCase()] = true;
+            }
         }
 
         var tokens = [];
@@ -13754,7 +13790,12 @@ window.__CONFIG__ = {ui_config_json};
                 wordIdx++;
             }
         }
-        return tokens.join('');
+        var boldSentence = tokens.join('').trim();
+        var boldHeader = toUnicodeBold(String(inflectedVal).trim());
+        if (boldHeader && boldSentence) {
+            return boldHeader + '\\n' + boldSentence;
+        }
+        return boldSentence || boldHeader;
     }
 
     function formatLemmaTooltip(lemma, gender, lang) {
@@ -19240,13 +19281,26 @@ window.__CONFIG__ = {ui_config_json};
                         }
                     } else if (cls === 'col-inflected') {
                         cell.textContent = vals.join(', ');
-                        var tooltips = [];
+                        var formsStr = vals.join(', ');
+                        var boldHeader = (typeof toUnicodeBold === 'function') ? toUnicodeBold(formsStr) : (window.toUnicodeBold ? window.toUnicodeBold(formsStr) : formsStr);
+                        var sentList = [];
                         for (var q = 0; q < picked.length; q++) {
-                            if (picked[q].inflected_tooltip && tooltips.indexOf(picked[q].inflected_tooltip) === -1) {
-                                tooltips.push(picked[q].inflected_tooltip);
+                            if (picked[q].inflected_tooltip) {
+                                var rawTip = picked[q].inflected_tooltip;
+                                var sentPart = (rawTip.indexOf('\\n') !== -1) ? rawTip.slice(rawTip.indexOf('\\n') + 1).trim() : rawTip.trim();
+                                if (sentPart && sentList.indexOf(sentPart) === -1) {
+                                    sentList.push(sentPart);
+                                }
                             }
                         }
-                        newTooltip = tooltips.length > 0 ? tooltips.join('\\n---\\n') : vals.join(', ');
+                        if (sentList.length > 1) {
+                            var numbered = sentList.map(function(s, idx) { return '[' + (idx + 1) + '] ' + s; });
+                            newTooltip = boldHeader ? (boldHeader + '\\n' + numbered.join('\\n')) : numbered.join('\\n');
+                        } else if (sentList.length === 1) {
+                            newTooltip = boldHeader ? (boldHeader + '\\n' + sentList[0]) : sentList[0];
+                        } else {
+                            newTooltip = boldHeader || formsStr;
+                        }
                     }
 
                     if (newTooltip) {
