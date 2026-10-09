@@ -2434,6 +2434,72 @@ def test_workspace_tab_container_multi_mode_clean_line_translation(tmp_path, mon
     assert "Second line sentence." in master_trans
 
 
+def test_container_multi_translation_order_preserved_when_spawn_order_reverse(page, tmp_path):
+    """Verifies that multi-line translation lines maintain 1:1 ascending order when spawn_order = reverse."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "spawn_order", "reverse")
+
+    text = "First line sentence.\nSecond line sentence.\nThird line sentence."
+    zid = "20261009102501"
+    tsv_file = tmp_path / f"{zid}-three-lines.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "First\tFirst\tпервый\t1\tFirst line sentence.\tПервое предложение.\t0\n"
+        "Second\tSecond\tвторой\t2\tSecond line sentence.\tВторое предложение.\t0\n"
+        "Third\tThird\tтретий\t3\tThird line sentence.\tТретье предложение.\t0\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#kw-workspace-tab-bar")
+
+    # Update sentence translations from client JS
+    page.evaluate("""() => {
+        window.WorkspaceTabs.updateSentences([
+            {sentence_index: 1, sentence_destination: "Перевод первого предложения."},
+            {sentence_index: 2, sentence_destination: "Перевод второго предложения."},
+            {sentence_index: 3, sentence_destination: "Перевод третьего предложения."}
+        ]);
+    }""")
+
+    # Click tab 1 (master container card)
+    page.locator('button.kw-tab-chip[data-tab-seq="1"]').click()
+
+    # Verify that cards[0].translated_text is strictly ascending 1..3
+    master_card_text = page.evaluate("() => window.WorkspaceTabs.getCards()[0].translated_text")
+    lines = [l.strip() for l in master_card_text.split("\n") if l.strip()]
+    assert lines == [
+        "Перевод первого предложения.",
+        "Перевод второго предложения.",
+        "Перевод третьего предложения."
+    ]
+
+    # Verify that #translation-container shows lines strictly ascending 1..3
+    trans_container_text = page.locator("#translation-container").inner_text()
+    rendered_lines = [l.strip() for l in trans_container_text.split("\n") if l.strip()]
+    assert rendered_lines == [
+        "Перевод первого предложения.",
+        "Перевод второго предложения.",
+        "Перевод третьего предложения."
+    ]
+
+
+
 
 
 

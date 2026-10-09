@@ -21538,16 +21538,15 @@ window.__CONFIG__ = {ui_config_json};
                             isSingleMode = false;
                         }
                         if (activeSentenceIdx === 0 && !isSingleMode) {
-                            if (!tText || tText.indexOf(String.fromCharCode(10)) === -1) {
-                                var childLines = [];
-                                for (var k = 0; k < cards.length; k++) {
-                                    if (cards[k].sentence_idx > 0 && cards[k].translated_text && cards[k].translated_text.trim()) {
-                                        childLines.push(cards[k].translated_text.trim());
-                                    }
-                                }
-                                if (childLines.length > 1) {
-                                    tText = childLines.join(String.fromCharCode(10));
-                                }
+                            var sortedChildren = cards.filter(function(card) {
+                                return card.sentence_idx > 0 && card.translated_text && card.translated_text.trim();
+                            }).sort(function(a, b) {
+                                return (a.sentence_idx || 0) - (b.sentence_idx || 0);
+                            });
+                            if (sortedChildren.length > 1) {
+                                tText = sortedChildren.map(function(card) {
+                                    return card.translated_text.trim();
+                                }).join(String.fromCharCode(10));
                             }
                         }
                         tText = tText || '';
@@ -21844,18 +21843,17 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 for (var c = 0; c < cards.length; c++) {
                     if (cards[c].sentence_idx === 0) {
-                        if (window.AppState && window.AppState.translatedText) {
+                        var sortedChildren = cards.filter(function(card) {
+                            return card.sentence_idx > 0 && card.translated_text && card.translated_text.trim();
+                        }).sort(function(a, b) {
+                            return (a.sentence_idx || 0) - (b.sentence_idx || 0);
+                        });
+                        if (sortedChildren.length > 0 && !isSingleMode) {
+                            cards[c].translated_text = sortedChildren.map(function(card) {
+                                return card.translated_text.trim();
+                            }).join(String.fromCharCode(10));
+                        } else if (window.AppState && window.AppState.translatedText) {
                             cards[c].translated_text = window.AppState.translatedText;
-                        } else if (!isSingleMode) {
-                            var childTrans = [];
-                            for (var k = 0; k < cards.length; k++) {
-                                if (cards[k].sentence_idx > 0 && cards[k].translated_text) {
-                                    childTrans.push(cards[k].translated_text.trim());
-                                }
-                            }
-                            if (childTrans.length > 0) {
-                                cards[c].translated_text = childTrans.join(String.fromCharCode(10));
-                            }
                         }
                         break;
                     }
