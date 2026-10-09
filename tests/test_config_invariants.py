@@ -1028,3 +1028,37 @@ def test_execution_context_will_split_resolution(will_split, dedup_scope, senten
         assert ctx.mode == OperationalMode.MONOLITHIC_LIVE
         assert workflow_res.dedup_scope == "global"
 
+
+@pytest.mark.parametrize("global_dedup", [True, False])
+@pytest.mark.parametrize("sent_dedup_override", [None, True, False])
+@pytest.mark.parametrize("over_dedup_override", [None, True, False])
+def test_pos_aware_deduplication_invariants_and_fallbacks(global_dedup, sent_dedup_override, over_dedup_override):
+    """
+    Task 3.2: Verify configuration invariants, backward-compatibility fallbacks,
+    and schema validation across all permutations of global, sentence-card,
+    and master-overview POS-aware deduplication parameters.
+    """
+    cp = configparser.ConfigParser()
+    cp.add_section(SEC_SETTINGS)
+    cp.add_section(SEC_SENTENCES_MODE)
+
+    cp.set(SEC_SETTINGS, "deduplicate_pos_aware", str(global_dedup).lower())
+    if sent_dedup_override is not None:
+        cp.set(SEC_SENTENCES_MODE, "sentence_deduplicate_pos_aware", str(sent_dedup_override).lower())
+    if over_dedup_override is not None:
+        cp.set(SEC_SENTENCES_MODE, "overview_deduplicate_pos_aware", str(over_dedup_override).lower())
+
+    cfg = RuntimeTokenConfig.from_config(cp)
+
+    assert cfg.deduplicate_pos_aware is global_dedup
+
+    # Sentence card fallback invariant: inherits global setting if omitted
+    expected_sent = global_dedup if sent_dedup_override is None else sent_dedup_override
+    assert cfg.sentence_deduplicate_pos_aware is expected_sent
+
+    # Master overview default invariant: defaults to False if omitted
+    expected_over = False if over_dedup_override is None else over_dedup_override
+    assert cfg.overview_deduplicate_pos_aware is expected_over
+
+    validate_dataclass(cfg)
+

@@ -2583,9 +2583,90 @@ def test_container_multi_occurrence_rollup_ignores_disparate_lemma_keys(page, tm
     assert "задание" in trans_text_after
 
 
+def test_overview_tab_consolidates_multi_sentence_pos_variants_while_sentence_cards_retain_contextual_pos(tmp_path):
+    """
+    Task 3.2: Verify that in container mode, Tab 1 (Master Overview) consolidates
+    cross-sentence occurrences of the same lemma with differing parts-of-speech into
+    a single row with rolled-up POS tags when overview_deduplicate_pos_aware = false,
+    while sentence cards (Tabs 2..N) retain contextual POS tags.
+    Also verifies that setting overview_deduplicate_pos_aware = true preserves separate rows on Tab 1.
+    """
+    import re
+    import json
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "sentence_deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "overview_deduplicate_pos_aware", "false")
+    config.set("settings", "filter_inflected_by_window", "false")
 
+    unique_zid = "20261010013000"
+    text = "We refer to the guidelines. He came to provide assistance."
+    tsv_file = tmp_path / f"{unique_zid}.en.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\tTokenOrder\n"
+        "refer\trefer\tv.\trefer\tссылаться\t1\t0\t1\n"
+        "to\tto\tprep.\tto\tк\t1\t0\t2\n"
+        "guidelines\tguideline\tn.\tguidelines\tправилам\t1\t0\t3\n"
+        "came\tcome\tv.\tcame\tпришел\t2\t0\t4\n"
+        "to\tto\tpart.\tto\tчтобы\t2\t0\t5\n"
+        "provide\tprovide\tv.\tprovide\tпредоставить\t2\t0\t6\n",
+        encoding="utf-8"
+    )
 
+    # 1. Default overview_deduplicate_pos_aware = False
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
 
+    cards_match = re.search(r'<script id="sentence-cards" type="application/json">\s*([\s\S]*?)\s*</script>', html)
+    assert cards_match is not None
+    cards = json.loads(cards_match.group(1))
 
+    master = next(c for c in cards if c["sentence_idx"] == 0)
+    to_master = [w for w in master["words"] if w["lemma"].strip().lower() == "to"]
+    assert len(to_master) == 1, f"Expected 1 consolidated row for 'to' on Tab 1, got {len(to_master)}"
+    assert to_master[0]["pos"].strip().lower() == "prep., part."
 
+    sent1 = next(c for c in cards if c["sentence_idx"] == 1)
+    to_s1 = [w for w in sent1["words"] if w["lemma"].strip().lower() == "to"]
+    assert len(to_s1) == 1
+    assert to_s1[0]["pos"].strip().lower() == "prep."
 
+    sent2 = next(c for c in cards if c["sentence_idx"] == 2)
+    to_s2 = [w for w in sent2["words"] if w["lemma"].strip().lower() == "to"]
+    assert len(to_s2) == 1
+    assert to_s2[0]["pos"].strip().lower() == "part."
+
+    # 2. When overview_deduplicate_pos_aware = True
+    config.set("sentences_mode", "overview_deduplicate_pos_aware", "true")
+    html_strict = kardenwort_desk.run_render_flow(
+        text=text,
+        language="en",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+    cards_match_strict = re.search(r'<script id="sentence-cards" type="application/json">\s*([\s\S]*?)\s*</script>', html_strict)
+    assert cards_match_strict is not None
+    cards_strict = json.loads(cards_match_strict.group(1))
+    master_strict = next(c for c in cards_strict if c["sentence_idx"] == 0)
+    to_master_strict = [w for w in master_strict["words"] if w["lemma"].strip().lower() == "to"]
+    assert len(to_master_strict) == 2, f"Expected 2 rows for 'to' on Tab 1 with overview_deduplicate_pos_aware=True, got {len(to_master_strict)}"
+    pos_set = {w["pos"].strip().lower() for w in to_master_strict}
+    assert pos_set == {"prep.", "part."}
