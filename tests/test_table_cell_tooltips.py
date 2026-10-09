@@ -477,3 +477,121 @@ def test_inflected_column_gray_color_styling(page, tmp_path):
     assert lemma_color == trans_color
     assert inf_color != lemma_color
 
+
+def test_sentence_cards_inflected_tooltip_serialization(tmp_path):
+    """Verifies that sentence_cards JSON and format_update_rows_dict serialize inflected_tooltip."""
+    import json
+    import re
+    import kardenwort_desk
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    zid = "20261009193000"
+    tsv_file = tmp_path / f"{zid}-test.en.tsv"
+    tsv_content = (
+        "WordSource\tWordSourceInflectedForm\tSentenceSource\tSentenceSourceIndex\tTokenOrder\n"
+        "task\ttasks\tAll tasks are complete.\t1\t1\n"
+        "task\ttasks\ttasks.md has been updated.\t2\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html_code = kardenwort_desk.run_render_flow(
+        text="All tasks are complete. tasks.md has been updated.",
+        language="en",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=True
+    )
+    # Extract sentence-cards JSON
+    m = re.search(r'<script id="sentence-cards" type="application/json">\s*(.*?)\s*</script>', html_code, re.DOTALL)
+    assert m is not None
+    cards = json.loads(m.group(1))
+    assert len(cards) >= 2
+    # Overview card
+    c0 = cards[0]
+    assert len(c0.get("words", [])) >= 1
+    w0 = c0["words"][0]
+    assert "inflected_tooltip" in w0
+    assert w0["inflected_tooltip"] is not None
+    assert to_unicode_bold("tasks") in w0["inflected_tooltip"]
+    assert "[1]" in w0["inflected_tooltip"]
+    assert "[2]" in w0["inflected_tooltip"]
+
+    # Child card
+    c1 = cards[1]
+    assert len(c1.get("words", [])) >= 1
+    w1 = c1["words"][0]
+    assert "inflected_tooltip" in w1
+    assert w1["inflected_tooltip"] is not None
+    assert to_unicode_bold("tasks") in w1["inflected_tooltip"]
+
+    # format_update_rows_dict serialization
+    rows_data = kardenwort_desk.format_update_rows_dict(
+        [["task", "tasks", "", "", "", "", "", "1", "1", "All tasks are complete."]],
+        ["WordSource", "WordSourceInflectedForm", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "WordSourcePOS", "WordSourceGender", "TokenOrder", "SentenceSourceIndex", "SentenceSource"],
+        {"lemma": "WordSource", "inflected": "WordSourceInflectedForm", "word_translation": "WordDestination", "sentence": "SentenceSource"}
+    )
+    assert 0 in rows_data
+    assert "inflected_tooltip" in rows_data[0]
+    assert to_unicode_bold("tasks") in rows_data[0]["inflected_tooltip"]
+
+
+def test_client_row_binding_preserves_numbered_tooltip_and_subtoken_isolation(page, tmp_path):
+    """Verifies that client bindCardWordsToTbody and AppView.renderRow preserve multi-sentence numbered tooltips and do not clobber them with unformatted single-line text."""
+    import kardenwort_desk
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    zid = "20261009193100"
+    tsv_file = tmp_path / f"{zid}-slug.en.tsv"
+    slug = "20261009000137-harden-bifurcated-failover-and-task-scoped-cooldowns"
+    tsv_content = (
+        "WordSource\tWordSourceInflectedForm\tSentenceSource\tSentenceSourceIndex\tTokenOrder\n"
+        f"task\t{slug}, tasks\tAll tasks are complete. You can archive with {slug}.\t1\t1\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html_code = kardenwort_desk.run_render_flow(
+        text=f"All tasks are complete. You can archive with {slug}.",
+        language="en",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=True
+    )
+    page.set_content(html_code)
+
+    # Simulate dynamic re-bind (e.g. skeleton normalization / card switch setting row_html = null)
+    page.evaluate("""
+        var tbody = document.querySelector('#lemma-table tbody');
+        var cards = JSON.parse(document.getElementById('sentence-cards').textContent);
+        if (cards && cards.length > 0) {
+            cards[0].words.forEach(function(w) { w.row_html = null; });
+            window.bindCardWordsToTbody(tbody, cards[0].words, {});
+        }
+    """)
+
+    inf_cell = page.locator("#lemma-table tbody tr td.col-inflected").first
+    title_val = inf_cell.get_attribute("title")
+    assert title_val is not None
+    # Must preserve the bold header
+    assert to_unicode_bold("tasks") in title_val
+    # Subtoken isolation in sentence context: and, harden, bifurcated must NOT be bolded
+    sent_part = "\n".join(title_val.split("\n")[1:])
+    assert to_unicode_bold("and") not in sent_part
+    assert to_unicode_bold("harden") not in sent_part
+
+    # Test that AppView.renderRow delta does not clobber title if inflected text is unchanged
+    page.evaluate("""
+        window.AppState.rows["0"] = {
+            inflected: "20261009000137-harden-bifurcated-failover-and-task-scoped-cooldowns, tasks",
+            lemma: "task",
+            trans: "задача"
+        };
+        window.AppView.renderRow("0", "translated");
+    """)
+    title_after_delta = inf_cell.get_attribute("title")
+    assert title_after_delta == title_val
+
+

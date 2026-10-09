@@ -2609,33 +2609,37 @@ def _format_single_inflected_sentence_context(
                 if p_clean.isdigit():
                     target_indices.add(int(p_clean))
 
-    raw_tokens = re.findall(r'[\w]+', (inflected_val or "").lower())
-    filtered_tokens = [t for t in raw_tokens if not re.match(r'^\d{14}$', t)]
+    target_words = set()
+    lemma_clean = str(lemma).strip().lower() if lemma and str(lemma).strip() else None
 
-    is_slug_or_compound = bool(
-        ('+' not in inflected_val)
-        and ('-' in inflected_val or '_' in inflected_val or re.search(r'\b\d{14}\b', inflected_val))
-    )
+    raw_components = [c.strip() for c in (inflected_val or "").split(",") if c.strip()]
+    if not raw_components:
+        raw_components = [inflected_val or ""]
 
-    if is_slug_or_compound and lemma and str(lemma).strip():
-        lemma_clean = str(lemma).strip().lower()
-        exact_matches = [t for t in filtered_tokens if t == lemma_clean]
-        if exact_matches:
-            target_words = set(exact_matches)
-        else:
-            stem_matches = [
-                t for t in filtered_tokens
-                if (len(t) >= 3 and (t.startswith(lemma_clean) or lemma_clean.startswith(t)))
-            ]
-            if stem_matches:
-                target_words = set(stem_matches)
+    for comp in raw_components:
+        comp_tokens = [t for t in re.findall(r'[\w]+', comp.lower()) if not re.match(r'^\d{14}$', t)]
+        is_comp_slug = bool(
+            ('+' not in comp)
+            and ('-' in comp or '_' in comp or re.search(r'\b\d{14}\b', comp))
+        )
+        if is_comp_slug and lemma_clean:
+            exact = [t for t in comp_tokens if t == lemma_clean]
+            if exact:
+                target_words.update(exact)
             else:
-                target_words = set(filtered_tokens)
+                stem = [
+                    t for t in comp_tokens
+                    if (len(t) >= 3 and (t.startswith(lemma_clean) or lemma_clean.startswith(t)))
+                ]
+                if stem:
+                    target_words.update(stem)
+                else:
+                    target_words.update(comp_tokens)
+        else:
+            target_words.update(comp_tokens)
+
+    if lemma_clean:
         target_words.add(lemma_clean)
-    else:
-        target_words = set(filtered_tokens)
-        if lemma and str(lemma).strip():
-            target_words.add(str(lemma).strip().lower())
 
     parts = re.split(r'(\w+)', str(sentence_text))
     word_idx = 0
@@ -11791,6 +11795,7 @@ html, body {{
             "highlight_class": row_highlight_class,
             "provenance": prov_val or "",
             "dynamic_tds": dynamic_tds,
+            "inflected_tooltip": inflected_tooltip,
             "row_html": row_html_line,
         })
     table_rows_html = "" if is_mismatch else "\n".join(table_rows)
@@ -12276,6 +12281,7 @@ html, body {{
                 "highlight_class": ov_hl_class,
                 "provenance": ov_prov_val or "",
                 "dynamic_tds": ov_dynamic_tds,
+                "inflected_tooltip": ov_inf_tooltip,
                 "row_html": ov_row_html,
             })
 
@@ -13723,45 +13729,48 @@ window.__CONFIG__ = {ui_config_json};
             }
         }
         var targetWords = {};
-        var infWords = (inflectedVal.toLowerCase().match(/[\\p{L}\\p{N}]+/gu) || inflectedVal.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
-        var filteredWords = [];
-        for (var j = 0; j < infWords.length; j++) {
-            if (infWords[j] && !/^\\d{14}$/.test(infWords[j])) {
-                filteredWords.push(infWords[j]);
+        var lemmaClean = (lemma && String(lemma).trim()) ? String(lemma).trim().toLowerCase() : null;
+        var rawComponents = String(inflectedVal || "").split(',');
+        for (var c = 0; c < rawComponents.length; c++) {
+            var comp = rawComponents[c].trim();
+            if (!comp) continue;
+            var compWords = (comp.toLowerCase().match(/[\p{L}\p{N}]+/gu) || comp.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
+            var compFiltered = [];
+            for (var j = 0; j < compWords.length; j++) {
+                if (compWords[j] && !/^\d{14}$/.test(compWords[j])) {
+                    compFiltered.push(compWords[j]);
+                }
             }
-        }
-
-        var isSlugOrCompound = (inflectedVal.indexOf('+') === -1) && (inflectedVal.indexOf('-') !== -1 || inflectedVal.indexOf('_') !== -1 || /\\b\\d{14}\\b/.test(inflectedVal));
-        if (isSlugOrCompound && lemma && String(lemma).trim()) {
-            var lemmaClean = String(lemma).trim().toLowerCase();
-            var exactMatches = [];
-            for (var m = 0; m < filteredWords.length; m++) {
-                if (filteredWords[m] === lemmaClean) exactMatches.push(filteredWords[m]);
-            }
-            if (exactMatches.length > 0) {
-                for (var e = 0; e < exactMatches.length; e++) targetWords[exactMatches[e]] = true;
-            } else {
-                var stemMatches = [];
-                for (var s = 0; s < filteredWords.length; s++) {
-                    var fw = filteredWords[s];
-                    if (fw.length >= 3 && (fw.indexOf(lemmaClean) === 0 || lemmaClean.indexOf(fw) === 0)) {
-                        stemMatches.push(fw);
+            var isCompSlug = (comp.indexOf('+') === -1) && (comp.indexOf('-') !== -1 || comp.indexOf('_') !== -1 || /\b\d{14}\b/.test(comp));
+            if (isCompSlug && lemmaClean) {
+                var exactMatches = [];
+                for (var m = 0; m < compFiltered.length; m++) {
+                    if (compFiltered[m] === lemmaClean) exactMatches.push(compFiltered[m]);
+                }
+                if (exactMatches.length > 0) {
+                    for (var e = 0; e < exactMatches.length; e++) targetWords[exactMatches[e]] = true;
+                } else {
+                    var stemMatches = [];
+                    for (var s = 0; s < compFiltered.length; s++) {
+                        var fw = compFiltered[s];
+                        if (fw.length >= 3 && (fw.indexOf(lemmaClean) === 0 || lemmaClean.indexOf(fw) === 0)) {
+                            stemMatches.push(fw);
+                        }
+                    }
+                    if (stemMatches.length > 0) {
+                        for (var sm = 0; sm < stemMatches.length; sm++) targetWords[stemMatches[sm]] = true;
+                    } else {
+                        for (var f = 0; f < compFiltered.length; f++) targetWords[compFiltered[f]] = true;
                     }
                 }
-                if (stemMatches.length > 0) {
-                    for (var sm = 0; sm < stemMatches.length; sm++) targetWords[stemMatches[sm]] = true;
-                } else {
-                    for (var f = 0; f < filteredWords.length; f++) targetWords[filteredWords[f]] = true;
+            } else {
+                for (var fwIdx = 0; fwIdx < compFiltered.length; fwIdx++) {
+                    targetWords[compFiltered[fwIdx]] = true;
                 }
             }
+        }
+        if (lemmaClean) {
             targetWords[lemmaClean] = true;
-        } else {
-            for (var fwIdx = 0; fwIdx < filteredWords.length; fwIdx++) {
-                targetWords[filteredWords[fwIdx]] = true;
-            }
-            if (lemma && String(lemma).trim()) {
-                targetWords[String(lemma).trim().toLowerCase()] = true;
-            }
         }
 
         var tokens = [];
@@ -15528,26 +15537,27 @@ window.__CONFIG__ = {ui_config_json};
                     if (!tds[0].classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
                         var div = tds[0].querySelector('.scrollable-cell');
                         var val = rowData.inflected || "";
+                        var oldVal = div ? (div.textContent || div.innerText) : (tds[0].classList.contains('editing') ? null : (tds[0].textContent || tds[0].innerText));
+                        var existingTitle = tds[0].getAttribute('data-orig-title') || tds[0].getAttribute('title') || (div ? (div.getAttribute('data-orig-title') || div.getAttribute('title')) : '');
                         var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? document.getElementById('source-container').textContent : "");
-                        var infTip = formatInflectedTooltip(sentText, val, rowData.token_order || rowId);
+                        var infTip = rowData.inflected_tooltip || ((oldVal === val && existingTitle) ? existingTitle : formatInflectedTooltip(sentText, val, rowData.token_order || rowId, rowData.lemma || ''));
                         var unrolledHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
                         tds[0].setAttribute('data-orig-html', unrolledHtml);
                         if (infTip) {
                             tds[0].setAttribute('data-orig-title', infTip);
                             if (div && div !== tds[0]) div.setAttribute('data-orig-title', infTip);
+                            tds[0].setAttribute('title', infTip);
+                            if (div) div.setAttribute('title', infTip);
                         } else {
                             tds[0].removeAttribute('data-orig-title');
                             if (div && div !== tds[0]) div.removeAttribute('data-orig-title');
+                            tds[0].removeAttribute('title');
+                            if (div) div.removeAttribute('title');
                         }
-                        var oldVal = div ? (div.textContent || div.innerText) : (tds[0].classList.contains('editing') ? null : (tds[0].textContent || tds[0].innerText));
                         if (oldVal !== val) {
                             if (div) setCellText(div, val);
                             else if (!tds[0].classList.contains('editing')) setCellText(tds[0], val);
                             updated = true;
-                        }
-                        if (infTip) {
-                            tds[0].setAttribute('title', infTip);
-                            if (div) div.setAttribute('title', infTip);
                         }
                     }
                     if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
@@ -21662,7 +21672,7 @@ window.__CONFIG__ = {ui_config_json};
                         var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                         var cardSentenceText = (w.sentence_text || (window.AppState ? window.AppState.sourceText : '') || '');
-                        var infTooltip = formatInflectedTooltip(cardSentenceText, w.inflected || '', w.token_order || rIdStr);
+                        var infTooltip = w.inflected_tooltip || (appRow && appRow.inflected_tooltip) || formatInflectedTooltip(cardSentenceText, w.inflected || '', w.token_order || rIdStr, w.lemma || '');
                         var lemTooltip = formatLemmaTooltip(w.lemma || '', w.gender || '', activeLang);
                         var ipaTooltip = (w.ipa && w.ipa.indexOf('skeleton-loader') === -1) ? w.ipa : '';
                         var morphTooltip = (w.morphology && w.morphology.indexOf('skeleton-loader') === -1) ? w.morphology : '';
@@ -25394,6 +25404,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
     col_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else (headers.index('gender') if 'gender' in headers else -1))
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+    col_sentence_source = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
     
     rows_data = {}
     for row_id, row in enumerate(data_rows):
@@ -25409,6 +25420,8 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
         gender_val = g_clean if g_clean in ("m", "f", "n") else ""
         token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
         sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
+        row_sentence = row[col_sentence_source] if col_sentence_source != -1 and len(row) > col_sentence_source and str(row[col_sentence_source]).strip() else ""
+        inf_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val, lemma=lemma_val)
         row_obj = {
             "lemma": lemma_val,
             "inflected": inflected_val,
@@ -25421,7 +25434,9 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
             "WordSourcePOS": pos_val,
             "WordSourceGender": gender_val,
             "token_order": token_order_val,
-            "sentence_idx": sent_idx_val
+            "sentence_idx": sent_idx_val,
+            "sentence_source": row_sentence,
+            "inflected_tooltip": inf_tooltip,
         }
         if row_provenances:
             if str(token_order_val) in row_provenances:
