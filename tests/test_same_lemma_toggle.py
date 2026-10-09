@@ -411,6 +411,7 @@ def test_multiline_numbered_sentence_tooltips_and_breakdown(tmp_path):
     # Task 5.1: Multiline numbered tooltip with Unicode bold words on inflected cell
     inf_td = row.find("td", class_="col-inflected")
     inf_title = inf_td.get("title", "")
+    assert inf_title.startswith("𝗔𝗺, 𝗕𝗲𝗶𝗺\n")
     assert "[1] 𝗔𝗺 Morgen trinke ich Kaffee." in inf_title
     assert "[2] 𝗕𝗲𝗶𝗺 Spiel hatte er Spaß." in inf_title
     assert "\n" in inf_title

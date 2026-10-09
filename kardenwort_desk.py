@@ -2710,15 +2710,21 @@ def format_inflected_sentence_tooltip(
                 formatted_lines.append(line)
 
         header_raw = ""
-        if inflected_val and str(inflected_val).strip():
+        seen_f = set()
+        unique_forms = []
+        for f in collected_forms:
+            if f not in seen_f:
+                seen_f.add(f)
+                unique_forms.append(f)
+
+        if len(unique_forms) > 1:
+            if inflected_val and all(f.lower() in str(inflected_val).lower() for f in unique_forms):
+                header_raw = str(inflected_val).strip()
+            else:
+                header_raw = ", ".join(unique_forms)
+        elif inflected_val and str(inflected_val).strip():
             header_raw = str(inflected_val).strip()
-        elif collected_forms:
-            seen_f = set()
-            unique_forms = []
-            for f in collected_forms:
-                if f not in seen_f:
-                    seen_f.add(f)
-                    unique_forms.append(f)
+        elif unique_forms:
             header_raw = ", ".join(unique_forms)
 
         header = to_unicode_bold(header_raw) if header_raw else ""

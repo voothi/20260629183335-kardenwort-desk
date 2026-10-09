@@ -35,22 +35,52 @@ def test_format_inflected_sentence_tooltip():
     # Single token match
     sent = "The brown fox jumps over the lazy dog."
     tooltip = format_inflected_sentence_tooltip(sent, "jumps", token_order="3")
-    # 'jumps' should be replaced by its unicode bold version
     bold_jumps = to_unicode_bold("jumps")
-    assert bold_jumps in tooltip
-    assert "The brown fox " in tooltip
-    assert " over the lazy dog." in tooltip
+    lines = tooltip.split("\n")
+    assert lines[0] == bold_jumps
+    assert lines[1] == f"The brown fox {bold_jumps} over the lazy dog."
 
     # Separable verb pair (indicated by + or space in inflected token)
     sent_de = "Er steht jeden Tag früh auf."
     tooltip_de = format_inflected_sentence_tooltip(sent_de, "aufstehen + steht auf", token_order="0")
     bold_steht = to_unicode_bold("steht")
     bold_auf = to_unicode_bold("auf")
-    assert bold_steht in tooltip_de
-    assert bold_auf in tooltip_de
+    lines_de = tooltip_de.split("\n")
+    assert lines_de[0] == to_unicode_bold("aufstehen + steht auf")
+    assert lines_de[1] == f"Er {bold_steht} jeden Tag früh {bold_auf}."
 
     # Fallback if sentence is empty
     assert format_inflected_sentence_tooltip("", "jumps") == "jumps"
+
+
+def test_inflected_tooltip_zid_compound_subtoken_isolation():
+    slug = "20261009000137-harden-bifurcated-failover-and-task-scoped-cooldowns"
+    sent = f"You can commit the changes to Git and proceed to archive with /opsx:archive {slug}."
+    tip = format_inflected_sentence_tooltip(sent, slug, lemma="task")
+    bold_slug = to_unicode_bold(slug)
+    bold_task = to_unicode_bold("task")
+
+    lines = tip.split("\n")
+    assert lines[0] == bold_slug
+    assert lines[1] == f"You can commit the changes to Git and proceed to archive with /opsx:archive 20261009000137-harden-bifurcated-failover-and-{bold_task}-scoped-cooldowns."
+    assert "Git and proceed" in lines[1]
+    assert to_unicode_bold("and") not in lines[1]
+    assert to_unicode_bold("20261009000137") not in lines[1]
+
+    # Merged multi-sentence with ZID slug and standard occurrences
+    tuples = [
+        ("All tasks are complete.", "tasks", None, "task"),
+        ("tasks.md has been updated.", "tasks", None, "task"),
+        (sent, slug, None, "task"),
+    ]
+    bold_tasks = to_unicode_bold("tasks")
+    multi_tip = format_inflected_sentence_tooltip(sentences=tuples, inflected_val=f"{slug}, tasks", lemma="task")
+    multi_lines = multi_tip.split("\n")
+    assert multi_lines[0] == f"{bold_slug}, {bold_tasks}"
+    assert multi_lines[1] == f"[1] All {bold_tasks} are complete."
+    assert multi_lines[2] == f"[2] {bold_tasks}.md has been updated."
+    assert multi_lines[3] == f"[3] You can commit the changes to Git and proceed to archive with /opsx:archive 20261009000137-harden-bifurcated-failover-and-{bold_task}-scoped-cooldowns."
+
 
 
 def test_format_lemma_article_tooltip():
@@ -218,10 +248,10 @@ def test_table_cell_tooltips_in_rendered_html(tmp_path):
         tsv_path=tsv_path
     )
 
-    # 1. Verify inflected column title has sentence with bold token
+    # 1. Verify inflected column title has bold header and sentence with bold token
     bold_hunde = to_unicode_bold("Hunde")
     assert f'Die {bold_hunde} schlafen im Haus.' in html_out
-    assert f'title="{html.escape("Die " + bold_hunde + " schlafen im Haus.")}"' in html_out
+    assert f'title="{html.escape(bold_hunde + "\nDie " + bold_hunde + " schlafen im Haus.")}"' in html_out
 
     # 2. Verify lemma column title has definite article for German nouns
     assert 'title="der Hund"' in html_out
