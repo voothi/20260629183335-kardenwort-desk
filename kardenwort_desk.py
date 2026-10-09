@@ -15185,10 +15185,15 @@ window.__CONFIG__ = {ui_config_json};
                                     }
                                     if (anyOverlap) {
                                         var rolledTrans = [];
+                                        var parentLem = (cw.lemma || '').trim().toLowerCase();
                                         for (var aidx = 0; aidx < cw.all_row_ids.length; aidx++) {
                                             var subId = String(cw.all_row_ids[aidx]);
                                             var subDelta = deltasByRowId[subId];
                                             var subState = (window.AppState && window.AppState.rows) ? window.AppState.rows[subId] : null;
+                                            var subLem = ((subDelta && subDelta.lemma) || (subState && subState.lemma) || '').trim().toLowerCase();
+                                            if (subLem && parentLem && subLem !== parentLem) {
+                                                continue;
+                                            }
                                             var subTr = "";
                                             if (subDelta) {
                                                 subTr = (subDelta.trans !== undefined && subDelta.trans !== "") ? subDelta.trans : ((subDelta.WordDestination !== undefined && subDelta.WordDestination !== "") ? subDelta.WordDestination : subDelta.word_translation);
@@ -15648,9 +15653,14 @@ window.__CONFIG__ = {ui_config_json};
                             var midParts = allRowIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
                             if (midParts.length > 1) {
                                 var rolledTrans = [];
+                                var parentLem = (rowData.lemma || (tds[1] ? (tds[1].textContent || tds[1].innerText) : '') || '').trim().toLowerCase();
                                 for (var mp = 0; mp < midParts.length; mp++) {
                                     var mRow = window.AppState.rows[midParts[mp]];
                                     if (mRow) {
+                                        var mLem = (mRow.lemma || '').trim().toLowerCase();
+                                        if (mLem && parentLem && mLem !== parentLem) {
+                                            continue;
+                                        }
                                         var mTr = (mRow.trans !== undefined && mRow.trans !== "") ? mRow.trans : ((mRow.WordDestination !== undefined && mRow.WordDestination !== "") ? mRow.WordDestination : mRow.word_translation);
                                         if (mTr && mTr !== "[FAILED]" && mTr.indexOf('skeleton-loader') === -1 && mTr !== '-' && mTr !== '--') {
                                             if (rolledTrans.indexOf(mTr) === -1) rolledTrans.push(mTr);
@@ -21606,9 +21616,14 @@ window.__CONFIG__ = {ui_config_json};
                             var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
                             if (w.all_row_ids && w.all_row_ids.length > 1 && window.AppState && window.AppState.rows) {
                                 var rolledTrans = [];
+                                var parentLem = (w.lemma || (appRow ? appRow.lemma : '') || '').trim().toLowerCase();
                                 for (var aidx = 0; aidx < w.all_row_ids.length; aidx++) {
                                     var subRow = window.AppState.rows[String(w.all_row_ids[aidx])];
                                     if (subRow) {
+                                        var subLem = (subRow.lemma || '').trim().toLowerCase();
+                                        if (subLem && parentLem && subLem !== parentLem) {
+                                            continue;
+                                        }
                                         var subTr = (subRow.trans !== undefined && subRow.trans !== "") ? subRow.trans : ((subRow.WordDestination !== undefined && subRow.WordDestination !== "") ? subRow.WordDestination : subRow.word_translation);
                                         if (subTr && subTr !== "[FAILED]" && subTr.indexOf('skeleton-loader') === -1 && subTr !== '-' && subTr !== '--') {
                                             if (rolledTrans.indexOf(subTr) === -1) rolledTrans.push(subTr);
