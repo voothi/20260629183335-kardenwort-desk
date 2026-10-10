@@ -10012,6 +10012,51 @@ def run_render_flow(text, language, zid, text_mode, config, resolved_paths, zoom
         with _ACTIVE_ZIDS_LOCK:
             _ACTIVE_ZIDS.discard(zid)
 
+def tag_server_compound_tokens(source_tokens: List[Dict[str, Any]]) -> None:
+    """
+    Identifies compound token chains connected by COMPOUND_JOINERS or PATH_LEVEL_DELIMITERS.
+    Sets is_in_compound=True and compound_text for participating word tokens.
+    """
+    compound_delimiters = COMPOUND_JOINERS | PATH_LEVEL_DELIMITERS
+    n_tokens = len(source_tokens)
+    i = 0
+    while i < n_tokens:
+        if source_tokens[i].get("is_word"):
+            j = i
+            chain = [j]
+            while j + 2 < n_tokens:
+                delim_tok = source_tokens[j + 1]
+                next_word_tok = source_tokens[j + 2]
+                if (not delim_tok.get("is_word") and 
+                    delim_tok.get("text") and 
+                    all(c in compound_delimiters for c in delim_tok.get("text")) and
+                    next_word_tok.get("is_word")):
+                    chain.append(j + 2)
+                    j += 2
+                else:
+                    break
+            if len(chain) > 1:
+                comp_text = "".join(source_tokens[k].get("text", "") for k in range(chain[0], chain[-1] + 1))
+                for idx in chain:
+                    source_tokens[idx]["is_in_compound"] = True
+                    source_tokens[idx]["compound_text"] = comp_text
+                i = chain[-1] + 1
+                continue
+            elif source_tokens[i].get("compound_id") is not None:
+                source_tokens[i]["is_in_compound"] = True
+                cid = source_tokens[i].get("compound_id")
+                same_cid = [k for k in range(n_tokens) if source_tokens[k].get("compound_id") == cid]
+                comp_text = "".join(source_tokens[k].get("text", "") for k in same_cid)
+                for idx in same_cid:
+                    source_tokens[idx]["is_in_compound"] = True
+                    source_tokens[idx]["compound_text"] = comp_text
+                i = max(same_cid) + 1 if same_cid else i + 1
+                continue
+            else:
+                source_tokens[i]["is_in_compound"] = False
+        i += 1
+
+
 def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths, zoom_level="100", theme="dark", tsv_path=None, split_gap_limit=60, wordfill_cfg=None, seq_num=None, trace_id=None, spawn_children=True, return_children=False, mismatch_info=None):
     is_mismatch = bool(mismatch_info and mismatch_info.get("is_mismatch"))
     if wordfill_cfg is None and config is not None:
@@ -11396,43 +11441,7 @@ html, body {{
     source_word_sentences = [t.get("sentence_idx", 1) for t in source_tokens if t.get("is_word") and "lower_clean" in t]
 
     COMPOUND_DELIMITERS = COMPOUND_JOINERS | PATH_LEVEL_DELIMITERS
-    n_tokens = len(source_tokens)
-    i = 0
-    while i < n_tokens:
-        if source_tokens[i].get("is_word"):
-            j = i
-            chain = [j]
-            while j + 2 < n_tokens:
-                delim_tok = source_tokens[j + 1]
-                next_word_tok = source_tokens[j + 2]
-                if (not delim_tok.get("is_word") and 
-                    delim_tok.get("text") and 
-                    all(c in COMPOUND_DELIMITERS for c in delim_tok.get("text")) and
-                    next_word_tok.get("is_word")):
-                    chain.append(j + 2)
-                    j += 2
-                else:
-                    break
-            if len(chain) > 1:
-                comp_text = "".join(source_tokens[k].get("text", "") for k in range(chain[0], chain[-1] + 1))
-                for idx in chain:
-                    source_tokens[idx]["is_in_compound"] = True
-                    source_tokens[idx]["compound_text"] = comp_text
-                i = chain[-1] + 1
-                continue
-            elif source_tokens[i].get("compound_id") is not None:
-                source_tokens[i]["is_in_compound"] = True
-                cid = source_tokens[i].get("compound_id")
-                same_cid = [k for k in range(n_tokens) if source_tokens[k].get("compound_id") == cid]
-                comp_text = "".join(source_tokens[k].get("text", "") for k in same_cid)
-                for idx in same_cid:
-                    source_tokens[idx]["is_in_compound"] = True
-                    source_tokens[idx]["compound_text"] = comp_text
-                i = max(same_cid) + 1 if same_cid else i + 1
-                continue
-            else:
-                source_tokens[i]["is_in_compound"] = False
-        i += 1
+    tag_server_compound_tokens(source_tokens)
 
     single_word_rows = set()
     anchored_positions = {}
@@ -17236,6 +17245,8 @@ window.__CONFIG__ = {ui_config_json};
             
             return group;
         }
+        window.isCompoundDelimiterNode = isCompoundDelimiterNode;
+        window.findCompoundSiblingSpans = findCompoundSiblingSpans;
 
         function isNonVerbalPartOfSpeech(pos) {
             if (!pos) return false;

@@ -6367,6 +6367,212 @@ def test_table_selection_dual_occurrence_highlighting_standalone_and_compound_su
     assert "highlight-orange-active" not in (span_path.get_attribute("class") or "")
 
 
+def test_rendered_page_and_js_fallback_compound_joiners_contract():
+    """
+    Task 4.1: Rendered page window.__CONFIG__.compound_joiners equals COMPOUND_JOINERS,
+    and the JS fallback literal equals it too.
+    """
+    import kardenwort_desk
+    from pathlib import Path
+
+    # 1. resolve_ui_config exposes compound_joiners matching COMPOUND_JOINERS
+    ui_cfg = kardenwort_desk.resolve_ui_config()
+    assert set(ui_cfg.get("compound_joiners", "")) == set(kardenwort_desk.COMPOUND_JOINERS)
+
+    # 2. Check JS fallback literal in kardenwort_desk.py
+    desk_path = Path(kardenwort_desk.__file__)
+    content = desk_path.read_text(encoding="utf-8")
+    m_fb = re.search(r'COMPOUND_JOINER_SET\s*=\s*new Set\([^;]*\|\|\s*"([^"]+)"\)', content)
+    assert m_fb, "COMPOUND_JOINER_SET fallback literal not found"
+    assert set(m_fb.group(1)) == set(kardenwort_desk.COMPOUND_JOINERS)
+
+
+def test_client_sibling_group_slashes_never_group(page, tmp_path, monkeypatch):
+    """
+    Task 4.2: Client sibling group for 'window' in '/usr/bin/per-window' is exactly 'per', 'window'.
+    Slashes do not act as client joiners.
+    """
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow, SEC_SETTINGS, SEC_RENDERING, SEC_TRIGGERS, SEC_ENVIRONMENT, SEC_LANGUAGES
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordSourceInflectedForm\tWordDestination\nwindow\twindow\ta window\n", encoding='utf-8')
+
+    source_text = "/usr/bin/per-window"
+    html = run_render_flow(
+        text=source_text,
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # Verify window.__CONFIG__.compound_joiners in rendered page
+    rendered_joiners = page.evaluate("() => window.__CONFIG__ ? window.__CONFIG__.compound_joiners : null")
+    assert rendered_joiners is not None
+    assert set(rendered_joiners) == set(kardenwort_desk.COMPOUND_JOINERS)
+
+    # Locate 'window' span and resolve compound sibling spans
+    result = page.evaluate("""() => {
+        const spans = Array.from(document.querySelectorAll('#source-container span.word'));
+        const spanWindow = spans.find(s => s.textContent === 'window');
+        if (!spanWindow) return null;
+        const group = window.findCompoundSiblingSpans(spanWindow);
+        return group.map(s => s.textContent);
+    }""")
+
+    assert result == ["per", "window"], f"Expected ['per', 'window'] but got {result}"
+
+
+def test_server_marks_path_delimiters_as_compound():
+    """
+    Task 4.3: Server marks 'usr', 'bin', 'window' in '/usr/bin/window' as is_in_compound
+    with compound_text 'usr/bin/window'.
+    """
+    import kardenwort_desk
+    from kardenwort_desk import tag_server_compound_tokens
+    import text_tokenizer as tok
+
+    source_tokens = tok.build_word_list_internal("/usr/bin/window", keep_spaces=True)
+    tag_server_compound_tokens(source_tokens)
+
+    word_tokens = [t for t in source_tokens if t.get("is_word")]
+    assert len(word_tokens) == 3
+    for t in word_tokens:
+        assert t["text"] in ("usr", "bin", "window")
+        assert t.get("is_in_compound") is True
+        assert t.get("compound_text") == "usr/bin/window"
+
+
+def test_dashes_are_not_grouped_on_client_or_server(page, tmp_path, monkeypatch):
+    """
+    Task 4.4: 'word—word' (em dash) and '1990–2000' (en dash) are not grouped on client or server.
+    """
+    import configparser
+    import sys
+    import kardenwort_desk
+    from kardenwort_desk import tag_server_compound_tokens, run_render_flow, SEC_SETTINGS, SEC_RENDERING, SEC_TRIGGERS, SEC_ENVIRONMENT, SEC_LANGUAGES
+    import text_tokenizer as tok
+
+    # 1. Server test: em dash and en dash are not compound joiners
+    for sample in ("word—word", "1990–2000"):
+        tokens = tok.build_word_list_internal(sample, keep_spaces=True)
+        tag_server_compound_tokens(tokens)
+        word_tokens = [t for t in tokens if t.get("is_word")]
+        for t in word_tokens:
+            assert not t.get("is_in_compound"), f"Token {t['text']} in {sample} should not be marked as compound on server"
+
+    # 2. Client test: em dash and en dash do not form sibling groups
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordSourceInflectedForm\tWordDestination\nword\tword\tслово\n", encoding='utf-8')
+
+    html = run_render_flow(
+        text="word—word and 1990–2000",
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    client_groups = page.evaluate("""() => {
+        const words = Array.from(document.querySelectorAll('#source-container span.word'));
+        return words.map(w => ({
+            text: w.textContent,
+            group: window.findCompoundSiblingSpans(w).map(s => s.textContent)
+        }));
+    }""")
+
+    for entry in client_groups:
+        assert entry["group"] == [entry["text"]], f"Span '{entry['text']}' should not group across dashes, got {entry['group']}"
+
+
+
 
 
 
