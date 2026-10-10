@@ -17160,16 +17160,26 @@ window.__CONFIG__ = {ui_config_json};
         window.setLemmaSelected = setLemmaSelected;
         window.syncSelectionsToCardsAndState = syncSelectionsToCardsAndState;
 
+        var COMPOUND_JOINER_SET = new Set((window.__CONFIG__ || {}).compound_joiners || "-_.:#@");
+
+        function isJoinerText(txt) {
+            if (!txt || txt.length === 0) return false;
+            for (var i = 0; i < txt.length; i++) {
+                if (!COMPOUND_JOINER_SET.has(txt[i])) return false;
+            }
+            return true;
+        }
+
         function isCompoundDelimiterNode(node) {
             if (!node) return false;
             if (node.nodeType === 3) { // Text node
                 var txt = node._origVal !== undefined ? node._origVal : (node.nodeValue || node.textContent || "");
-                return txt.length > 0 && /^[-_–—.:#@]+$/.test(txt);
+                return isJoinerText(txt);
             }
             if (node.nodeType === 1) { // Element node (e.g. <span class="sentence-delimiter">-</span>)
                 if (node.classList && node.classList.contains('sentence-delimiter')) {
                     var txt = node._origVal !== undefined ? node._origVal : (node.textContent || "");
-                    return txt.length > 0 && /^[-_–—.:#@]+$/.test(txt);
+                    return isJoinerText(txt);
                 }
             }
             return false;
