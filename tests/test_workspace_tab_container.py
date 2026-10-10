@@ -2807,3 +2807,66 @@ def test_playwright_tab1_master_overview_dynamic_occurrence_sync(page, tmp_path)
     restored_text = inf_cell.inner_text().strip()
     assert "das" in restored_text and "den" in restored_text and "der" in restored_text
 
+
+def test_playwright_source_token_pin_frame_zero_layout_displacement(page, tmp_path):
+    """
+    Verifies that when a token in the source or translation text is pinned with a rainbow bookmark frame,
+    the zero-geometry box-shadow causes 0.0px horizontal displacement delta for the token itself and
+    all trailing tokens on the line.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    if not config.has_section("Rendering"):
+        config.add_section("Rendering")
+    config.set("Rendering", "hover_highlight", "true")
+    config.set("Rendering", "hover_highlight_bookmarks", "4")
+    config.set("Rendering", "hover_highlight_rainbow", "true")
+
+    text = "Er fängt heute mit der Arbeit an, die ihm gefällt, weil das Projekt den Erfolg bringen soll, der ihm versprochen wurde 1."
+    zid = "20261010101555"
+    tsv_file = tmp_path / f"{zid}.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\tTokenOrder\n"
+        "Arbeit\tArbeit\tn.\tArbeit\tРабота\t1\t0\t1\n"
+        "Erfolg\tErfolg\tn.\tErfolg\tУспех\t1\t0\t2\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="single",
+        theme="dark",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+
+    words = page.locator("#source-container span.word").all()
+    texts = [w.inner_text() for w in words]
+    boxes_before = [w.bounding_box() for w in words]
+
+    # Pin 'Arbeit' by clicking it
+    arbeit = page.locator("#source-container span.word").filter(has_text="Arbeit").first
+    arbeit.click()
+    page.wait_for_timeout(50)
+
+    # Assert bookmark pin class is present
+    arbeit_class = arbeit.get_attribute("class") or ""
+    assert "hl-mvp-pin" in arbeit_class
+    assert "hl-mvp-pin-0" in arbeit_class
+
+    boxes_after = [w.bounding_box() for w in words]
+
+    for b_before, b_after, token_text in zip(boxes_before, boxes_after, texts):
+        assert b_before is not None and b_after is not None
+        dx = abs(b_after["x"] - b_before["x"])
+        dw = abs(b_after["width"] - b_before["width"])
+        assert dx < 0.1, f"Token '{token_text}' shifted horizontally by dx={b_after['x'] - b_before['x']:.2f}px!"
+        assert dw < 0.1, f"Token '{token_text}' width changed by dw={b_after['width'] - b_before['width']:.2f}px!"
+
