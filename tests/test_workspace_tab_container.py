@@ -2670,3 +2670,140 @@ def test_overview_tab_consolidates_multi_sentence_pos_variants_while_sentence_ca
     assert len(to_master_strict) == 2, f"Expected 2 rows for 'to' on Tab 1 with overview_deduplicate_pos_aware=True, got {len(to_master_strict)}"
     pos_set = {w["pos"].strip().lower() for w in to_master_strict}
     assert pos_set == {"prep.", "part."}
+
+
+def test_playwright_pin_strip_zero_layout_displacement(page, tmp_path):
+    """
+    Verifies that when a bookmark pin is activated and hl-mvp-pin-0 adds a colored
+    left border to td:first-child, the text inside td:first-child does not undergo
+    any horizontal pixel layout shift (0px delta).
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    if not config.has_section("Rendering"):
+        config.add_section("Rendering")
+    config.set("Rendering", "hover_highlight", "true")
+    config.set("Rendering", "hover_highlight_bookmarks", "4")
+    config.set("Rendering", "hover_highlight_rainbow", "true")
+
+    text = "Er fängt heute mit der Arbeit an, weil ihm das Projekt gefällt."
+    zid = "20261010094001"
+    tsv_file = tmp_path / f"{zid}.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\tTokenOrder\n"
+        "gefällt\tfällen\tv.\tgefällt\tвырубка\t1\t0\t1\n"
+        "Arbeit\tArbeit\tn.\tArbeit\tработа\t1\t0\t2\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="single",
+        theme="dark",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    gefaellt_row = page.locator("#lemma-table tbody tr").filter(has_text="gefällt").first
+    target_cell = gefaellt_row.locator("td:first-child .scrollable-cell")
+    box_before = target_cell.bounding_box()
+    assert box_before is not None
+
+    # Find the token corresponding to 'gefällt' in source text and click it to pin
+    gefaellt_span = page.locator("#source-container span.word").filter(has_text="gefällt").first
+    gefaellt_span.click()
+    page.wait_for_timeout(50)
+
+    # Verify that the table row now has the pin class
+    row_class = gefaellt_row.get_attribute("class") or ""
+    assert "hl-mvp-pin" in row_class
+
+    box_after = target_cell.bounding_box()
+    assert box_after is not None
+
+    # The horizontal offset (x coordinate) MUST be identical (0px layout shift)
+    assert abs(box_after["x"] - box_before["x"]) < 0.1, (
+        f"Layout shift detected! Expected x={box_before['x']}, got x={box_after['x']}"
+    )
+
+    # Click again to unpin
+    gefaellt_span.click()
+    page.wait_for_timeout(50)
+    box_unpinned = target_cell.bounding_box()
+    assert box_unpinned is not None
+    assert abs(box_unpinned["x"] - box_before["x"]) < 0.1
+
+
+def test_playwright_tab1_master_overview_dynamic_occurrence_sync(page, tmp_path):
+    """
+    Verifies that on Tab 1 (Master Overview) in container mode, table rows carry data-occ,
+    and clicking tokens in the source text dynamically filters the INFLECTED and translation
+    cells to show only the selected occurrence, restoring the consolidated string on deselect.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "delivery_mode", "container")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("sentences_mode", "overview_deduplicate_pos_aware", "false")
+
+    text = "Er fängt heute mit der Arbeit an, weil ihm das Projekt gefällt. Er soll den Erfolg bringen, der ihm versprochen wurde."
+    zid = "20261010094002"
+    tsv_file = tmp_path / f"{zid}.de.tsv"
+    tsv_file.write_text(
+        "Quotation\tWordSource\tWordSourcePOS\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\tTokenOrder\n"
+        "der\tder\tart.\tder\tтот\t1\t0\t1\n"
+        "das\tder\tart.\tdas\tто\t1\t0\t2\n"
+        "den\tder\tart.\tden\tтот_акк\t2\t0\t3\n"
+        "der\tder\tpron.\tder\tкоторый\t2\t0\t4\n",
+        encoding="utf-8"
+    )
+
+    html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1  # Tab 1: Master Overview
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    # Locate row for 'der' on Tab 1
+    der_row = page.locator("#lemma-table tbody tr").filter(has_text="der").first
+    data_occ = der_row.get_attribute("data-occ")
+    assert data_occ is not None and len(data_occ) > 0, "Expected data-occ attribute on Tab 1 overview row"
+
+    inf_cell = der_row.locator("td.col-inflected")
+    initial_text = inf_cell.inner_text().strip()
+    assert "das" in initial_text and "den" in initial_text and "der" in initial_text
+
+    # Click the token 'den' in the source text
+    den_span = page.locator("#source-container span.word").filter(has_text="den").first
+    den_span.click()
+    page.wait_for_timeout(60)
+
+    # INFLECTED cell must dynamically show occurrence form 'den'
+    updated_inf_text = inf_cell.inner_text().strip()
+    assert updated_inf_text == "den", f"Expected dynamic filtered text 'den', got '{updated_inf_text}'"
+
+    # Click 'den' again to deselect
+    den_span.click()
+    page.wait_for_timeout(60)
+
+    # Restored to baseline consolidated string
+    restored_text = inf_cell.inner_text().strip()
+    assert "das" in restored_text and "den" in restored_text and "der" in restored_text
+

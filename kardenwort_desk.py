@@ -11853,6 +11853,7 @@ html, body {{
             "provenance": prov_val or "",
             "dynamic_tds": dynamic_tds,
             "inflected_tooltip": inflected_tooltip,
+            "occurrence_data": _row_occ,
             "row_html": row_html_line,
         })
     table_rows_html = "" if is_mismatch else "\n".join(table_rows)
@@ -12306,12 +12307,102 @@ html, body {{
                 ov_prov_title = f' title="{html.escape(ov_tooltip_title)}"' if ov_tooltip_title else ''
                 ov_prov_attr = f'{ov_prov_data}{ov_prov_title}'
 
+            ov_occ_attr = ""
+            ov_row_occ = {}
+            if row_occurrences:
+                for mid in matched_ids:
+                    if 0 <= mid < len(data_rows):
+                        r_mid = data_rows[mid]
+                        t_ord = str(r_mid[col_token_order]) if col_token_order != -1 and len(r_mid) > col_token_order else str(mid)
+                        if t_ord in row_occurrences and isinstance(row_occurrences[t_ord], dict):
+                            ov_row_occ.update(row_occurrences[t_ord])
+            
+            if is_ov_unified_der:
+                der_forms = DE_UNIFIED_ARTICLE_FORMS
+                for tok_item in source_tokens:
+                    if tok_item.get("is_word") and (tok_item.get("lower_clean") or "").lower() in der_forms:
+                        v_key = str(tok_item.get("visual_idx"))
+                        raw_w = (tok_item.get("text") or "").strip().lower()
+                        v_int = tok_item.get("visual_idx", 0)
+                        prev_toks = [st for st in source_tokens if st.get("visual_idx", 0) < v_int and st.get("text", "").strip()]
+                        prev_t = prev_toks[-1].get("text", "").strip() if prev_toks else ""
+                        is_rel_pron = (prev_t == "," or prev_t.endswith(","))
+                        pos_inferred = "pron." if is_rel_pron else "art."
+                        trans_inferred = "который" if pos_inferred == "pron." else "тот"
+                        if raw_w == "die" and pos_inferred == "pron.":
+                            trans_inferred = "которая"
+                        
+                        if col_word_dest != -1:
+                            for mid in matched_ids:
+                                if 0 <= mid < len(data_rows):
+                                    r_mid = data_rows[mid]
+                                    m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip().lower()
+                                    if raw_w in [f.strip() for f in m_inf.split(',')]:
+                                        cand_tr = r_mid[col_word_dest].strip() if len(r_mid) > col_word_dest else ""
+                                        if cand_tr and cand_tr != "[FAILED]" and "skeleton-loader" not in cand_tr and cand_tr not in ("-", "--"):
+                                            trans_inferred = cand_tr
+                                            break
+                        
+                        tok_sent_idx = tok_item.get("sentence_idx")
+                        tok_sent_text = ""
+                        if tok_sent_idx is not None and 1 <= tok_sent_idx <= len(source_sentences):
+                            tok_sent_text = source_sentences[tok_sent_idx - 1]
+                        else:
+                            tok_sent_text = ov_sentence
+                        inf_tooltip = format_inflected_sentence_tooltip(tok_sent_text, raw_w, token_order=ov_token_order, lemma=ov_lemma)
+                        if v_key not in ov_row_occ:
+                            ov_row_occ[v_key] = {
+                                "form": raw_w,
+                                "pos": pos_inferred,
+                                "trans": trans_inferred,
+                                "morph": f"der ({'корень: относительное местоимение' if pos_inferred == 'pron.' else 'определенный артикль'})",
+                                "inflected_tooltip": inf_tooltip
+                            }
+                        else:
+                            entry = dict(ov_row_occ[v_key])
+                            if "form" not in entry:
+                                entry["form"] = raw_w
+                            if "inflected_tooltip" not in entry:
+                                entry["inflected_tooltip"] = inf_tooltip
+                            ov_row_occ[v_key] = entry
+            elif matched_ids and len(matched_ids) > 1:
+                for mid in matched_ids:
+                    if 0 <= mid < len(data_rows):
+                        r_mid = data_rows[mid]
+                        m_inf = resolve_row_inflected_form(r_mid, col_inflected, col_inflected2, col_quotation, col_lemma).strip().lower()
+                        m_tr = r_mid[col_word_dest].strip() if col_word_dest != -1 and len(r_mid) > col_word_dest else ""
+                        m_pos = r_mid[col_pos].strip() if col_pos != -1 and len(r_mid) > col_pos else ""
+                        m_morph = r_mid[col_morph].strip() if col_morph != -1 and len(r_mid) > col_morph else ""
+                        m_t_ord = str(r_mid[col_token_order]) if col_token_order != -1 and len(r_mid) > col_token_order else str(mid)
+                        for tok_item in source_tokens:
+                            if tok_item.get("is_word"):
+                                t_clean = (tok_item.get("lower_clean") or "").lower()
+                                t_ord_match = (str(tok_item.get("token_order")) == m_t_ord) if tok_item.get("token_order") is not None else False
+                                if t_ord_match or (t_clean in [f.strip() for f in m_inf.split(',')]):
+                                    v_key = str(tok_item.get("visual_idx"))
+                                    if v_key not in ov_row_occ:
+                                        tok_sent_idx = tok_item.get("sentence_idx")
+                                        tok_sent_text = source_sentences[tok_sent_idx - 1] if (tok_sent_idx is not None and 1 <= tok_sent_idx <= len(source_sentences)) else ov_sentence
+                                        ov_row_occ[v_key] = {
+                                            "form": tok_item.get("text", "").strip(),
+                                            "pos": m_pos,
+                                            "trans": m_tr,
+                                            "morph": m_morph,
+                                            "inflected_tooltip": format_inflected_sentence_tooltip(tok_sent_text, tok_item.get("text", "").strip(), token_order=m_t_ord, lemma=ov_lemma)
+                                        }
+
+            if ov_row_occ:
+                try:
+                    ov_occ_attr = ' data-occ="' + html.escape(json.dumps(ov_row_occ, ensure_ascii=False), quote=True) + '"'
+                except Exception:
+                    ov_occ_attr = ""
+
             all_ids_attr = f' data-all-row-ids="{all_ids_str}"' if all_ids_str else ""
             ov_hl_class = "highlight-orange"
             if ov_is_sel == "1":
                 ov_hl_class += " selected kw-row-selected"
             ov_row_html = (
-                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}" data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
+                f'<tr data-row-id="{primary_id}"{all_ids_attr} data-token-order="{ov_token_order}"{ov_occ_attr} data-sentence-idx="0" data-selected="{ov_is_sel}" class="{ov_hl_class}">'
                 f'<td class="{inflected_class} col-inflected" data-col="{inflected_col_name}"{ov_inf_title}><div class="scrollable-cell">{ov_inflected}</div></td>'
                 f'<td class="{lemma_class} col-lemma" data-col="{lemma_col_name}"{ov_lemma_title}><div class="scrollable-cell">{ov_lemma}</div></td>'
                 f'<td class="{trans_class} col-translation" data-col="{trans_col_name}"{ov_prov_attr}><div class="scrollable-cell"{ov_prov_attr}>{ov_trans}</div></td>'
@@ -12340,6 +12431,7 @@ html, body {{
                 "provenance": ov_prov_val or "",
                 "dynamic_tds": ov_dynamic_tds,
                 "inflected_tooltip": ov_inf_tooltip,
+                "occurrence_data": ov_row_occ,
                 "row_html": ov_row_html,
             })
 
@@ -12652,14 +12744,15 @@ html, body {{
   body.theme-dark #translation-container span.word.hl-mvp-pin-6 { border: 2px solid #ff7b72 !important; border-radius: 4px !important; margin: -2px !important; }
   body.theme-dark #source-container span.word.hl-mvp-pin-7,
   body.theme-dark #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #a5b4fc !important; border-radius: 4px !important; margin: -2px !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left: 4px solid #39d353 !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left: 4px solid #b78cf7 !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left: 4px solid #ff9c3a !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left: 4px solid #ff79c6 !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left: 4px solid #f2ca30 !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left: 4px solid #39c5ff !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left: 4px solid #ff7b72 !important; }
-  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left: 4px solid #a5b4fc !important; }
+  #lemma-table tbody tr td:first-child { border-left: 4px solid transparent !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left-color: #39d353 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left-color: #b78cf7 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left-color: #ff9c3a !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left-color: #ff79c6 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left-color: #f2ca30 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left-color: #39c5ff !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left-color: #ff7b72 !important; }
+  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left-color: #a5b4fc !important; }
   body.theme-light #source-container span.word.hl-mvp-pin-0,
   body.theme-light #translation-container span.word.hl-mvp-pin-0,
   body.theme-white #source-container span.word.hl-mvp-pin-0,
@@ -12693,21 +12786,21 @@ html, body {{
   body.theme-white #source-container span.word.hl-mvp-pin-7,
   body.theme-white #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #7c3aed !important; border-radius: 4px !important; margin: -2px !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-0 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left: 4px solid #1a7f37 !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left-color: #1a7f37 !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-1 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left: 4px solid #8250df !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left-color: #8250df !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-2 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left: 4px solid #bc4c00 !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left-color: #bc4c00 !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-3 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left: 4px solid #cf222e !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left-color: #cf222e !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-4 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left: 4px solid #b08800 !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left-color: #b08800 !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-5 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left: 4px solid #0891b2 !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left-color: #0891b2 !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-6 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left: 4px solid #e11d48 !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left-color: #e11d48 !important; }
   body.theme-light #lemma-table tbody tr.hl-mvp-pin-7 td:first-child,
-  body.theme-white #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left: 4px solid #7c3aed !important; }
+  body.theme-white #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left-color: #7c3aed !important; }
   body.text-selection-mode-active,
   body.text-selection-mode-active * {
     cursor: text !important;
@@ -21968,8 +22061,12 @@ window.__CONFIG__ = {ui_config_json};
                         var posTitleAttr = posTooltip ? (' title="' + escapeHtml(posTooltip) + '"') : '';
                         var genTitleAttr = genTooltip ? (' title="' + escapeHtml(genTooltip) + '"') : '';
 
+                        var occAttr = (w.occurrence_data && typeof w.occurrence_data === 'object' && Object.keys(w.occurrence_data).length > 0)
+                            ? (' data-occ="' + escapeHtml(JSON.stringify(w.occurrence_data)) + '"')
+                            : '';
+
                         htmlParts.push(
-                            '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(w.token_order || rIdStr) + '" data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
+                            '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(w.token_order || rIdStr) + '"' + occAttr + ' data-sentence-idx="' + escapeHtml(w.sentence_idx || '1') + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
                             '<td class="editable col-inflected" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.inflected || '') + '</div></td>' +
                             '<td class="editable col-lemma" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(w.lemma || '') + '</div></td>' +
                             '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (w.translation || '') + '</div></td>' +
