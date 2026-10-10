@@ -94,6 +94,9 @@ class ErrorCode(str, Enum):
 # Frozen set of all valid catalog codes for O(1) membership checks.
 _VALID_ERROR_CODES: FrozenSet[str] = frozenset(member.value for member in ErrorCode)
 
+COMPOUND_JOINERS = frozenset({'_', '-', '.', ':', '#', '@'})
+PATH_LEVEL_DELIMITERS = frozenset({'/', '\\'})
+
 
 class SentenceMatchStrategy(str, Enum):
     """
@@ -2239,6 +2242,7 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
         'auto_inject_updates': True,
         'highlight_same_lemma': False,
         'filter_selected_only': False,
+        'compound_joiners': "".join(sorted(COMPOUND_JOINERS)),
     }
     if not config:
         return ui_cfg
@@ -11391,7 +11395,7 @@ html, body {{
     source_word_cleans = [t["lower_clean"] for t in source_tokens if t.get("is_word") and "lower_clean" in t]
     source_word_sentences = [t.get("sentence_idx", 1) for t in source_tokens if t.get("is_word") and "lower_clean" in t]
 
-    COMPOUND_DELIMITERS = {'_', '-', '.', '/', '\\', ':', '#', '@'}
+    COMPOUND_DELIMITERS = COMPOUND_JOINERS | PATH_LEVEL_DELIMITERS
     n_tokens = len(source_tokens)
     i = 0
     while i < n_tokens:
@@ -23129,6 +23133,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{lang_modal_display}", lang_modal_display)
     html_page = html_page.replace("{mismatch_info_json}", json.dumps(mismatch_info) if mismatch_info else "null")
     ui_cfg = resolve_ui_config(config)
+    ui_cfg["compound_joiners"] = "".join(sorted(COMPOUND_JOINERS))
     html_page = html_page.replace("{ui_config_json}", json.dumps(ui_cfg))
     html_page = html_page.replace("{pos_display_order_json}", json.dumps(POS_DISPLAY_ORDER))
     html_page = html_page.replace("{same_lemma_active_class}", " active" if ui_cfg.get("highlight_same_lemma") else "")
