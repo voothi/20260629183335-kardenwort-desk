@@ -6267,6 +6267,107 @@ def test_workspace_tabs_tab_switch_clears_mvp_bookmarks(page):
     assert "hl-mvp-pin" not in (row2.get_attribute("class") or "")
 
 
+def test_table_selection_dual_occurrence_highlighting_standalone_and_compound_subtokens(page, tmp_path, monkeypatch):
+    import configparser
+    import sys
+    from kardenwort_desk import run_render_flow, SEC_SETTINGS, SEC_RENDERING, SEC_TRIGGERS, SEC_ENVIRONMENT, SEC_LANGUAGES
+    import kardenwort_desk
+
+    monkeypatch.setattr(kardenwort_desk, 'run_progressive_worker_async', lambda *args, **kwargs: None)
+
+    config = configparser.ConfigParser()
+    config.add_section(SEC_SETTINGS)
+    config.set(SEC_SETTINGS, 'default_target_language', 'ru')
+    config.add_section(SEC_RENDERING)
+    config.set(SEC_RENDERING, 'display_mode', 'monolithic')
+    config.add_section(SEC_TRIGGERS)
+    config.set(SEC_TRIGGERS, 'run_lemma_base_translation', 'auto')
+    config.set(SEC_TRIGGERS, 'run_lemma_enrichment', 'manual')
+    config.add_section(SEC_ENVIRONMENT)
+    config.set(SEC_ENVIRONMENT, 'kardenwort_workspace', str(tmp_path))
+    config.add_section(SEC_LANGUAGES)
+    config.set(SEC_LANGUAGES, 'en_lemma_index', 'en_idx')
+    config.set(SEC_LANGUAGES, 'en_lemma_override', 'en_over')
+    config.set(SEC_LANGUAGES, 'en_prompt', 'en_prompt')
+
+    mapping = configparser.ConfigParser()
+    mapping.optionxform = str
+    mapping.add_section('fields')
+    mapping.add_section('fields_mapping.word')
+    mapping.add_section('desk_columns')
+    mapping.set('desk_columns', 'WordSource', 'lemma')
+    mapping.set('desk_columns', 'WordSourceInflectedForm', 'inflected')
+    mapping.set('desk_columns', 'WordDestination', 'word_translation')
+
+    mapping_file = tmp_path / "mapping.ini"
+    with open(mapping_file, 'w') as f:
+        mapping.write(f)
+
+    resolved_paths = {
+        'kardenwort_workspace': tmp_path,
+        'anki_mapping_file': str(mapping_file),
+        'kardenwort_python': sys.executable
+    }
+
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+
+    tsv_path = res_dir / "123-test-slug.en.tsv"
+    tsv_path.write_text("WordSource\tWordSourceInflectedForm\tWordDestination\nwindow\twindow\ta window\n", encoding='utf-8')
+
+    source_text = "A window and a per-window config at /usr/bin/window."
+    html = run_render_flow(
+        text=source_text,
+        language="en",
+        zid="123",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html)
+
+    # Initial spans: standalone word, kebab-case sub-token, and path sub-token
+    span_standalone = page.locator("span[data-word-idx='3']")
+    span_kebab = page.locator("span[data-word-idx='11']")
+    span_path = page.locator("span[data-word-idx='22']")
+    span_following = page.locator("span[data-word-idx='13']")
+
+    assert span_standalone.inner_text() == "window"
+    assert span_kebab.inner_text() == "window"
+    assert span_path.inner_text() == "window"
+
+    assert "highlight-orange" in (span_standalone.get_attribute("class") or "")
+    assert "highlight-orange" in (span_kebab.get_attribute("class") or "")
+    assert "highlight-orange" in (span_path.get_attribute("class") or "")
+
+    box_before = span_following.bounding_box()
+
+    # Selecting table row 0 for general lemma 'window' activates all occurrences
+    row0 = page.locator("tr[data-row-id='0']")
+    row0.click()
+
+    assert "highlight-orange-active" in (span_standalone.get_attribute("class") or "")
+    assert "highlight-orange-active" in (span_kebab.get_attribute("class") or "")
+    assert "highlight-orange-active" in (span_path.get_attribute("class") or "")
+
+    # Delimiters and non-matching sub-tokens remain unhighlighted
+    span_per = page.locator("span[data-word-idx='9']")
+    assert "highlight-orange-active" not in (span_per.get_attribute("class") or "")
+
+    # Layout displacement on subsequent tokens remains zero (box-shadow zero-geometry)
+    box_after = span_following.bounding_box()
+    assert abs(box_after["x"] - box_before["x"]) < 0.01
+
+    # Deselecting row restores baseline styling across all occurrences
+    row0.click()
+    assert "highlight-orange-active" not in (span_standalone.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_kebab.get_attribute("class") or "")
+    assert "highlight-orange-active" not in (span_path.get_attribute("class") or "")
+
+
+
 
 
 
