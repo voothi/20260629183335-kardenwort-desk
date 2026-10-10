@@ -1,0 +1,1836 @@
+﻿diff --git a/kardenwort_desk.py b/kardenwort_desk.py
+index d8a9e31..caaf624 100644
+--- a/kardenwort_desk.py
++++ b/kardenwort_desk.py
+@@ -530,7 +530,8 @@ def check_endpoint_reachable(server_url: str, connect_timeout: float = MICROSERV
+     """
+     if not server_url:
+         return False
+-    effective_timeout = min(connect_timeout, 0.4)
++    raw_timeout = connect_timeout if (connect_timeout is not None and connect_timeout > 0) else MICROSERVICE_CONNECT_TIMEOUT_DEFAULT
++    effective_timeout = min(raw_timeout, 0.4)
+     parsed = urllib.parse.urlparse(server_url)
+     host = parsed.hostname or "127.0.0.1"
+     port = parsed.port or (443 if parsed.scheme == "https" else 80)
+@@ -1092,6 +1093,8 @@ class RuntimeTokenConfig:
+     lemmatize_mapped_tokens: bool = True
+     deduplicate_pos_aware: bool = True
+     unify_article_pronoun_lemmas: bool = True
++    sentence_deduplicate_pos_aware: bool = True
++    overview_deduplicate_pos_aware: bool = False
+ 
+     @property
+     def combine_source_words_order(self) -> str:
+@@ -1113,6 +1116,12 @@ class RuntimeTokenConfig:
+             lemmatize_mapped_tokens = config.getboolean(SEC_TOKEN_MAPPINGS, "lemmatize_mapped_tokens", fallback=True)
+             deduplicate_pos_aware = config.getboolean(SEC_SETTINGS, "deduplicate_pos_aware", fallback=True)
+             unify_article_pronoun_lemmas = config.getboolean(SEC_SETTINGS, "unify_article_pronoun_lemmas", fallback=True)
++            sentence_deduplicate_pos_aware = config.getboolean(
++                SEC_SENTENCES_MODE, "sentence_deduplicate_pos_aware", fallback=deduplicate_pos_aware
++            )
++            overview_deduplicate_pos_aware = config.getboolean(
++                SEC_SENTENCES_MODE, "overview_deduplicate_pos_aware", fallback=False
++            )
+         else:
+             filter_by_window = True
+             combine_source_words = False
+@@ -1120,6 +1129,8 @@ class RuntimeTokenConfig:
+             lemmatize_mapped_tokens = True
+             deduplicate_pos_aware = True
+             unify_article_pronoun_lemmas = True
++            sentence_deduplicate_pos_aware = True
++            overview_deduplicate_pos_aware = False
+ 
+         if config and hasattr(config, "get"):
+             combine_order = config.get(
+@@ -1155,6 +1166,8 @@ class RuntimeTokenConfig:
+             lemmatize_mapped_tokens=lemmatize_mapped_tokens,
+             deduplicate_pos_aware=deduplicate_pos_aware,
+             unify_article_pronoun_lemmas=unify_article_pronoun_lemmas,
++            sentence_deduplicate_pos_aware=sentence_deduplicate_pos_aware,
++            overview_deduplicate_pos_aware=overview_deduplicate_pos_aware,
+         )
+ 
+ 
+@@ -2374,6 +2387,50 @@ def normalize_pos_tag(pos: Optional[str]) -> str:
+         return pos_lower
+     return pos_clean
+ 
++GERMAN_CONTRACTION_PREPOSITIONS: Set[str] = {
++    "zu", "in", "an", "bei", "von", "für", "fuer", "durch", "um", "auf", "unter", "hinter", "vor", "über", "ueber", "mit", "nach", "aus", "ab"
++}
++GERMAN_CONTRACTION_ARTICLES: Set[str] = {
++    "der", "die", "das", "dem", "den", "des", "ein", "eine", "einem", "einen", "einer", "eines"
++}
++GERMAN_CONTRACTION_PRONOUNS: Set[str] = {
++    "es", "ich", "du", "er", "sie", "wir", "ihr", "man", "mich", "dich", "ihn", "uns", "euch", "ihnen"
++}
++ENGLISH_CONTRACTION_VERBS: Set[str] = {
++    "be", "have", "will", "would", "had", "am", "are", "is", "was", "were", "has", "do", "does", "did", "ca", "could", "should", "might", "must", "wo",
++    "'re", "’re", "re", "'ve", "’ve", "ve", "'ll", "’ll", "ll", "'d", "’d", "d", "'m", "’m", "m"
++}
++ENGLISH_CONTRACTION_PARTICLES: Set[str] = {
++    "not", "n't", "n’t", "nt", "'t", "’t"
++}
++ENGLISH_CONTRACTION_PRONOUNS: Set[str] = {
++    "i", "you", "he", "she", "it", "we", "they", "that", "what", "who", "where", "how", "there"
++}
++
++def resolve_contraction_constituent_pos(lemma: str, raw_target_token: str = "", default_pos: str = "") -> str:
++    """Assigns linguistically authentic POS tags to deconstructed contraction sub-lemmas.
++    
++    Prevents verbal/adverbial constituents in contractions (e.g. 're -> be, n't -> not)
++    from inheriting parent pronoun POS tags.
++    """
++    lem_lower = (lemma or "").strip().lower()
++    raw_lower = (raw_target_token or "").strip().lower()
++
++    if lem_lower in GERMAN_CONTRACTION_ARTICLES or raw_lower in GERMAN_CONTRACTION_ARTICLES:
++        return "art."
++    if lem_lower in GERMAN_CONTRACTION_PREPOSITIONS or raw_lower in GERMAN_CONTRACTION_PREPOSITIONS:
++        return "prep."
++    if lem_lower in GERMAN_CONTRACTION_PRONOUNS or raw_lower in GERMAN_CONTRACTION_PRONOUNS:
++        return "pron."
++    if lem_lower in ENGLISH_CONTRACTION_VERBS or raw_lower in ENGLISH_CONTRACTION_VERBS:
++        return "v."
++    if lem_lower in ENGLISH_CONTRACTION_PARTICLES or raw_lower in ENGLISH_CONTRACTION_PARTICLES:
++        return "part."
++    if lem_lower in ENGLISH_CONTRACTION_PRONOUNS or raw_lower in ENGLISH_CONTRACTION_PRONOUNS:
++        return "pron."
++
++    return default_pos
++
+ 
+ DE_UNIFIED_ARTICLE_LEMMA = "der"
+ DE_UNIFIED_ARTICLE_FORMS = frozenset({"der", "die", "das", "den", "dem", "des"})
+@@ -2588,81 +2645,173 @@ def to_unicode_bold(text: str) -> str:
+             result.append(ch)
+     return "".join(result)
+ 
++def _format_single_inflected_sentence_context(
++    sentence_text: str,
++    inflected_val: Optional[str] = None,
++    token_order: Optional[Union[str, int]] = None,
++    lemma: Optional[str] = None,
++) -> str:
++    if not sentence_text:
++        return ""
++    if not inflected_val:
++        return str(sentence_text).strip()
++
++    target_indices = set()
++    if token_order is not None:
++        t_str = str(token_order).strip()
++        if "+" in t_str:
++            for p in t_str.split("+"):
++                p_clean = p.strip()
++                if p_clean.isdigit():
++                    target_indices.add(int(p_clean))
++
++    target_words = set()
++    lemma_clean = str(lemma).strip().lower() if lemma and str(lemma).strip() else None
++
++    raw_components = [c.strip() for c in (inflected_val or "").split(",") if c.strip()]
++    if not raw_components:
++        raw_components = [inflected_val or ""]
++
++    for comp in raw_components:
++        comp_tokens = [t for t in re.findall(r'[\w]+', comp.lower()) if not re.match(r'^\d{14}$', t)]
++        is_comp_slug = bool(
++            ('+' not in comp)
++            and ('-' in comp or '_' in comp or re.search(r'\b\d{14}\b', comp))
++        )
++        if is_comp_slug and lemma_clean:
++            exact = [t for t in comp_tokens if t == lemma_clean]
++            if exact:
++                target_words.update(exact)
++            else:
++                stem = [
++                    t for t in comp_tokens
++                    if (len(t) >= 3 and (t.startswith(lemma_clean) or lemma_clean.startswith(t)))
++                ]
++                if stem:
++                    target_words.update(stem)
++                else:
++                    target_words.update(comp_tokens)
++        else:
++            target_words.update(comp_tokens)
++
++    if lemma_clean:
++        target_words.add(lemma_clean)
++
++    parts = re.split(r'(\w+)', str(sentence_text))
++    word_idx = 0
++    has_indices = bool(target_indices)
++
++    for i, part in enumerate(parts):
++        if re.match(r'^\w+$', part):
++            should_bold = False
++            if has_indices and word_idx in target_indices:
++                should_bold = True
++            elif part.lower() in target_words:
++                should_bold = True
++
++            if should_bold:
++                parts[i] = to_unicode_bold(part)
++            word_idx += 1
++
++    return "".join(parts).strip()
++
+ def format_inflected_sentence_tooltip(
+     sentence_text: Optional[Union[str, List[Any]]] = None,
+     inflected_val: Optional[str] = None,
+     token_order: Optional[Union[str, int]] = None,
+     sentences: Optional[List[Any]] = None,
++    lemma: Optional[str] = None,
+ ) -> str:
+     items = sentences if sentences is not None else (sentence_text if isinstance(sentence_text, list) else None)
+     if items is not None:
+         formatted_lines = []
+         seen_lines = set()
++        collected_forms = []
+         for item in items:
+-            s_txt, i_val, t_ord = "", "", None
++            s_txt, i_val, t_ord, item_lemma = "", "", None, lemma
+             if isinstance(item, (list, tuple)):
+                 if len(item) == 1:
+                     s_txt = item[0]
+                 elif len(item) == 2:
+                     s_txt, i_val = item[0], item[1]
+-                elif len(item) >= 3:
++                elif len(item) == 3:
+                     s_txt, i_val, t_ord = item[0], item[1], item[2]
++                elif len(item) >= 4:
++                    s_txt, i_val, t_ord, item_lemma = item[0], item[1], item[2], item[3]
+             elif isinstance(item, dict):
+                 s_txt = item.get("sentence") or item.get("sentence_source") or ""
+                 i_val = item.get("inflected") or item.get("inflected_val") or inflected_val or ""
+                 t_ord = item.get("token_order", token_order)
++                item_lemma = item.get("lemma") or lemma
+             elif isinstance(item, str):
+                 s_txt = item
+                 i_val = inflected_val or ""
+                 t_ord = token_order
++                item_lemma = lemma
++
++            item_lemma = item_lemma or lemma
+ 
+             s_clean = (s_txt or "").strip()
+             if not s_clean:
+                 continue
+-            line = format_inflected_sentence_tooltip(sentence_text=s_clean, inflected_val=i_val, token_order=t_ord)
++
++            eff_inf = (i_val if i_val is not None and str(i_val).strip() else inflected_val) or ""
++            if eff_inf and str(eff_inf).strip():
++                collected_forms.append(str(eff_inf).strip())
++
++            line = _format_single_inflected_sentence_context(
++                sentence_text=s_clean,
++                inflected_val=eff_inf,
++                token_order=t_ord,
++                lemma=item_lemma,
++            )
+             if line and line not in seen_lines:
+                 seen_lines.add(line)
+                 formatted_lines.append(line)
+ 
++        header_raw = ""
++        seen_f = set()
++        unique_forms = []
++        for f in collected_forms:
++            if f not in seen_f:
++                seen_f.add(f)
++                unique_forms.append(f)
++
++        if len(unique_forms) > 1:
++            if inflected_val and all(f.lower() in str(inflected_val).lower() for f in unique_forms):
++                header_raw = str(inflected_val).strip()
++            else:
++                header_raw = ", ".join(unique_forms)
++        elif inflected_val and str(inflected_val).strip():
++            header_raw = str(inflected_val).strip()
++        elif unique_forms:
++            header_raw = ", ".join(unique_forms)
++
++        header = to_unicode_bold(header_raw) if header_raw else ""
++
+         if len(formatted_lines) > 1:
+-            return "\n".join(f"[{idx + 1}] {line}" for idx, line in enumerate(formatted_lines))
++            body = "\n".join(f"[{idx + 1}] {line}" for idx, line in enumerate(formatted_lines))
++            return f"{header}\n{body}" if header else body
+         elif len(formatted_lines) == 1:
+-            return formatted_lines[0]
++            body = formatted_lines[0]
++            return f"{header}\n{body}" if header else body
+         return (inflected_val or "").strip()
+ 
+     if not sentence_text:
+         return (inflected_val or "").strip()
+     if not inflected_val:
+         return str(sentence_text).strip()
+-    
+-    target_indices = set()
+-    if token_order is not None:
+-        t_str = str(token_order).strip()
+-        if "+" in t_str:
+-            for p in t_str.split("+"):
+-                p_clean = p.strip()
+-                if p_clean.isdigit():
+-                    target_indices.add(int(p_clean))
+-    
+-    target_words = set(re.findall(r'[\w]+', inflected_val.lower()))
+-    
+-    parts = re.split(r'(\w+)', str(sentence_text))
+-    word_idx = 0
+-    has_indices = bool(target_indices)
+-    
+-    for i, part in enumerate(parts):
+-        if re.match(r'^\w+$', part):
+-            should_bold = False
+-            if has_indices and word_idx in target_indices:
+-                should_bold = True
+-            elif part.lower() in target_words:
+-                should_bold = True
+-            
+-            if should_bold:
+-                parts[i] = to_unicode_bold(part)
+-            word_idx += 1
+-            
+-    return "".join(parts)
++
++    formatted_sentence = _format_single_inflected_sentence_context(
++        sentence_text=str(sentence_text),
++        inflected_val=inflected_val,
++        token_order=token_order,
++        lemma=lemma,
++    )
++    header = to_unicode_bold(str(inflected_val).strip())
++    if header and formatted_sentence:
++        return f"{header}\n{formatted_sentence}"
++    return formatted_sentence or header
+ 
+ def format_lemma_article_tooltip(
+     lemma: Optional[str],
+@@ -6470,12 +6619,12 @@ def run_argos_translation(text, source, target, config, resolved_paths, zid=None
+ def is_network_online_multi(hosts, port=53, timeout=0.3):
+     if not hosts:
+         return True
+-    timeout = min(timeout, 0.4)
++    effective_timeout = timeout if (timeout is not None and timeout > 0) else 0.3
+         
+     def check_host(host):
+         try:
+             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+-            s.settimeout(timeout)
++            s.settimeout(effective_timeout)
+             s.connect((host.strip(), port))
+             s.close()
+             return True
+@@ -6573,11 +6722,13 @@ def _save_shared_cooldowns(cooldowns: Dict[str, float], config=None, resolved_pa
+     except Exception:
+         pass
+ 
+-def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_COOLDOWN_SECONDS, config = None, resolved_paths = None) -> None:
++def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_COOLDOWN_SECONDS, config = None, resolved_paths = None, task_type: Optional[str] = None) -> None:
+     """Record that a translation provider is in cooldown until time.time() + duration, synced across processes."""
+     if not provider:
+         return
+     p_norm = provider.strip().lower()
++    t_norm = task_type.strip().lower() if task_type else None
++    key = f"{t_norm}:{p_norm}" if t_norm else p_norm
+     eff_duration = float(duration)
+     if config and config.has_section(SEC_PIPELINE):
+         try:
+@@ -6586,39 +6737,51 @@ def record_provider_cooldown(provider: str, duration: float = DEFAULT_PROVIDER_C
+             pass
+     expire_at = time.time() + eff_duration
+     with _cooldown_lock:
+-        _provider_cooldowns[p_norm] = expire_at
++        _provider_cooldowns[key] = expire_at
+         try:
+             shared = _load_shared_cooldowns(config, resolved_paths)
+-            shared[p_norm] = expire_at
++            shared[key] = expire_at
+             now = time.time()
+             clean_shared = {k: v for k, v in shared.items() if v > now}
+             _save_shared_cooldowns(clean_shared, config, resolved_paths)
+         except Exception:
+             pass
+-    logger.warning(f"Provider '{p_norm}' placed in cooldown for {eff_duration:.1f}s due to rate limit/quota.")
++    logger.warning(f"Provider '{key}' placed in cooldown for {eff_duration:.1f}s due to rate limit/quota.")
+ 
+-def is_provider_cooled_down(provider: str, config=None, resolved_paths=None) -> bool:
++def is_provider_cooled_down(provider: str, config=None, resolved_paths=None, task_type: Optional[str] = None) -> bool:
+     """Check whether a provider is currently cooled down, checking in-memory and shared process store."""
+     if not provider:
+         return False
+     p_norm = provider.strip().lower()
++    t_norm = task_type.strip().lower() if task_type else None
++    scoped_key = f"{t_norm}:{p_norm}" if t_norm else None
+     now = time.time()
+     with _cooldown_lock:
+-        expire_at = _provider_cooldowns.get(p_norm)
+-        if expire_at is None:
+-            try:
+-                shared = _load_shared_cooldowns(config, resolved_paths)
+-                for k, exp in shared.items():
+-                    if exp > now:
+-                        _provider_cooldowns[k] = exp
+-                expire_at = _provider_cooldowns.get(p_norm)
+-            except Exception:
+-                pass
+-        if expire_at is None:
+-            return False
+-        if now < expire_at:
+-            return True
+-        del _provider_cooldowns[p_norm]
++        def _get_exp(k):
++            exp = _provider_cooldowns.get(k)
++            if exp is None:
++                try:
++                    shared = _load_shared_cooldowns(config, resolved_paths)
++                    for sk, sexp in shared.items():
++                        if sexp > now:
++                            _provider_cooldowns[sk] = sexp
++                    exp = _provider_cooldowns.get(k)
++                except Exception:
++                    pass
++            return exp
++
++        if scoped_key:
++            keys_to_check = [scoped_key, p_norm]
++        else:
++            keys_to_check = [p_norm, f"text:{p_norm}", f"lemma:{p_norm}"]
++        for k in keys_to_check:
++            expire_at = _get_exp(k)
++            if expire_at is not None:
++                if now < expire_at:
++                    return True
++                else:
++                    if k in _provider_cooldowns:
++                        del _provider_cooldowns[k]
+         return False
+ 
+ def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
+@@ -6635,30 +6798,44 @@ def clear_provider_cooldowns(config=None, resolved_paths=None) -> None:
+     except Exception:
+         pass
+ 
+-def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=None) -> float:
++def get_provider_cooldown_remaining(provider: str, config=None, resolved_paths=None, task_type: Optional[str] = None) -> float:
+     """Get remaining cooldown duration in seconds, or 0.0 if not cooled down."""
+     if not provider:
+         return 0.0
+     p_norm = provider.strip().lower()
++    t_norm = task_type.strip().lower() if task_type else None
++    scoped_key = f"{t_norm}:{p_norm}" if t_norm else None
+     now = time.time()
+     with _cooldown_lock:
+-        expire_at = _provider_cooldowns.get(p_norm)
+-        if expire_at is None:
+-            try:
+-                shared = _load_shared_cooldowns(config, resolved_paths)
+-                for k, exp in shared.items():
+-                    if exp > now:
+-                        _provider_cooldowns[k] = exp
+-                expire_at = _provider_cooldowns.get(p_norm)
+-            except Exception:
+-                pass
+-        if expire_at is None:
+-            return 0.0
+-        remaining = expire_at - now
+-        if remaining > 0:
+-            return remaining
+-        del _provider_cooldowns[p_norm]
+-        return 0.0
++        def _get_exp(k):
++            exp = _provider_cooldowns.get(k)
++            if exp is None:
++                try:
++                    shared = _load_shared_cooldowns(config, resolved_paths)
++                    for sk, sexp in shared.items():
++                        if sexp > now:
++                            _provider_cooldowns[sk] = sexp
++                    exp = _provider_cooldowns.get(k)
++                except Exception:
++                    pass
++            return exp
++
++        if scoped_key:
++            keys_to_check = [scoped_key, p_norm]
++        else:
++            keys_to_check = [p_norm, f"text:{p_norm}", f"lemma:{p_norm}"]
++        max_remaining = 0.0
++        for k in keys_to_check:
++            expire_at = _get_exp(k)
++            if expire_at is not None:
++                remaining = expire_at - now
++                if remaining > 0:
++                    if remaining > max_remaining:
++                        max_remaining = remaining
++                else:
++                    if k in _provider_cooldowns:
++                        del _provider_cooldowns[k]
++        return max_remaining
+ 
+ def is_rate_limit_exception(exc: Exception) -> bool:
+     if exc is None:
+@@ -6735,7 +6912,7 @@ def is_provider_unavailable_exception(exc: Exception) -> bool:
+ 
+ DEFAULT_PROVIDER_FAILOVER_SECONDS = 60.0
+ 
+-def record_provider_failover(provider: str, duration: float = DEFAULT_PROVIDER_FAILOVER_SECONDS, config=None, resolved_paths=None) -> None:
++def record_provider_failover(provider: str, duration: float = DEFAULT_PROVIDER_FAILOVER_SECONDS, config=None, resolved_paths=None, task_type: Optional[str] = None) -> None:
+     """Record that a provider is temporarily unavailable due to network/timeout error."""
+     eff_duration = duration
+     if config and config.has_section(SEC_PIPELINE):
+@@ -6743,7 +6920,7 @@ def record_provider_failover(provider: str, duration: float = DEFAULT_PROVIDER_F
+             eff_duration = config.getfloat(SEC_PIPELINE, 'provider_failover_seconds', fallback=duration)
+         except Exception:
+             pass
+-    record_provider_cooldown(provider, duration=eff_duration, config=None, resolved_paths=resolved_paths)
++    record_provider_cooldown(provider, duration=eff_duration, config=config, resolved_paths=resolved_paths, task_type=task_type)
+ 
+ _failover_callbacks = []
+ _active_session_providers = {}
+@@ -6839,11 +7016,11 @@ def notify_provider_failover(task: str, from_provider: str, to_provider: str, zi
+         except Exception as e:
+             logger.debug(f"Error invoking global failover callback: {e}")
+ 
+-def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None):
++def dispatch_single_provider(provider_name: str, text: str, source: str, target: str, config, resolved_paths, zid=None, trace_id=None, task_type: Optional[str] = None):
+     """Executes translation using a single explicit provider without failover branching."""
+     eff_source = 'auto' if source == 'und' else source
+     p_norm = (provider_name or "").strip().lower()
+-    if is_provider_cooled_down(p_norm):
++    if is_provider_cooled_down(p_norm, config=config, resolved_paths=resolved_paths, task_type=task_type):
+         cooldown_msg = f"Provider '{p_norm}' is currently cooled down due to rate limiting"
+         raise TranslationException(
+             cooldown_msg,
+@@ -6873,9 +7050,9 @@ def dispatch_single_provider(provider_name: str, text: str, source: str, target:
+             raise Exception(f"Unsupported translation provider: {provider_name}")
+     except Exception as exc:
+         if is_rate_limit_exception(exc):
+-            record_provider_cooldown(p_norm, config=config)
++            record_provider_cooldown(p_norm, config=config, resolved_paths=resolved_paths, task_type=task_type)
+         elif is_network_failure_exception(exc):
+-            record_provider_failover(p_norm, config=config, resolved_paths=resolved_paths)
++            record_provider_failover(p_norm, config=config, resolved_paths=resolved_paths, task_type=task_type)
+         raise
+ 
+ def translate_text(text, source, target, config, resolved_paths, provider=None, zid=None, trace_id=None, on_failover=None, task_type='text'):
+@@ -6917,7 +7094,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
+             from_p = providers_to_try[0]
+             for p in providers_to_try:
+                 if p != 'argos':
+-                    record_provider_failover(p, config=config, resolved_paths=resolved_paths)
++                    record_provider_failover(p, config=config, resolved_paths=resolved_paths, task_type=eff_task)
+             notify_provider_failover(eff_task, from_p, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+             try:
+                 res = run_argos_translation(text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
+@@ -6931,7 +7108,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
+     while idx < len(providers_to_try):
+         current_provider = providers_to_try[idx]
+         is_last = (idx == len(providers_to_try) - 1)
+-        if is_provider_cooled_down(current_provider):
++        if is_provider_cooled_down(current_provider, config=config, resolved_paths=resolved_paths, task_type=eff_task):
+             logger.warning(f"Provider '{current_provider}' is currently cooled down. Bypassing...")
+             if not is_last:
+                 next_cand = providers_to_try[idx + 1]
+@@ -6951,7 +7128,13 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
+             continue
+ 
+         try:
+-            res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
++            try:
++                res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id, task_type=eff_task)
++            except TypeError as te:
++                if "task_type" in str(te):
++                    res = dispatch_single_provider(current_provider, text, eff_source, target, config, resolved_paths, zid=zid, trace_id=trace_id)
++                else:
++                    raise
+             if res is not None:
+                 return ProvenanceString(res, provenance=f"live:{current_provider}")
+             return res
+@@ -6960,9 +7143,9 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
+             is_unavail = is_provider_unavailable_exception(e)
+             is_net_fail = is_network_failure_exception(e)
+             if is_rate_limit_exception(e):
+-                record_provider_cooldown(current_provider, config=config)
++                record_provider_cooldown(current_provider, config=config, resolved_paths=resolved_paths, task_type=eff_task)
+             elif is_unavail:
+-                record_provider_failover(current_provider, config=config, resolved_paths=resolved_paths)
++                record_provider_failover(current_provider, config=config, resolved_paths=resolved_paths, task_type=eff_task)
+ 
+             if strategy == 'strict':
+                 logger.warning(f"Provider '{current_provider}' failed under strict strategy: {e}. Aborting failover.")
+@@ -6987,7 +7170,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
+                 continue
+ 
+             # strategy == 'chain'
+-            if is_net_fail:
++            if is_net_fail and check_ips and not is_network_online_multi(hosts=check_ips):
+                 offline_target_idx = None
+                 for future_idx in range(idx + 1, len(providers_to_try)):
+                     if providers_to_try[future_idx] in OFFLINE_TRANSLATION_PROVIDERS:
+@@ -6995,7 +7178,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
+                         break
+                 if offline_target_idx is not None:
+                     next_cand = providers_to_try[offline_target_idx]
+-                    logger.warning(f"Network failure on provider '{current_provider}' ({e}). Bypassing online providers and short-circuiting to offline provider '{next_cand}'...")
++                    logger.warning(f"Confirmed host network failure on provider '{current_provider}' ({e}). Bypassing online providers and short-circuiting to offline provider '{next_cand}'...")
+                     notify_provider_failover(eff_task, current_provider, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                     idx = offline_target_idx
+                     continue
+@@ -7100,7 +7283,7 @@ def _parse_numbered_response(response_text, n):
+     return None
+ 
+ 
+-def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider, zid=None, on_failover=None, **kwargs):
++def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, provider, zid=None, on_failover=None, visited_providers=None, **kwargs):
+     """
+     Translate a list of lemmas using a multi-tier batch strategy.
+ 
+@@ -7111,6 +7294,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+     """
+     import concurrent.futures
+ 
++    if visited_providers is None:
++        visited_providers = kwargs.pop('visited_providers', None)
++    visited = set(visited_providers or ())
++
+     chain, strategy = resolve_provider_chain(config, task_type='lemma')
+     norm_p = (provider or "").strip().lower()
+     if not norm_p or norm_p == 'default' or (chain and norm_p == chain[0]):
+@@ -7120,9 +7307,18 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+         candidates = [norm_p] + [p for p in chain if p != norm_p]
+         active_provider = provider
+ 
+-    if is_provider_cooled_down(active_provider) and strategy != 'strict':
++    if active_provider in visited:
++        logger.warning(f"Fast-path cycle detected for provider '{active_provider}' (visited: {visited}). Terminating fast-path recursion.")
++        unvisited = [c for c in candidates if c not in visited and not is_provider_cooled_down(c, config=config, resolved_paths=resolved_paths, task_type='lemma')]
++        if unvisited and strategy != 'strict':
++            active_provider = unvisited[0]
++        else:
++            prov_tag = f"live:{active_provider}" if active_provider else "live:unknown"
++            return ProvenanceDict({}, provenance=prov_tag)
++
++    if is_provider_cooled_down(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma') and strategy != 'strict':
+         for cand in candidates:
+-            if not is_provider_cooled_down(cand):
++            if cand not in visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
+                 logger.warning(f"Lemma provider '{active_provider}' is in cooldown. Switching fast-path to '{cand}'...")
+                 notify_provider_failover('lemma', active_provider, cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                 active_provider = cand
+@@ -7146,7 +7342,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+         chunks = [lemmas[i:i + batch_size] for i in range(0, len(lemmas), batch_size)]
+         chunk_prov = prov_tag
+         for chunk in chunks:
+-            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, **kwargs)
++            chunk_result = translate_lemmas_fast_path(chunk, source, target, config, resolved_paths, active_provider, zid=zid, on_failover=on_failover, visited_providers=visited, **kwargs)
+             if hasattr(chunk_result, 'provenance') and chunk_result.provenance:
+                 chunk_prov = chunk_result.provenance
+                 if str(chunk_prov).startswith("live:"):
+@@ -7165,7 +7361,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+             from_lp = active_provider
+             for p in candidates:
+                 if p != 'argos':
+-                    record_provider_failover(p, config=config, resolved_paths=resolved_paths)
++                    record_provider_failover(p, config=config, resolved_paths=resolved_paths, task_type='lemma')
+             notify_provider_failover('lemma', from_lp, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+             active_provider = 'argos'
+             prov_tag = "live:argos"
+@@ -7176,7 +7372,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+         provider_order = [active_provider] + [p for p in candidates if p != active_provider]
+ 
+     def _call_translate_text(text_val, p_name):
+-        kwargs_call = {"provider": p_name}
++        kwargs_call = {"provider": p_name, "task_type": "lemma"}
+         if zid is not None:
+             kwargs_call["zid"] = zid
+         if on_failover is not None:
+@@ -7185,9 +7381,10 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+             return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
+         except TypeError as te:
+             msg = str(te)
+-            if "unexpected keyword argument" in msg or "zid" in msg or "on_failover" in msg:
++            if "unexpected keyword argument" in msg or "zid" in msg or "on_failover" in msg or "task_type" in msg:
+                 kwargs_call.pop("on_failover", None)
+                 kwargs_call.pop("zid", None)
++                kwargs_call.pop("task_type", None)
+                 try:
+                     return translate_text(text_val, source, target, config, resolved_paths, **kwargs_call)
+                 except TypeError:
+@@ -7195,32 +7392,37 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+             raise
+ 
+     def _handle_tier_exception(tier_name, exc):
++        is_rate = is_rate_limit_exception(exc)
+         is_unavail = is_provider_unavailable_exception(exc)
+-        if is_rate_limit_exception(exc):
+-            record_provider_cooldown(active_provider, config=config)
++        if not (is_rate or is_unavail):
++            return None
++
++        if is_rate:
++            record_provider_cooldown(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
+         elif is_unavail:
+-            record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths)
++            record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
+ 
+         fallback_provider = None
+         is_net = is_network_failure_exception(exc)
++        next_visited = set(visited) | {active_provider}
+         if strategy != 'strict':
+-            if is_net:
+-                # Network failure: short-circuit directly to first offline provider in candidates
++            if is_net and check_ips and not is_network_online_multi(hosts=check_ips):
++                # Confirmed host network failure: short-circuit directly to first offline provider in candidates
+                 for cand in candidates:
+-                    if cand != active_provider and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand):
++                    if cand != active_provider and cand not in next_visited and cand in OFFLINE_TRANSLATION_PROVIDERS and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
+                         fallback_provider = cand
+                         break
+             if not fallback_provider:
+-                # Sequential fallback if no offline provider available or for rate limit / api errors
++                # Sequential fallback if host is online, no offline provider available or for rate limit / api errors
+                 for cand in candidates:
+-                    if cand != active_provider and not is_provider_cooled_down(cand):
++                    if cand != active_provider and cand not in next_visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
+                         fallback_provider = cand
+                         break
+ 
+         if fallback_provider:
+             logger.warning(f"Fast-path {tier_name} failed for '{active_provider}' ({exc}). Short-circuiting to fallback provider '{fallback_provider}'...")
+             notify_provider_failover('lemma', active_provider, fallback_provider, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+-            return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, **kwargs)
++            return translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, fallback_provider, zid=zid, on_failover=on_failover, visited_providers=next_visited, **kwargs)
+ 
+         return None
+ 
+@@ -7228,7 +7430,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+         p_idx = 0
+         while p_idx < len(provider_order):
+             candidate = provider_order[p_idx]
+-            if is_provider_cooled_down(candidate) and strategy != 'strict':
++            if is_provider_cooled_down(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma') and strategy != 'strict':
+                 p_idx += 1
+                 continue
+             cand_prov_tag = f"live:{candidate}"
+@@ -7240,12 +7442,12 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
+                     return lemma, val_str, p
+             except Exception as exc:
+                 if is_rate_limit_exception(exc):
+-                    record_provider_cooldown(candidate, config=config)
++                    record_provider_cooldown(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma')
+                 elif is_provider_unavailable_exception(exc):
+-                    record_provider_failover(candidate, config=config, resolved_paths=resolved_paths)
++                    record_provider_failover(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma')
+                 logger.debug(f"Candidate provider '{candidate}' failed for lemma '{lemma}': {exc}")
+-                if is_network_failure_exception(exc) and strategy == 'chain':
+-                    # Short-circuit to first offline provider in provider_order
++                if is_network_failure_exception(exc) and strategy == 'chain' and check_ips and not is_network_online_multi(hosts=check_ips):
++                    # Short-circuit to first offline provider in provider_order only on confirmed host network failure
+                     off_idx = None
+                     for future_idx in range(p_idx + 1, len(provider_order)):
+                         if provider_order[future_idx] in OFFLINE_TRANSLATION_PROVIDERS:
+@@ -7410,6 +7612,37 @@ def _split_long_line(line, max_chars=90):
+     out.append(cur)
+     return out
+ 
++GERMAN_CALENDAR_MONTHS: FrozenSet[str] = frozenset({
++    "januar", "februar", "märz", "maerz", "april", "mai", "juni",
++    "juli", "august", "september", "oktober", "november", "dezember",
++    "january", "february", "march", "may", "june",
++    "july", "august", "september", "october", "november", "december"
++})
++
++GERMAN_ORDINAL_INDICATORS: FrozenSet[str] = frozenset({
++    "am", "im", "vom", "beim", "zum", "zur", "der", "die", "das", "den", "dem", "des",
++    "ein", "eine", "einer", "einem", "einen", "eines", "the", "on", "in", "at"
++})
++
++GERMAN_SENTENCE_STARTER_WORDS: FrozenSet[str] = frozenset({
++    "ich", "du", "er", "sie", "es", "wir", "ihr", "man", "jemand", "niemand",
++    "mein", "meine", "dein", "deine", "sein", "seine", "ihr", "ihre", "unser", "unsere", "euer", "eure",
++    "der", "die", "das", "den", "dem", "des", "ein", "eine", "einer", "einem", "einen", "eines",
++    "dieser", "diese", "dieses", "diesen", "diesem", "dieser", "jener", "jene", "jenes",
++    "wer", "was", "wie", "wo", "wann", "warum", "weshalb", "wieso", "wohin", "woher", "welcher", "welche", "welches",
++    "und", "oder", "aber", "denn", "doch", "jedoch", "allerdings",
++    "weil", "da", "dass", "daß", "wenn", "falls", "obwohl", "ob", "während", "bevor", "nachdem", "als", "seit",
++    "hier", "dort", "da", "nun", "jetzt", "damals", "heute", "gestern", "morgen",
++    "dann", "danach", "dabei", "darauf", "daran", "daraus", "dazu", "dafür", "damit",
++    "zudem", "außerdem", "zuerst", "schließlich", "endlich", "plötzlich", "leider", "vielleicht",
++    "nicht", "kein", "keine", "keiner", "keinem", "keinen", "keines",
++    "ist", "sind", "war", "waren", "wird", "werden", "wurde", "wurden",
++    "hat", "haben", "hatte", "hatten", "kann", "können", "konnte", "konnten",
++    "muss", "müssen", "musste", "mussten", "soll", "sollen", "sollte", "sollten",
++    "will", "wollen", "wollte", "wollten", "darf", "dürfen", "durfte", "durften"
++})
++
++
+ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:", punctuation_marks=".,;:!?()\"[]{}—–"):
+     import re
+     if not text or not str(text).strip() or str(text).strip().lower() == 'none':
+@@ -7452,9 +7685,24 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
+                 if re.match(r'^[a-zA-Z]$', clean_word_no_dot):
+                     continue
+                 if clean_word_no_dot.isdigit():
+-                    continue
++                    tokens_before = preceding_part.strip().split()
++                    if len(tokens_before) < 2:
++                        continue
++                    prev_token = tokens_before[-2].lower().rstrip('.,;:!?')
++                    
++                    following_text = text[m.end():].lstrip()
++                    next_match = re.match(r'^([^\s]+)', following_text)
++                    next_token = next_match.group(1) if next_match else ''
++                    next_word_clean = re.sub(r'^[^\w]+|[^\w]+$', '', next_token).lower()
++                    
++                    is_ordinal_date = (prev_token in GERMAN_ORDINAL_INDICATORS) or (next_word_clean in GERMAN_CALENDAR_MONTHS)
++                    is_capitalized_start = bool(next_token and next_token[0].isupper())
++                    is_ordinal_noun = is_capitalized_start and (next_word_clean not in GERMAN_SENTENCE_STARTER_WORDS)
++                    if is_ordinal_date or is_ordinal_noun or not is_capitalized_start:
++                        continue
+         
+         splits.append(split_pos)
++        last_idx = m.end()
+         
+     sentences = []
+     start = 0
+@@ -9081,7 +9329,7 @@ def get_desk_token_mappings(resolved_paths=None, language=None, config=None) ->
+     return mappings
+ 
+ 
+-def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None, col_quotation=-1, col_word_dest=-1):
++def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config, window_text=None, language=None, resolved_paths=None, col_quotation=-1, col_word_dest=-1, deduplicate_pos_aware=None):
+     deduped_rows = []
+     seen_words = {}
+ 
+@@ -9092,7 +9340,8 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
+     apo_cfg = tuple(c.strip() for c in apo_cfg_str.split(',') if c.strip())
+     prefer_lowercase_cfg = token_config.prefer_lowercase
+     filter_by_window = token_config.filter_by_window
+-    deduplicate_pos_aware = token_config.deduplicate_pos_aware
++    if deduplicate_pos_aware is None:
++        deduplicate_pos_aware = token_config.deduplicate_pos_aware
+     unify_article_pronoun_lemmas = token_config.unify_article_pronoun_lemmas
+ 
+     is_filtering_window = False
+@@ -9192,13 +9441,14 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
+                     deduped_rows[existing_row_idx][col_inflected] = ", ".join(sort_inflected_forms(existing_parts, apo_cfg, order_cfg, prefer_lowercase_cfg))
+ 
+                 if col_pos != -1 and len(deduped_rows[existing_row_idx]) > col_pos:
+-                    if is_unified_der:
++                    if is_unified_der or not deduplicate_pos_aware:
+                         existing_pos_raw = deduped_rows[existing_row_idx][col_pos].strip()
+                         seen_pos = []
+-                        for p in existing_pos_raw.split(','):
+-                            norm_p = normalize_pos_tag(p).lower()
+-                            if norm_p and norm_p not in seen_pos:
+-                                seen_pos.append(norm_p)
++                        if existing_pos_raw:
++                            for p in existing_pos_raw.split(','):
++                                norm_p = normalize_pos_tag(p).lower()
++                                if norm_p and norm_p not in seen_pos:
++                                    seen_pos.append(norm_p)
+                         if pos:
+                             for p in pos.split(','):
+                                 norm_p = normalize_pos_tag(p).lower()
+@@ -9206,16 +9456,14 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
+                                     seen_pos.append(norm_p)
+                         seen_pos = sort_pos_tags(seen_pos)
+                         deduped_rows[existing_row_idx][col_pos] = ", ".join(seen_pos)
+-                    elif not deduplicate_pos_aware and not deduped_rows[existing_row_idx][col_pos].strip() and pos:
+-                        deduped_rows[existing_row_idx][col_pos] = pos
+ 
+                 eff_col_dest = col_word_dest
+-                if eff_col_dest == -1 and is_unified_der:
++                if eff_col_dest == -1 and (is_unified_der or not deduplicate_pos_aware):
+                     remaining_cols = [c for c in range(min(len(deduped_rows[existing_row_idx]), len(row))) if c not in (col_word_source, col_pos, col_inflected, col_quotation)]
+                     if len(remaining_cols) == 1:
+                         eff_col_dest = remaining_cols[0]
+ 
+-                if is_unified_der and eff_col_dest != -1 and len(deduped_rows[existing_row_idx]) > eff_col_dest and len(row) > eff_col_dest:
++                if (is_unified_der or not deduplicate_pos_aware) and eff_col_dest != -1 and len(deduped_rows[existing_row_idx]) > eff_col_dest and len(row) > eff_col_dest:
+                     existing_trans = str(deduped_rows[existing_row_idx][eff_col_dest] or "").strip()
+                     new_trans = str(row[eff_col_dest] or "").strip()
+                     seen_trans = []
+@@ -9230,7 +9478,7 @@ def deduplicate_rows(data_rows, col_word_source, col_pos, col_inflected, config,
+ 
+                 for c in range(min(len(deduped_rows[existing_row_idx]), len(row))):
+                     if c not in (col_inflected, col_quotation):
+-                        if is_unified_der and eff_col_dest != -1 and c == eff_col_dest:
++                        if (is_unified_der or not deduplicate_pos_aware) and eff_col_dest != -1 and c == eff_col_dest:
+                             continue
+                         if not str(deduped_rows[existing_row_idx][c]).strip() and str(row[c]).strip():
+                             deduped_rows[existing_row_idx][c] = row[c]
+@@ -10051,6 +10299,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
+         col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
+         
+         dedup_scope_cfg = smc.deduplication_scope
++        token_config = RuntimeTokenConfig.from_config(config)
+         if col_word_source != -1 and dedup_scope_cfg != 'none':
+             if smc.delivery_mode == 'container' and dedup_scope_cfg == 'sentence' and len(source_sentences) >= 2:
+                 # Retain sentence-local lemma rows for each child card in container mode,
+@@ -10070,7 +10319,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
+                             if any(f in sub_words for f in forms) or (row_lem.lower() in sub_words):
+                                 s_rows.append(list(row))
+                     s_text = source_sentences[s_i]
+-                    s_dedup = deduplicate_rows(s_rows, col_word_source, col_pos, col_inflected, config, window_text=s_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest)
++                    s_dedup = deduplicate_rows(s_rows, col_word_source, col_pos, col_inflected, config, window_text=s_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest, deduplicate_pos_aware=token_config.sentence_deduplicate_pos_aware)
+                     s_dedup = sort_rows_by_frequency(s_dedup, headers, language, config, resolved_paths, role_fields=role_fields)
+                     master_data_rows.extend(s_dedup)
+             else:
+@@ -10218,7 +10467,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
+                         sub_rows.append(sub_row)
+                         
+                 if col_word_source != -1 and dedup_scope_cfg == 'sentence':
+-                    sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest)
++                    sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest, deduplicate_pos_aware=token_config.sentence_deduplicate_pos_aware)
+ 
+                 # Pre-sort child sentence rows by lemma frequency so restore_session() is an immediate O(1) load
+                 sub_rows = sort_rows_by_frequency(
+@@ -11482,7 +11731,7 @@ html, body {{
+         if not row_sentence:
+             row_sentence = text
+ 
+-        inflected_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val)
++        inflected_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val, lemma=lemma_val)
+         inflected_title_attr = f' title="{html.escape(inflected_tooltip)}"' if inflected_tooltip else ''
+ 
+         lemma_tooltip = format_lemma_article_tooltip(lemma_val, gender_raw, lang=language)
+@@ -11552,7 +11801,7 @@ html, body {{
+                     trans_inferred = "который" if pos_inferred == "pron." else "тот"
+                     if raw_w == "die" and pos_inferred == "pron.":
+                         trans_inferred = "которая"
+-                    inf_tooltip = format_inflected_sentence_tooltip(row_sentence, raw_w, token_order=token_order_val)
++                    inf_tooltip = format_inflected_sentence_tooltip(row_sentence, raw_w, token_order=token_order_val, lemma=lemma_val)
+                     if v_key not in _row_occ:
+                         _row_occ[v_key] = {
+                             "form": raw_w,
+@@ -11603,6 +11852,7 @@ html, body {{
+             "highlight_class": row_highlight_class,
+             "provenance": prov_val or "",
+             "dynamic_tds": dynamic_tds,
++            "inflected_tooltip": inflected_tooltip,
+             "row_html": row_html_line,
+         })
+     table_rows_html = "" if is_mismatch else "\n".join(table_rows)
+@@ -11811,11 +12061,13 @@ html, body {{
+         col_ws_dedup = col_lemma if col_lemma != -1 else (headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1)
+         col_pos_dedup = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
+         dedup_scope_val = smc.deduplication_scope
++        token_config = RuntimeTokenConfig.from_config(config)
+         if col_ws_dedup != -1 and dedup_scope_val != 'none':
+             overview_rows = deduplicate_rows(
+                 data_rows, col_ws_dedup, col_pos_dedup, col_inflected, config,
+                 window_text=text, language=language, resolved_paths=resolved_paths,
+-                col_quotation=col_quotation, col_word_dest=col_word_dest
++                col_quotation=col_quotation, col_word_dest=col_word_dest,
++                deduplicate_pos_aware=token_config.overview_deduplicate_pos_aware
+             )
+             overview_rows = sort_rows_by_frequency(
+                 overview_rows, headers, language, config, resolved_paths, role_fields=role_fields
+@@ -11825,14 +12077,13 @@ html, body {{
+                 [list(r) for r in data_rows], headers, language, config, resolved_paths, role_fields=role_fields
+             )
+         
+-        token_config = RuntimeTokenConfig.from_config(config)
+         lemma_pos_to_row_ids = {}
+         for r_id, r in enumerate(data_rows):
+             lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
+             pos_val = r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(r) > col_pos_dedup else ""
+ 
+             is_unified_der = token_config.unify_article_pronoun_lemmas and lem == "der"
+-            if not token_config.deduplicate_pos_aware:
++            if not token_config.overview_deduplicate_pos_aware:
+                 eff_pos = ""
+             elif is_unified_der and any(p.strip() in ("art.", "pron.", "det.", "prep.") for p in pos_val.split(',')):
+                 eff_pos = "art."
+@@ -11889,7 +12140,7 @@ html, body {{
+             ov_pos_clean = ov_r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(ov_r) > col_pos_dedup else ""
+ 
+             is_ov_unified_der = token_config.unify_article_pronoun_lemmas and ov_lem_clean == "der"
+-            if not token_config.deduplicate_pos_aware:
++            if not token_config.overview_deduplicate_pos_aware:
+                 ov_eff_pos = ""
+             elif is_ov_unified_der and any(p.strip() in ("art.", "pron.", "det.", "prep.") for p in ov_pos_clean.split(',')):
+                 ov_eff_pos = "art."
+@@ -11942,7 +12193,7 @@ html, body {{
+                         if p_val:
+                             pos_items.append((mid, p_val))
+                 if pos_items:
+-                    if is_ov_unified_der:
++                    if is_ov_unified_der or not token_config.overview_deduplicate_pos_aware:
+                         seen_ov_pos = []
+                         for _, p_val in pos_items:
+                             for p_sub in p_val.split(','):
+@@ -11980,13 +12231,13 @@ html, body {{
+                         inf_form = resolve_row_inflected_form(r_item, col_inflected, col_inflected2, col_quotation, col_lemma)
+                         t_ord_item = r_item[col_token_order] if col_token_order != -1 and len(r_item) > col_token_order else ""
+                         if sent_txt:
+-                            ov_sent_tuples.append((sent_txt, inf_form, t_ord_item))
++                            ov_sent_tuples.append((sent_txt, inf_form, t_ord_item, ov_lemma))
+                 if ov_sent_tuples:
+-                    ov_inf_tooltip = format_inflected_sentence_tooltip(sentences=ov_sent_tuples)
++                    ov_inf_tooltip = format_inflected_sentence_tooltip(sentences=ov_sent_tuples, inflected_val=ov_inflected, lemma=ov_lemma)
+                 else:
+-                    ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
++                    ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order, lemma=ov_lemma)
+             else:
+-                ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order)
++                ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order, lemma=ov_lemma)
+             ov_inf_title = f' title="{html.escape(ov_inf_tooltip)}"' if ov_inf_tooltip else ''
+ 
+             ov_lemma_tooltip = format_lemma_article_tooltip(ov_lemma, ov_gender_raw, lang=language)
+@@ -12088,6 +12339,7 @@ html, body {{
+                 "highlight_class": ov_hl_class,
+                 "provenance": ov_prov_val or "",
+                 "dynamic_tds": ov_dynamic_tds,
++                "inflected_tooltip": ov_inf_tooltip,
+                 "row_html": ov_row_html,
+             })
+ 
+@@ -12400,6 +12652,14 @@ html, body {{
+   body.theme-dark #translation-container span.word.hl-mvp-pin-6 { border: 2px solid #ff7b72 !important; border-radius: 4px !important; margin: -2px !important; }
+   body.theme-dark #source-container span.word.hl-mvp-pin-7,
+   body.theme-dark #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #a5b4fc !important; border-radius: 4px !important; margin: -2px !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left: 4px solid #39d353 !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left: 4px solid #b78cf7 !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left: 4px solid #ff9c3a !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left: 4px solid #ff79c6 !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left: 4px solid #f2ca30 !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left: 4px solid #39c5ff !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left: 4px solid #ff7b72 !important; }
++  body.theme-dark #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left: 4px solid #a5b4fc !important; }
+   body.theme-light #source-container span.word.hl-mvp-pin-0,
+   body.theme-light #translation-container span.word.hl-mvp-pin-0,
+   body.theme-white #source-container span.word.hl-mvp-pin-0,
+@@ -12432,6 +12692,22 @@ html, body {{
+   body.theme-light #translation-container span.word.hl-mvp-pin-7,
+   body.theme-white #source-container span.word.hl-mvp-pin-7,
+   body.theme-white #translation-container span.word.hl-mvp-pin-7 { border: 2px solid #7c3aed !important; border-radius: 4px !important; margin: -2px !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-0 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left: 4px solid #1a7f37 !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-1 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left: 4px solid #8250df !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-2 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left: 4px solid #bc4c00 !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-3 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-3 td:first-child { border-left: 4px solid #cf222e !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-4 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-4 td:first-child { border-left: 4px solid #b08800 !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-5 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-5 td:first-child { border-left: 4px solid #0891b2 !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-6 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-6 td:first-child { border-left: 4px solid #e11d48 !important; }
++  body.theme-light #lemma-table tbody tr.hl-mvp-pin-7 td:first-child,
++  body.theme-white #lemma-table tbody tr.hl-mvp-pin-7 td:first-child { border-left: 4px solid #7c3aed !important; }
+   body.text-selection-mode-active,
+   body.text-selection-mode-active * {
+     cursor: text !important;
+@@ -13520,7 +13796,7 @@ window.__CONFIG__ = {ui_config_json};
+         return res;
+     }
+ 
+-    function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder) {
++    function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma) {
+         if (!sentenceText) return (inflectedVal || "").trim();
+         if (!inflectedVal) return sentenceText.trim();
+         var targetIndices = {};
+@@ -13535,9 +13811,48 @@ window.__CONFIG__ = {ui_config_json};
+             }
+         }
+         var targetWords = {};
+-        var infWords = (inflectedVal.toLowerCase().match(/[\\p{L}\\p{N}]+/gu) || inflectedVal.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
+-        for (var j = 0; j < infWords.length; j++) {
+-            if (infWords[j]) targetWords[infWords[j]] = true;
++        var lemmaClean = (lemma && String(lemma).trim()) ? String(lemma).trim().toLowerCase() : null;
++        var rawComponents = String(inflectedVal || "").split(',');
++        for (var c = 0; c < rawComponents.length; c++) {
++            var comp = rawComponents[c].trim();
++            if (!comp) continue;
++            var compWords = (comp.toLowerCase().match(/[\p{L}\p{N}]+/gu) || comp.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
++            var compFiltered = [];
++            for (var j = 0; j < compWords.length; j++) {
++                if (compWords[j] && !/^\d{14}$/.test(compWords[j])) {
++                    compFiltered.push(compWords[j]);
++                }
++            }
++            var isCompSlug = (comp.indexOf('+') === -1) && (comp.indexOf('-') !== -1 || comp.indexOf('_') !== -1 || /\b\d{14}\b/.test(comp));
++            if (isCompSlug && lemmaClean) {
++                var exactMatches = [];
++                for (var m = 0; m < compFiltered.length; m++) {
++                    if (compFiltered[m] === lemmaClean) exactMatches.push(compFiltered[m]);
++                }
++                if (exactMatches.length > 0) {
++                    for (var e = 0; e < exactMatches.length; e++) targetWords[exactMatches[e]] = true;
++                } else {
++                    var stemMatches = [];
++                    for (var s = 0; s < compFiltered.length; s++) {
++                        var fw = compFiltered[s];
++                        if (fw.length >= 3 && (fw.indexOf(lemmaClean) === 0 || lemmaClean.indexOf(fw) === 0)) {
++                            stemMatches.push(fw);
++                        }
++                    }
++                    if (stemMatches.length > 0) {
++                        for (var sm = 0; sm < stemMatches.length; sm++) targetWords[stemMatches[sm]] = true;
++                    } else {
++                        for (var f = 0; f < compFiltered.length; f++) targetWords[compFiltered[f]] = true;
++                    }
++                }
++            } else {
++                for (var fwIdx = 0; fwIdx < compFiltered.length; fwIdx++) {
++                    targetWords[compFiltered[fwIdx]] = true;
++                }
++            }
++        }
++        if (lemmaClean) {
++            targetWords[lemmaClean] = true;
+         }
+ 
+         var tokens = [];
+@@ -13572,7 +13887,12 @@ window.__CONFIG__ = {ui_config_json};
+                 wordIdx++;
+             }
+         }
+-        return tokens.join('');
++        var boldSentence = tokens.join('').trim();
++        var boldHeader = toUnicodeBold(String(inflectedVal).trim());
++        if (boldHeader && boldSentence) {
++            return boldHeader + '\\n' + boldSentence;
++        }
++        return boldSentence || boldHeader;
+     }
+ 
+     function formatLemmaTooltip(lemma, gender, lang) {
+@@ -13933,13 +14253,36 @@ window.__CONFIG__ = {ui_config_json};
+                 removeClass(span, 'hl-mvp-pin-' + k);
+             }
+         }
++        var tRows = document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
++        for (var rIdx = 0; rIdx < tRows.length; rIdx++) {
++            var rEl = tRows[rIdx];
++            removeClass(rEl, 'hl-mvp-pin');
++            for (var k = 0; k < 8; k++) {
++                removeClass(rEl, 'hl-mvp-pin-' + k);
++            }
++        }
+         for (var m = 0; m < mvpBookmarks.length; m++) {
+             var b = mvpBookmarks[m];
++            var mappedRowIds = [];
+             if (b.srcSpan) {
+                 addClass(b.srcSpan, 'hl-mvp-pin');
+                 if (mvpRainbowMode && b.slot !== undefined) {
+                     addClass(b.srcSpan, 'hl-mvp-pin-' + b.slot);
+                 }
++                var td = (typeof findTokenData === 'function') ? findTokenData(b.srcSpan) : ((window.findTokenData) ? window.findTokenData(b.srcSpan) : null);
++                if (!td && window.findTokenDataByVisualIdx) {
++                    var wIdxAttr = b.srcSpan.getAttribute('data-word-idx');
++                    if (wIdxAttr !== null) td = window.findTokenDataByVisualIdx(wIdxAttr);
++                }
++                if (td) {
++                    if (td.atomic_row_ids && td.atomic_row_ids.length > 0) {
++                        mappedRowIds = mappedRowIds.concat(td.atomic_row_ids);
++                    } else if (td.row_ids && td.row_ids.length > 0) {
++                        mappedRowIds = mappedRowIds.concat(td.row_ids);
++                    } else if (td.atomic_id !== undefined && td.atomic_id !== null) {
++                        mappedRowIds.push(td.atomic_id);
++                    }
++                }
+             }
+             if (b.transSpan) {
+                 addClass(b.transSpan, 'hl-mvp-pin');
+@@ -13947,8 +14290,32 @@ window.__CONFIG__ = {ui_config_json};
+                     addClass(b.transSpan, 'hl-mvp-pin-' + b.slot);
+                 }
+             }
++            if (mappedRowIds.length > 0) {
++                for (var rIdx = 0; rIdx < tRows.length; rIdx++) {
++                    var rEl = tRows[rIdx];
++                    var rIdStr = String(rEl.getAttribute('data-row-id'));
++                    var rIdInt = parseInt(rIdStr, 10);
++                    var matched = (mappedRowIds.indexOf(rIdInt) !== -1 || mappedRowIds.indexOf(rIdStr) !== -1);
++                    if (!matched && window.getRowGroupIds) {
++                        var pList = window.getRowGroupIds(rEl);
++                        for (var p = 0; p < pList.length; p++) {
++                            if (mappedRowIds.indexOf(parseInt(pList[p], 10)) !== -1 || mappedRowIds.indexOf(pList[p]) !== -1) {
++                                matched = true;
++                                break;
++                            }
++                        }
++                    }
++                    if (matched) {
++                        addClass(rEl, 'hl-mvp-pin');
++                        if (mvpRainbowMode && b.slot !== undefined) {
++                            addClass(rEl, 'hl-mvp-pin-' + b.slot);
++                        }
++                    }
++                }
++            }
+         }
+     }
++    window.refreshBookmarkClasses = refreshBookmarkClasses;
+ 
+     function tokenizeText(text) {
+         var rx = /([a-zA-Z0-9'\u00C0-\u024F\u0400-\u04FF\u0500-\u052F\u1E00-\u1EFF]+)/g;
+@@ -14335,6 +14702,22 @@ window.__CONFIG__ = {ui_config_json};
+                 var entry = mvpBookmarks[bIdx];
+                 if (entry.srcSpan) removeClass(entry.srcSpan, 'hl-mvp-hover');
+                 if (entry.transSpan) removeClass(entry.transSpan, 'hl-mvp-hover');
++                if (entry.srcSpan && typeof window.findTokenData === 'function') {
++                    var sTd = window.findTokenData(entry.srcSpan);
++                    if (sTd) {
++                        var sRowIds = (sTd.atomic_row_ids !== undefined && sTd.atomic_row_ids !== null)
++                            ? sTd.atomic_row_ids.slice()
++                            : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
++                        if (typeof selectedRowIdsMap !== 'undefined') {
++                            for (var sr = 0; sr < sRowIds.length; sr++) {
++                                delete selectedRowIdsMap[String(sRowIds[sr])];
++                            }
++                        }
++                        if (typeof removeTokenFromActiveSelections === 'function') removeTokenFromActiveSelections(entry.srcSpan);
++                        if (typeof syncSelectionsToCardsAndState === 'function') syncSelectionsToCardsAndState();
++                        if (typeof updateRowStyles === 'function') updateRowStyles();
++                    }
++                }
+                 mvpBookmarks.splice(bIdx, 1);
+             } else {
+                 var targetIdx = getTargetIdx(idx, false);
+@@ -14361,6 +14744,22 @@ window.__CONFIG__ = {ui_config_json};
+                     }
+                 }
+                 mvpBookmarks.push({ idx: bKey, srcSpan: srcSpan, transSpan: transSpan, slot: slot });
++                if (srcSpan && typeof window.findTokenData === 'function') {
++                    var sTd = window.findTokenData(srcSpan);
++                    if (sTd) {
++                        var sRowIds = (sTd.atomic_row_ids !== undefined && sTd.atomic_row_ids !== null)
++                            ? sTd.atomic_row_ids.slice()
++                            : ((sTd.row_ids && sTd.row_ids.slice) ? sTd.row_ids.slice() : []);
++                        if (typeof selectedRowIdsMap !== 'undefined') {
++                            for (var sr = 0; sr < sRowIds.length; sr++) {
++                                selectedRowIdsMap[String(sRowIds[sr])] = true;
++                            }
++                        }
++                        if (typeof addTokenToActiveSelections === 'function') addTokenToActiveSelections(srcSpan);
++                        if (typeof syncSelectionsToCardsAndState === 'function') syncSelectionsToCardsAndState();
++                        if (typeof updateRowStyles === 'function') updateRowStyles();
++                    }
++                }
+             }
+             refreshBookmarkClasses();
+         };
+@@ -14947,10 +15346,15 @@ window.__CONFIG__ = {ui_config_json};
+                                     }
+                                     if (anyOverlap) {
+                                         var rolledTrans = [];
++                                        var parentLem = (cw.lemma || '').trim().toLowerCase();
+                                         for (var aidx = 0; aidx < cw.all_row_ids.length; aidx++) {
+                                             var subId = String(cw.all_row_ids[aidx]);
+                                             var subDelta = deltasByRowId[subId];
+                                             var subState = (window.AppState && window.AppState.rows) ? window.AppState.rows[subId] : null;
++                                            var subLem = ((subDelta && subDelta.lemma) || (subState && subState.lemma) || '').trim().toLowerCase();
++                                            if (subLem && parentLem && subLem !== parentLem) {
++                                                continue;
++                                            }
+                                             var subTr = "";
+                                             if (subDelta) {
+                                                 subTr = (subDelta.trans !== undefined && subDelta.trans !== "") ? subDelta.trans : ((subDelta.WordDestination !== undefined && subDelta.WordDestination !== "") ? subDelta.WordDestination : subDelta.word_translation);
+@@ -15299,27 +15703,28 @@ window.__CONFIG__ = {ui_config_json};
+                     if (!tds[0].classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
+                         var div = tds[0].querySelector('.scrollable-cell');
+                         var val = rowData.inflected || "";
++                        var oldVal = div ? (div.textContent || div.innerText) : (tds[0].classList.contains('editing') ? null : (tds[0].textContent || tds[0].innerText));
++                        var existingTitle = tds[0].getAttribute('data-orig-title') || tds[0].getAttribute('title') || (div ? (div.getAttribute('data-orig-title') || div.getAttribute('title')) : '');
+                         var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? document.getElementById('source-container').textContent : "");
+-                        var infTip = formatInflectedTooltip(sentText, val, rowData.token_order || rowId);
++                        var infTip = rowData.inflected_tooltip || ((oldVal === val && existingTitle) ? existingTitle : formatInflectedTooltip(sentText, val, rowData.token_order || rowId, rowData.lemma || ''));
+                         var unrolledHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
+                         tds[0].setAttribute('data-orig-html', unrolledHtml);
+                         if (infTip) {
+                             tds[0].setAttribute('data-orig-title', infTip);
+                             if (div && div !== tds[0]) div.setAttribute('data-orig-title', infTip);
++                            tds[0].setAttribute('title', infTip);
++                            if (div) div.setAttribute('title', infTip);
+                         } else {
+                             tds[0].removeAttribute('data-orig-title');
+                             if (div && div !== tds[0]) div.removeAttribute('data-orig-title');
++                            tds[0].removeAttribute('title');
++                            if (div) div.removeAttribute('title');
+                         }
+-                        var oldVal = div ? (div.textContent || div.innerText) : (tds[0].classList.contains('editing') ? null : (tds[0].textContent || tds[0].innerText));
+                         if (oldVal !== val) {
+                             if (div) setCellText(div, val);
+                             else if (!tds[0].classList.contains('editing')) setCellText(tds[0], val);
+                             updated = true;
+                         }
+-                        if (infTip) {
+-                            tds[0].setAttribute('title', infTip);
+-                            if (div) div.setAttribute('title', infTip);
+-                        }
+                     }
+                     if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
+                         var div = tds[1].querySelector('.scrollable-cell');
+@@ -15409,9 +15814,14 @@ window.__CONFIG__ = {ui_config_json};
+                             var midParts = allRowIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
+                             if (midParts.length > 1) {
+                                 var rolledTrans = [];
++                                var parentLem = (rowData.lemma || (tds[1] ? (tds[1].textContent || tds[1].innerText) : '') || '').trim().toLowerCase();
+                                 for (var mp = 0; mp < midParts.length; mp++) {
+                                     var mRow = window.AppState.rows[midParts[mp]];
+                                     if (mRow) {
++                                        var mLem = (mRow.lemma || '').trim().toLowerCase();
++                                        if (mLem && parentLem && mLem !== parentLem) {
++                                            continue;
++                                        }
+                                         var mTr = (mRow.trans !== undefined && mRow.trans !== "") ? mRow.trans : ((mRow.WordDestination !== undefined && mRow.WordDestination !== "") ? mRow.WordDestination : mRow.word_translation);
+                                         if (mTr && mTr !== "[FAILED]" && mTr.indexOf('skeleton-loader') === -1 && mTr !== '-' && mTr !== '--') {
+                                             if (rolledTrans.indexOf(mTr) === -1) rolledTrans.push(mTr);
+@@ -16817,9 +17227,14 @@ window.__CONFIG__ = {ui_config_json};
+                 }
+ 
+                 var shared = false;
+-                for (var r = 0; r < targetRowIds.length; r++) {
+-                    if (otd.row_ids.indexOf(targetRowIds[r]) !== -1) {
+-                        if (otd.sentence_idx === undefined || td.sentence_idx === undefined || otd.sentence_idx === td.sentence_idx) {
++                var spanSent = span.getAttribute('data-sentence-idx');
++                var otherSent = otherSpan.getAttribute('data-sentence-idx');
++                var sameSent = (spanSent && otherSent)
++                    ? (spanSent === otherSent)
++                    : (otd.sentence_idx === undefined || td.sentence_idx === undefined || String(otd.sentence_idx) === String(td.sentence_idx));
++                if (sameSent) {
++                    for (var r = 0; r < targetRowIds.length; r++) {
++                        if (otd.row_ids.indexOf(targetRowIds[r]) !== -1) {
+                             shared = true;
+                             break;
+                         }
+@@ -17655,6 +18070,8 @@ window.__CONFIG__ = {ui_config_json};
+             return getSingleTokenWordsToPlay(span, 'inflection');
+         }
+ 
++        window.findTokenData = findTokenData;
++        window.findTokenDataByVisualIdx = findTokenDataByVisualIdx;
+         window.findTableRowById = findTableRowById;
+         window.getRawRowTranslations = getRawRowTranslations;
+         window.getWordTranslation = getWordTranslation;
+@@ -17867,12 +18284,15 @@ window.__CONFIG__ = {ui_config_json};
+                             if (!isNaN(rvIdx)) vIdxsToRemove[rvIdx] = true;
+                         }
+                         
++                        var currentTableRows = (tableRows && tableRows.length > 0)
++                            ? tableRows
++                            : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
+                         for (var j = 0; j < targetRowIds.length; j++) {
+                             var tid = String(targetRowIds[j]);
+                             if (tokenDragMode) {
+                                 selectedRowIdsMap[tid] = true;
+-                                for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+-                                    var tr = tableRows[trIdx];
++                                for (var trIdx = 0; trIdx < currentTableRows.length; trIdx++) {
++                                    var tr = currentTableRows[trIdx];
+                                     var pList = getRowGroupIds(tr);
+                                     if (pList.indexOf(tid) !== -1) {
+                                         selectedRowIdsMap[pList[0]] = true;
+@@ -17883,8 +18303,8 @@ window.__CONFIG__ = {ui_config_json};
+                             } else {
+                                 if (!isRowStillNeededByOtherActiveTokens(tid, vIdxsToRemove)) {
+                                     delete selectedRowIdsMap[tid];
+-                                    for (var trIdx = 0; trIdx < tableRows.length; trIdx++) {
+-                                        var tr = tableRows[trIdx];
++                                    for (var trIdx = 0; trIdx < currentTableRows.length; trIdx++) {
++                                        var tr = currentTableRows[trIdx];
+                                         var pList = getRowGroupIds(tr);
+                                         if (pList.indexOf(tid) !== -1) {
+                                             for (var p = 0; p < pList.length; p++) {
+@@ -17908,6 +18328,9 @@ window.__CONFIG__ = {ui_config_json};
+                         syncSelectionsToCardsAndState();
+                         updateRowStyles();
+                         updateBidirectionalHighlights();
++                        if (typeof refreshBookmarkClasses === 'function') {
++                            refreshBookmarkClasses();
++                        }
+                         
+                         if (e.preventDefault) {
+                             e.preventDefault();
+@@ -18403,6 +18826,9 @@ window.__CONFIG__ = {ui_config_json};
+         syncSelectionsToCardsAndState();
+         updateRowStyles();
+         updateBidirectionalHighlights();
++        if (typeof refreshBookmarkClasses === 'function') {
++            refreshBookmarkClasses();
++        }
+     }
+     window.rebindTableRows = rebindTableRows;
+     rebindTableRows();
+@@ -18910,12 +19336,19 @@ window.__CONFIG__ = {ui_config_json};
+                     }
+                 }
+             }
+-            if (typeof tableRows === 'undefined' || !tableRows) {
++            if (typeof tableRows === 'undefined' || !tableRows || tableRows.length === 0) {
+                 var lt = document.getElementById('lemma-table');
+                 if (lt) {
+                     var tbodies = lt.getElementsByTagName('tbody');
+                     var rowsContainer = tbodies.length > 0 ? tbodies[0] : lt;
+-                    tableRows = rowsContainer.getElementsByTagName('tr');
++                    var trs = rowsContainer.getElementsByTagName('tr');
++                    var freshRows = [];
++                    for (var r = 0; r < trs.length; r++) {
++                        if (trs[r].getAttribute('data-row-id') !== null) {
++                            freshRows.push(trs[r]);
++                        }
++                    }
++                    tableRows = freshRows;
+                 } else {
+                     return;
+                 }
+@@ -19053,13 +19486,26 @@ window.__CONFIG__ = {ui_config_json};
+                         }
+                     } else if (cls === 'col-inflected') {
+                         cell.textContent = vals.join(', ');
+-                        var tooltips = [];
++                        var formsStr = vals.join(', ');
++                        var boldHeader = (typeof toUnicodeBold === 'function') ? toUnicodeBold(formsStr) : (window.toUnicodeBold ? window.toUnicodeBold(formsStr) : formsStr);
++                        var sentList = [];
+                         for (var q = 0; q < picked.length; q++) {
+-                            if (picked[q].inflected_tooltip && tooltips.indexOf(picked[q].inflected_tooltip) === -1) {
+-                                tooltips.push(picked[q].inflected_tooltip);
++                            if (picked[q].inflected_tooltip) {
++                                var rawTip = picked[q].inflected_tooltip;
++                                var sentPart = (rawTip.indexOf('\\n') !== -1) ? rawTip.slice(rawTip.indexOf('\\n') + 1).trim() : rawTip.trim();
++                                if (sentPart && sentList.indexOf(sentPart) === -1) {
++                                    sentList.push(sentPart);
++                                }
+                             }
+                         }
+-                        newTooltip = tooltips.length > 0 ? tooltips.join('\\n---\\n') : vals.join(', ');
++                        if (sentList.length > 1) {
++                            var numbered = sentList.map(function(s, idx) { return '[' + (idx + 1) + '] ' + s; });
++                            newTooltip = boldHeader ? (boldHeader + '\\n' + numbered.join('\\n')) : numbered.join('\\n');
++                        } else if (sentList.length === 1) {
++                            newTooltip = boldHeader ? (boldHeader + '\\n' + sentList[0]) : sentList[0];
++                        } else {
++                            newTooltip = boldHeader || formsStr;
++                        }
+                     }
+ 
+                     if (newTooltip) {
+@@ -19157,18 +19603,62 @@ window.__CONFIG__ = {ui_config_json};
+             var activeLemmas = {};
+             var activeTokenRowIds = {};
+             if (hasActiveTokens) {
++                var addLem = function(lVal) {
++                    if (lVal) {
++                        var c = String(lVal).trim().toLowerCase();
++                        if (c) activeLemmas[c] = true;
++                    }
++                };
++                var addRowLem = function(rVal) {
++                    if (rVal !== undefined && rVal !== null) {
++                        var rStr = String(rVal);
++                        activeTokenRowIds[rStr] = true;
++                        if (typeof getLemmaByRowId === 'function') {
++                            var rL = getLemmaByRowId(rVal);
++                            if (rL) addLem(rL);
++                        }
++                    }
++                };
++
+                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                     var item = window.AppState.activeTokenSelections[a];
+                     if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                         activeVisualIdxs[String(item.visual_idx)] = true;
+                     }
+                     if (item.lemma) {
+-                        activeLemmas[String(item.lemma).trim().toLowerCase()] = true;
++                        addLem(item.lemma);
++                    }
++                    if (item.atomic_id !== undefined && item.atomic_id !== null) {
++                        addRowLem(item.atomic_id);
++                    }
++                    if (item.atomic_row_ids) {
++                        for (var r = 0; r < item.atomic_row_ids.length; r++) {
++                            addRowLem(item.atomic_row_ids[r]);
++                        }
+                     }
++                    if (item.row_ids) {
++                        for (var r = 0; r < item.row_ids.length; r++) {
++                            addRowLem(item.row_ids[r]);
++                        }
++                    }
++                    if (item.row_id !== undefined && item.row_id !== null) {
++                        addRowLem(item.row_id);
++                    }
++
+                     var vTok = tokByVidx[String(item.visual_idx)];
+-                    if (vTok && vTok.row_ids) {
+-                        for (var r = 0; r < vTok.row_ids.length; r++) {
+-                            activeTokenRowIds[String(vTok.row_ids[r])] = true;
++                    if (vTok) {
++                        if (vTok.lemma) {
++                            addLem(vTok.lemma);
++                        }
++                        if (vTok.atomic_row_ids) {
++                            for (var r = 0; r < vTok.atomic_row_ids.length; r++) {
++                                addRowLem(vTok.atomic_row_ids[r]);
++                            }
++                        }
++                        if (vTok.row_ids) {
++                            for (var r = 0; r < vTok.row_ids.length; r++) {
++                                addRowLem(vTok.row_ids[r]);
++                            }
+                         }
+                     }
+                 }
+@@ -19192,7 +19682,20 @@ window.__CONFIG__ = {ui_config_json};
+             for (var i = 0; i < tokenMap.length; i++) {
+                 var token = tokenMap[i];
+                 var isOrphanSelected = (typeof selectedOrphanWordIdxsMap !== 'undefined' && selectedOrphanWordIdxsMap && selectedOrphanWordIdxsMap.hasOwnProperty(String(token.visual_idx)));
+-                if ((!token.row_ids || token.row_ids.length === 0) && !isOrphanSelected) continue;
++                var tokRowIds = [];
++                if (token.atomic_row_ids && token.atomic_row_ids.length > 0) {
++                    for (var tri = 0; tri < token.atomic_row_ids.length; tri++) {
++                        tokRowIds.push(token.atomic_row_ids[tri]);
++                    }
++                }
++                if (token.row_ids && token.row_ids.length > 0) {
++                    for (var tri = 0; tri < token.row_ids.length; tri++) {
++                        if (tokRowIds.indexOf(token.row_ids[tri]) === -1) {
++                            tokRowIds.push(token.row_ids[tri]);
++                        }
++                    }
++                }
++                if (tokRowIds.length === 0 && !isOrphanSelected) continue;
+                 
+                 var hasMatchingRow = false;
+                 var isDirectRowMatch = false;
+@@ -19201,14 +19704,29 @@ window.__CONFIG__ = {ui_config_json};
+ 
+                 var tokClean = (token.lower_clean || token.text || '').trim().toLowerCase();
+                 var tokLem = (token.lemma || tokClean).trim().toLowerCase();
+-                var isLemmaActive = hasActiveTokens && activeLemmas.hasOwnProperty(tokLem);
++                var isLemmaActive = false;
++                if (hasActiveTokens) {
++                    if (tokLem && activeLemmas.hasOwnProperty(tokLem)) {
++                        isLemmaActive = true;
++                    } else {
++                        for (var cr = 0; cr < tokRowIds.length; cr++) {
++                            if (typeof getLemmaByRowId === 'function') {
++                                var candLem = getLemmaByRowId(tokRowIds[cr]);
++                                if (candLem && activeLemmas.hasOwnProperty(String(candLem).trim().toLowerCase())) {
++                                    isLemmaActive = true;
++                                    break;
++                                }
++                            }
++                        }
++                    }
++                }
+ 
+                 if (hasActiveTokens && (isOrphanSelected || !!activeVisualIdxs[String(token.visual_idx)])) {
+                     hasMatchingRow = true;
+                     isTargetedActiveTokenMatch = true;
+-                } else if (token.row_ids && token.row_ids.length > 0) {
+-                    for (var r = 0; r < token.row_ids.length; r++) {
+-                        var rid = token.row_ids[r];
++                } else if (tokRowIds.length > 0) {
++                    for (var r = 0; r < tokRowIds.length; r++) {
++                        var rid = tokRowIds[r];
+                         if (primaryTargetRowIds.hasOwnProperty(rid)) {
+                             if (!isLemmaActive) {
+                                 hasMatchingRow = true;
+@@ -19216,19 +19734,26 @@ window.__CONFIG__ = {ui_config_json};
+                                 matchedRowId = rid;
+                                 break;
+                             } else {
+-                                var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
+-                                var sharesIdenticalAtomic = false;
++                                var tSpan = spanByVidx[String(token.visual_idx)];
++                                var isSameOccurrence = false;
+                                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                                     var atItem = window.AppState.activeTokenSelections[a];
++                                    var aSpan = spanByVidx[String(atItem.visual_idx)];
++                                    if (!aSpan || !tSpan) continue;
++
++                                    var tSent = (tSpan && tSpan.getAttribute('data-sentence-idx')) || (token.sentence_idx !== undefined ? String(token.sentence_idx) : '');
++                                    var aSent = (aSpan && aSpan.getAttribute('data-sentence-idx')) || (atItem.sentence_idx !== undefined ? String(atItem.sentence_idx) : '');
++                                    var sameSentence = (tSent && aSent) ? (tSent === aSent) : true;
++                                    if (!sameSentence) continue;
++
++                                    var tokAtomics = (token.atomic_row_ids && token.atomic_row_ids.length > 0) ? token.atomic_row_ids : (token.row_ids || []);
++                                    var sharesIdenticalAtomic = false;
+                                     if (atItem.atomic_id !== null && atItem.atomic_id !== undefined && tokAtomics.indexOf(atItem.atomic_id) !== -1) {
+                                         var atClean = (atItem.lower_clean || atItem.text || '').trim().toLowerCase();
+-                                        if (!atClean) {
+-                                            var atSpan = spanByVidx[String(atItem.visual_idx)];
+-                                            if (atSpan) atClean = (atSpan.getAttribute('data-lower-clean') || atSpan.textContent || '').trim().toLowerCase();
++                                        if (!atClean && aSpan) {
++                                            atClean = (aSpan.getAttribute('data-lower-clean') || aSpan.textContent || '').trim().toLowerCase();
+                                         }
+                                         if (tokClean && atClean && tokClean === atClean) {
+-                                            var tSpan = spanByVidx[String(token.visual_idx)];
+-                                            var aSpan = spanByVidx[String(atItem.visual_idx)];
+                                             var aTd = (typeof findTokenDataByVisualIdx === 'function') ? findTokenDataByVisualIdx(atItem.visual_idx) : null;
+                                             var tGrp = (tSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(tSpan) : null;
+                                             var aGrp = (aSpan && typeof findCompoundSiblingSpans === 'function') ? findCompoundSiblingSpans(aSpan) : null;
+@@ -19241,30 +19766,45 @@ window.__CONFIG__ = {ui_config_json};
+                                                 (aGrp && aGrp.length > 1);
+                                             if (hasCompoundContext) {
+                                                 sharesIdenticalAtomic = true;
+-                                                break;
+                                             }
+                                         }
+                                     }
+-                                }
+-                                var isCompoundSibling = false;
+-                                if (!sharesIdenticalAtomic) {
+-                                    for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+-                                        var atItem = window.AppState.activeTokenSelections[a];
+-                                        var aSpan = spanByVidx[String(atItem.visual_idx)];
+-                                        var tSpan = spanByVidx[String(token.visual_idx)];
+-                                        if (aSpan && tSpan) {
+-                                            var grp = findCompoundSiblingSpans(aSpan);
+-                                            if (grp && grp.indexOf(tSpan) !== -1) {
+-                                                isCompoundSibling = true;
+-                                                break;
+-                                            }
++
++                                    var sameCompoundId = (tSpan.hasAttribute('data-compound-id') && aSpan.hasAttribute('data-compound-id'))
++                                        ? (tSpan.getAttribute('data-compound-id') === aSpan.getAttribute('data-compound-id'))
++                                        : false;
++
++                                    var isCompoundSibling = false;
++                                    if (typeof findCompoundSiblingSpans === 'function') {
++                                        var grp = findCompoundSiblingSpans(aSpan);
++                                        if (grp && grp.indexOf(tSpan) !== -1) {
++                                            isCompoundSibling = true;
++                                        }
++                                    }
++                                    var isRelatedPartner = false;
++                                    if (typeof findRelatedTokenSpans === 'function') {
++                                        var relGrp = findRelatedTokenSpans(aSpan);
++                                        if (relGrp && relGrp.indexOf(tSpan) !== -1) {
++                                            isRelatedPartner = true;
+                                         }
+                                     }
++
++                                    if (sharesIdenticalAtomic || sameCompoundId || isCompoundSibling || isRelatedPartner) {
++                                        isSameOccurrence = true;
++                                        break;
++                                    }
+                                 }
+-                                if (sharesIdenticalAtomic || isCompoundSibling) {
++
++                                if (isSameOccurrence) {
+                                     hasMatchingRow = true;
+                                     isTargetedActiveTokenMatch = true;
+                                     break;
++                                } else {
++                                    hasMatchingRow = true;
++                                    isDirectRowMatch = false;
++                                    isTargetedActiveTokenMatch = false;
++                                    matchedRowId = rid;
++                                    break;
+                                 }
+                             }
+                         } else if (activeTargetRowIds.hasOwnProperty(rid)) {
+@@ -19349,10 +19889,26 @@ window.__CONFIG__ = {ui_config_json};
+                     if (s.classList.contains('highlight-orange-active') || s.classList.contains('highlight-purple-active')) continue;
+                     var sLem = (getWordLemma(s) || s.getAttribute('data-lower-clean') || '').trim().toLowerCase();
+                     if (!sLem) {
+-                        var td = findTokenData(s);
++                        var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
+                         if (td && td.lemma) sLem = String(td.lemma).trim().toLowerCase();
+                     }
+-                    if (sLem && activeLemmas[sLem]) {
++                    var sMatchesLemma = (sLem && activeLemmas[sLem]);
++                    if (!sMatchesLemma) {
++                        var td = tokByVidx[vIdxStr] || (typeof findTokenData === 'function' ? findTokenData(s) : null);
++                        if (td) {
++                            var tdRows = (td.atomic_row_ids && td.atomic_row_ids.length > 0) ? td.atomic_row_ids : (td.row_ids || []);
++                            for (var tr = 0; tr < tdRows.length; tr++) {
++                                if (typeof getLemmaByRowId === 'function') {
++                                    var tdLem = getLemmaByRowId(tdRows[tr]);
++                                    if (tdLem && activeLemmas[String(tdLem).trim().toLowerCase()]) {
++                                        sMatchesLemma = true;
++                                        break;
++                                    }
++                                }
++                            }
++                        }
++                    }
++                    if (sMatchesLemma) {
+                         try {
+                             s.classList.add('lemma-peer-highlight');
+                         } catch(e) {}
+@@ -21327,9 +21883,14 @@ window.__CONFIG__ = {ui_config_json};
+                             var updatedTrans = (appRow.trans !== undefined && appRow.trans !== "") ? appRow.trans : ((appRow.WordDestination !== undefined && appRow.WordDestination !== "") ? appRow.WordDestination : appRow.word_translation);
+                             if (w.all_row_ids && w.all_row_ids.length > 1 && window.AppState && window.AppState.rows) {
+                                 var rolledTrans = [];
++                                var parentLem = (w.lemma || (appRow ? appRow.lemma : '') || '').trim().toLowerCase();
+                                 for (var aidx = 0; aidx < w.all_row_ids.length; aidx++) {
+                                     var subRow = window.AppState.rows[String(w.all_row_ids[aidx])];
+                                     if (subRow) {
++                                        var subLem = (subRow.lemma || '').trim().toLowerCase();
++                                        if (subLem && parentLem && subLem !== parentLem) {
++                                            continue;
++                                        }
+                                         var subTr = (subRow.trans !== undefined && subRow.trans !== "") ? subRow.trans : ((subRow.WordDestination !== undefined && subRow.WordDestination !== "") ? subRow.WordDestination : subRow.word_translation);
+                                         if (subTr && subTr !== "[FAILED]" && subTr.indexOf('skeleton-loader') === -1 && subTr !== '-' && subTr !== '--') {
+                                             if (rolledTrans.indexOf(subTr) === -1) rolledTrans.push(subTr);
+@@ -21393,7 +21954,7 @@ window.__CONFIG__ = {ui_config_json};
+                         var allIdsAttr = (w.all_row_ids && w.all_row_ids.length > 0) ? (' data-all-row-ids="' + escapeHtml(w.all_row_ids.join(',')) + '"') : '';
+                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                         var cardSentenceText = (w.sentence_text || (window.AppState ? window.AppState.sourceText : '') || '');
+-                        var infTooltip = formatInflectedTooltip(cardSentenceText, w.inflected || '', w.token_order || rIdStr);
++                        var infTooltip = w.inflected_tooltip || (appRow && appRow.inflected_tooltip) || formatInflectedTooltip(cardSentenceText, w.inflected || '', w.token_order || rIdStr, w.lemma || '');
+                         var lemTooltip = formatLemmaTooltip(w.lemma || '', w.gender || '', activeLang);
+                         var ipaTooltip = (w.ipa && w.ipa.indexOf('skeleton-loader') === -1) ? w.ipa : '';
+                         var morphTooltip = (w.morphology && w.morphology.indexOf('skeleton-loader') === -1) ? w.morphology : '';
+@@ -21476,16 +22037,28 @@ window.__CONFIG__ = {ui_config_json};
+                             isSingleMode = false;
+                         }
+                         if (activeSentenceIdx === 0 && !isSingleMode) {
+-                            if (!tText || tText.indexOf(String.fromCharCode(10)) === -1) {
+-                                var childLines = [];
+-                                for (var k = 0; k < cards.length; k++) {
+-                                    if (cards[k].sentence_idx > 0 && cards[k].translated_text && cards[k].translated_text.trim()) {
+-                                        childLines.push(cards[k].translated_text.trim());
+-                                    }
++                            var filledCount = 0;
++                            var maxSentenceIdx = 0;
++                            for (var sc = 0; sc < cards.length; sc++) {
++                                if (cards[sc].sentence_idx > maxSentenceIdx) {
++                                    maxSentenceIdx = cards[sc].sentence_idx;
++                                }
++                                if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
++                                    filledCount++;
++                                }
++                            }
++                            if (filledCount > 1) {
++                                var slots = new Array(maxSentenceIdx);
++                                for (var si = 0; si < maxSentenceIdx; si++) {
++                                    slots[si] = "";
+                                 }
+-                                if (childLines.length > 1) {
+-                                    tText = childLines.join(String.fromCharCode(10));
++                                for (var sc = 0; sc < cards.length; sc++) {
++                                    var cIdx = cards[sc].sentence_idx;
++                                    if (cIdx > 0 && cIdx <= maxSentenceIdx) {
++                                        slots[cIdx - 1] = (cards[sc].translated_text || "").trim();
++                                    }
+                                 }
++                                tText = slots.join(String.fromCharCode(10));
+                             }
+                         }
+                         tText = tText || '';
+@@ -21560,6 +22133,10 @@ window.__CONFIG__ = {ui_config_json};
+                 }
+                 if (!targetCard) return;
+ 
++                if (typeof window.clearMVPBookmarks === 'function') {
++                    window.clearMVPBookmarks();
++                }
++
+                 // 1. Ensure selection state is synchronized across all cards and AppState
+                 syncSelectionsToCardsAndState();
+ 
+@@ -21677,6 +22254,11 @@ window.__CONFIG__ = {ui_config_json};
+                 buildLcIndex();
+                 updateBidirectionalHighlights();
+                 updateRowStyles();
++                if (typeof refreshBookmarkClasses === 'function') {
++                    refreshBookmarkClasses();
++                } else if (typeof window.refreshBookmarkClasses === 'function') {
++                    window.refreshBookmarkClasses();
++                }
+                 if (window.AppState && window.AppState.filterSelectedOnly) {
+                     var lt = document.getElementById('lemma-table');
+                     if (lt) addClass(lt, 'kw-filter-selected-only');
+@@ -21782,18 +22364,37 @@ window.__CONFIG__ = {ui_config_json};
+                 }
+                 for (var c = 0; c < cards.length; c++) {
+                     if (cards[c].sentence_idx === 0) {
+-                        if (window.AppState && window.AppState.translatedText) {
+-                            cards[c].translated_text = window.AppState.translatedText;
+-                        } else if (!isSingleMode) {
+-                            var childTrans = [];
+-                            for (var k = 0; k < cards.length; k++) {
+-                                if (cards[k].sentence_idx > 0 && cards[k].translated_text) {
+-                                    childTrans.push(cards[k].translated_text.trim());
++                        var filledCount = 0;
++                        var maxSentenceIdx = 0;
++                        for (var sc = 0; sc < cards.length; sc++) {
++                            if (cards[sc].sentence_idx > maxSentenceIdx) {
++                                maxSentenceIdx = cards[sc].sentence_idx;
++                            }
++                            if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
++                                filledCount++;
++                            }
++                        }
++                        if (filledCount > 1 && !isSingleMode) {
++                            var slots = new Array(maxSentenceIdx);
++                            for (var si = 0; si < maxSentenceIdx; si++) {
++                                slots[si] = "";
++                            }
++                            for (var sc = 0; sc < cards.length; sc++) {
++                                var cIdx = cards[sc].sentence_idx;
++                                if (cIdx > 0 && cIdx <= maxSentenceIdx) {
++                                    slots[cIdx - 1] = (cards[sc].translated_text || "").trim();
+                                 }
+                             }
+-                            if (childTrans.length > 0) {
+-                                cards[c].translated_text = childTrans.join(String.fromCharCode(10));
++                            cards[c].translated_text = slots.join(String.fromCharCode(10));
++                        } else if (filledCount === 1 && !isSingleMode && (!cards[c].translated_text || !cards[c].translated_text.trim())) {
++                            for (var sc = 0; sc < cards.length; sc++) {
++                                if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
++                                    cards[c].translated_text = cards[sc].translated_text.trim();
++                                    break;
++                                }
+                             }
++                        } else if (window.AppState && window.AppState.translatedText) {
++                            cards[c].translated_text = window.AppState.translatedText;
+                         }
+                         break;
+                     }
+@@ -23078,7 +23679,9 @@ def render_section(token, ctx):
+                 if isinstance(val, str):
+                     val = val.replace('\r', '')
+                 if t == "inflected":
+-                    inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val)
++                    lem_idx = col_indices.get('lemma', -1)
++                    lem_v = row[lem_idx] if lem_idx != -1 and len(row) > lem_idx else ""
++                    inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val, lemma=lem_v)
+                     inf_title_attr = f' title="{html.escape(inf_tooltip)}"' if inf_tooltip else ''
+                     html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
+                 elif t == "lemma":
+@@ -25092,6 +25695,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
+     col_gender = headers.index(role_fields['gender']) if 'gender' in role_fields and role_fields['gender'] in headers else (headers.index('WordSourceGender') if 'WordSourceGender' in headers else (headers.index('gender') if 'gender' in headers else -1))
+     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
+     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
++    col_sentence_source = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+     
+     rows_data = {}
+     for row_id, row in enumerate(data_rows):
+@@ -25107,6 +25711,8 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
+         gender_val = g_clean if g_clean in ("m", "f", "n") else ""
+         token_order_val = row[col_token_order] if col_token_order != -1 and len(row) > col_token_order and str(row[col_token_order]).strip() else str(row_id)
+         sent_idx_val = row[col_index] if col_index != -1 and len(row) > col_index and str(row[col_index]).strip().isdigit() else "1"
++        row_sentence = row[col_sentence_source] if col_sentence_source != -1 and len(row) > col_sentence_source and str(row[col_sentence_source]).strip() else ""
++        inf_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val, lemma=lemma_val)
+         row_obj = {
+             "lemma": lemma_val,
+             "inflected": inflected_val,
+@@ -25119,7 +25725,9 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
+             "WordSourcePOS": pos_val,
+             "WordSourceGender": gender_val,
+             "token_order": token_order_val,
+-            "sentence_idx": sent_idx_val
++            "sentence_idx": sent_idx_val,
++            "sentence_source": row_sentence,
++            "inflected_tooltip": inf_tooltip,
+         }
+         if row_provenances:
+             if str(token_order_val) in row_provenances:
