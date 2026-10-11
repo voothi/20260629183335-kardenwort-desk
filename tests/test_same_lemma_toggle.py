@@ -1385,3 +1385,78 @@ def test_contraction_peer_highlight_across_sentences(page, tmp_path):
     assert "highlight-orange-active" not in you_cls
 
 
+def test_compound_subtoken_row_ids_and_highlight_isolation(page, tmp_path):
+    """Verifies that subtoken row_ids are scoped to the matching compound and selecting Postfach does not highlight E."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("rendering"):
+        config.add_section("rendering")
+    config.set("rendering", "highlight_same_lemma", "true")
+
+    zid = "20261011215859"
+    tsv_file = tmp_path / f"{zid}-email-postfach.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "E-Mail\tE-Mail\tE-Mail\tэлектронная почта\t1\tSchauen Sie bitte in Ihr E-Mail-Postfach nach der neuesten E-Mail von Amazon.\tПосмотрите в ваш почтовый ящик для последнего письма от Amazon.\t0\n"
+        "Mail\tMail\tE-Mail-Postfach, E-Mail\tпочта\t1\tSchauen Sie bitte in Ihr E-Mail-Postfach nach der neuesten E-Mail von Amazon.\tПосмотрите в ваш почтовый ящик для последнего письма от Amazon.\t0\n"
+        "Postfach\tPostfach\tE-Mail-Postfach\tпочтовый ящик\t1\tSchauen Sie bitte in Ihr E-Mail-Postfach nach der neuesten E-Mail von Amazon.\tПосмотрите в ваш почтовый ящик для последнего письма от Amazon.\t0\n"
+        "E-Mail-Postfach\tE-Mail-Postfach\tE-Mail-Postfach\tпочтовый ящик\t1\tSchauen Sie bitte in Ihr E-Mail-Postfach nach der neuesten E-Mail von Amazon.\tПосмотрите в ваш почтовый ящик для последнего письма от Amazon.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    raw_html = kardenwort_desk.run_render_flow(
+        text="Schauen Sie bitte in Ihr E-Mail-Postfach nach der neuesten E-Mail von Amazon.",
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+
+    import re
+    m_tm = re.search(r'id=["\']token-map["\'][^>]*>(.*?)</script>', raw_html, re.DOTALL)
+    assert m_tm is not None
+    token_map = json.loads(m_tm.group(1))
+
+    e_tokens = [t for t in token_map if t.get("text") == "E"]
+    assert len(e_tokens) == 2
+    # First E is in E-Mail-Postfach -> row_ids must contain 3 (E-Mail-Postfach) and not 0 (E-Mail)
+    assert 3 in e_tokens[0].get("row_ids", [])
+    assert 0 not in e_tokens[0].get("row_ids", [])
+    # Second E is in E-Mail -> row_ids must contain 0 (E-Mail) and not 3 (E-Mail-Postfach)
+    assert 0 in e_tokens[1].get("row_ids", [])
+    assert 3 not in e_tokens[1].get("row_ids", [])
+
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+
+    postfach_span = page.locator('#source-container span.word:has-text("Postfach")').first
+    e_spans = page.locator('#source-container span.word[data-lower-clean="e"]')
+    assert e_spans.count() == 2
+
+    e1_span = e_spans.nth(0)
+    e2_span = e_spans.nth(1)
+
+    # Click Postfach
+    postfach_span.click()
+
+    # Postfach is actively highlighted
+    assert "highlight-orange-active" in (postfach_span.get_attribute("class") or "")
+
+    # Neither E gets lemma-peer-highlight
+    assert "lemma-peer-highlight" not in (e1_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" not in (e2_span.get_attribute("class") or "")
+
+    # activeLemmas contains "postfach", but not "e-mail-postfach"
+    active_lemmas = page.evaluate("() => (window.AppState && window.AppState.activeLemmas) ? Object.keys(window.AppState.activeLemmas) : []")
+    assert "postfach" in active_lemmas
+    assert "e-mail-postfach" not in active_lemmas
+
+
+
