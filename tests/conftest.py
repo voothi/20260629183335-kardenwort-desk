@@ -3,7 +3,9 @@ import socket
 import urllib.parse
 import urllib.request
 import urllib.error
+from pathlib import Path
 import pytest
+
 
 LIVE_DAEMON_PORTS = {8081, 8082, 8083, 59999}
 
@@ -91,5 +93,92 @@ def reset_provider_cooldowns():
                 kardenwort_desk.logger.removeHandler(h)
     except (ImportError, AttributeError):
         pass
+
+
+@pytest.fixture(scope="session", autouse=True)
+def isolate_test_results_dir(tmp_path_factory):
+    """
+    Hermetically isolates automated test runs from polluting the repository root `results/`
+    directory with ephemeral session logs, updates, marker files, or generated TSVs.
+    Redirects kardenwort_desk.load_config and default resolve_results_dir logic to a sandboxed
+    temporary directory, unless an explicit non-repo directory is specified.
+    """
+    sandboxed_results = tmp_path_factory.mktemp("sandboxed_results")
+    repo_results = (Path(__file__).resolve().parent.parent / "results").resolve()
+    mp = pytest.MonkeyPatch()
+
+    def _is_repo_results(p):
+        if p is None:
+            return True
+        try:
+            resolved = Path(p).resolve()
+            return resolved == repo_results or repo_results in resolved.parents
+        except Exception:
+            return False
+
+    try:
+        import kardenwort_desk
+        orig_load_config = kardenwort_desk.load_config
+        orig_resolve_results = kardenwort_desk.resolve_results_dir
+
+        def sandboxed_load_config(*args, **kwargs):
+            cfg, resolved_paths, gd, wf = orig_load_config(*args, **kwargs)
+            if isinstance(resolved_paths, dict):
+                resolved_paths["results_dir"] = sandboxed_results
+                resolved_paths["generated_results_dir"] = sandboxed_results
+            return cfg, resolved_paths, gd, wf
+
+        def sandboxed_resolve_results(resolved_paths=None, kw_config=None):
+            if isinstance(resolved_paths, dict):
+                for key in ("generated_results_dir", "results_dir"):
+                    val = resolved_paths.get(key)
+                    if val and not _is_repo_results(val):
+                        return Path(val).resolve()
+            res = orig_resolve_results(resolved_paths, kw_config)
+            if _is_repo_results(res):
+                return sandboxed_results
+            return Path(res).resolve()
+
+        mp.setattr(kardenwort_desk, "load_config", sandboxed_load_config)
+        mp.setattr(kardenwort_desk, "resolve_results_dir", sandboxed_resolve_results)
+
+        if hasattr(kardenwort_desk, "SessionLogger"):
+            orig_logger_init = kardenwort_desk.SessionLogger.__init__
+
+            def sandboxed_logger_init(self, zid, results_dir, trace_id=None):
+                if _is_repo_results(results_dir):
+                    results_dir = sandboxed_results
+                orig_logger_init(self, zid, results_dir, trace_id=trace_id)
+
+            mp.setattr(kardenwort_desk.SessionLogger, "__init__", sandboxed_logger_init)
+    except (ImportError, AttributeError):
+        pass
+
+    try:
+        import kardenwort_controller
+        if hasattr(kardenwort_controller, "load_config"):
+            mp.setattr(kardenwort_controller, "load_config", sandboxed_load_config)
+        if hasattr(kardenwort_controller, "resolve_results_dir"):
+            mp.setattr(kardenwort_controller, "resolve_results_dir", sandboxed_resolve_results)
+    except (ImportError, AttributeError):
+        pass
+
+    try:
+        import kardenwort_db
+        if hasattr(kardenwort_db, "_GLOBAL_DB_LOGGER") and hasattr(kardenwort_db._GLOBAL_DB_LOGGER, "set_log_path"):
+            orig_set_log_path = kardenwort_db._GLOBAL_DB_LOGGER.set_log_path
+
+            def sandboxed_set_log_path(log_path, max_mb=5.0):
+                if log_path and _is_repo_results(Path(log_path).parent):
+                    log_path = sandboxed_results / Path(log_path).name
+                orig_set_log_path(log_path, max_mb=max_mb)
+
+            mp.setattr(kardenwort_db._GLOBAL_DB_LOGGER, "set_log_path", sandboxed_set_log_path)
+    except (ImportError, AttributeError):
+        pass
+
+    yield sandboxed_results
+    mp.undo()
+
 
 
