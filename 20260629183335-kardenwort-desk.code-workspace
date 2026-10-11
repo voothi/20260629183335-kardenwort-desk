@@ -6,6 +6,11 @@
 			"path": "U:/voothi/20260629183335-kardenwort-desk"
 		},
 		{
+			"name": "kardenwort",
+			"desc": "(Main) (Backend) (TSV) (Desk)",
+			"path": "U:/voothi/20261011131135-kardenwort"
+		},
+		{
 			"name": "autohotkey",
 			"desc": "(kardenwort-window) (Frontend) (AHKv2)",
 			"path": "U:/voothi/20240411110510-autohotkey"
