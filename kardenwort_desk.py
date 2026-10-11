@@ -3827,7 +3827,7 @@ class SqliteStorageAdapter(StorageAdapter):
                 if not src_val and source_raw_text:
                     src_val = source_raw_text
 
-                if src_val or dst_val or s_idx in existing_sents_by_idx or s_idx in sent_map:
+                if (len(existing_sents_by_idx) <= 1 or session_record.get("text_mode") == "multi") and (src_val or dst_val or s_idx in existing_sents_by_idx or s_idx in sent_map):
                     if s_idx not in sent_map:
                         sent_map[s_idx] = {
                             "session_zid": session_zid,
@@ -15395,7 +15395,7 @@ window.__CONFIG__ = {ui_config_json};
                         }
                     }
                 }
-                function applyCardProgressiveUpdate(rowsData) {
+                function applyCardProgressiveUpdate(rowsData, rawPayload) {
                     if (!rowsData) return;
                     var wCards = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
                         ? window.WorkspaceTabs.getCards()
@@ -15443,12 +15443,13 @@ window.__CONFIG__ = {ui_config_json};
                     var activeSentIdx = (activeCard && activeCard.sentence_idx !== undefined && activeCard.sentence_idx !== null)
                         ? String(activeCard.sentence_idx)
                         : null;
+                    var isGlobalUpdate = Boolean(rawPayload && (rawPayload.sentences || rawPayload.stage === 'translating' || rawPayload.stage === 'finished' || rawPayload.is_finished || rawPayload.is_global || rawPayload.all_sentences));
                     for (var wc = 0; wc < wCards.length; wc++) {
                         var cardObj = wCards[wc];
                         var cardSentIdx = (cardObj && cardObj.sentence_idx !== undefined && cardObj.sentence_idx !== null)
                             ? String(cardObj.sentence_idx)
                             : (cardObj && cardObj.index !== undefined ? String(cardObj.index) : String(wc));
-                        if (activeSentIdx !== null && cardSentIdx !== "0" && cardSentIdx !== activeSentIdx) {
+                        if (!isGlobalUpdate && activeSentIdx !== null && activeSentIdx !== "0" && cardSentIdx !== "0" && cardSentIdx !== activeSentIdx) {
                             continue;
                         }
                         var cardWords = cardObj.words;
@@ -15544,7 +15545,7 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
                 window.applyCardProgressiveUpdate = applyCardProgressiveUpdate;
-                applyCardProgressiveUpdate(rowsData);
+                applyCardProgressiveUpdate(rowsData, data);
                 if (window.AppState.isFinished) {
                     var tc = document.getElementById('translation-container');
                     if (tc && (tc.querySelector('.skeleton-loader') || tc.querySelector('[data-pending="true"]') || tc.classList.contains('skeleton-loader') || !tc.textContent.trim())) {
