@@ -1961,21 +1961,74 @@ class SessionArbiter:
             else:
                 text = recovered_text
 
-        provider = self.config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback='deepl')
+        # Resolve text provider chain and failover strategy
+        providers, strategy = resolve_provider_chain(self.config, task_type='text')
+        reprocess_p = self.config.get(SEC_PIPELINE, 'text_reprocess_provider', fallback=None) if self.config and self.config.has_section(SEC_PIPELINE) else None
+        if reprocess_p and reprocess_p.strip():
+            reprocess_p = reprocess_p.strip().lower()
+            if reprocess_p not in providers:
+                providers = [reprocess_p] + providers
+            elif providers and providers[0] != reprocess_p:
+                providers = [reprocess_p] + [p for p in providers if p != reprocess_p]
 
-        # Translate in-memory
-        sentence_trans = translate_source_text(text, lang, target_lang, text_mode, self.config, self.resolved_paths, provider, zid=req_zid)
+        sentence_trans = None
+        last_err = None
+        active_text_provider = None
+        for prov in providers:
+            try:
+                sentence_trans = translate_source_text(text, lang, target_lang, text_mode, self.config, self.resolved_paths, prov, zid=req_zid)
+                if sentence_trans:
+                    active_text_provider = prov
+                    break
+            except Exception as e:
+                logger.warning(f"Retext provider '{prov}' failed for session {session_zid}: {e}")
+                last_err = e
+                continue
+
+        if not sentence_trans:
+            if last_err:
+                raise StructuredError(ErrorCode.DESK_FAILED, f"All retext providers failed. Last error: {last_err}") from last_err
+            else:
+                raise StructuredError(ErrorCode.DESK_FAILED, "Retext translation produced empty result.")
+
+        active_text_prov = getattr(sentence_trans, "provenance", f"live:{active_text_provider}")
 
         with storage_adapter.file_lock(tsv_path):
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
             col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+            col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
 
             if col_sentence_dest != -1:
+                padded_dict = (sentence_trans.get('PADDED') or {}) if isinstance(sentence_trans, dict) else {}
                 for row in data_rows:
                     if len(row) > col_sentence_dest and sentence_trans:
-                        row[col_sentence_dest] = list(sentence_trans.values())[0] if isinstance(sentence_trans, dict) else str(sentence_trans)
+                        if isinstance(sentence_trans, dict):
+                            s_idx_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
+                            trans_val = (padded_dict.get(s_idx_val) or padded_dict.get(s_idx_val - 1) or
+                                         sentence_trans.get(s_idx_val) or sentence_trans.get(s_idx_val - 1) or
+                                         list(sentence_trans.values())[0])
+                            row[col_sentence_dest] = str(trans_val)
+                        else:
+                            row[col_sentence_dest] = str(sentence_trans)
+
+                if is_sqlite and isinstance(sentence_trans, dict):
+                    for s_idx_raw, trans in sentence_trans.items():
+                        if s_idx_raw == 'PADDED':
+                            continue
+                        try:
+                            s_idx = int(s_idx_raw)
+                        except (ValueError, TypeError):
+                            continue
+                        if trans and isinstance(trans, str):
+                            try:
+                                storage_adapter.update_sentence_translation(
+                                    session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=active_text_prov
+                                )
+                            except Exception as e:
+                                logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
+
                 storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
 
         new_fp = compute_content_fingerprint(data_rows)
@@ -2016,7 +2069,10 @@ class SessionArbiter:
             "data_rows": data_rows,
             "rows": structured_rows,
             "translated_text": translated_html,
-            "translatedText": translated_html
+            "translatedText": translated_html,
+            "sentences": sentence_trans if isinstance(sentence_trans, dict) else {1: str(sentence_trans)},
+            "active_provider": active_text_provider,
+            "text_provenance": active_text_prov,
         }
 
     def propagate_enrichment_to_siblings(
@@ -2133,6 +2189,7 @@ class SessionArbiter:
         token_orders: Optional[List[Any]] = None,
         target_coordinates: Optional[List[Any]] = None,
         visual_indices: Optional[List[Any]] = None,
+        sentence_idx: Optional[int] = None,
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -2219,6 +2276,27 @@ class SessionArbiter:
         target_row_indices = list(dict.fromkeys(target_row_indices))
         target_token_orders = list(dict.fromkeys(target_token_orders))
         selected_row_indices = set(target_row_indices)
+
+        if sentence_idx is None and target_coordinates:
+            for tc in target_coordinates:
+                if isinstance(tc, dict) and tc.get('sentence_idx') is not None:
+                    try:
+                        sentence_idx = int(tc.get('sentence_idx'))
+                        break
+                    except (ValueError, TypeError):
+                        pass
+
+        if sentence_idx is None and col_sent != -1 and target_row_indices:
+            row_sents = set()
+            for r in target_row_indices:
+                if r < len(data_rows) and len(data_rows[r]) > col_sent:
+                    val = str(data_rows[r][col_sent]).strip()
+                    if val.isdigit():
+                        row_sents.add(int(val))
+            if len(row_sents) == 1:
+                sentence_idx = list(row_sents)[0]
+
+        is_master_overview = (sentence_idx is None or int(sentence_idx) == 0)
 
         if selected_row_indices and provider != 'none':
             reword_prov_tag = f"live:{provider}"
@@ -2412,8 +2490,8 @@ class SessionArbiter:
                     except Exception as e:
                         raise StructuredError(ErrorCode.DESK_FAILED, f"Re-word failed: {e}") from e
 
-                # Propagate newly enriched lemmas to open sibling sessions!
-                if enriched_lemma_map:
+                # Propagate newly enriched lemmas to open sibling sessions strictly if Master Overview session
+                if enriched_lemma_map and is_master_overview:
                     self.propagate_enrichment_to_siblings(enriched_lemma_map, exclude_session_zid=session_zid, language=lang)
             else:
                 # Fast-path machine translation (deepl, google, argos, combined, etc.)
@@ -2472,7 +2550,8 @@ class SessionArbiter:
                                 with storage_adapter.file_lock(tsv_path):
                                     storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
 
-                            self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
+                            if is_master_overview:
+                                self.propagate_translations_to_siblings(translated_map, exclude_session_zid=session_zid, language=lang)
                 except StructuredError:
                     raise
                 except Exception as e:
@@ -3351,6 +3430,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 token_orders=token_orders,
                 target_coordinates=target_coordinates,
                 visual_indices=visual_indices,
+                sentence_idx=body.get('sentence_idx'),
             )
             self._send_json(200, res)
             return

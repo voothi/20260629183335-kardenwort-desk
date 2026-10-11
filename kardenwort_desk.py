@@ -3827,20 +3827,30 @@ class SqliteStorageAdapter(StorageAdapter):
                 if not src_val and source_raw_text:
                     src_val = source_raw_text
 
-                if len(existing_sents_by_idx) <= 1:
-                    if src_val or dst_val or s_idx in existing_sents_by_idx:
-                        if s_idx not in sent_map:
-                            sent_map[s_idx] = {
-                                "session_zid": session_zid,
-                                "sentence_index": s_idx,
-                                "sentence_source": src_val or "",
-                                "sentence_destination": dst_val,
-                                "sentence_destination2": dst2_val,
-                                "sentence_source_ipa": ipa_val,
-                                "sentence_source_audio": aud_val,
-                                "text_provenance": text_provenance or existing_sent.get("text_provenance"),
-                            }
-                        elif text_provenance and not sent_map[s_idx].get("text_provenance"):
+                if src_val or dst_val or s_idx in existing_sents_by_idx or s_idx in sent_map:
+                    if s_idx not in sent_map:
+                        sent_map[s_idx] = {
+                            "session_zid": session_zid,
+                            "sentence_index": s_idx,
+                            "sentence_source": src_val or "",
+                            "sentence_destination": dst_val,
+                            "sentence_destination2": dst2_val,
+                            "sentence_source_ipa": ipa_val,
+                            "sentence_source_audio": aud_val,
+                            "text_provenance": text_provenance or existing_sent.get("text_provenance"),
+                        }
+                    else:
+                        if dst_val:
+                            sent_map[s_idx]["sentence_destination"] = dst_val
+                        if dst2_val:
+                            sent_map[s_idx]["sentence_destination2"] = dst2_val
+                        if src_val and not sent_map[s_idx].get("sentence_source"):
+                            sent_map[s_idx]["sentence_source"] = src_val
+                        if ipa_val and not sent_map[s_idx].get("sentence_source_ipa"):
+                            sent_map[s_idx]["sentence_source_ipa"] = ipa_val
+                        if aud_val and not sent_map[s_idx].get("sentence_source_audio"):
+                            sent_map[s_idx]["sentence_source_audio"] = aud_val
+                        if text_provenance and not sent_map[s_idx].get("text_provenance"):
                             sent_map[s_idx]["text_provenance"] = text_provenance
 
                 # Extract word fields
@@ -15409,8 +15419,39 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                     }
+                    for (var ci = 0; ci < wCards.length; ci++) {
+                        var cWords = wCards[ci].words;
+                        if (cWords) {
+                            for (var cwi = 0; cwi < cWords.length; cwi++) {
+                                var item = cWords[cwi];
+                                if (item.token_order !== undefined && item.token_order !== null && item.row_id !== undefined && item.row_id !== null) {
+                                    var sTok = String(item.token_order);
+                                    var sRow = String(item.row_id);
+                                    if (deltasByTokenOrder[sTok] && !deltasByRowId[sRow]) {
+                                        deltasByRowId[sRow] = deltasByTokenOrder[sTok];
+                                    }
+                                    if (deltasByRowId[sRow] && !deltasByTokenOrder[sTok]) {
+                                        deltasByTokenOrder[sTok] = deltasByRowId[sRow];
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    var activeCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function')
+                        ? window.WorkspaceTabs.getActiveCard()
+                        : null;
+                    var activeSentIdx = (activeCard && activeCard.sentence_idx !== undefined && activeCard.sentence_idx !== null)
+                        ? String(activeCard.sentence_idx)
+                        : null;
                     for (var wc = 0; wc < wCards.length; wc++) {
-                        var cardWords = wCards[wc].words;
+                        var cardObj = wCards[wc];
+                        var cardSentIdx = (cardObj && cardObj.sentence_idx !== undefined && cardObj.sentence_idx !== null)
+                            ? String(cardObj.sentence_idx)
+                            : (cardObj && cardObj.index !== undefined ? String(cardObj.index) : String(wc));
+                        if (activeSentIdx !== null && cardSentIdx !== "0" && cardSentIdx !== activeSentIdx) {
+                            continue;
+                        }
+                        var cardWords = cardObj.words;
                         if (cardWords) {
                             for (var ww = 0; ww < cardWords.length; ww++) {
                                 var cw = cardWords[ww];
@@ -15470,6 +15511,20 @@ window.__CONFIG__ = {ui_config_json};
                                             }
                                             if (!subTr && subState) {
                                                 subTr = (subState.trans !== undefined && subState.trans !== "") ? subState.trans : ((subState.WordDestination !== undefined && subState.WordDestination !== "") ? subState.WordDestination : subState.word_translation);
+                                            }
+                                            if (!subTr) {
+                                                for (var oc = 0; oc < wCards.length; oc++) {
+                                                    var oWords = wCards[oc].words;
+                                                    if (oWords) {
+                                                        for (var ow = 0; ow < oWords.length; ow++) {
+                                                            if (String(oWords[ow].row_id) === subId && oWords[ow].translation) {
+                                                                subTr = oWords[ow].translation;
+                                                                break;
+                                                            }
+                                                        }
+                                                    }
+                                                    if (subTr) break;
+                                                }
                                             }
                                             if (subTr && subTr !== "[FAILED]" && subTr.indexOf('skeleton-loader') === -1 && subTr !== '-' && subTr !== '--') {
                                                 if (rolledTrans.indexOf(subTr) === -1) rolledTrans.push(subTr);
@@ -21304,6 +21359,32 @@ window.__CONFIG__ = {ui_config_json};
                             tc.innerHTML = tText;
                         }
                         if (window.AppState) window.AppState.translatedText = tText;
+
+                        var wCards = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
+                            ? window.WorkspaceTabs.getCards()
+                            : (window._kwSentenceCards || null);
+                        if (wCards && wCards.length > 0) {
+                            var actCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function')
+                                ? window.WorkspaceTabs.getActiveCard()
+                                : null;
+                            var actSent = (actCard && actCard.sentence_idx !== undefined && actCard.sentence_idx !== null)
+                                ? actCard.sentence_idx
+                                : 0;
+                            for (var c = 0; c < wCards.length; c++) {
+                                if (actSent === 0) {
+                                    if (wCards[c].sentence_idx === 0) {
+                                        wCards[c].translated_text = tText;
+                                    }
+                                } else {
+                                    if (wCards[c].sentence_idx === actSent) {
+                                        wCards[c].translated_text = tText;
+                                    }
+                                }
+                            }
+                            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.updateActiveTabTranslation === 'function') {
+                                window.WorkspaceTabs.updateActiveTabTranslation();
+                            }
+                        }
                     }
                     if (window.receiveUpdate && tText) {
                         var retextUpdate = {
@@ -21409,11 +21490,18 @@ window.__CONFIG__ = {ui_config_json};
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
             if (tok) headers['X-API-Token'] = tok;
+            var actCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function')
+                ? window.WorkspaceTabs.getActiveCard()
+                : null;
+            var curSentIdx = (actCard && actCard.sentence_idx !== undefined && actCard.sentence_idx !== null)
+                ? actCard.sentence_idx
+                : 0;
             var bodyPayload = {
                 session_zid: sZid,
                 row_ids: rows,
                 token_orders: tokenOrders,
-                language: getSessionLang()
+                language: getSessionLang(),
+                sentence_idx: curSentIdx
             };
             if (targetCoordinates.length > 0) {
                 bodyPayload.target_coordinates = targetCoordinates;

@@ -1,0 +1,368 @@
+import json
+from pathlib import Path
+from unittest.mock import MagicMock, patch
+import pytest
+
+import kardenwort_desk
+from kardenwort_desk import SqliteStorageAdapter
+from kardenwort_controller import SessionArbiter
+
+
+def test_intellifiller_prompt_constraints():
+    config_path = Path("U:/voothi/20251206123938-intellifiller-ai-addon-for-anki/IntelliFiller/config.json")
+    assert config_path.exists(), "IntelliFiller config.json must exist"
+    
+    with open(config_path, "r", encoding="utf-8") as f:
+        data = json.load(f)
+
+    prompts_list = data.get("prompts", []) if isinstance(data, dict) else data
+    prompts = {p.get("promptName"): p.get("prompt") for p in prompts_list if isinstance(p, dict)}
+    
+    # Check German Prompt
+    de_prompt = prompts.get("German Vocabulary Analysis and Translation (JSON)")
+    assert de_prompt is not None
+    assert 'based strictly on its contextual meaning in "Context"' in de_prompt
+    assert "Do NOT copy, blend, or comma-concatenate machine translations" in de_prompt
+    assert "Output ONE single dictionary word (Nominative/Infinitive)" in de_prompt
+
+    # Check English Prompt
+    en_prompt = prompts.get("English Vocabulary Analysis and Translation (JSON)")
+    assert en_prompt is not None
+    assert 'based strictly on its contextual meaning in "Context"' in en_prompt
+    assert "Do NOT copy, blend, or comma-concatenate machine translations" in en_prompt
+    assert "Output ONE single dictionary word (Nominative/Infinitive)" in en_prompt
+
+
+def test_sqlite_storage_adapter_multi_sentence_retext_persistence(tmp_path):
+    db_file = tmp_path / "test_retext_persistence.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    resolved_paths["sqlite_db_path"] = str(db_file)
+    
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
+    session_zid = "20261012010101"
+    
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "WordDestination"
+    ]
+    initial_rows = [
+        ["0", "Hallo", "Hallo", "1", "Hallo Welt.", "Привет мир.", "привет"],
+        ["1", "Danke", "danke", "2", "Vielen Dank.", "Большое спасибо.", "спасибо"]
+    ]
+    
+    # Initial save creates 2 sentences
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-slug",
+        source_language="de",
+        target_language="ru",
+        text_mode="multi",
+        source_raw_text="Hallo Welt.\nVielen Dank.",
+        data_rows=initial_rows,
+        headers=headers,
+    )
+    
+    sents = adapter.db.get_sentences_by_session(session_zid)
+    assert len(sents) == 2
+    sents_map = {s["sentence_index"]: s["sentence_destination"] for s in sents}
+    assert sents_map[1] == "Привет мир."
+    assert sents_map[2] == "Большое спасибо."
+    
+    # Re-text updates translations in data_rows for multiple sentences
+    updated_rows = [
+        ["0", "Hallo", "Hallo", "1", "Hallo Welt.", "Здравствуй, мир!", "привет"],
+        ["1", "Danke", "danke", "2", "Vielen Dank.", "Сердечное спасибо!", "спасибо"]
+    ]
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-slug",
+        source_language="de",
+        target_language="ru",
+        text_mode="multi",
+        source_raw_text="Hallo Welt.\nVielen Dank.",
+        data_rows=updated_rows,
+        headers=headers,
+    )
+    
+    # Verify that multi-sentence translations were updated and persisted in SQLite
+    reloaded_sents = adapter.db.get_sentences_by_session(session_zid)
+    assert len(reloaded_sents) == 2
+    reloaded_map = {s["sentence_index"]: s["sentence_destination"] for s in reloaded_sents}
+    assert reloaded_map[1] == "Здравствуй, мир!"
+    assert reloaded_map[2] == "Сердечное спасибо!"
+
+
+def test_reword_session_scopes_sibling_propagation_to_master_overview(tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    if not config.has_section("pipeline"):
+        config.add_section("pipeline")
+    config.set("pipeline", "lemma_reprocess_provider", "google")
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = str(results_dir)
+    
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    session_zid = "20261012020202"
+    
+    # Set up in-memory session with data rows
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "WordDestination"
+    ]
+    rows = [
+        ["0", "gehen", "gehen", "1", "Wir gehen.", "Мы идем.", "идти"],
+        ["1", "gehen", "gehen", "2", "Sie gehen.", "Они идут.", "идти"]
+    ]
+    tsv_file = results_dir / f"{session_zid}.de.tsv"
+    tsv_file.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in rows), encoding="utf-8")
+    
+    arbiter.sessions[session_zid] = {
+        "session_zid": session_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Wir gehen.\nSie gehen.",
+        "tsv_path": str(tsv_file),
+        "comments": [],
+        "headers": headers,
+        "data_rows": rows,
+        "role_fields": {
+            "lemma": "WordSource",
+            "word_translation": "WordDestination",
+            "sentence_index": "SentenceSourceIndex",
+            "sentence_source": "SentenceSource",
+            "sentence_destination": "SentenceDestination"
+        },
+        "row_provenances": {}
+    }
+    
+    with patch.object(arbiter, "propagate_enrichment_to_siblings") as mock_enrich_prop, \
+         patch.object(arbiter, "propagate_translations_to_siblings") as mock_trans_prop, \
+         patch("kardenwort_controller.translate_lemmas_fast_path", return_value={"gehen": "шагать"}):
+        
+        # 1. Reword called with sentence_idx = 2 (specific sentence tab)
+        arbiter.reword_session(
+            session_zid=session_zid,
+            selected_rows=[1],
+            language="de",
+            sentence_idx=2
+        )
+        # Propagation to siblings must NOT occur when sentence_idx != 0
+        mock_enrich_prop.assert_not_called()
+        mock_trans_prop.assert_not_called()
+        
+        # 2. Reword called with sentence_idx = 0 (Master Overview tab)
+        arbiter.reword_session(
+            session_zid=session_zid,
+            selected_rows=[0],
+            language="de",
+            sentence_idx=0
+        )
+        # Propagation to siblings MUST occur when sentence_idx == 0
+        assert mock_trans_prop.call_count == 1
+
+
+def test_retext_session_failover_provider_chain(tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    if config.has_section("pipeline"):
+        config.remove_option("pipeline", "text_reprocess_provider")
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = str(results_dir)
+    
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    session_zid = "20261012030303"
+    
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "WordDestination"
+    ]
+    rows = [["0", "Test", "Test", "1", "Test sentence.", "Старый перевод.", "тест"]]
+    tsv_file = results_dir / f"{session_zid}.de.tsv"
+    tsv_file.write_text("\t".join(headers) + "\n" + "\t".join(rows[0]), encoding="utf-8")
+    
+    arbiter.sessions[session_zid] = {
+        "session_zid": session_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Test sentence.",
+        "tsv_path": str(tsv_file),
+        "comments": [],
+        "headers": headers,
+        "data_rows": rows,
+        "role_fields": {
+            "sentence_destination": "SentenceDestination",
+            "sentence_index": "SentenceSourceIndex"
+        }
+    }
+    
+    # Configure provider chain: first fails, second succeeds
+    attempted_providers = []
+    def mock_translate(text, src, tgt, mode, cfg, paths, prov, **kwargs):
+        attempted_providers.append(prov)
+        if prov == "failing_primary":
+            raise ConnectionError("Primary provider timed out")
+        return {0: "Успешный резервный перевод"}
+    
+    with patch("kardenwort_controller.resolve_provider_chain", return_value=(["failing_primary", "working_secondary"], "chain")), \
+         patch("kardenwort_controller.translate_source_text", side_effect=mock_translate):
+        
+        res = arbiter.retext_session(session_zid=session_zid, language="de")
+        
+        assert res["status"] == "success"
+        assert res["active_provider"] == "working_secondary"
+        assert "Успешный резервный перевод" in res["translated_text"]
+        assert attempted_providers == ["failing_primary", "working_secondary"]
+
+
+def test_tab_reword_isolation_and_overview_sync(page, tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    raw_text = "Er geht nach Hause. Sie geht zum Park."
+    
+    tsv_content = (
+        "TokenOrder\tQuotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\n"
+        "1\tgeht\tgehen\tv.\tидти (s1)\t1\n"
+        "5\tgeht\tgehen\tv.\tидти (s2)\t2\n"
+    )
+    tsv_file = tmp_path / "20261012040404-test.de.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+    
+    html_out = kardenwort_desk.run_render_flow(
+        text=raw_text,
+        language="de",
+        zid="20261012040404",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=True,
+        return_children=False,
+    )
+    
+    page.set_content(html_out)
+    page.wait_for_timeout(150)
+    
+    # Check card structure in WorkspaceTabs
+    card_info = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({
+            seq: c.seq_num,
+            sent_idx: c.sentence_idx,
+            words: (c.words || []).map(w => ({ lemma: w.lemma, trans: w.translation, t_ord: w.token_order, row_id: w.row_id, all_row_ids: w.all_row_ids }))
+        }));
+    }""")
+    assert len(card_info) >= 3
+    
+    # Find sequence number for Sentence 2 (sent_idx == 2)
+    s2_seq = next(c["seq"] for c in card_info if c["sent_idx"] == 2)
+    
+    # Switch to Sentence Tab 2
+    page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({s2_seq}); }}")
+    page.wait_for_timeout(50)
+    
+    # Apply progressive update via receiveUpdate targeting Sentence 2's token (token_order = 5, lemma = "gehen")
+    # While active tab is Sentence 2
+    page.evaluate("""() => {
+        window.receiveUpdate({
+            ok: true,
+            status: 'success',
+            rows: {
+                "5": {
+                    token_order: 5,
+                    lemma: "gehen",
+                    trans: "шагает (s2 новый)"
+                }
+            }
+        });
+    }""")
+    page.wait_for_timeout(50)
+    
+    # Read updated cards from WorkspaceTabs
+    updated_cards = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({
+            seq: c.seq_num,
+            sent_idx: c.sentence_idx,
+            words: (c.words || []).map(w => ({ lemma: w.lemma, trans: w.translation, t_ord: w.token_order }))
+        }));
+    }""")
+    
+    overview_card = next(c for c in updated_cards if c["sent_idx"] == 0)
+    sent1_card = next(c for c in updated_cards if c["sent_idx"] == 1)
+    sent2_card = next(c for c in updated_cards if c["sent_idx"] == 2)
+    
+    # 1. Active sentence card (Sentence 2) must be updated
+    assert any("шагает (s2 новый)" in w["trans"] for w in sent2_card["words"])
+    
+    # 2. Master Overview card (Sentence 0) must be updated in sync
+    assert any("шагает (s2 новый)" in w["trans"] for w in overview_card["words"])
+    
+    # 3. Sibling sentence card (Sentence 1) must NOT be mutated!
+    assert all("шагает (s2 новый)" not in w["trans"] for w in sent1_card["words"])
+    assert any("идти (s1)" in w["trans"] for w in sent1_card["words"])
+
+
+def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    raw_text = "Er geht nach Hause. Sie geht zum Park."
+    
+    tsv_content = (
+        "TokenOrder\tQuotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\n"
+        "1\tgeht\tgehen\tv.\tидти\t1\n"
+        "5\tgeht\tgehen\tv.\tидти\t2\n"
+    )
+    tsv_file = tmp_path / "20261012050505-test.de.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+    
+    html_out = kardenwort_desk.run_render_flow(
+        text=raw_text,
+        language="de",
+        zid="20261012050505",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=True,
+        return_children=False,
+    )
+    
+    page.set_content(html_out)
+    page.wait_for_timeout(150)
+    
+    # Simulate fetch /session/retext response inside onRetextClick
+    page.evaluate("""() => {
+        window.fetch = function(url, options) {
+            return Promise.resolve({
+                ok: true,
+                status: 200,
+                json: function() {
+                    return Promise.resolve({
+                        status: 'success',
+                        data: {
+                            translatedText: '<div>Он идет домой (обновлено).</div><div>Она идет в парк (обновлено).</div>',
+                            translated_text: '<div>Он идет домой (обновлено).</div><div>Она идет в парк (обновлено).</div>'
+                        }
+                    });
+                }
+            });
+        };
+        window.onRetextClick();
+    }""")
+    page.wait_for_timeout(100)
+    
+    # Verify WorkspaceTabs cards updated
+    cards_translated = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({ sent_idx: c.sentence_idx, trans: c.translated_text }));
+    }""")
+    
+    overview = next(c for c in cards_translated if c["sent_idx"] == 0)
+    assert "Он идет домой (обновлено)" in overview["trans"]
+    
+    # Switch tabs back and forth to ensure translation is preserved and does not revert
+    page.evaluate("() => { if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab(2); }")
+    page.wait_for_timeout(50)
+    page.evaluate("() => { if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab(1); }")
+    page.wait_for_timeout(50)
+    
+    tc_text = page.locator("#translation-container").inner_text()
+    assert "Он идет домой (обновлено)" in tc_text
