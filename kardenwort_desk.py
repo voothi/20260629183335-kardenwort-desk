@@ -17714,6 +17714,33 @@ window.__CONFIG__ = {ui_config_json};
                     if (Array.isArray(items) && items.length > 0) {
                         if (!window.AppState) window.AppState = {};
                         window.AppState.activeTokenSelections = items;
+                        if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
+                        for (var i = 0; i < items.length; i++) {
+                            var it = items[i];
+                            if (it.lemma) {
+                                var normLem = String(it.lemma).trim().toLowerCase();
+                                if (normLem) {
+                                    window.AppState.selectedLemmas[normLem] = true;
+                                }
+                            }
+                            if (it.atomic_id !== null && it.atomic_id !== undefined) {
+                                selectedRowIdsMap[String(it.atomic_id)] = true;
+                            }
+                            if (it.atomic_row_ids && Array.isArray(it.atomic_row_ids)) {
+                                for (var r = 0; r < it.atomic_row_ids.length; r++) {
+                                    if (it.atomic_row_ids[r] !== null && it.atomic_row_ids[r] !== undefined) {
+                                        selectedRowIdsMap[String(it.atomic_row_ids[r])] = true;
+                                    }
+                                }
+                            }
+                            if (it.row_ids && Array.isArray(it.row_ids)) {
+                                for (var r = 0; r < it.row_ids.length; r++) {
+                                    if (it.row_ids[r] !== null && it.row_ids[r] !== undefined) {
+                                        selectedRowIdsMap[String(it.row_ids[r])] = true;
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             } catch(e) {}
@@ -19102,8 +19129,13 @@ window.__CONFIG__ = {ui_config_json};
                 if (rLem) setLemmaSelected(rLem, true);
             } else {
                 var rLem = getRowLemma(r);
-                if (rLem && window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[rLem]) {
-                    selectedRowIdsMap[rIdStr] = true;
+                var isRowOrLemSelected = (rLem && window.AppState && window.AppState.selectedLemmas && window.AppState.selectedLemmas[rLem]) || selectedRowIdsMap.hasOwnProperty(rIdStr);
+                if (isRowOrLemSelected) {
+                    var pIds = getRowGroupIds(r);
+                    for (var p = 0; p < pIds.length; p++) {
+                        selectedRowIdsMap[pIds[p]] = true;
+                    }
+                    if (rLem) setLemmaSelected(rLem, true);
                 }
             }
             if (!r.__kw_wired) {
@@ -20043,9 +20075,34 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
 
+                var isTokenRowSelected = false;
+                if (isOrphanSelected || tokRowIds.length === 0) {
+                    isTokenRowSelected = true;
+                } else {
+                    for (var tri = 0; tri < tokRowIds.length; tri++) {
+                        var trid = tokRowIds[tri];
+                        if (selectedRowIdsMap.hasOwnProperty(String(trid)) || activeTargetRowIds.hasOwnProperty(parseInt(trid, 10))) {
+                            isTokenRowSelected = true;
+                            break;
+                        }
+                        if (typeof getLemmaByRowId === 'function') {
+                            var rLem = getLemmaByRowId(trid);
+                            if (rLem && selLemmas && selLemmas[String(rLem).trim().toLowerCase()]) {
+                                isTokenRowSelected = true;
+                                break;
+                            }
+                        }
+                    }
+                    if (!isTokenRowSelected && tokLem && selLemmas && selLemmas[tokLem]) {
+                        isTokenRowSelected = true;
+                    }
+                }
+
                 if (hasActiveTokens && (isOrphanSelected || !!activeVisualIdxs[String(token.visual_idx)])) {
-                    hasMatchingRow = true;
-                    isTargetedActiveTokenMatch = true;
+                    if (isTokenRowSelected) {
+                        hasMatchingRow = true;
+                        isTargetedActiveTokenMatch = true;
+                    }
                 } else if (tokRowIds.length > 0) {
                     for (var r = 0; r < tokRowIds.length; r++) {
                         var rid = tokRowIds[r];
@@ -20118,8 +20175,10 @@ window.__CONFIG__ = {ui_config_json};
                                 }
 
                                 if (isSameOccurrence) {
-                                    hasMatchingRow = true;
-                                    isTargetedActiveTokenMatch = true;
+                                    if (isTokenRowSelected) {
+                                        hasMatchingRow = true;
+                                        isTargetedActiveTokenMatch = true;
+                                    }
                                     break;
                                 } else {
                                     hasMatchingRow = true;
@@ -20162,13 +20221,15 @@ window.__CONFIG__ = {ui_config_json};
                     if (span) {
                         try {
                             if (isDirectRowMatch || isTargetedActiveTokenMatch) {
-                                if (span.classList.contains('highlight-purple')) {
-                                    span.classList.add('highlight-purple-active');
-                                } else if (span.classList.contains('highlight-orange')) {
-                                    span.classList.add('highlight-orange-active');
-                                }
-                                if (isOrphanSelected) {
-                                    span.classList.add('active-subtoken');
+                                if (isTokenRowSelected) {
+                                    if (span.classList.contains('highlight-purple')) {
+                                        span.classList.add('highlight-purple-active');
+                                    } else if (span.classList.contains('highlight-orange')) {
+                                        span.classList.add('highlight-orange-active');
+                                    }
+                                    if (isOrphanSelected) {
+                                        span.classList.add('active-subtoken');
+                                    }
                                 }
                             } else if (isLegacyOverview) {
                                 if (span.classList.contains('highlight-purple')) {
