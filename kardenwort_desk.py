@@ -2828,7 +2828,8 @@ def format_inflected_sentence_tooltip(
 def format_lemma_article_tooltip(
     lemma: Optional[str],
     gender: Optional[str] = None,
-    lang: str = "de"
+    lang: str = "de",
+    pos: Optional[str] = None
 ) -> str:
     if not lemma:
         return ""
@@ -2838,16 +2839,47 @@ def format_lemma_article_tooltip(
     cur_lang = (lang or "de").strip().lower()
     if cur_lang == "de":
         lower_lemma = clean_lemma.lower()
-        if lower_lemma.startswith(("der ", "die ", "das ")):
+        german_articles = (
+            "der", "die", "das",
+            "ein", "eine", "einer", "eines", "einem", "einen",
+            "des", "dem", "den",
+            "kein", "keine", "keiner", "keines", "keinem", "keinen"
+        )
+        if lower_lemma in german_articles or lower_lemma.startswith(tuple(a + " " for a in german_articles)):
             return clean_lemma
-        g = (str(gender) if gender is not None else "").strip().lower()
-        if g in ("m", "masc", "masculine"):
+
+        if pos:
+            pos_parts = [p.strip().rstrip('.').lower() for p in str(pos).split(',') if p.strip()]
+            noun_tags = {"n", "noun", "propn", "subst"}
+            non_noun_tags = {
+                "art", "det", "pron", "v", "verb", "aux",
+                "adv", "prep", "adp", "conj", "cconj", "sconj",
+                "intj", "num", "part", "adj"
+            }
+            has_noun = any(p in noun_tags for p in pos_parts)
+            has_non_noun = any(p in non_noun_tags for p in pos_parts)
+            if has_non_noun and not has_noun:
+                return clean_lemma
+        else:
+            if clean_lemma[0].islower():
+                return clean_lemma
+            german_pronouns = {
+                "er", "sie", "es", "wir", "ihr", "du", "ich",
+                "mich", "dich", "ihn", "ihm", "ihnen", "uns", "euch",
+                "mir", "dir", "sich", "mein", "dein", "sein", "unser", "euer"
+            }
+            if lower_lemma in german_pronouns:
+                return clean_lemma
+
+        g = (str(gender) if gender is not None else "").strip().rstrip('.').lower()
+        if g in ("m", "masc", "masculine", "der"):
             return f"der {clean_lemma}"
-        elif g in ("f", "fem", "feminine"):
+        elif g in ("f", "fem", "feminine", "die"):
             return f"die {clean_lemma}"
-        elif g in ("n", "neut", "neuter"):
+        elif g in ("n", "neut", "neuter", "das"):
             return f"das {clean_lemma}"
     return clean_lemma
+
 
 def format_pos_tooltip(pos_val: Optional[str]) -> str:
     if not pos_val:
@@ -11860,7 +11892,7 @@ html, body {{
         inflected_tooltip = format_inflected_sentence_tooltip(row_sentence, inflected_val, token_order=token_order_val, lemma=lemma_val)
         inflected_title_attr = f' title="{html.escape(inflected_tooltip)}"' if inflected_tooltip else ''
 
-        lemma_tooltip = format_lemma_article_tooltip(lemma_val, gender_raw, lang=language)
+        lemma_tooltip = format_lemma_article_tooltip(lemma_val, gender_raw, lang=language, pos=pos_raw)
         lemma_title_attr = f' title="{html.escape(lemma_tooltip)}"' if lemma_tooltip else ''
 
         ipa_title_attr = f' title="{html.escape(ipa_val)}"' if (ipa_val and "skeleton-loader" not in ipa_val) else ''
@@ -12368,7 +12400,7 @@ html, body {{
                 ov_inf_tooltip = format_inflected_sentence_tooltip(ov_sentence, ov_inflected, token_order=ov_token_order, lemma=ov_lemma)
             ov_inf_title = f' title="{html.escape(ov_inf_tooltip)}"' if ov_inf_tooltip else ''
 
-            ov_lemma_tooltip = format_lemma_article_tooltip(ov_lemma, ov_gender_raw, lang=language)
+            ov_lemma_tooltip = format_lemma_article_tooltip(ov_lemma, ov_gender_raw, lang=language, pos=ov_pos_raw)
             ov_lemma_title = f' title="{html.escape(ov_lemma_tooltip)}"' if ov_lemma_tooltip else ''
 
             ov_ipa_title = f' title="{html.escape(ov_ipa)}"' if (ov_ipa and "skeleton-loader" not in ov_ipa) else ''
@@ -14125,23 +14157,68 @@ window.__CONFIG__ = {ui_config_json};
         return boldSentence || boldHeader;
     }
 
-    function formatLemmaTooltip(lemma, gender, lang) {
+    function formatLemmaTooltip(lemma, gender, lang, pos) {
         if (!lemma) return "";
         var cleanLemma = String(lemma).trim();
         if (!cleanLemma) return "";
         var currentLang = (lang || (window.AppConfig ? window.AppConfig.language : 'de') || 'de').toLowerCase();
         if (currentLang === 'de') {
             var lowerLemma = cleanLemma.toLowerCase();
-            if (lowerLemma.indexOf('der ') === 0 || lowerLemma.indexOf('die ') === 0 || lowerLemma.indexOf('das ') === 0) {
-                return cleanLemma;
+            var germanArticles = [
+                "der", "die", "das",
+                "ein", "eine", "einer", "eines", "einem", "einen",
+                "des", "dem", "den",
+                "kein", "keine", "keiner", "keines", "keinem", "keinen"
+            ];
+            for (var i = 0; i < germanArticles.length; i++) {
+                var art = germanArticles[i];
+                if (lowerLemma === art || lowerLemma.indexOf(art + " ") === 0) {
+                    return cleanLemma;
+                }
             }
-            var g = (gender ? String(gender).trim().toLowerCase() : "");
-            if (g === 'm' || g === 'masc' || g === 'masculine') return 'der ' + cleanLemma;
-            if (g === 'f' || g === 'fem' || g === 'feminine') return 'die ' + cleanLemma;
-            if (g === 'n' || g === 'neut' || g === 'neuter') return 'das ' + cleanLemma;
+
+            if (pos) {
+                var posStr = String(pos).toLowerCase();
+                var posParts = posStr.split(',').map(function(p) {
+                    return p.trim().replace(/\.+$/, '');
+                }).filter(Boolean);
+                var nounTags = { "n": true, "noun": true, "propn": true, "subst": true };
+                var nonNounTags = {
+                    "art": true, "det": true, "pron": true, "v": true, "verb": true, "aux": true,
+                    "adv": true, "prep": true, "adp": true, "conj": true, "cconj": true, "sconj": true,
+                    "intj": true, "num": true, "part": true, "adj": true
+                };
+                var hasNoun = false;
+                var hasNonNoun = false;
+                for (var j = 0; j < posParts.length; j++) {
+                    if (nounTags[posParts[j]]) hasNoun = true;
+                    if (nonNounTags[posParts[j]]) hasNonNoun = true;
+                }
+                if (hasNonNoun && !hasNoun) {
+                    return cleanLemma;
+                }
+            } else {
+                if (/^[a-zäöüß]/.test(cleanLemma)) {
+                    return cleanLemma;
+                }
+                var germanPronouns = {
+                    "er": true, "sie": true, "es": true, "wir": true, "ihr": true, "du": true, "ich": true,
+                    "mich": true, "dich": true, "ihn": true, "ihm": true, "ihnen": true, "uns": true, "euch": true,
+                    "mir": true, "dir": true, "sich": true, "mein": true, "dein": true, "sein": true, "unser": true, "euer": true
+                };
+                if (germanPronouns[lowerLemma]) {
+                    return cleanLemma;
+                }
+            }
+
+            var g = (gender ? String(gender).trim().replace(/\.+$/, '').toLowerCase() : "");
+            if (g === 'm' || g === 'masc' || g === 'masculine' || g === 'der') return 'der ' + cleanLemma;
+            if (g === 'f' || g === 'fem' || g === 'feminine' || g === 'die') return 'die ' + cleanLemma;
+            if (g === 'n' || g === 'neut' || g === 'neuter' || g === 'das') return 'das ' + cleanLemma;
         }
         return cleanLemma;
     }
+
 
     var POS_FULL_NAME_MAP_JS = {
         "n.": "Noun", "noun": "Noun", "NOUN": "Noun", "PROPN": "Noun",
@@ -16019,7 +16096,9 @@ window.__CONFIG__ = {ui_config_json};
                         }
                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                         var rawG = rowData.gender !== undefined ? rowData.gender : (rowData.WordSourceGender || "");
-                        var lemTip = formatLemmaTooltip(val, rawG, activeLang);
+                        var curPosCell = tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]');
+                        var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : ""));
+                        var lemTip = formatLemmaTooltip(val, rawG, activeLang, rawPos);
                         if (lemTip) {
                             tds[1].setAttribute('title', lemTip);
                         }
@@ -22516,7 +22595,7 @@ window.__CONFIG__ = {ui_config_json};
                         var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
                         var cardSentenceText = (w.sentence_text || (window.AppState ? window.AppState.sourceText : '') || '');
                         var infTooltip = w.inflected_tooltip || (appRow && appRow.inflected_tooltip) || formatInflectedTooltip(cardSentenceText, w.inflected || '', w.token_order || rIdStr, w.lemma || '');
-                        var lemTooltip = formatLemmaTooltip(w.lemma || '', w.gender || '', activeLang);
+                        var lemTooltip = formatLemmaTooltip(w.lemma || '', w.gender || '', activeLang, w.pos || '');
                         var ipaTooltip = (w.ipa && w.ipa.indexOf('skeleton-loader') === -1) ? w.ipa : '';
                         var morphTooltip = (w.morphology && w.morphology.indexOf('skeleton-loader') === -1) ? w.morphology : '';
                         var posTooltip = formatPosTooltip(w.pos || '');
@@ -24271,7 +24350,9 @@ def render_section(token, ctx):
                 elif t == "lemma":
                     gender_idx = col_indices.get('gender', col_indices.get('g', -1))
                     g_val = row[gender_idx] if gender_idx != -1 and len(row) > gender_idx else ""
-                    lem_tooltip = format_lemma_article_tooltip(val, g_val, lang=ctx.get('language', 'de'))
+                    pos_idx = col_indices.get('pos', -1)
+                    pos_val_for_lem = row[pos_idx] if pos_idx != -1 and len(row) > pos_idx else ""
+                    lem_tooltip = format_lemma_article_tooltip(val, g_val, lang=ctx.get('language', 'de'), pos=pos_val_for_lem)
                     lem_title_attr = f' title="{html.escape(lem_tooltip)}"' if lem_tooltip else ''
                     html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
                 elif t == "translation":
