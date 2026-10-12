@@ -1008,6 +1008,28 @@ def test_multisentence_container_tabs_progressive_lemma_sync(page, tmp_path):
     assert td_complete.locator(".skeleton-loader").count() == 0
 
 
+def test_rendered_html_scrollbar_gutter_stable(tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    tsv_file = tmp_path / "20261012100000-gutter.de.tsv"
+    tsv_file.write_text(
+        "# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\nHaus\tHaus\tдом\n",
+        encoding="utf-8",
+    )
+    html = kardenwort_desk.run_render_flow(
+        text="Haus",
+        language="de",
+        zid="20261012100000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+    assert "scrollbar-gutter: stable" in html
+    assert "@supports not (scrollbar-gutter: stable)" in html
+
+
+
+
 
 
 

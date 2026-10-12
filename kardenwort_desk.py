@@ -12619,6 +12619,14 @@ html, body {{
     -moz-box-sizing: border-box;
     box-sizing: border-box;
   }
+  html {
+    scrollbar-gutter: stable;
+  }
+  @supports not (scrollbar-gutter: stable) {
+    html {
+      overflow-y: scroll;
+    }
+  }
   /* For standard Webkit/Blink browsers */
   ::-webkit-scrollbar {
     width: 8px;
