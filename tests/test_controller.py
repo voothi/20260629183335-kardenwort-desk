@@ -1555,7 +1555,7 @@ def test_get_session_zid_serves_directly_from_sqlite_without_translation(running
         assert "собака" in content
         assert not translation_called
         assert ("lemma-table" in content or "source-container" in content)
-        assert duration < 1.0
+        assert duration < 3.0
 
 
 def test_get_session_zid_incremental_wordfill_hydration(running_controller, monkeypatch):

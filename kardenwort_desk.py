@@ -16068,11 +16068,12 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
-                var infCell = tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]') || (tds.length > 0 ? tds[0] : null);
-                var lemCell = tr.querySelector('td.col-lemma, td[data-col="WordSource"]') || (tds.length > 1 ? tds[1] : null);
+                var infCell = tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]') || (tds.length >= 5 ? tds[0] : null);
+                var lemCell = tr.querySelector('td.col-lemma, td[data-col="WordSource"]') || (tds.length >= 5 ? tds[1] : (tds.length > 0 ? tds[0] : null));
+                var transTd = tr.querySelector('td.col-translation, td[data-col="WordDestination"]') || (tds.length >= 3 ? tds[2] : (tds.length > 1 ? tds[1] : null));
                 var ipaCell = tr.querySelector('td.col-ipa, td[data-col="WordSourceIpaAI"], td[data-col="WordSourceIpa"]') || (tds.length > 3 ? tds[3] : null);
                 var morphCell = tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"], td[data-col="WordSourceMorphology"]') || (tds.length > 4 ? tds[4] : null);
-                if (tds.length >= 5 || (infCell && lemCell)) {
+                if (tds.length >= 1) {
                     if (infCell && !infCell.classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
                         var div = infCell.querySelector('.scrollable-cell');
                         var val = rowData.inflected || "";
@@ -16151,7 +16152,6 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                     }
-                    var transTd = tr.querySelector('td[data-col="WordDestination"]') || (tds.length >= 3 ? tds[2] : null);
                     function applyCellProvenance(effectiveVal) {
                         if (!transTd) return;
                         var existingProv = transTd.getAttribute('data-provenance') || (transTd.querySelector('.scrollable-cell') ? transTd.querySelector('.scrollable-cell').getAttribute('data-provenance') : null);
@@ -16185,15 +16185,15 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                     }
-                    if (!tds[2].classList.contains('dirty') && hasTransProp) {
-                        var div = tds[2].querySelector('.scrollable-cell') || tds[2];
+                    if (transTd && !transTd.classList.contains('dirty') && hasTransProp) {
+                        var div = transTd.querySelector('.scrollable-cell') || transTd;
                         var val = (rowData.trans !== undefined && rowData.trans !== "") ? rowData.trans : ((rowData.WordDestination !== undefined && rowData.WordDestination !== "") ? rowData.WordDestination : ((rowData.word_translation !== undefined) ? rowData.word_translation : (rowData.trans || "")));
                         var allRowIdsAttr = tr.getAttribute('data-all-row-ids');
                         if (allRowIdsAttr) {
                             var midParts = allRowIdsAttr.split(',').map(function(s) { return s.trim(); }).filter(Boolean);
                             if (midParts.length > 1) {
                                 var rolledTrans = [];
-                                var parentLem = (rowData.lemma || (tds[1] ? (tds[1].textContent || tds[1].innerText) : '') || '').trim().toLowerCase();
+                                var parentLem = (rowData.lemma || (lemCell ? (lemCell.textContent || lemCell.innerText) : '') || '').trim().toLowerCase();
                                 for (var mp = 0; mp < midParts.length; mp++) {
                                     var mRow = window.AppState.rows[midParts[mp]];
                                     if (mRow) {
@@ -16217,31 +16217,31 @@ window.__CONFIG__ = {ui_config_json};
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (val !== "" || globalStage === 'translated' || globalStage === 'translated_words' || globalStage === 'translated_lemmas' || isTerm) {
-                            var oldVal = tds[2].classList.contains('editing') ? null : (div.textContent || div.innerText);
+                            var oldVal = transTd.classList.contains('editing') ? null : (div.textContent || div.innerText);
                             var targetVal = val;
                             if (isTerm && targetVal === "" && window.AppState.lastError && oldVal && oldVal.indexOf('skeleton-loader') === -1) {
                                 targetVal = oldVal;
                             }
                             if (targetVal === "" && isTerm) {
-                                if (!tds[2].classList.contains('editing')) div.innerHTML = "";
+                                if (!transTd.classList.contains('editing')) div.innerHTML = "";
                             } else {
-                                if (!tds[2].classList.contains('editing')) setCellText(div, targetVal);
+                                if (!transTd.classList.contains('editing')) setCellText(div, targetVal);
                                 applyCellProvenance(targetVal);
                             }
                             updated = true;
                         } else {
-                            var oldVal = tds[2].classList.contains('editing') ? null : (div.textContent || div.innerText);
+                            var oldVal = transTd.classList.contains('editing') ? null : (div.textContent || div.innerText);
                             var shouldUpdate = (oldVal !== val) || hasSkeleton;
                             if (shouldUpdate) {
                                 if (val === "" && isTerm) {
-                                    if (!tds[2].classList.contains('editing')) div.innerHTML = "";
+                                    if (!transTd.classList.contains('editing')) div.innerHTML = "";
                                     updated = true;
                                 } else if (val !== "") {
-                                    if (!tds[2].classList.contains('editing')) setCellText(div, val);
+                                    if (!transTd.classList.contains('editing')) setCellText(div, val);
                                     applyCellProvenance(val);
                                     updated = true;
                                 }
-                            } else if (val !== "" && !tds[2].classList.contains('editing')) {
+                            } else if (val !== "" && !transTd.classList.contains('editing')) {
                                 applyCellProvenance(val);
                             }
                         }
@@ -16260,8 +16260,8 @@ window.__CONFIG__ = {ui_config_json};
                                 }
                             }
                         }
-                    } else if (!tds[2].classList.contains('dirty') && !tds[2].classList.contains('editing')) {
-                        var div = tds[2].querySelector('.scrollable-cell') || tds[2];
+                    } else if (transTd && !transTd.classList.contains('dirty') && !transTd.classList.contains('editing')) {
+                        var div = transTd.querySelector('.scrollable-cell') || transTd;
                         var curText = (div.textContent || div.innerText || '').trim();
                         if (curText && curText !== '...' && curText !== 'Loading...' && !div.querySelector('.skeleton-loader')) {
                             applyCellProvenance(curText);
