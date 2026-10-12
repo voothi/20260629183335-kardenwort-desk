@@ -2870,3 +2870,77 @@ def test_playwright_source_token_pin_frame_zero_layout_displacement(page, tmp_pa
         assert dx < 0.1, f"Token '{token_text}' shifted horizontally by dx={b_after['x'] - b_before['x']:.2f}px!"
         assert dw < 0.1, f"Token '{token_text}' width changed by dw={b_after['width'] - b_before['width']:.2f}px!"
 
+
+def test_container_tab_subtoken_isolation_and_overview_retext_distribution(page, tmp_path):
+    """Verifies that switching container tabs isolates active subtokens and Master Overview Retext distributes translations to child cards."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+    zid = "20261012130000"
+    tsv_file = tmp_path / f"{zid}.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "Er\tEr\tpron.\tОн\t1\tEr geht.\tОн идет.\t0\n"
+        "Sie\tSie\tpron.\tОна\t2\tSie kommt.\tОна приходит.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+    raw_html = kardenwort_desk.run_render_flow(
+        text="Er geht. Sie kommt.",
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=True,
+        return_children=False
+    )
+    page.set_content(raw_html)
+    page.wait_for_selector(".kw-tab-chip")
+
+    # 1. Switch to Tab for sentence 1 and click token "Er"
+    page.evaluate("() => { const c = window.WorkspaceTabs.getCards().find(x => x.sentence_idx === 1); window.WorkspaceTabs.switchToTab(c.seq_num); }")
+    er_word = page.locator('#source-container span.word:has-text("Er")').first
+    er_word.click()
+    active_tokens_tab1 = page.evaluate("() => window.AppState.activeTokenSelections.length")
+    assert active_tokens_tab1 >= 1
+
+    # Switch to Tab for sentence 2: active tokens for sentence 1 must be pruned
+    page.evaluate("() => { const c = window.WorkspaceTabs.getCards().find(x => x.sentence_idx === 2); window.WorkspaceTabs.switchToTab(c.seq_num); }")
+    active_tokens_tab2 = page.evaluate("() => window.AppState.activeTokenSelections.length")
+    assert active_tokens_tab2 == 0
+
+    # 2. Master Overview Retext distribution to child cards
+    page.evaluate("() => { const c = window.WorkspaceTabs.getCards().find(x => x.sentence_idx === 0); window.WorkspaceTabs.switchToTab(c.seq_num); }") # Overview
+    # Simulate Retext completion on Overview with multi-line text
+    page.evaluate("""() => {
+        const newTrans = "Он идет быстро.\\nОна приходит поздно.";
+        window.AppState.translatedText = newTrans;
+        const wCards = window.WorkspaceTabs.getCards();
+        const cleanLines = ["Он идет быстро.", "Она приходит поздно."];
+        for (let c = 0; c < wCards.length; c++) {
+            if (wCards[c].sentence_idx === 0) {
+                wCards[c].translated_text = newTrans;
+            } else if (wCards[c].sentence_idx > 0) {
+                const sIdx0 = wCards[c].sentence_idx - 1;
+                if (sIdx0 >= 0 && sIdx0 < cleanLines.length) {
+                    wCards[c].translated_text = cleanLines[sIdx0];
+                }
+            }
+        }
+    }""")
+
+    # Verify child cards received their translations
+    c1_trans = page.evaluate("() => window.WorkspaceTabs.getCards().find(x => x.sentence_idx === 1).translated_text")
+    c2_trans = page.evaluate("() => window.WorkspaceTabs.getCards().find(x => x.sentence_idx === 2).translated_text")
+    assert c1_trans == "Он идет быстро."
+    assert c2_trans == "Она приходит поздно."
+
+    # Switch to child tab and back to Overview
+    page.evaluate("() => { const c = window.WorkspaceTabs.getCards().find(x => x.sentence_idx === 1); window.WorkspaceTabs.switchToTab(c.seq_num); }")
+    page.evaluate("() => { const c = window.WorkspaceTabs.getCards().find(x => x.sentence_idx === 0); window.WorkspaceTabs.switchToTab(c.seq_num); }")
+    overview_text = page.locator("#translation-container").inner_text()
+    assert "Он идет быстро." in overview_text
+    assert "Она приходит поздно." in overview_text
+

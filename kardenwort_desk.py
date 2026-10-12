@@ -17753,6 +17753,26 @@ window.__CONFIG__ = {ui_config_json};
             saveActiveTokensToStorage();
         }
 
+        function pruneActiveTokensByRowOrLemma(rowId, lemma) {
+            if (!window.AppState || !window.AppState.activeTokenSelections || window.AppState.activeTokenSelections.length === 0) return;
+            var rStr = (rowId !== undefined && rowId !== null) ? String(rowId) : null;
+            var lStr = (lemma !== undefined && lemma !== null) ? String(lemma).trim().toLowerCase() : null;
+            window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
+                if (lStr && item.lemma && String(item.lemma).trim().toLowerCase() === lStr) return false;
+                if (rStr) {
+                    if (item.atomic_id !== undefined && String(item.atomic_id) === rStr) return false;
+                    if (item.row_id !== undefined && String(item.row_id) === rStr) return false;
+                    if (item.row_ids && item.row_ids.some(function(id) { return String(id) === rStr; })) return false;
+                    if (item.atomic_row_ids && item.atomic_row_ids.some(function(id) { return String(id) === rStr; })) return false;
+                }
+                return true;
+            });
+            if (typeof saveActiveTokensToStorage === 'function') {
+                saveActiveTokensToStorage();
+            }
+        }
+        window.pruneActiveTokensByRowOrLemma = pruneActiveTokensByRowOrLemma;
+
         function addTokenToActiveSelections(span) {
             if (!window.AppState) window.AppState = {};
             if (!window.AppState.activeTokenSelections) window.AppState.activeTokenSelections = [];
@@ -17770,7 +17790,25 @@ window.__CONFIG__ = {ui_config_json};
                     }
                 }
                 if (!exists) {
-                    var sIdx = (td && td.sentence_idx !== undefined) ? td.sentence_idx : parseInt(s.getAttribute('data-sentence-idx'), 10);
+                    var sIdx = (td && td.sentence_idx !== undefined && !isNaN(td.sentence_idx)) ? td.sentence_idx : null;
+                    if (sIdx === null) {
+                        var chunkEl = (s.closest && s.closest('.kw-sentence-chunk, [data-sentence-idx]')) || s.parentElement;
+                        if (chunkEl && chunkEl.getAttribute) {
+                            var cSent = parseInt(chunkEl.getAttribute('data-sentence-idx'), 10);
+                            if (!isNaN(cSent)) sIdx = cSent;
+                        }
+                    }
+                    if (sIdx === null) {
+                        var sAttr = s.getAttribute('data-sentence-idx');
+                        if (sAttr) {
+                            var sNum = parseInt(sAttr, 10);
+                            if (!isNaN(sNum)) sIdx = sNum;
+                        }
+                    }
+                    if (sIdx === null && window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+                        var ac = window.WorkspaceTabs.getActiveCard();
+                        if (ac && ac.sentence_idx !== undefined && !isNaN(ac.sentence_idx)) sIdx = ac.sentence_idx;
+                    }
                     var tOrder = (td && td.token_order !== undefined) ? td.token_order : (s.getAttribute('data-token-order') || '');
                     var aId = (td && td.atomic_id !== undefined) ? td.atomic_id : ((td && td.atomic_row_ids && td.atomic_row_ids.length > 0) ? td.atomic_row_ids[0] : ((td && td.row_ids && td.row_ids.length > 0) ? td.row_ids[0] : null));
                     var lem = (td && td.lemma) ? td.lemma : (getWordLemma(s) || '');
@@ -18153,11 +18191,12 @@ window.__CONFIG__ = {ui_config_json};
                 return parts.length === 1 ? parts[0] : rawInflection.trim();
             }
             var cleanToken = (tokenText || "").trim().toLowerCase();
-            var filtered = parts.filter(function(p) {
-                return p.trim().toLowerCase() !== cleanToken;
-            });
-            if (filtered.length > 0) {
-                return filtered[0];
+            if (cleanToken) {
+                for (var i = 0; i < parts.length; i++) {
+                    if (parts[i].trim().toLowerCase() === cleanToken) {
+                        return parts[i];
+                    }
+                }
             }
             return parts[0];
         }
@@ -18848,6 +18887,9 @@ window.__CONFIG__ = {ui_config_json};
             }
             if (e.button === 0) {
                 if (window.AppState) window.AppState.activeTokenSelections = [];
+                if (typeof saveActiveTokensToStorage === 'function') {
+                    saveActiveTokensToStorage();
+                }
             }
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
@@ -18931,6 +18973,12 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     var rowLem = getRowLemma(row);
                     if (rowLem) setLemmaSelected(rowLem, dragSelectMode);
+                    if (!dragSelectMode) {
+                        pruneActiveTokensByRowOrLemma(rowIdStr, rowLem);
+                        for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
+                            pruneActiveTokensByRowOrLemma(constituentIds[cIdx], rowLem);
+                        }
+                    }
                     syncSelectionsToCardsAndState();
                 } else {
                     dragStartVisualIdx = rowVisualIdx;
@@ -18958,6 +19006,12 @@ window.__CONFIG__ = {ui_config_json};
                     }
                     var rowLem = getRowLemma(row);
                     if (rowLem) setLemmaSelected(rowLem, dragSelectMode);
+                    if (!dragSelectMode) {
+                        pruneActiveTokensByRowOrLemma(rowIdStr, rowLem);
+                        for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
+                            pruneActiveTokensByRowOrLemma(constituentIds[cIdx], rowLem);
+                        }
+                    }
                     syncSelectionsToCardsAndState();
                 }
                 
@@ -19374,15 +19428,7 @@ window.__CONFIG__ = {ui_config_json};
             var activeEl = document.activeElement;
             if (activeEl && (activeEl.tagName === 'INPUT' || activeEl.tagName === 'TEXTAREA')) return;
 
-            if (e.ctrlKey && keyCode === 90) { // Ctrl+Z
-                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                if (window.undo) window.undo();
-                return;
-            } else if (e.ctrlKey && keyCode === 89) { // Ctrl+Y
-                if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
-                if (window.redo) window.redo();
-                return;
-            } else if (e.ctrlKey && keyCode === 65) { // Ctrl+A
+            if (e.ctrlKey && keyCode === 65) { // Ctrl+A
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (typeof tableRows !== 'undefined' && tableRows.length > 0) {
                     for (var i = 0; i < tableRows.length; i++) {
@@ -19483,7 +19529,7 @@ window.__CONFIG__ = {ui_config_json};
             } else if (keyCode === 32) { // Space
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (focusedRowId !== null) {
-                    var fRow = (focusedRowId >= 0 && focusedRowId < tableRows.length) ? tableRows[focusedRowId] : null;
+                    var fRow = (typeof findTableRowById === 'function') ? findTableRowById(focusedRowId) : ((focusedRowId >= 0 && focusedRowId < tableRows.length) ? tableRows[focusedRowId] : null);
                     var fRowId = fRow ? fRow.getAttribute('data-row-id') : String(focusedRowId);
                     var cIds = (!window.WorkspaceTabs || !window.WorkspaceTabs.getCards) ? getRowGroupIds(fRow) : [fRowId];
                     var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(fRowId);
@@ -19494,6 +19540,12 @@ window.__CONFIG__ = {ui_config_json};
                             selectedRowIdsMap[cIds[c]] = true;
                         }
                     }
+                    var fLem = fRow ? getRowLemma(fRow) : '';
+                    if (fLem) setLemmaSelected(fLem, !isCurrentlySelected);
+                    if (isCurrentlySelected) {
+                        pruneActiveTokensByRowOrLemma(fRowId, fLem);
+                    }
+                    syncSelectionsToCardsAndState();
                     lastClickedRowId = isCurrentlySelected ? null : parseInt(fRowId, 10);
                     updateRowStyles();
                     updateBidirectionalHighlights();
@@ -19550,6 +19602,9 @@ window.__CONFIG__ = {ui_config_json};
             if (window.AppState) {
                 window.AppState.selectedLemmas = {};
                 window.AppState.activeTokenSelections = [];
+            }
+            if (typeof saveActiveTokensToStorage === 'function') {
+                saveActiveTokensToStorage();
             }
             if (window.clearMVPBookmarks) window.clearMVPBookmarks();
             syncSelectionsToCardsAndState();
@@ -21543,10 +21598,31 @@ window.__CONFIG__ = {ui_config_json};
                             var actSent = (actCard && actCard.sentence_idx !== undefined && actCard.sentence_idx !== null)
                                 ? actCard.sentence_idx
                                 : 0;
+                            var lines = [];
+                            if (tText.indexOf('<div') !== -1 || tText.indexOf('</div') !== -1) {
+                                var tmpDiv = document.createElement('div');
+                                tmpDiv.innerHTML = tText;
+                                var childDivs = tmpDiv.querySelectorAll('div');
+                                if (childDivs.length > 0) {
+                                    for (var cd = 0; cd < childDivs.length; cd++) {
+                                        lines.push((childDivs[cd].textContent || childDivs[cd].innerText || '').trim());
+                                    }
+                                }
+                            }
+                            if (lines.length === 0) {
+                                lines = tText.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
+                            }
+                            var cleanLines = lines.map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
+
                             for (var c = 0; c < wCards.length; c++) {
                                 if (actSent === 0) {
                                     if (wCards[c].sentence_idx === 0) {
                                         wCards[c].translated_text = tText;
+                                    } else if (wCards[c].sentence_idx > 0) {
+                                        var sIdx0 = wCards[c].sentence_idx - 1;
+                                        if (sIdx0 >= 0 && sIdx0 < cleanLines.length) {
+                                            wCards[c].translated_text = cleanLines[sIdx0];
+                                        }
                                     }
                                 } else {
                                     if (wCards[c].sentence_idx === actSent) {
@@ -21586,9 +21662,57 @@ window.__CONFIG__ = {ui_config_json};
             var tokenOrders = [];
             var targetCoordinates = [];
 
-            var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
+            var tableSelectedRows = [];
+            if (typeof tableRows !== 'undefined' && tableRows) {
+                for (var i = 0; i < tableRows.length; i++) {
+                    var tr = tableRows[i];
+                    var trId = String(tr.getAttribute('data-row-id'));
+                    var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
+                    if (isTrSel) {
+                        var grp = getRowGroupIds(tr);
+                        for (var p = 0; p < grp.length; p++) {
+                            var pInt = parseInt(grp[p], 10);
+                            if (!isNaN(pInt) && tableSelectedRows.indexOf(pInt) === -1) tableSelectedRows.push(pInt);
+                        }
+                    }
+                }
+            }
+            if (tableSelectedRows.length === 0) {
+                var selArr = (typeof getSelectedRowsArray === 'function') ? getSelectedRowsArray() : [];
+                for (var s = 0; s < selArr.length; s++) {
+                    var sInt = parseInt(selArr[s], 10);
+                    if (!isNaN(sInt) && tableSelectedRows.indexOf(sInt) === -1) tableSelectedRows.push(sInt);
+                }
+            }
 
+            var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
+            var activeTokenRows = [];
+            var activeHasMatchingSelection = false;
             if (hasActiveTokens) {
+                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                    var item = window.AppState.activeTokenSelections[a];
+                    var itemRowIds = (item.atomic_row_ids && item.atomic_row_ids.length > 0)
+                        ? item.atomic_row_ids
+                        : ((item.row_ids && item.row_ids.length > 0)
+                            ? item.row_ids
+                            : ((item.atomic_id !== undefined && item.atomic_id !== null) ? [item.atomic_id] : []));
+                    if (itemRowIds.length === 0 && item.visual_idx !== undefined && item.visual_idx !== null) {
+                        var td = findTokenDataByVisualIdx(item.visual_idx);
+                        itemRowIds = td ? (td.atomic_row_ids || td.row_ids || []) : [];
+                    }
+                    for (var rIdx = 0; rIdx < itemRowIds.length; rIdx++) {
+                        var rInt = parseInt(itemRowIds[rIdx], 10);
+                        if (!isNaN(rInt)) {
+                            if (activeTokenRows.indexOf(rInt) === -1) activeTokenRows.push(rInt);
+                            if (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(String(rInt))) {
+                                activeHasMatchingSelection = true;
+                            }
+                        }
+                    }
+                }
+            }
+
+            if (hasActiveTokens && activeTokenRows.length > 0 && activeHasMatchingSelection) {
                 // 1. Token-scoped (targeted) selection
                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                     var item = window.AppState.activeTokenSelections[a];
@@ -21601,34 +21725,20 @@ window.__CONFIG__ = {ui_config_json};
                             lemma: item.lemma
                         });
                     }
-                    if (item.atomic_id !== undefined && item.atomic_id !== null) {
-                        var aId = parseInt(item.atomic_id, 10);
-                        if (!isNaN(aId) && rows.indexOf(aId) === -1) {
-                            rows.push(aId);
-                        }
-                    } else if (item.visual_idx !== undefined && item.visual_idx !== null) {
-                        var td = findTokenDataByVisualIdx(item.visual_idx);
-                        var atomics = td ? (td.atomic_row_ids || td.row_ids || []) : [];
-                        for (var at = 0; at < atomics.length; at++) {
-                            var atId = parseInt(atomics[at], 10);
-                            if (!isNaN(atId) && rows.indexOf(atId) === -1) {
-                                rows.push(atId);
-                            }
-                        }
-                    }
                     if (item.token_order !== undefined && item.token_order !== null && String(item.token_order).trim() !== '') {
                         if (tokenOrders.indexOf(item.token_order) === -1) {
                             tokenOrders.push(item.token_order);
                         }
                     }
                 }
+                rows = activeTokenRows;
             } else {
                 // 2. Row-scoped selection (from #lemma-table directly): unroll data-all-row-ids
                 if (typeof tableRows !== 'undefined' && tableRows) {
                     for (var i = 0; i < tableRows.length; i++) {
                         var tr = tableRows[i];
                         var trId = String(tr.getAttribute('data-row-id'));
-                        var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
+                        var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
                         if (isTrSel) {
                             var grp = getRowGroupIds(tr);
                             for (var p = 0; p < grp.length; p++) {
@@ -21716,40 +21826,74 @@ window.__CONFIG__ = {ui_config_json};
             var rows = [];
             var tokenOrders = [];
 
-            var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
+            var tableSelectedRows = [];
+            if (typeof tableRows !== 'undefined' && tableRows) {
+                for (var i = 0; i < tableRows.length; i++) {
+                    var tr = tableRows[i];
+                    var trId = String(tr.getAttribute('data-row-id'));
+                    var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
+                    if (isTrSel) {
+                        var grp = getRowGroupIds(tr);
+                        for (var p = 0; p < grp.length; p++) {
+                            var pInt = parseInt(grp[p], 10);
+                            if (!isNaN(pInt) && tableSelectedRows.indexOf(pInt) === -1) tableSelectedRows.push(pInt);
+                        }
+                    }
+                }
+            }
+            if (tableSelectedRows.length === 0) {
+                var selArr = (typeof getSelectedRowsArray === 'function') ? getSelectedRowsArray() : [];
+                for (var s = 0; s < selArr.length; s++) {
+                    var sInt = parseInt(selArr[s], 10);
+                    if (!isNaN(sInt) && tableSelectedRows.indexOf(sInt) === -1) tableSelectedRows.push(sInt);
+                }
+            }
 
+            var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
+            var activeTokenRows = [];
+            var activeHasMatchingSelection = false;
             if (hasActiveTokens) {
-                // 1. Token-scoped (targeted) selection
                 for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                     var item = window.AppState.activeTokenSelections[a];
-                    if (item.atomic_id !== undefined && item.atomic_id !== null) {
-                        var aId = parseInt(item.atomic_id, 10);
-                        if (!isNaN(aId) && rows.indexOf(aId) === -1) {
-                            rows.push(aId);
-                        }
-                    } else if (item.visual_idx !== undefined && item.visual_idx !== null) {
+                    var itemRowIds = (item.atomic_row_ids && item.atomic_row_ids.length > 0)
+                        ? item.atomic_row_ids
+                        : ((item.row_ids && item.row_ids.length > 0)
+                            ? item.row_ids
+                            : ((item.atomic_id !== undefined && item.atomic_id !== null) ? [item.atomic_id] : []));
+                    if (itemRowIds.length === 0 && item.visual_idx !== undefined && item.visual_idx !== null) {
                         var td = findTokenDataByVisualIdx(item.visual_idx);
-                        var atomics = td ? (td.atomic_row_ids || td.row_ids || []) : [];
-                        for (var at = 0; at < atomics.length; at++) {
-                            var atId = parseInt(atomics[at], 10);
-                            if (!isNaN(atId) && rows.indexOf(atId) === -1) {
-                                rows.push(atId);
+                        itemRowIds = td ? (td.atomic_row_ids || td.row_ids || []) : [];
+                    }
+                    for (var rIdx = 0; rIdx < itemRowIds.length; rIdx++) {
+                        var rInt = parseInt(itemRowIds[rIdx], 10);
+                        if (!isNaN(rInt)) {
+                            if (activeTokenRows.indexOf(rInt) === -1) activeTokenRows.push(rInt);
+                            if (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(String(rInt))) {
+                                activeHasMatchingSelection = true;
                             }
                         }
                     }
+                }
+            }
+
+            if (hasActiveTokens && activeTokenRows.length > 0 && activeHasMatchingSelection) {
+                // 1. Token-scoped (targeted) selection
+                for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
+                    var item = window.AppState.activeTokenSelections[a];
                     if (item.token_order !== undefined && item.token_order !== null && String(item.token_order).trim() !== '') {
                         if (tokenOrders.indexOf(item.token_order) === -1) {
                             tokenOrders.push(item.token_order);
                         }
                     }
                 }
+                rows = activeTokenRows;
             } else {
                 // 2. Row-scoped selection (from #lemma-table directly): unroll data-all-row-ids
                 if (typeof tableRows !== 'undefined' && tableRows) {
                     for (var i = 0; i < tableRows.length; i++) {
                         var tr = tableRows[i];
                         var trId = String(tr.getAttribute('data-row-id'));
-                        var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || selectedRowIdsMap.hasOwnProperty(trId);
+                        var isTrSel = tr.classList.contains('selected') || tr.classList.contains('kw-row-selected') || tr.getAttribute('data-selected') === '1' || (typeof selectedRowIdsMap !== 'undefined' && selectedRowIdsMap.hasOwnProperty(trId));
                         if (isTrSel) {
                             var grp = getRowGroupIds(tr);
                             for (var p = 0; p < grp.length; p++) {
@@ -22565,6 +22709,24 @@ window.__CONFIG__ = {ui_config_json};
                 activeTabSeq = targetCard.seq_num;
                 activeSentenceIdx = targetCard.sentence_idx;
                 window._kwActiveTabSeq = activeTabSeq;
+
+                if (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0) {
+                    if (activeSentenceIdx > 0) {
+                        window.AppState.activeTokenSelections = window.AppState.activeTokenSelections.filter(function(item) {
+                            var sIdx = item.sentence_idx;
+                            if (sIdx === undefined || sIdx === null || isNaN(sIdx)) {
+                                if (typeof findTokenDataByVisualIdx === 'function') {
+                                    var td = findTokenDataByVisualIdx(item.visual_idx);
+                                    if (td && td.sentence_idx !== undefined) sIdx = td.sentence_idx;
+                                }
+                            }
+                            return sIdx !== undefined && sIdx !== null && !isNaN(sIdx) && String(sIdx) === String(activeSentenceIdx);
+                        });
+                    }
+                    if (typeof saveActiveTokensToStorage === 'function') {
+                        saveActiveTokensToStorage();
+                    }
+                }
 
                 var activeBtn = null;
                 var tabButtons = document.querySelectorAll('.kw-tab-chip');

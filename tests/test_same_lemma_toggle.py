@@ -912,6 +912,12 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path):
     # 3. Verify second 'der' retained active highlight across reload
     assert "highlight-orange-active" in (second_der_after.get_attribute("class") or "")
     assert "highlight-orange-active" not in (first_der_after.get_attribute("class") or "")
+    # Assert table row is restored as selected
+    der_row = page.locator('#lemma-table tbody tr').first
+    assert der_row.get_attribute("data-selected") == "1"
+    der_row_cls = der_row.get_attribute("class") or ""
+    assert "selected" in der_row_cls
+    assert "kw-row-selected" in der_row_cls
 
     # 4. Now click 'das' and reload again
     das_span = page.locator('#source-container span.word:has-text("das")').first
@@ -926,6 +932,75 @@ def test_active_subtoken_persists_across_page_reload(page, tmp_path):
     first_der_after2 = page.locator('#source-container span.word:has-text("der")').nth(0)
     assert "highlight-orange-active" in (das_span_after.get_attribute("class") or "")
     assert "highlight-orange-active" not in (first_der_after2.get_attribute("class") or "")
+
+
+def test_table_row_click_clears_storage_and_prevents_reload_resurrection(page, tmp_path):
+    """Verifies that clicking a table row clears sessionStorage and prevents resurrection of previously clicked tokens on reload."""
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    if not config.has_section("settings"):
+        config.add_section("settings")
+    config.set("settings", "unify_article_pronoun_lemmas", "true")
+    config.set("settings", "deduplicate_pos_aware", "true")
+    config.set("sentences_mode", "enabled", "true")
+    config.set("sentences_mode", "delivery_mode", "container")
+
+    zid = "20261003163543"
+    tsv_file = tmp_path / f"{zid}-row-click-clear.de.tsv"
+    tsv_content = (
+        "# comment\n"
+        "Quotation\tWordSource\tWordSourcePOS\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\n"
+        "der\tder\tart.\tтот\t1\tEr fängt heute mit der Arbeit an, der ihm versprochen wurde.\tОн начинает сегодня с работы, который ему обещали.\t0\n"
+        "Arbeit\tArbeit\tn.\tработа\t1\tEr fängt heute mit der Arbeit an, der ihm versprochen wurde.\tОн начинает сегодня с работы, который ему обещали.\t0\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    text = "Er fängt heute mit der Arbeit an, der ihm versprochen wurde."
+    raw_html = kardenwort_desk.run_render_flow(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        theme="dark",
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        seq_num=1,
+        wordfill_cfg={"enabled": False}
+    )
+    html = inject_mock_fetch(raw_html)
+
+    html_file = tmp_path / "page_row_clear.html"
+    html_file.write_text(html, encoding="utf-8")
+
+    page.goto(html_file.as_uri())
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    second_der = page.locator('#source-container span.word:has-text("der")').nth(1)
+    second_der.click()
+    assert "highlight-orange-active" in (second_der.get_attribute("class") or "")
+
+    # Verify sessionStorage has active tokens
+    storage_val = page.evaluate(f"() => sessionStorage.getItem('kw_active_tokens_{zid}')")
+    assert storage_val is not None
+
+    # Primary LMB click on table row for Arbeit (tr index 1)
+    arbeit_row = page.locator('#lemma-table tbody tr').nth(1)
+    arbeit_row.click()
+
+    # Verify sessionStorage was cleared
+    storage_after_row_click = page.evaluate(f"() => sessionStorage.getItem('kw_active_tokens_{zid}')")
+    assert storage_after_row_click is None
+
+    # Reload page (F5)
+    page.reload()
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    # Verify second der does NOT have active highlight restored
+    second_der_reloaded = page.locator('#source-container span.word:has-text("der")').nth(1)
+    assert "highlight-orange-active" not in (second_der_reloaded.get_attribute("class") or "")
 
 
 def test_table_row_click_highlights_all_der_occurrences(page, tmp_path):

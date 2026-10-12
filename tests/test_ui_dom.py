@@ -1028,8 +1028,54 @@ def test_rendered_html_scrollbar_gutter_stable(tmp_path):
     assert "@supports not (scrollbar-gutter: stable)" in html
 
 
+def test_single_undo_redo_keystroke_and_space_key_high_row_id(page, tmp_path):
+    """Verifies that Ctrl+Z / Ctrl+Y execute exactly once per keystroke, and Space key toggles rows with high database IDs."""
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    tsv_file = tmp_path / "20261012120000-high-id.de.tsv"
+    tsv_file.write_text(
+        "# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\tSentenceSourceIndex\tDeskSelected\n"
+        "Haus\tHaus\tдом\t1\t0\n",
+        encoding="utf-8",
+    )
+    raw_html = kardenwort_desk.run_render_flow(
+        text="Haus",
+        language="de",
+        zid="20261012120000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+    # Inject high ID (e.g. data-row-id="42")
+    raw_html = raw_html.replace('data-row-id="0"', 'data-row-id="42"')
+    page.set_content(raw_html)
+    page.wait_for_selector("#lemma-table tbody tr")
 
+    # 1. Test Space key on row with high data-row-id="42"
+    page.keyboard.press("ArrowDown")
+    page.keyboard.press("Space")
+    row_42 = page.locator('tr[data-row-id="42"]')
+    assert row_42.get_attribute("data-selected") == "1"
+    assert "selected" in (row_42.get_attribute("class") or "")
 
+    # Space again toggles off
+    page.keyboard.press("Space")
+    assert row_42.get_attribute("data-selected") == "0"
+    assert "selected" not in (row_42.get_attribute("class") or "")
 
+    # 2. Test single Undo / Redo execution
+    page.evaluate("""() => {
+        window.__undoCalls = 0;
+        window.__redoCalls = 0;
+        const origUndo = window.undo;
+        const origRedo = window.redo;
+        window.undo = function() { window.__undoCalls++; if (origUndo) origUndo(); };
+        window.redo = function() { window.__redoCalls++; if (origRedo) origRedo(); };
+    }""")
+    page.keyboard.press("Control+z")
+    undo_count = page.evaluate("() => window.__undoCalls")
+    assert undo_count == 1, f"Expected 1 undo call per Ctrl+Z keystroke, got {undo_count}"
 
-
+    page.keyboard.press("Control+y")
+    redo_count = page.evaluate("() => window.__redoCalls")
+    assert redo_count == 1, f"Expected 1 redo call per Ctrl+Y keystroke, got {redo_count}"
