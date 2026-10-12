@@ -14521,7 +14521,7 @@ window.__CONFIG__ = {ui_config_json};
         // 2. Dynamically synchronize text translation skeletons
         var updateSkeletonHtml = function(html) {
             if (!html || html.indexOf('skeleton-loader') === -1) return html;
-            return html.replace(/(<span[^>]*class="[^"]*skeleton-loader[^"]*"[^>]*>)([\\s\\S]*?)(<\/span>)/gi, function(match, openTag, innerText, closeTag) {
+            return html.replace(/(<span[^>]*class="[^"]*skeleton-loader[^"]*"[^>]*>)([^]*?)(<[/]span>)/gi, function(match, openTag, innerText, closeTag) {
                 var newOpenTag = openTag;
                 if (newOpenTag.indexOf('title=') !== -1) {
                     newOpenTag = newOpenTag.replace(/title="[^"]*"/i, 'title="' + escapeHtml(label) + '"');
