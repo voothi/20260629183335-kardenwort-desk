@@ -383,3 +383,96 @@ storage_backend=tsv
     # Row was NOT pre-filled with the blended translation and remains in selected
     assert remaining_selected == [0]
     assert session_rows[0][headers.index("WordDestination")] == ""
+
+
+def test_enrich_session_coordinate_mismatch_raises_value_error(tmp_path):
+    """
+    Test 2.1: Assert coordinate alignment between sentence visual index and session visual index.
+    Raises ValueError immediately when target visual index does not align with sentence token coordinates.
+    """
+    db_path = tmp_path / "kardenwort.db"
+    migrations_dir = Path(__file__).resolve().parent.parent / "schemas" / "migrations"
+    db = KardenwortDB(str(db_path), migrations_dir=migrations_dir)
+    db.run_migrations()
+
+    sess_zid = "20261012120500"
+    s1 = "Erste Satz ohne das Wort."
+    s2 = "Zweite Satz mit dem Zielwort."
+    full_text = f"{s1} {s2}"
+
+    db.insert_session({
+        "zid": sess_zid,
+        "source_raw_text": full_text,
+        "source_language": "de",
+        "target_language": "ru",
+        "text_mode": "multi",
+        "slug": "test-coord-mismatch",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 1,
+        "sentence_source": s1,
+        "sentence_destination": "Первое предложение.",
+    })
+    db.insert_sentence({
+        "session_zid": sess_zid,
+        "sentence_index": 2,
+        "sentence_source": s2,
+        "sentence_destination": "Второе предложение с целевым словом.",
+    })
+    db.insert_word({
+        "session_zid": sess_zid,
+        "sentence_index": 2,
+        "token_order": 10,
+        "quotation": "Zielwort",
+        "lemma": "Zielwort",
+        "word_source": "Zielwort",
+        "word_destination": "целевое слово",
+        "pos": "noun",
+        "morphology": "das Zielwort",
+        "word_provenance": "initial",
+    })
+
+    mapping_path = tmp_path / "mapping.ini"
+    mapping_path.write_text(
+        "[roles]\n"
+        "lemma=WordSource\n"
+        "word_translation=WordDestination\n"
+        "pos=WordSourcePOS\n"
+        "morphology=WordSourceMorphologyAI\n"
+        "sentence_index=SentenceSourceIndex\n"
+        "sentence=SentenceSource\n"
+        "[fields]\n"
+        "TokenOrder=\nWordSource=\nWordDestination=\nWordSourcePOS=\nWordSourceMorphologyAI=\nSentenceSourceIndex=\nSentenceSource=\n",
+        encoding="utf-8"
+    )
+
+    config_path = tmp_path / "config.ini"
+    config_path.write_text(f"""[storage]
+backend=sqlite
+sqlite_path={db_path.as_posix()}
+[settings]
+default_language=de
+default_target_language=ru
+anki_mapping_file={mapping_path.as_posix()}
+[environment]
+kardenwort_workspace={tmp_path.as_posix()}
+[languages]
+de_prompt=test
+""", encoding="utf-8")
+
+    config, resolved_paths, _, _ = kd.load_config(config_path)
+    storage_adapter = kd.get_storage_adapter(config, resolved_paths)
+
+    # Intentionally pass bogus visual index 999 that does NOT align with sentence 2 tokens
+    with pytest.raises(ValueError) as excinfo:
+        storage_adapter.enrich_session_intellifiller(
+            session_zid=sess_zid,
+            prompt_name="test",
+            selected_rows=[0],
+            visual_indices=[999],
+            reprocess=True,
+        )
+    assert "Coordinate alignment violation" in str(excinfo.value)
+    assert "target visual indices [999]" in str(excinfo.value)
+

@@ -1144,3 +1144,68 @@ def test_table_metadata_and_inline_edit_tooltip_sync(page, tmp_path):
         return transTd.getAttribute('title');
     }""")
     assert "Pre-filled from Corpus (WordFill)" in occ_tip, f"Expected humanized provenance, got {occ_tip!r}"
+
+
+def test_word_span_layout_metrics_invariance_on_flip_and_hover(page, tmp_path):
+    """
+    Test 3.1: Verify invariant box geometry on .source-text span.word and .flipped.
+    Asserts that toggling .flipped does not alter bounding box geometry or cause subpixel reflow.
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    source_text = "Invariant box geometry must eliminate subpixel reflow completely."
+    tsv_content = (
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
+        "0\tInvariant\tИнвариантный\t1\n"
+        "1\tbox\tящик\t1\n"
+        "2\tgeometry\tгеометрия\t1\n"
+    )
+    tsv_file = tmp_path / "20261012220000-layout-test.en.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="en",
+        zid="20261012220000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+
+    metrics_check = page.evaluate("""() => {
+        const span = document.querySelector("#source-container span.word");
+        const initialRect = span.getBoundingClientRect();
+        const initialStyle = window.getComputedStyle(span);
+        const initialPadL = initialStyle.paddingLeft;
+        const initialPadR = initialStyle.paddingRight;
+        const initialMarL = initialStyle.marginLeft;
+        const initialMarR = initialStyle.marginRight;
+        const initialBorderL = initialStyle.borderLeftWidth;
+
+        // Toggle .flipped
+        span.classList.add('flipped');
+        const flippedStyle = window.getComputedStyle(span);
+        const flippedPadL = flippedStyle.paddingLeft;
+        const flippedPadR = flippedStyle.paddingRight;
+        const flippedMarL = flippedStyle.marginLeft;
+        const flippedMarR = flippedStyle.marginRight;
+        const flippedBorderL = flippedStyle.borderLeftWidth;
+        const flippedBoxShadow = flippedStyle.boxShadow;
+
+        return {
+            initialPadL, initialPadR, initialMarL, initialMarR, initialBorderL,
+            flippedPadL, flippedPadR, flippedMarL, flippedMarR, flippedBorderL,
+            flippedBoxShadow
+        };
+    }""")
+
+    assert metrics_check["initialPadL"] == metrics_check["flippedPadL"], "Padding left shifted on flipped"
+    assert metrics_check["initialPadR"] == metrics_check["flippedPadR"], "Padding right shifted on flipped"
+    assert metrics_check["initialMarL"] == metrics_check["flippedMarL"], "Margin left shifted on flipped"
+    assert metrics_check["initialMarR"] == metrics_check["flippedMarR"], "Margin right shifted on flipped"
+    assert metrics_check["flippedBorderL"] in ("0px", "none"), "Border width non-zero on flipped"
+    assert "rgb" in metrics_check["flippedBoxShadow"] or "inset" in metrics_check["flippedBoxShadow"], "Expected box-shadow on flipped"
+

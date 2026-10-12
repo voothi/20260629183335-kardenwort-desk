@@ -4883,6 +4883,7 @@ class SqliteStorageAdapter(StorageAdapter):
 
         scratch_data_rows = [list(r) for r in data_rows]
         if target_vidxs:
+            col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else (headers.index('WordSource') if 'WordSource' in headers else -1)
             if col_sent_src != -1:
                 target_scratch_set = set(target_scratch_indices) if target_scratch_indices is not None else set(range(len(scratch_data_rows)))
                 for s_row_idx in target_scratch_set:
@@ -4890,6 +4891,25 @@ class SqliteStorageAdapter(StorageAdapter):
                         raw_sent = scratch_data_rows[s_row_idx][col_sent_src]
                         s_idx = int(scratch_data_rows[s_row_idx][col_sent]) if col_sent != -1 and len(scratch_data_rows[s_row_idx]) > col_sent and str(scratch_data_rows[s_row_idx][col_sent]).isdigit() else 1
                         s_offset = sentence_offsets.get(s_idx, 0)
+                        if raw_sent and s_offset is not None and col_lemma != -1 and len(scratch_data_rows[s_row_idx]) > col_lemma:
+                            lem_str = str(scratch_data_rows[s_row_idx][col_lemma]).strip().lower()
+                            try:
+                                sent_toks = tok.build_word_list_internal(raw_sent, keep_spaces=True)
+                                cand_coords = [
+                                    s_offset + int(t.get("visual_idx", 0))
+                                    for t in sent_toks
+                                    if t.get("is_word") and (t.get("lower_clean") or t.get("text", "")).strip().lower() == lem_str
+                                ]
+                                if cand_coords and not any(tv in cand_coords for tv in target_vidxs):
+                                    raise ValueError(
+                                        f"Coordinate alignment violation in session '{session_zid}': "
+                                        f"target visual indices {target_vidxs} do not match sentence {s_idx} "
+                                        f"token coordinates {cand_coords} for lemma '{lem_str}'"
+                                    )
+                            except ValueError:
+                                raise
+                            except Exception:
+                                pass
                         scratch_data_rows[s_row_idx][col_sent_src] = build_bracketed_sentence_context(
                             raw_sent,
                             target_visual_indices=target_vidxs,
@@ -4995,7 +5015,14 @@ class SqliteStorageAdapter(StorageAdapter):
                             # 3.1 Single matching token in the sentence: write new trans/pos/morph directly; skip aggregation
                             target_key = str(target_vidx)
                             if matching_tokens and s_offset is not None:
-                                target_key = str(s_offset + int(matching_tokens[0].get("visual_idx", 0)))
+                                token_global_vidx = s_offset + int(matching_tokens[0].get("visual_idx", 0))
+                                if target_vidxs and not any(tv == token_global_vidx for tv in target_vidxs):
+                                    raise ValueError(
+                                        f"Coordinate alignment violation in session '{session_zid}': "
+                                        f"target visual indices {target_vidxs} do not match sentence {sent_idx} "
+                                        f"token coordinate {token_global_vidx} for lemma '{w_lem}'"
+                                    )
+                                target_key = str(token_global_vidx)
                             occ_data = {
                                 target_key: {
                                     "pos": new_pos,
@@ -5020,8 +5047,16 @@ class SqliteStorageAdapter(StorageAdapter):
                                 token_global_indices.append(g_idx)
 
                             target_set = set(target_vidxs)
-                            # 2.2 Fallback: match by lemma occurrence ordinal within the sentence when offset cannot be resolved
-                            if not any(g in target_set for g in token_global_indices) and s_offset is None:
+                            # Assert coordinate alignment if target coordinates and sentence offsets are known
+                            if target_vidxs and s_offset is not None:
+                                if not any(g in target_set for g in token_global_indices):
+                                    raise ValueError(
+                                        f"Coordinate alignment violation in session '{session_zid}': "
+                                        f"target visual indices {target_vidxs} do not match sentence {sent_idx} "
+                                        f"candidate token coordinates {token_global_indices} for lemma '{w_lem}'"
+                                    )
+                            elif not any(g in target_set for g in token_global_indices) and s_offset is None:
+                                # Fallback: match by lemma occurrence ordinal within the sentence when offset cannot be resolved
                                 for ord_i, g_idx in enumerate(token_global_indices):
                                     if ord_i < len(target_vidxs):
                                         target_set.add(g_idx)
@@ -5065,7 +5100,7 @@ class SqliteStorageAdapter(StorageAdapter):
                                 for st in matching_tokens:
                                     loc_k = str(st.get("visual_idx"))
                                     glob_k = str(s_offset + int(st.get("visual_idx", 0)))
-                                    if loc_k != glob_k and loc_k in occ_data and glob_k in occ_data:
+                                    if loc_k != glob_k and loc_k in occ_data:
                                         del occ_data[loc_k]
 
                             pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
@@ -12861,21 +12896,29 @@ html, body {{
     transition: background-color 0.2s, color 0.2s;
     border-radius: 3px;
     padding: 0 2px;
+    margin: 0;
+    border: none;
+    box-sizing: border-box;
   }
   #translation-container span.word {
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     border-radius: 2px;
-    padding: 0;
+    padding: 0 2px;
+    margin: 0;
+    border: none;
+    box-sizing: border-box;
   }
-  .source-text span.word.flipped {
+  .source-text span.word.flipped,
+  #source-container span.word.flipped,
+  #translation-container span.word.flipped {
     background-color: {flipped_bg};
     color: {flipped_text};
-    font-weight: 300;
-    border: 1px dashed {flipped_border};
-    padding: 0 3px;
-    margin: 0 -1px;
-    border-radius: 4px;
+    box-shadow: inset 0 0 0 1px {flipped_border};
+    border-radius: 3px;
+    padding: 0 2px;
+    margin: 0;
+    border: none;
   }
   .source-text span.word:hover {
     background-color: {word_hover};
