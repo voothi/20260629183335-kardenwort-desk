@@ -4890,15 +4890,24 @@ class SqliteStorageAdapter(StorageAdapter):
                     if 0 <= s_row_idx < len(scratch_data_rows) and len(scratch_data_rows[s_row_idx]) > col_sent_src:
                         raw_sent = scratch_data_rows[s_row_idx][col_sent_src]
                         s_idx = int(scratch_data_rows[s_row_idx][col_sent]) if col_sent != -1 and len(scratch_data_rows[s_row_idx]) > col_sent and str(scratch_data_rows[s_row_idx][col_sent]).isdigit() else 1
-                        s_offset = sentence_offsets.get(s_idx, 0)
+                        s_offset = sentence_offsets.get(s_idx)
                         if raw_sent and s_offset is not None and col_lemma != -1 and len(scratch_data_rows[s_row_idx]) > col_lemma:
                             lem_str = str(scratch_data_rows[s_row_idx][col_lemma]).strip().lower()
+                            col_quot = headers.index(role_fields.get('quotation', 'Quotation')) if role_fields.get('quotation', 'Quotation') in headers else (headers.index('Quotation') if 'Quotation' in headers else -1)
+                            raw_quot = str(scratch_data_rows[s_row_idx][col_quot]) if col_quot != -1 and len(scratch_data_rows[s_row_idx]) > col_quot else ""
+                            matched_quot = [f.strip().lower() for f in raw_quot.split(",") if f.strip()]
+                            unify_article_lemmas = self.config.getboolean(SEC_SETTINGS, "unify_article_pronoun_lemmas", fallback=True) if hasattr(self, 'config') and self.config else True
+                            is_unified_der = unify_article_lemmas and (lem_str == DE_UNIFIED_ARTICLE_LEMMA)
                             try:
                                 sent_toks = tok.build_word_list_internal(raw_sent, keep_spaces=True)
                                 cand_coords = [
                                     s_offset + int(t.get("visual_idx", 0))
                                     for t in sent_toks
-                                    if t.get("is_word") and (t.get("lower_clean") or t.get("text", "")).strip().lower() == lem_str
+                                    if t.get("is_word") and (
+                                        (t.get("lower_clean") or t.get("text", "")).strip().lower() == lem_str
+                                        or (t.get("lower_clean") or t.get("text", "")).strip().lower() in matched_quot
+                                        or (is_unified_der and (t.get("lower_clean") or t.get("text", "")).strip().lower() in DE_UNIFIED_ARTICLE_FORMS)
+                                    )
                                 ]
                                 if cand_coords and not any(tv in cand_coords for tv in target_vidxs):
                                     raise ValueError(
@@ -12904,19 +12913,27 @@ html, body {{
     cursor: pointer;
     transition: background-color 0.2s, color 0.2s;
     border-radius: 2px;
-    padding: 0 2px;
+    padding: 0;
     margin: 0;
     border: none;
     box-sizing: border-box;
   }
   .source-text span.word.flipped,
-  #source-container span.word.flipped,
-  #translation-container span.word.flipped {
+  #source-container span.word.flipped {
     background-color: {flipped_bg};
     color: {flipped_text};
     box-shadow: inset 0 0 0 1px {flipped_border};
     border-radius: 3px;
     padding: 0 2px;
+    margin: 0;
+    border: none;
+  }
+  #translation-container span.word.flipped {
+    background-color: {flipped_bg};
+    color: {flipped_text};
+    box-shadow: inset 0 0 0 1px {flipped_border};
+    border-radius: 2px;
+    padding: 0;
     margin: 0;
     border: none;
   }
@@ -14504,7 +14521,7 @@ window.__CONFIG__ = {ui_config_json};
         // 2. Dynamically synchronize text translation skeletons
         var updateSkeletonHtml = function(html) {
             if (!html || html.indexOf('skeleton-loader') === -1) return html;
-            return html.replace(/(<span[^>]*class="[^"]*skeleton-loader[^"]*"[^>]*>)([\s\S]*?)(<\/span>)/gi, function(match, openTag, innerText, closeTag) {
+            return html.replace(/(<span[^>]*class="[^"]*skeleton-loader[^"]*"[^>]*>)([\\s\\S]*?)(<\/span>)/gi, function(match, openTag, innerText, closeTag) {
                 var newOpenTag = openTag;
                 if (newOpenTag.indexOf('title=') !== -1) {
                     newOpenTag = newOpenTag.replace(/title="[^"]*"/i, 'title="' + escapeHtml(label) + '"');
@@ -22435,7 +22452,7 @@ window.__CONFIG__ = {ui_config_json};
                             }
                         }
                         if (lines.length === 0) {
-                            var brClean = tmp.innerHTML.replace(/<br\\s*[\\/]?>/gi, String.fromCharCode(10));
+                            var brClean = tmp.innerHTML.replace(/<br\\s*[/]?>/gi, String.fromCharCode(10));
                             tmp.innerHTML = brClean;
                             clean = (tmp.textContent || tmp.innerText || '').trim();
                         }
