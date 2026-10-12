@@ -2464,6 +2464,7 @@ def build_bracketed_sentence_context(
     target_word: Optional[str] = None,
     target_occurrence: Optional[int] = None,
     target_visual_indices: Optional[Any] = None,
+    visual_idx_offset: int = 0,
 ) -> str:
     """
     Wraps only the targeted token occurrence(s) in square brackets '[word]'
@@ -2505,6 +2506,13 @@ def build_bracketed_sentence_context(
 
     # Target by visual_idx first if provided
     if target_set:
+        if visual_idx_offset:
+            matched_offset = any(((t.get("visual_idx") or 0) + visual_idx_offset) in target_set for t in tokens)
+            if matched_offset:
+                return "".join(
+                    f"[{t['text']}]" if (((t.get("visual_idx") or 0) + visual_idx_offset) in target_set) else t["text"]
+                    for t in tokens
+                )
         matched = any(t.get("visual_idx") in target_set for t in tokens)
         if matched:
             return "".join(
@@ -4790,17 +4798,56 @@ class SqliteStorageAdapter(StorageAdapter):
                         pass
         target_vidx = target_vidxs[0] if target_vidxs else None
 
+        source_text = restored.get("source_text") or (session.get("source_raw_text") if isinstance(session, dict) else "")
+        db_sentences = restored.get("sentences", [])
+        col_sent_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+
+        sentence_offsets = {1: 0}
+        if source_text:
+            ordered_sents = []
+            if db_sentences:
+                for s in sorted(db_sentences, key=lambda s: s.get("sentence_index", 0)):
+                    s_idx = s.get("sentence_index")
+                    s_str = s.get("sentence_source") or ""
+                    if s_idx is not None and s_str:
+                        ordered_sents.append((int(s_idx), s_str))
+            elif col_sent != -1 and col_sent_src != -1:
+                seen_sent_idx = set()
+                for r in data_rows:
+                    if len(r) > col_sent and len(r) > col_sent_src:
+                        s_idx_str = str(r[col_sent]).strip()
+                        if s_idx_str.isdigit():
+                            s_idx_int = int(s_idx_str)
+                            if s_idx_int not in seen_sent_idx:
+                                seen_sent_idx.add(s_idx_int)
+                                ordered_sents.append((s_idx_int, str(r[col_sent_src])))
+                ordered_sents.sort(key=lambda x: x[0])
+
+            curr_search_pos = 0
+            for s_idx_int, s_str in ordered_sents:
+                f_pos = source_text.find(s_str, curr_search_pos)
+                if f_pos != -1:
+                    prefix_str = source_text[:f_pos]
+                    try:
+                        p_toks = tok.build_word_list_internal(prefix_str, keep_spaces=True)
+                        sentence_offsets[s_idx_int] = len(p_toks)
+                    except Exception:
+                        pass
+                    curr_search_pos = f_pos + len(s_str)
+
         scratch_data_rows = [list(r) for r in data_rows]
         if target_vidxs:
-            col_sent_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
             if col_sent_src != -1:
                 target_scratch_set = set(target_scratch_indices) if target_scratch_indices is not None else set(range(len(scratch_data_rows)))
                 for s_row_idx in target_scratch_set:
                     if 0 <= s_row_idx < len(scratch_data_rows) and len(scratch_data_rows[s_row_idx]) > col_sent_src:
                         raw_sent = scratch_data_rows[s_row_idx][col_sent_src]
+                        s_idx = int(scratch_data_rows[s_row_idx][col_sent]) if col_sent != -1 and len(scratch_data_rows[s_row_idx]) > col_sent and str(scratch_data_rows[s_row_idx][col_sent]).isdigit() else 1
+                        s_offset = sentence_offsets.get(s_idx, 0)
                         scratch_data_rows[s_row_idx][col_sent_src] = build_bracketed_sentence_context(
                             raw_sent,
-                            target_visual_indices=target_vidxs
+                            target_visual_indices=target_vidxs,
+                            visual_idx_offset=s_offset,
                         )
 
         with tempfile.TemporaryDirectory() as temp_dir:
@@ -4863,9 +4910,10 @@ class SqliteStorageAdapter(StorageAdapter):
                         ef_raw = matched_word.get("extra_fields")
                         ef_dict = sanitize_extra_fields(ef_raw)
 
-                        occ_data = ef_dict.get("occurrence_data", {})
-                        if not isinstance(occ_data, dict):
-                            occ_data = {}
+                        stored_occ_data = ef_dict.get("occurrence_data", {})
+                        if not isinstance(stored_occ_data, dict):
+                            stored_occ_data = {}
+                        occ_data = dict(stored_occ_data)
 
                         pos_field = role_fields.get('pos', 'WordSourcePOS')
                         trans_field = role_fields.get('word_translation', 'WordDestination')
@@ -4875,30 +4923,6 @@ class SqliteStorageAdapter(StorageAdapter):
                         new_trans = row_updates.get(trans_field, "")
                         new_morph = row_updates.get(morph_field, "")
 
-                        if len(target_vidxs) == 1:
-                            occ_data[str(target_vidxs[0])] = {
-                                "pos": new_pos,
-                                "trans": new_trans,
-                                "morph": new_morph
-                            }
-                        else:
-                            for vi in target_vidxs:
-                                existing_vi = occ_data.get(str(vi), {})
-                                vi_pos = existing_vi.get("pos", new_pos)
-                                vi_trans = existing_vi.get("trans", new_trans)
-                                vi_morph = existing_vi.get("morph", new_morph)
-                                if "art." in new_pos and "pron." in new_pos:
-                                    pass
-                                else:
-                                    vi_pos = new_pos
-                                    vi_trans = new_trans
-                                    vi_morph = new_morph
-                                occ_data[str(vi)] = {
-                                    "pos": vi_pos,
-                                    "trans": vi_trans,
-                                    "morph": vi_morph
-                                }
-
                         w_lem = (matched_word.get("lemma") or "").strip().lower()
                         is_unified_der = unify_article_lemmas and (w_lem == DE_UNIFIED_ARTICLE_LEMMA)
                         col_s_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
@@ -4906,6 +4930,7 @@ class SqliteStorageAdapter(StorageAdapter):
                         if col_s_src != -1 and row_idx < len(data_rows) and len(data_rows[row_idx]) > col_s_src:
                             sent_text = data_rows[row_idx][col_s_src]
 
+                        matching_tokens = []
                         if sent_text and w_lem:
                             try:
                                 all_toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
@@ -4914,43 +4939,121 @@ class SqliteStorageAdapter(StorageAdapter):
                                     st_clean = (st.get("lower_clean") or st.get("text") or "").strip().lower()
                                     is_match = (st_clean == w_lem) or (st_clean in matched_quot) or (is_unified_der and st_clean in DE_UNIFIED_ARTICLE_FORMS)
                                     if st.get("is_word") and is_match:
-                                        st_vidx_str = str(st.get("visual_idx"))
-                                        if st_vidx_str not in occ_data:
-                                            fallback_pos = matched_word.get("pos") or ""
-                                            if is_unified_der and "art." in fallback_pos:
-                                                fallback_pos = "art."
-                                            occ_data[st_vidx_str] = {
-                                                "pos": fallback_pos,
-                                                "trans": matched_word.get("word_destination") or "",
-                                                "morph": matched_word.get("morphology") or ""
-                                            }
+                                        matching_tokens.append(st)
                             except Exception:
                                 pass
 
-                        pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
-                        trans_items = [(int(k), v.get("trans", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("trans")]
-                        morph_items = [(int(k), v.get("morph", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("morph")]
+                        s_offset = sentence_offsets.get(sent_idx)
 
-                        if len(pos_items) > 1:
-                            if is_unified_der:
-                                seen_occ_pos = []
-                                for _, p_val in sorted(pos_items, key=lambda x: x[0]):
-                                    for p_sub in p_val.split(','):
-                                        norm_p = normalize_pos_tag(p_sub).lower()
-                                        if norm_p and norm_p not in seen_occ_pos:
-                                            seen_occ_pos.append(norm_p)
-                                seen_occ_pos = sort_pos_tags(seen_occ_pos)
-                                row_updates[pos_field] = ", ".join(seen_occ_pos)
-                            else:
-                                row_updates[pos_field] = aggregate_sequential_distinct(pos_items, delimiter=", ")
-                        if len(trans_items) > 1:
-                            row_updates[trans_field] = aggregate_sequential_distinct(trans_items, delimiter=", ")
-                        if len(morph_items) > 1:
-                            row_updates[morph_field] = aggregate_sequential_distinct(morph_items, delimiter="; ")
+                        if len(matching_tokens) <= 1:
+                            # 3.1 Single matching token in the sentence: write new trans/pos/morph directly; skip aggregation
+                            target_key = str(target_vidx)
+                            if matching_tokens and s_offset is not None:
+                                target_key = str(s_offset + int(matching_tokens[0].get("visual_idx", 0)))
+                            occ_data = {
+                                target_key: {
+                                    "pos": new_pos,
+                                    "trans": new_trans,
+                                    "morph": new_morph,
+                                }
+                            }
+                            row_updates[pos_field] = new_pos
+                            row_updates[trans_field] = new_trans
+                            row_updates[morph_field] = new_morph
+                            ef_dict["occurrence_data"] = occ_data
+                            ef_dict = sanitize_extra_fields(ef_dict)
+                            row_updates["extra_fields"] = json.dumps(ef_dict, ensure_ascii=False)
+                        else:
+                            # Multiple matching tokens: map sentence-local tokens to global coordinates
+                            token_global_indices = []
+                            for idx_ord, st in enumerate(matching_tokens):
+                                if s_offset is not None:
+                                    g_idx = s_offset + int(st.get("visual_idx", 0))
+                                else:
+                                    g_idx = int(st.get("visual_idx", 0))
+                                token_global_indices.append(g_idx)
 
-                        ef_dict["occurrence_data"] = occ_data
-                        ef_dict = sanitize_extra_fields(ef_dict)
-                        row_updates["extra_fields"] = json.dumps(ef_dict, ensure_ascii=False)
+                            target_set = set(target_vidxs)
+                            # 2.2 Fallback: match by lemma occurrence ordinal within the sentence when offset cannot be resolved
+                            if not any(g in target_set for g in token_global_indices) and s_offset is None:
+                                for ord_i, g_idx in enumerate(token_global_indices):
+                                    if ord_i < len(target_vidxs):
+                                        target_set.add(g_idx)
+
+                            # Assign new enrichment values to targeted occurrences
+                            for g_idx in token_global_indices:
+                                if g_idx in target_set:
+                                    occ_data[str(g_idx)] = {
+                                        "pos": new_pos,
+                                        "trans": new_trans,
+                                        "morph": new_morph,
+                                    }
+
+                            # 3.2 Fill untouched occurrences only from their own existing occ_data entries; never from an aggregated row value
+                            for idx_ord, st in enumerate(matching_tokens):
+                                g_idx = token_global_indices[idx_ord]
+                                g_idx_str = str(g_idx)
+                                if g_idx_str not in occ_data:
+                                    local_vidx_str = str(st.get("visual_idx"))
+                                    if g_idx_str in stored_occ_data:
+                                        occ_data[g_idx_str] = stored_occ_data[g_idx_str]
+                                    elif local_vidx_str in stored_occ_data:
+                                        occ_data[g_idx_str] = stored_occ_data[local_vidx_str]
+                                    else:
+                                        fallback_pos = matched_word.get("pos") or ""
+                                        if is_unified_der and "art." in fallback_pos:
+                                            fallback_pos = "art."
+                                        fallback_trans = ""
+                                        if not stored_occ_data:
+                                            cur_dest = (matched_word.get("word_destination") or "").strip()
+                                            if ", " not in cur_dest:
+                                                fallback_trans = cur_dest
+                                        occ_data[g_idx_str] = {
+                                            "pos": fallback_pos,
+                                            "trans": fallback_trans,
+                                            "morph": matched_word.get("morphology") or "",
+                                        }
+
+                            # Clean up stale local-coordinate keys if global coordinates are used
+                            if s_offset is not None and s_offset > 0:
+                                for st in matching_tokens:
+                                    loc_k = str(st.get("visual_idx"))
+                                    glob_k = str(s_offset + int(st.get("visual_idx", 0)))
+                                    if loc_k != glob_k and loc_k in occ_data and glob_k in occ_data:
+                                        del occ_data[loc_k]
+
+                            pos_items = [(int(k), v.get("pos", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("pos")]
+                            trans_items = [(int(k), v.get("trans", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("trans")]
+                            morph_items = [(int(k), v.get("morph", "")) for k, v in occ_data.items() if str(k).isdigit() and v.get("morph")]
+
+                            if len(pos_items) > 1:
+                                if is_unified_der:
+                                    seen_occ_pos = []
+                                    for _, p_val in sorted(pos_items, key=lambda x: x[0]):
+                                        for p_sub in p_val.split(','):
+                                            norm_p = normalize_pos_tag(p_sub).lower()
+                                            if norm_p and norm_p not in seen_occ_pos:
+                                                seen_occ_pos.append(norm_p)
+                                    seen_occ_pos = sort_pos_tags(seen_occ_pos)
+                                    row_updates[pos_field] = ", ".join(seen_occ_pos)
+                                else:
+                                    row_updates[pos_field] = aggregate_sequential_distinct(pos_items, delimiter=", ")
+                            elif len(pos_items) == 1:
+                                row_updates[pos_field] = pos_items[0][1]
+
+                            if len(trans_items) > 1:
+                                row_updates[trans_field] = aggregate_sequential_distinct(trans_items, delimiter=", ")
+                            elif len(trans_items) == 1:
+                                row_updates[trans_field] = trans_items[0][1]
+
+                            if len(morph_items) > 1:
+                                row_updates[morph_field] = aggregate_sequential_distinct(morph_items, delimiter="; ")
+                            elif len(morph_items) == 1:
+                                row_updates[morph_field] = morph_items[0][1]
+
+                            ef_dict["occurrence_data"] = occ_data
+                            ef_dict = sanitize_extra_fields(ef_dict)
+                            row_updates["extra_fields"] = json.dumps(ef_dict, ensure_ascii=False)
 
                     if matched_word:
                         w_id = matched_word.get("id")
@@ -25793,6 +25896,26 @@ def cmd_reprocess_worker(args):
                         lemma_val = row[col_lemma].strip()
                         match = find_wordfill_match(lemma_val, language, wordfill_cfg, exclude_path=tsv_path)
                         if match:
+                            # Wordfill guard: skip corpus match with comma-joined translation for single-occurrence targets
+                            col_dest_name = role_fields.get('word_translation', 'WordDestination')
+                            match_dest = (match.get(col_dest_name) or match.get('WordDestination') or '').strip()
+                            if ', ' in match_dest:
+                                col_s_src = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
+                                sent_text = row[col_s_src].strip() if col_s_src != -1 and len(row) > col_s_src else ''
+                                if sent_text:
+                                    try:
+                                        toks = tok.build_word_list_internal(sent_text, keep_spaces=True)
+                                        lem_clean = lemma_val.lower()
+                                        match_cnt = sum(1 for t in toks if t.get('is_word') and (t.get('lower_clean') or t.get('text', '')).lower() == lem_clean)
+                                        if match_cnt <= 1:
+                                            logger.info(
+                                                f"wordfill (reprocess): skipped blended corpus match '{match_dest}' for single-occurrence lemma '{lemma_val}' in row {row_id}; will enrich via IntelliFiller."
+                                            )
+                                            remaining_selected.append(row_id)
+                                            continue
+                                    except Exception:
+                                        pass
+
                             has_ipa = bool(match.get('WordSourceIPA', '').strip())
                             has_morph = bool(match.get('WordSourceMorphologyAI', '').strip())
                             tier = 2 if (has_ipa and has_morph) else (1 if (has_ipa or has_morph) else 0)
