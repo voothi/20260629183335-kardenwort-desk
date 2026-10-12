@@ -1079,3 +1079,68 @@ def test_single_undo_redo_keystroke_and_space_key_high_row_id(page, tmp_path):
     page.keyboard.press("Control+y")
     redo_count = page.evaluate("() => window.__redoCalls")
     assert redo_count == 1, f"Expected 1 redo call per Ctrl+Y keystroke, got {redo_count}"
+
+
+def test_table_metadata_and_inline_edit_tooltip_sync(page, tmp_path):
+    config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
+    tsv_content = (
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordSourceInflectedForm\tWordSourceGender\tWordSourcePos\tWordDestination\tSentenceSourceIndex\n"
+        "0\tder\tder\tm\tart.\t\t1\n"
+        "1\tHund\tHund\tm.\tn.\tсобака\t1\n"
+    )
+    tsv_file = tmp_path / "20261012170000-tooltip-sync.de.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html_code = kardenwort_desk.run_render_flow(
+        text="Der Hund läuft.",
+        language="de",
+        zid="20261012170000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+    )
+    page.set_content(html_code)
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    # 1. Verify DOM tooltip attributes for "der": must NOT prepend "der" to article/pronoun
+    row_der_lemma = page.locator('tr[data-row-id="0"] td.col-lemma')
+    der_title = row_der_lemma.get_attribute("title")
+    assert der_title == "der", f"Expected 'der' tooltip for article lemma, got {der_title!r}"
+
+    # Row 1 "Hund" with gender "m." should have "der Hund"
+    row_hund_lemma = page.locator('tr[data-row-id="1"] td.col-lemma')
+    hund_title = row_hund_lemma.get_attribute("title")
+    assert hund_title == "der Hund", f"Expected 'der Hund' tooltip for noun lemma, got {hund_title!r}"
+
+    # 2. Test inline cell editing tooltip refresh on lemma edit
+    page.evaluate("""() => {
+        var cell = document.querySelector('tr[data-row-id="1"] td.col-lemma');
+        window.makeEditable(cell);
+        var input = cell.querySelector('input');
+        input.value = "Katze";
+        var genCell = document.querySelector('tr[data-row-id="1"] td.col-gender');
+        if (genCell) genCell.textContent = "f";
+        window.commitActiveEdit();
+    }""")
+    updated_title = page.locator('tr[data-row-id="1"] td.col-lemma').get_attribute("title")
+    assert updated_title == "die Katze", f"Expected 'die Katze' tooltip after inline edit, got {updated_title!r}"
+
+    # 3. Test humanized provenance in occurrence views
+    occ_tip = page.evaluate("""() => {
+        var tr = document.querySelector('tr[data-row-id="1"]');
+        tr.setAttribute('data-occ', '1');
+        var transTd = tr.querySelector('td.col-translation');
+        transTd.setAttribute('data-provenance', 'corpus:wordfill');
+        window.AppState.activeTokenSelections = [1];
+        window.AppState.rows["1"] = {
+            token_order: 1,
+            trans: "собака",
+            provenance: "corpus:wordfill"
+        };
+        window.applyOccurrenceRow(tr);
+        return transTd.getAttribute('title');
+    }""")
+    assert "Pre-filled from Corpus (WordFill)" in occ_tip, f"Expected humanized provenance, got {occ_tip!r}"

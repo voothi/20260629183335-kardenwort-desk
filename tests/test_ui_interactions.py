@@ -5781,7 +5781,7 @@ def test_watchdog_timeout_skeleton_cleanup_without_retry_buttons(page):
     assert page.locator(".btn-retry-cell").count() == 0
 
     # Warning toast displayed
-    toast = page.locator(".kw-toast-warning")
+    toast = page.locator(".kw-toast-warning").first
     assert toast.is_visible()
     assert "Background loading timed out" in toast.inner_text()
 

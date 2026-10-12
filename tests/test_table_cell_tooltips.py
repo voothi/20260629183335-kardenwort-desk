@@ -6,6 +6,7 @@ from kardenwort_desk import (
     format_lemma_article_tooltip,
     format_pos_tooltip,
     format_gender_tooltip,
+    format_gender_badge,
     format_classification_tooltip,
     run_render_flow,
     render_section,
@@ -92,11 +93,41 @@ def test_format_lemma_article_tooltip():
     assert format_lemma_article_tooltip("Frau", "feminine", lang="de") == "die Frau"
     assert format_lemma_article_tooltip("Kind", "neuter", lang="de") == "das Kind"
 
+    # Gender tag with trailing dot or article keyword
+    assert format_lemma_article_tooltip("Hund", "m.", lang="de") == "der Hund"
+    assert format_lemma_article_tooltip("Katze", "f.", lang="de") == "die Katze"
+    assert format_lemma_article_tooltip("Haus", "n.", lang="de") == "das Haus"
+    assert format_lemma_article_tooltip("Hund", "der", lang="de") == "der Hund"
+    assert format_lemma_article_tooltip("Katze", "die", lang="de") == "die Katze"
+    assert format_lemma_article_tooltip("Haus", "das", lang="de") == "das Haus"
+
     # Already has article
     assert format_lemma_article_tooltip("der Hund", "m", lang="de") == "der Hund"
     assert format_lemma_article_tooltip("die Katze", "f", lang="de") == "die Katze"
 
-    # Non-noun or unknown gender
+    # Article or pronoun as lemma (guard against duplicate/ill-formed articles)
+    assert format_lemma_article_tooltip("der", "m", lang="de") == "der"
+    assert format_lemma_article_tooltip("der", "m", lang="de", pos="art.") == "der"
+    assert format_lemma_article_tooltip("der", "m", lang="de", pos="art") == "der"
+    assert format_lemma_article_tooltip("die", "f", lang="de", pos="art.") == "die"
+    assert format_lemma_article_tooltip("das", "n", lang="de", pos="art.") == "das"
+    assert format_lemma_article_tooltip("er", "m", lang="de") == "er"
+    assert format_lemma_article_tooltip("er", "m", lang="de", pos="pron.") == "er"
+    assert format_lemma_article_tooltip("er", "m", lang="de", pos="pron") == "er"
+    assert format_lemma_article_tooltip("sie", "f", lang="de", pos="pron.") == "sie"
+
+    # POS gating: noun POS tags
+    assert format_lemma_article_tooltip("Katze", "f", lang="de", pos="n.") == "die Katze"
+    assert format_lemma_article_tooltip("Katze", "f", lang="de", pos="n") == "die Katze"
+    assert format_lemma_article_tooltip("Katze", "f", lang="de", pos="NOUN") == "die Katze"
+
+    # POS gating: non-noun POS tags suppress article prepending
+    assert format_lemma_article_tooltip("laufen", "m", lang="de", pos="v.") == "laufen"
+    assert format_lemma_article_tooltip("laufen", "m", lang="de", pos="v") == "laufen"
+    assert format_lemma_article_tooltip("schnell", "n", lang="de", pos="adv.") == "schnell"
+    assert format_lemma_article_tooltip("schnell", "n", lang="de", pos="adv") == "schnell"
+
+    # Non-noun or unknown gender without POS
     assert format_lemma_article_tooltip("laufen", "", lang="de") == "laufen"
     assert format_lemma_article_tooltip("schnell", "", lang="de") == "schnell"
 
@@ -109,27 +140,38 @@ def test_format_pos_tooltip():
     assert format_pos_tooltip("NOUN") == "Noun"
     assert format_pos_tooltip("PROPN") == "Noun"
     assert format_pos_tooltip("n.") == "Noun"
+    assert format_pos_tooltip("n") == "Noun"
     assert format_pos_tooltip("VERB") == "Verb"
     assert format_pos_tooltip("AUX") == "Verb"
     assert format_pos_tooltip("v.") == "Verb"
+    assert format_pos_tooltip("v") == "Verb"
     assert format_pos_tooltip("ADJ") == "Adjective"
     assert format_pos_tooltip("adj.") == "Adjective"
+    assert format_pos_tooltip("adj") == "Adjective"
     assert format_pos_tooltip("ADV") == "Adverb"
     assert format_pos_tooltip("adv.") == "Adverb"
+    assert format_pos_tooltip("adv") == "Adverb"
     assert format_pos_tooltip("ADP") == "Preposition"
     assert format_pos_tooltip("prep.") == "Preposition"
+    assert format_pos_tooltip("prep") == "Preposition"
     assert format_pos_tooltip("PRON") == "Pronoun"
     assert format_pos_tooltip("pron.") == "Pronoun"
+    assert format_pos_tooltip("pron") == "Pronoun"
     assert format_pos_tooltip("CCONJ") == "Conjunction"
     assert format_pos_tooltip("conj.") == "Conjunction"
+    assert format_pos_tooltip("conj") == "Conjunction"
     assert format_pos_tooltip("DET") == "Article"
     assert format_pos_tooltip("art.") == "Article"
+    assert format_pos_tooltip("art") == "Article"
     assert format_pos_tooltip("NUM") == "Numeral"
     assert format_pos_tooltip("num.") == "Numeral"
+    assert format_pos_tooltip("num") == "Numeral"
     assert format_pos_tooltip("PART") == "Particle"
     assert format_pos_tooltip("part.") == "Particle"
+    assert format_pos_tooltip("part") == "Particle"
     assert format_pos_tooltip("INTJ") == "Interjection"
     assert format_pos_tooltip("intj.") == "Interjection"
+    assert format_pos_tooltip("intj") == "Interjection"
     assert format_pos_tooltip("") == ""
     assert format_pos_tooltip(None) == ""
 
@@ -137,14 +179,20 @@ def test_format_pos_tooltip():
 def test_format_gender_tooltip():
     # Backward compatibility: single-argument calls
     assert format_gender_tooltip("m") == "Masculine"
+    assert format_gender_tooltip("m.") == "Masculine"
     assert format_gender_tooltip("MASC") == "Masculine"
     assert format_gender_tooltip("masculine") == "Masculine"
+    assert format_gender_tooltip("der") == "Masculine"
     assert format_gender_tooltip("f") == "Feminine"
+    assert format_gender_tooltip("f.") == "Feminine"
     assert format_gender_tooltip("FEM") == "Feminine"
     assert format_gender_tooltip("feminine") == "Feminine"
+    assert format_gender_tooltip("die") == "Feminine"
     assert format_gender_tooltip("n") == "Neuter"
+    assert format_gender_tooltip("n.") == "Neuter"
     assert format_gender_tooltip("NEUT") == "Neuter"
     assert format_gender_tooltip("neuter") == "Neuter"
+    assert format_gender_tooltip("das") == "Neuter"
     assert format_gender_tooltip("") == ""
     assert format_gender_tooltip(None) == ""
     assert format_gender_tooltip("other") == ""
@@ -182,6 +230,20 @@ def test_format_gender_tooltip():
     assert format_gender_tooltip("f", "Kinn") == "Feminine"
     assert format_gender_tooltip("f", "Sinn") == "Feminine"
     assert format_gender_tooltip("f", "Benzin") == "Feminine"
+
+
+def test_format_gender_badge():
+    assert format_gender_badge("m") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert format_gender_badge("m.") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert format_gender_badge("der") == '<span class="kw-gender kw-gender-m">m</span>'
+    assert format_gender_badge("f") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert format_gender_badge("f.") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert format_gender_badge("die") == '<span class="kw-gender kw-gender-f">f</span>'
+    assert format_gender_badge("n") == '<span class="kw-gender kw-gender-n">n</span>'
+    assert format_gender_badge("n.") == '<span class="kw-gender kw-gender-n">n</span>'
+    assert format_gender_badge("das") == '<span class="kw-gender kw-gender-n">n</span>'
+    assert format_gender_badge("") == ""
+    assert format_gender_badge(None) == ""
 
 
 def test_format_classification_tooltip():

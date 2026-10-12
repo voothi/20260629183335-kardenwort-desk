@@ -2589,42 +2589,53 @@ def aggregate_sequential_distinct(
 
 POS_FULL_NAME_MAP = {
     "n.": "Noun",
+    "n": "Noun",
     "NOUN": "Noun",
     "PROPN": "Noun",
     "noun": "Noun",
     "v.": "Verb",
+    "v": "Verb",
     "VERB": "Verb",
     "AUX": "Verb",
     "verb": "Verb",
     "adj.": "Adjective",
+    "adj": "Adjective",
     "ADJ": "Adjective",
     "adjective": "Adjective",
     "adv.": "Adverb",
+    "adv": "Adverb",
     "ADV": "Adverb",
     "adverb": "Adverb",
     "prep.": "Preposition",
+    "prep": "Preposition",
     "ADP": "Preposition",
     "PREP": "Preposition",
     "preposition": "Preposition",
     "art.": "Article",
+    "art": "Article",
     "DET": "Article",
     "ART": "Article",
     "article": "Article",
     "pron.": "Pronoun",
+    "pron": "Pronoun",
     "PRON": "Pronoun",
     "pronoun": "Pronoun",
     "conj.": "Conjunction",
+    "conj": "Conjunction",
     "CCONJ": "Conjunction",
     "SCONJ": "Conjunction",
     "CONJ": "Conjunction",
     "conjunction": "Conjunction",
     "num.": "Numeral",
+    "num": "Numeral",
     "NUM": "Numeral",
     "numeral": "Numeral",
     "part.": "Particle",
+    "part": "Particle",
     "PART": "Particle",
     "particle": "Particle",
     "intj.": "Interjection",
+    "intj": "Interjection",
     "INTJ": "Interjection",
     "interjection": "Interjection",
 }
@@ -2633,12 +2644,15 @@ GENDER_FULL_NAME_MAP = {
     "m": "Masculine",
     "masc": "Masculine",
     "masculine": "Masculine",
+    "der": "Masculine",
     "f": "Feminine",
     "fem": "Feminine",
     "feminine": "Feminine",
+    "die": "Feminine",
     "n": "Neuter",
     "neut": "Neuter",
     "neuter": "Neuter",
+    "das": "Neuter",
 }
 
 def to_unicode_bold(text: str) -> str:
@@ -2951,17 +2965,17 @@ def is_ai_provenance(provenance: Optional[str]) -> bool:
 def format_gender_tooltip(gender_val: Optional[str], lemma: Optional[str] = None, provenance: Optional[str] = None) -> str:
     if not gender_val:
         return ""
-    g_clean = str(gender_val).strip().lower()
+    g_clean = str(gender_val).strip().rstrip('.').lower()
     if g_clean not in GENDER_FULL_NAME_MAP:
         return ""
     gender_name = GENDER_FULL_NAME_MAP[g_clean]
 
     g_code = ""
-    if g_clean in ("m", "masc", "masculine"):
+    if g_clean in ("m", "masc", "masculine", "der"):
         g_code = "m"
-    elif g_clean in ("f", "fem", "feminine"):
+    elif g_clean in ("f", "fem", "feminine", "die"):
         g_code = "f"
-    elif g_clean in ("n", "neut", "neuter"):
+    elif g_clean in ("n", "neut", "neuter", "das"):
         g_code = "n"
 
     ai_flag = is_ai_provenance(provenance)
@@ -2995,7 +3009,7 @@ def format_classification_tooltip(classification_val: Optional[str], role: str =
     return val_str
 
 def format_gender_badge(gender_val: Optional[str]) -> str:
-    g = (str(gender_val) if gender_val is not None else "").strip().lower()
+    g = (str(gender_val) if gender_val is not None else "").strip().rstrip('.').lower()
     if g in ("m", "masc", "masculine", "der"):
         return '<span class="kw-gender kw-gender-m">m</span>'
     elif g in ("f", "fem", "feminine", "die"):
@@ -14078,14 +14092,14 @@ window.__CONFIG__ = {ui_config_json};
         for (var c = 0; c < rawComponents.length; c++) {
             var comp = rawComponents[c].trim();
             if (!comp) continue;
-            var compWords = (comp.toLowerCase().match(/[\p{L}\p{N}]+/gu) || comp.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
+            var compWords = (comp.toLowerCase().match(/[\\p{L}\\p{N}]+/gu) || comp.toLowerCase().match(/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+/g) || []);
             var compFiltered = [];
             for (var j = 0; j < compWords.length; j++) {
-                if (compWords[j] && !/^\d{14}$/.test(compWords[j])) {
+                if (compWords[j] && !/^\\d{14}$/.test(compWords[j])) {
                     compFiltered.push(compWords[j]);
                 }
             }
-            var isCompSlug = (comp.indexOf('+') === -1) && (comp.indexOf('-') !== -1 || comp.indexOf('_') !== -1 || /\b\d{14}\b/.test(comp));
+            var isCompSlug = (comp.indexOf('+') === -1) && (comp.indexOf('-') !== -1 || comp.indexOf('_') !== -1 || /\\b\\d{14}\\b/.test(comp));
             if (isCompSlug && lemmaClean) {
                 var exactMatches = [];
                 for (var m = 0; m < compFiltered.length; m++) {
@@ -14180,7 +14194,7 @@ window.__CONFIG__ = {ui_config_json};
             if (pos) {
                 var posStr = String(pos).toLowerCase();
                 var posParts = posStr.split(',').map(function(p) {
-                    return p.trim().replace(/\.+$/, '');
+                    return p.trim().replace(/\\.+$/, '');
                 }).filter(Boolean);
                 var nounTags = { "n": true, "noun": true, "propn": true, "subst": true };
                 var nonNounTags = {
@@ -14211,7 +14225,7 @@ window.__CONFIG__ = {ui_config_json};
                 }
             }
 
-            var g = (gender ? String(gender).trim().replace(/\.+$/, '').toLowerCase() : "");
+            var g = (gender ? String(gender).trim().replace(/\\.+$/, '').toLowerCase() : "");
             if (g === 'm' || g === 'masc' || g === 'masculine' || g === 'der') return 'der ' + cleanLemma;
             if (g === 'f' || g === 'fem' || g === 'feminine' || g === 'die') return 'die ' + cleanLemma;
             if (g === 'n' || g === 'neut' || g === 'neuter' || g === 'das') return 'das ' + cleanLemma;
@@ -14221,17 +14235,17 @@ window.__CONFIG__ = {ui_config_json};
 
 
     var POS_FULL_NAME_MAP_JS = {
-        "n.": "Noun", "noun": "Noun", "NOUN": "Noun", "PROPN": "Noun",
-        "v.": "Verb", "verb": "Verb", "VERB": "Verb", "AUX": "Verb",
-        "adj.": "Adjective", "adjective": "Adjective", "ADJ": "Adjective",
-        "adv.": "Adverb", "adverb": "Adverb", "ADV": "Adverb",
-        "prep.": "Preposition", "preposition": "Preposition", "ADP": "Preposition", "PREP": "Preposition",
-        "art.": "Article", "article": "Article", "DET": "Article", "ART": "Article",
-        "pron.": "Pronoun", "pronoun": "Pronoun", "PRON": "Pronoun",
-        "conj.": "Conjunction", "conjunction": "Conjunction", "CCONJ": "Conjunction", "SCONJ": "Conjunction", "CONJ": "Conjunction",
-        "num.": "Numeral", "numeral": "Numeral", "NUM": "Numeral",
-        "part.": "Particle", "particle": "Particle", "PART": "Particle",
-        "intj.": "Interjection", "interjection": "Interjection", "INTJ": "Interjection"
+        "n.": "Noun", "n": "Noun", "noun": "Noun", "NOUN": "Noun", "PROPN": "Noun",
+        "v.": "Verb", "v": "Verb", "verb": "Verb", "VERB": "Verb", "AUX": "Verb",
+        "adj.": "Adjective", "adj": "Adjective", "adjective": "Adjective", "ADJ": "Adjective",
+        "adv.": "Adverb", "adv": "Adverb", "adverb": "Adverb", "ADV": "Adverb",
+        "prep.": "Preposition", "prep": "Preposition", "preposition": "Preposition", "ADP": "Preposition", "PREP": "Preposition",
+        "art.": "Article", "art": "Article", "article": "Article", "DET": "Article", "ART": "Article",
+        "pron.": "Pronoun", "pron": "Pronoun", "pronoun": "Pronoun", "PRON": "Pronoun",
+        "conj.": "Conjunction", "conj": "Conjunction", "conjunction": "Conjunction", "CCONJ": "Conjunction", "SCONJ": "Conjunction", "CONJ": "Conjunction",
+        "num.": "Numeral", "num": "Numeral", "numeral": "Numeral", "NUM": "Numeral",
+        "part.": "Particle", "part": "Particle", "particle": "Particle", "PART": "Particle",
+        "intj.": "Interjection", "intj": "Interjection", "interjection": "Interjection", "INTJ": "Interjection"
     };
 
     function formatPosTooltip(posVal) {
@@ -14245,13 +14259,15 @@ window.__CONFIG__ = {ui_config_json};
         if (POS_FULL_NAME_MAP_JS[pClean]) return POS_FULL_NAME_MAP_JS[pClean];
         if (POS_FULL_NAME_MAP_JS[pClean.toUpperCase()]) return POS_FULL_NAME_MAP_JS[pClean.toUpperCase()];
         if (POS_FULL_NAME_MAP_JS[pClean.toLowerCase()]) return POS_FULL_NAME_MAP_JS[pClean.toLowerCase()];
+        var pStripped = pClean.replace(/\\.+$/, '').toLowerCase();
+        if (POS_FULL_NAME_MAP_JS[pStripped]) return POS_FULL_NAME_MAP_JS[pStripped];
         return pClean;
     }
 
     var GENDER_FULL_NAME_MAP_JS = {
-        "m": "Masculine", "masc": "Masculine", "masculine": "Masculine",
-        "f": "Feminine", "fem": "Feminine", "feminine": "Feminine",
-        "n": "Neuter", "neut": "Neuter", "neuter": "Neuter"
+        "m": "Masculine", "masc": "Masculine", "masculine": "Masculine", "der": "Masculine",
+        "f": "Feminine", "fem": "Feminine", "feminine": "Feminine", "die": "Feminine",
+        "n": "Neuter", "neut": "Neuter", "neuter": "Neuter", "das": "Neuter"
     };
 
     var GERMAN_GENDER_SUFFIXES_MASCULINE_JS = ["partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"];
@@ -14309,14 +14325,14 @@ window.__CONFIG__ = {ui_config_json};
 
     function formatGenderTooltip(genderVal, lemma, provenance) {
         if (!genderVal) return "";
-        var gClean = String(genderVal).trim().toLowerCase();
+        var gClean = String(genderVal).trim().replace(/\\.+$/, '').toLowerCase();
         if (!GENDER_FULL_NAME_MAP_JS[gClean]) return "";
         var genderName = GENDER_FULL_NAME_MAP_JS[gClean];
 
         var gCode = "";
-        if (gClean === 'm' || gClean === 'masc' || gClean === 'masculine') gCode = 'm';
-        else if (gClean === 'f' || gClean === 'fem' || gClean === 'feminine') gCode = 'f';
-        else if (gClean === 'n' || gClean === 'neut' || gClean === 'neuter') gCode = 'n';
+        if (gClean === 'm' || gClean === 'masc' || gClean === 'masculine' || gClean === 'der') gCode = 'm';
+        else if (gClean === 'f' || gClean === 'fem' || gClean === 'feminine' || gClean === 'die') gCode = 'f';
+        else if (gClean === 'n' || gClean === 'neut' || gClean === 'neuter' || gClean === 'das') gCode = 'n';
 
         var aiFlag = isAiProvenance(provenance);
         var suffix = detectGermanGenderSuffix(lemma, gCode);
@@ -14357,14 +14373,14 @@ window.__CONFIG__ = {ui_config_json};
         if (!genderVal) return "";
         var g = String(genderVal).trim();
         if (g.indexOf('<span') !== -1) {
-            var m = g.match(/\bkw-gender-(m|f|n)\b/i);
+            var m = g.match(/\\bkw-gender-(m|f|n)\\b/i);
             if (m) {
                 var code = m[1].toLowerCase();
                 return '<span class="kw-gender kw-gender-' + code + '">' + code + '</span>';
             }
             return "";
         }
-        var gLower = g.toLowerCase();
+        var gLower = g.replace(/\\.+$/, '').toLowerCase();
         if (gLower === 'm' || gLower === 'masc' || gLower === 'masculine' || gLower === 'der') {
             return '<span class="kw-gender kw-gender-m">m</span>';
         } else if (gLower === 'f' || gLower === 'fem' || gLower === 'feminine' || gLower === 'die') {
@@ -16052,45 +16068,49 @@ window.__CONFIG__ = {ui_config_json};
                 }
                 if (!tr) return false;
                 var tds = tr.getElementsByTagName('td');
-                if (tds.length >= 5) {
-                    if (!tds[0].classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
-                        var div = tds[0].querySelector('.scrollable-cell');
+                var infCell = tr.querySelector('td.col-inflected, td[data-col="WordSourceInflectedForm"]') || (tds.length > 0 ? tds[0] : null);
+                var lemCell = tr.querySelector('td.col-lemma, td[data-col="WordSource"]') || (tds.length > 1 ? tds[1] : null);
+                var ipaCell = tr.querySelector('td.col-ipa, td[data-col="WordSourceIpaAI"], td[data-col="WordSourceIpa"]') || (tds.length > 3 ? tds[3] : null);
+                var morphCell = tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"], td[data-col="WordSourceMorphology"]') || (tds.length > 4 ? tds[4] : null);
+                if (tds.length >= 5 || (infCell && lemCell)) {
+                    if (infCell && !infCell.classList.contains('dirty') && rowData.hasOwnProperty('inflected') && rowData.inflected !== undefined && rowData.inflected !== "") {
+                        var div = infCell.querySelector('.scrollable-cell');
                         var val = rowData.inflected || "";
-                        var oldVal = div ? (div.textContent || div.innerText) : (tds[0].classList.contains('editing') ? null : (tds[0].textContent || tds[0].innerText));
-                        var existingTitle = tds[0].getAttribute('data-orig-title') || tds[0].getAttribute('title') || (div ? (div.getAttribute('data-orig-title') || div.getAttribute('title')) : '');
+                        var oldVal = div ? (div.textContent || div.innerText) : (infCell.classList.contains('editing') ? null : (infCell.textContent || infCell.innerText));
+                        var existingTitle = infCell.getAttribute('data-orig-title') || infCell.getAttribute('title') || (div ? (div.getAttribute('data-orig-title') || div.getAttribute('title')) : '');
                         var sentText = rowData.sentence_source || rowData.SentenceSource || (window.AppState ? window.AppState.sourceText : "") || (document.getElementById('source-container') ? document.getElementById('source-container').textContent : "");
                         var infTip = rowData.inflected_tooltip || ((oldVal === val && existingTitle) ? existingTitle : formatInflectedTooltip(sentText, val, rowData.token_order || rowId, rowData.lemma || ''));
                         var unrolledHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
-                        tds[0].setAttribute('data-orig-html', unrolledHtml);
+                        infCell.setAttribute('data-orig-html', unrolledHtml);
                         if (infTip) {
-                            tds[0].setAttribute('data-orig-title', infTip);
-                            if (div && div !== tds[0]) div.setAttribute('data-orig-title', infTip);
-                            tds[0].setAttribute('title', infTip);
+                            infCell.setAttribute('data-orig-title', infTip);
+                            if (div && div !== infCell) div.setAttribute('data-orig-title', infTip);
+                            infCell.setAttribute('title', infTip);
                             if (div) div.setAttribute('title', infTip);
                         } else {
-                            tds[0].removeAttribute('data-orig-title');
-                            if (div && div !== tds[0]) div.removeAttribute('data-orig-title');
-                            tds[0].removeAttribute('title');
+                            infCell.removeAttribute('data-orig-title');
+                            if (div && div !== infCell) div.removeAttribute('data-orig-title');
+                            infCell.removeAttribute('title');
                             if (div) div.removeAttribute('title');
                         }
                         if (oldVal !== val) {
                             if (div) setCellText(div, val);
-                            else if (!tds[0].classList.contains('editing')) setCellText(tds[0], val);
+                            else if (!infCell.classList.contains('editing')) setCellText(infCell, val);
                             updated = true;
                         }
                     }
-                    if (!tds[1].classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
-                        var div = tds[1].querySelector('.scrollable-cell');
+                    if (lemCell && !lemCell.classList.contains('dirty') && rowData.hasOwnProperty('lemma') && rowData.lemma !== undefined) {
+                        var div = lemCell.querySelector('.scrollable-cell');
                         var val = rowData.lemma || "";
                         if (globalStage === 'translated_lemmas' || globalStage === 'translated' || globalStage === 'finished') {
                             if (div) setCellText(div, val);
-                            else if (!tds[1].classList.contains('editing')) setCellText(tds[1], val);
+                            else if (!lemCell.classList.contains('editing')) setCellText(lemCell, val);
                             updated = true;
                         } else {
-                            var oldVal = div ? (div.textContent || div.innerText) : (tds[1].classList.contains('editing') ? null : (tds[1].textContent || tds[1].innerText));
+                            var oldVal = div ? (div.textContent || div.innerText) : (lemCell.classList.contains('editing') ? null : (lemCell.textContent || lemCell.innerText));
                             if (oldVal !== val) {
                                 if (div) setCellText(div, val);
-                                else if (!tds[1].classList.contains('editing')) setCellText(tds[1], val);
+                                else if (!lemCell.classList.contains('editing')) setCellText(lemCell, val);
                                 updated = true;
                             }
                         }
@@ -16100,7 +16120,11 @@ window.__CONFIG__ = {ui_config_json};
                         var rawPos = rowData.pos !== undefined ? rowData.pos : (rowData.WordSourcePos !== undefined ? rowData.WordSourcePos : (curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : ""));
                         var lemTip = formatLemmaTooltip(val, rawG, activeLang, rawPos);
                         if (lemTip) {
-                            tds[1].setAttribute('title', lemTip);
+                            lemCell.setAttribute('title', lemTip);
+                            if (div && div !== lemCell) div.setAttribute('title', lemTip);
+                        } else {
+                            lemCell.removeAttribute('title');
+                            if (div && div !== lemCell) div.removeAttribute('title');
                         }
                         var curGenderCell = tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]');
                         if (curGenderCell) {
@@ -16243,58 +16267,84 @@ window.__CONFIG__ = {ui_config_json};
                             applyCellProvenance(curText);
                         }
                     }
-                    if (!tds[3].classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
-                        var div = tds[3].querySelector('.scrollable-cell') || tds[3];
+                    if (ipaCell && !ipaCell.classList.contains('dirty') && rowData.hasOwnProperty('ipa') && rowData.ipa !== undefined) {
+                        var div = ipaCell.querySelector('.scrollable-cell') || ipaCell;
                         var val = rowData.ipa || "";
                         var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
-                            if (!tds[3].classList.contains('editing')) setCellText(div, val);
+                            if (!ipaCell.classList.contains('editing')) setCellText(div, val);
                             if (val && val.indexOf('skeleton-loader') === -1) {
-                                tds[3].setAttribute('title', val);
+                                ipaCell.setAttribute('title', val);
+                                if (div && div !== ipaCell) div.setAttribute('title', val);
+                            } else {
+                                ipaCell.removeAttribute('title');
+                                if (div && div !== ipaCell) div.removeAttribute('title');
                             }
                             updated = true;
                         } else if (val !== "") {
-                            var oldVal = tds[3].classList.contains('editing') ? null : (div.textContent || div.innerText);
+                            var oldVal = ipaCell.classList.contains('editing') ? null : (div.textContent || div.innerText);
                             if (oldVal !== val || hasSkeleton) {
-                                if (!tds[3].classList.contains('editing')) setCellText(div, val);
+                                if (!ipaCell.classList.contains('editing')) setCellText(div, val);
                                 if (val.indexOf('skeleton-loader') === -1) {
-                                    tds[3].setAttribute('title', val);
+                                    ipaCell.setAttribute('title', val);
+                                    if (div && div !== ipaCell) div.setAttribute('title', val);
+                                } else {
+                                    ipaCell.removeAttribute('title');
+                                    if (div && div !== ipaCell) div.removeAttribute('title');
                                 }
                                 updated = true;
                             }
+                        } else {
+                            ipaCell.removeAttribute('title');
+                            if (div && div !== ipaCell) div.removeAttribute('title');
                         }
                     }
-                    if (!tds[4].classList.contains('dirty') && (rowData.hasOwnProperty('morph') || rowData.hasOwnProperty('morphology') || rowData.hasOwnProperty('WordSourceMorphologyAI')) && (rowData.morph !== undefined || rowData.morphology !== undefined || rowData.WordSourceMorphologyAI !== undefined)) {
-                        var div = tds[4].querySelector('.scrollable-cell') || tds[4];
+                    if (morphCell && !morphCell.classList.contains('dirty') && (rowData.hasOwnProperty('morph') || rowData.hasOwnProperty('morphology') || rowData.hasOwnProperty('WordSourceMorphologyAI')) && (rowData.morph !== undefined || rowData.morphology !== undefined || rowData.WordSourceMorphologyAI !== undefined)) {
+                        var div = morphCell.querySelector('.scrollable-cell') || morphCell;
                         var val = (rowData.morph !== undefined && rowData.morph !== "") ? rowData.morph : ((rowData.morphology !== undefined && rowData.morphology !== "") ? rowData.morphology : (rowData.WordSourceMorphologyAI || ""));
                         var hasSkeleton = div.querySelector('.skeleton-loader') !== null;
                         var isTerm = (globalStage === 'finished' || window.AppState.isFinished);
                         if (hasSkeleton && val === "" && !isTerm) {
                             // Skeletons remain active until real translations arrive or terminal stage
                         } else if (globalStage === 'translated_words' || isTerm) {
-                            if (!tds[4].classList.contains('editing')) div.innerHTML = val;
+                            if (!morphCell.classList.contains('editing')) div.innerHTML = val;
                             if (val && val.indexOf('skeleton-loader') === -1) {
-                                tds[4].setAttribute('title', val);
+                                morphCell.setAttribute('title', val);
+                                if (div && div !== morphCell) div.setAttribute('title', val);
+                            } else {
+                                morphCell.removeAttribute('title');
+                                if (div && div !== morphCell) div.removeAttribute('title');
                             }
                             updated = true;
                         } else if (val !== "") {
-                            var oldVal = tds[4].classList.contains('editing') ? null : div.innerHTML;
+                            var oldVal = morphCell.classList.contains('editing') ? null : div.innerHTML;
                             if (oldVal !== val || hasSkeleton) {
-                                if (!tds[4].classList.contains('editing')) div.innerHTML = val;
+                                if (!morphCell.classList.contains('editing')) div.innerHTML = val;
                                 if (val.indexOf('skeleton-loader') === -1) {
-                                    tds[4].setAttribute('title', val);
+                                    morphCell.setAttribute('title', val);
+                                    if (div && div !== morphCell) div.setAttribute('title', val);
+                                } else {
+                                    morphCell.removeAttribute('title');
+                                    if (div && div !== morphCell) div.removeAttribute('title');
                                 }
                                 updated = true;
                             }
+                        } else {
+                            morphCell.removeAttribute('title');
+                            if (div && div !== morphCell) div.removeAttribute('title');
                         }
                         if (val && val.indexOf('skeleton-loader') === -1) {
                             var unrolledMorphHtml = val ? String(val).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;") : "";
-                            tds[4].setAttribute('data-orig-html', unrolledMorphHtml);
-                            tds[4].setAttribute('data-orig-title', val);
-                            if (div && div !== tds[4]) div.setAttribute('data-orig-title', val);
+                            morphCell.setAttribute('data-orig-html', unrolledMorphHtml);
+                            morphCell.setAttribute('data-orig-title', val);
+                            if (div && div !== morphCell) div.setAttribute('data-orig-title', val);
+                        } else {
+                            morphCell.removeAttribute('data-orig-html');
+                            morphCell.removeAttribute('data-orig-title');
+                            if (div && div !== morphCell) div.removeAttribute('data-orig-title');
                         }
                     }
                     if (rowData.hasOwnProperty('classifications') && rowData.classifications !== undefined) {
@@ -19935,7 +19985,8 @@ window.__CONFIG__ = {ui_config_json};
                         var prov = td.getAttribute('data-provenance');
                         newTooltip = vals.join(', ');
                         if (prov) {
-                            newTooltip += ' (' + prov + ')';
+                            var pTitle = (typeof formatProvenanceTooltip === 'function') ? formatProvenanceTooltip(prov) : ((window.formatProvenanceTooltip) ? window.formatProvenanceTooltip(prov) : prov);
+                            newTooltip += ' (' + (pTitle || prov) + ')';
                         }
                     } else if (cls === 'col-inflected') {
                         cell.textContent = vals.join(', ');
@@ -20554,6 +20605,32 @@ window.__CONFIG__ = {ui_config_json};
                         cell.removeAttribute('title');
                         div.removeAttribute('title');
                     }
+                } else if (colName === 'WordSource' || cell.classList.contains('col-lemma')) {
+                    var curGenCell = trParent ? trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]') : null;
+                    var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
+                    var curPosCell = trParent ? trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]') : null;
+                    var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
+                    var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                    var origTip = formatLemmaTooltip(originalValue, curGen, activeLang, curPos);
+                    if (origTip) {
+                        cell.setAttribute('title', origTip);
+                        div.setAttribute('title', origTip);
+                    } else {
+                        cell.removeAttribute('title');
+                        div.removeAttribute('title');
+                    }
+                } else if (colName === 'WordSourceInflectedForm' || cell.classList.contains('col-inflected')) {
+                    var lemCell = trParent ? trParent.querySelector('td.col-lemma, td[data-col="WordSource"]') : null;
+                    var lemVal = lemCell ? (lemCell.textContent || lemCell.innerText || "").trim() : "";
+                    var cardSentenceText = (window.AppState ? window.AppState.sourceText : '') || '';
+                    var origTip = formatInflectedTooltip(cardSentenceText, originalValue, tokenOrderVal, lemVal);
+                    if (origTip) {
+                        cell.setAttribute('title', origTip);
+                        div.setAttribute('title', origTip);
+                    } else {
+                        cell.removeAttribute('title');
+                        div.removeAttribute('title');
+                    }
                 }
                 cell.appendChild(div);
                 cell.classList.remove('editing');
@@ -20571,6 +20648,32 @@ window.__CONFIG__ = {ui_config_json};
                 if (colName === 'WordDestination' || cell.classList.contains('col-translation')) {
                     var curProv = cell.getAttribute('data-provenance');
                     var newTip = formatTranslationCellTooltip(newValue, curProv);
+                    if (newTip) {
+                        cell.setAttribute('title', newTip);
+                        div.setAttribute('title', newTip);
+                    } else {
+                        cell.removeAttribute('title');
+                        div.removeAttribute('title');
+                    }
+                } else if (colName === 'WordSource' || cell.classList.contains('col-lemma')) {
+                    var curGenCell = trParent ? trParent.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]') : null;
+                    var curGen = curGenCell ? (curGenCell.textContent || curGenCell.innerText || "").trim() : "";
+                    var curPosCell = trParent ? trParent.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]') : null;
+                    var curPos = curPosCell ? (curPosCell.textContent || curPosCell.innerText || "").trim() : "";
+                    var activeLang = (window.AppConfig ? window.AppConfig.language : 'de') || 'de';
+                    var newTip = formatLemmaTooltip(newValue, curGen, activeLang, curPos);
+                    if (newTip) {
+                        cell.setAttribute('title', newTip);
+                        div.setAttribute('title', newTip);
+                    } else {
+                        cell.removeAttribute('title');
+                        div.removeAttribute('title');
+                    }
+                } else if (colName === 'WordSourceInflectedForm' || cell.classList.contains('col-inflected')) {
+                    var lemCell = trParent ? trParent.querySelector('td.col-lemma, td[data-col="WordSource"]') : null;
+                    var lemVal = lemCell ? (lemCell.textContent || lemCell.innerText || "").trim() : "";
+                    var cardSentenceText = (window.AppState ? window.AppState.sourceText : '') || '';
+                    var newTip = formatInflectedTooltip(cardSentenceText, newValue, tokenOrderVal, lemVal);
                     if (newTip) {
                         cell.setAttribute('title', newTip);
                         div.setAttribute('title', newTip);
@@ -20643,6 +20746,7 @@ window.__CONFIG__ = {ui_config_json};
                 commit();
             });
         }
+        window.makeEditable = makeEditable;
         
         window.getSelectedRows = function() {
             return JSON.stringify(getSelectedRowsArray());
