@@ -18191,12 +18191,11 @@ window.__CONFIG__ = {ui_config_json};
                 return parts.length === 1 ? parts[0] : rawInflection.trim();
             }
             var cleanToken = (tokenText || "").trim().toLowerCase();
-            if (cleanToken) {
-                for (var i = 0; i < parts.length; i++) {
-                    if (parts[i].trim().toLowerCase() === cleanToken) {
-                        return parts[i];
-                    }
-                }
+            var filtered = parts.filter(function(p) {
+                return p.trim().toLowerCase() !== cleanToken;
+            });
+            if (filtered.length > 0) {
+                return filtered[0];
             }
             return parts[0];
         }
