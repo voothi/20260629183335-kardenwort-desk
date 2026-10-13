@@ -448,3 +448,162 @@ def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
     
     tc_text = page.locator("#translation-container").inner_text()
     assert "Он идет домой (обновлено)" in tc_text
+
+
+def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    db_file = tmp_path / "test_retext_child_tab.db"
+    resolved_paths["sqlite_db_path"] = str(db_file)
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = str(results_dir)
+
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
+    session_zid = "20261013095555"
+
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "WordSourcePOS",
+        "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "WordDestination"
+    ]
+    initial_rows = [
+        ["1", "geht", "gehen", "v.", "1", "Er geht nach Hause.", "Он идет домой.", "идти"],
+        ["5", "geht", "gehen", "v.", "2", "Sie geht zum Park.", "Она идет в парк.", "идти"]
+    ]
+    tsv_file = results_dir / f"{session_zid}.de.tsv"
+    tsv_file.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in initial_rows), encoding="utf-8")
+
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-retext-child-tab",
+        source_language="de",
+        target_language="ru",
+        text_mode="multi",
+        source_raw_text="Er geht nach Hause.\nSie geht zum Park.",
+        data_rows=initial_rows,
+        headers=headers,
+    )
+
+    raw_text = "Er geht nach Hause. Sie geht zum Park."
+    html_out = kardenwort_desk.run_render_flow(
+        text=raw_text,
+        language="de",
+        zid=session_zid,
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=True,
+        return_children=False,
+    )
+
+    page.set_content(html_out)
+    page.wait_for_timeout(150)
+
+    # 1. Switch to Tab for Sentence 2 (sent_idx == 2)
+    card_info = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({ seq: c.seq_num, sent_idx: c.sentence_idx }));
+    }""")
+    s2_seq = next(c["seq"] for c in card_info if c["sent_idx"] == 2)
+
+    page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({s2_seq}); }}")
+    page.wait_for_timeout(50)
+
+    # Verify initial translation of Sentence 2 on screen
+    initial_tc = page.locator("#translation-container").inner_text()
+    assert "Она идет в парк." in initial_tc
+
+    # 2. Simulate Retext execution while viewing Sentence 2 tab
+    retext_full = "<div>Он шагает домой (retext).</div><div>Она шагает в парк (retext).</div>"
+    page.evaluate(f"""() => {{
+        window.fetch = function(url, options) {{
+            return Promise.resolve({{
+                ok: true,
+                status: 200,
+                json: function() {{
+                    return Promise.resolve({{
+                        status: 'success',
+                        data: {{
+                            translatedText: '{retext_full}',
+                            translated_text: '{retext_full}',
+                            sentences: {{
+                                0: 'Он шагает домой (retext).',
+                                1: 'Она шагает в парк (retext).'
+                            }}
+                        }}
+                    }});
+                }}
+            }});
+        }};
+        window.onRetextClick();
+    }}""")
+    page.wait_for_timeout(100)
+
+    # 3. Assert: Active tab (Sentence 2) displays ONLY Sentence 2's translation, NOT full paragraph!
+    active_tc = page.locator("#translation-container").inner_text()
+    assert "Она шагает в парк (retext)." in active_tc
+    assert "Он шагает домой (retext)." not in active_tc
+
+    # Interactive tokens must be preserved
+    words = page.locator("#translation-container span.word")
+    assert words.count() > 0
+
+    # 4. Verify all card models were updated in WorkspaceTabs
+    updated_cards = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({ sent_idx: c.sentence_idx, trans: c.translated_text }));
+    }""")
+    overview = next(c for c in updated_cards if c["sent_idx"] == 0)
+    sent1 = next(c for c in updated_cards if c["sent_idx"] == 1)
+    sent2 = next(c for c in updated_cards if c["sent_idx"] == 2)
+
+    assert "Он шагает домой (retext)." in overview["trans"]
+    assert "Она шагает в парк (retext)." in overview["trans"]
+    assert "Он шагает домой (retext)." in sent1["trans"]
+    assert "Она шагает в парк (retext)." in sent2["trans"]
+
+    # 5. Switch to Overview Tab (sent_idx == 0)
+    overview_seq = next(c["seq"] for c in card_info if c["sent_idx"] == 0)
+    page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({overview_seq}); }}")
+    page.wait_for_timeout(50)
+    overview_tc = page.locator("#translation-container").inner_text()
+    assert "Он шагает домой (retext)." in overview_tc
+    assert "Она шагает в парк (retext)." in overview_tc
+
+    # 6. Switch to Sentence 1 Tab (sent_idx == 1)
+    sent1_seq = next(c["seq"] for c in card_info if c["sent_idx"] == 1)
+    page.evaluate(f"() => {{ if (window.WorkspaceTabs) window.WorkspaceTabs.switchToTab({sent1_seq}); }}")
+    page.wait_for_timeout(50)
+    sent1_tc = page.locator("#translation-container").inner_text()
+    assert "Он шагает домой (retext)." in sent1_tc
+    assert "Она шагает в парк (retext)." not in sent1_tc
+
+    # 7. Backend SQLite contract check: retext_session aligns SQLite rows at 1-indexed positions
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.storage_adapter = adapter
+    arbiter.sessions[session_zid] = {
+        "session_zid": session_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Er geht nach Hause.\nSie geht zum Park.",
+        "tsv_path": str(tsv_file),
+        "comments": [],
+        "headers": headers,
+        "data_rows": [list(r) for r in initial_rows],
+        "role_fields": {
+            "sentence_destination": "SentenceDestination",
+            "sentence_index": "SentenceSourceIndex"
+        }
+    }
+    with patch("kardenwort_controller.translate_source_text", return_value={
+        0: "Он шагает домой (backend).",
+        1: "Она шагает в парк (backend)."
+    }):
+        arbiter.retext_session(session_zid=session_zid, language="de", text_mode="multi")
+
+    sents = adapter.db.get_sentences_by_session(session_zid)
+    assert len(sents) == 2
+    sents_map = {s["sentence_index"]: s["sentence_destination"] for s in sents}
+    assert sents_map[1] == "Он шагает домой (backend)."
+    assert sents_map[2] == "Она шагает в парк (backend)."
+    assert 0 not in sents_map
