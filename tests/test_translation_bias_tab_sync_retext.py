@@ -214,6 +214,88 @@ def test_retext_session_failover_provider_chain(tmp_path):
         assert attempted_providers == ["failing_primary", "working_secondary"]
 
 
+def test_retext_session_sqlite_sentence_index_alignment(tmp_path):
+    db_file = tmp_path / "test_retext_alignment.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    resolved_paths["sqlite_db_path"] = str(db_file)
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = str(results_dir)
+
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
+    session_zid = "20261013090001"
+
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "WordDestination"
+    ]
+    initial_rows = [
+        ["0", "Hallo", "Hallo", "1", "Hallo Welt.", "Alt 1", "привет"],
+        ["1", "Danke", "danke", "2", "Vielen Dank.", "Alt 2", "спасибо"]
+    ]
+    tsv_file = results_dir / f"{session_zid}.de.tsv"
+    tsv_file.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in initial_rows), encoding="utf-8")
+
+    # Initial save creates 2 sentences in SQLite
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-retext-alignment",
+        source_language="de",
+        target_language="ru",
+        text_mode="multi",
+        source_raw_text="Hallo Welt.\nVielen Dank.",
+        data_rows=initial_rows,
+        headers=headers,
+    )
+
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.storage_adapter = adapter
+    arbiter.sessions[session_zid] = {
+        "session_zid": session_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Hallo Welt.\nVielen Dank.",
+        "tsv_path": str(tsv_file),
+        "comments": [],
+        "headers": headers,
+        "data_rows": [list(r) for r in initial_rows],
+        "role_fields": {
+            "sentence_destination": "SentenceDestination",
+            "sentence_index": "SentenceSourceIndex"
+        }
+    }
+
+    # Core returns 0-indexed dict with FULL_TEXT and PADDED keys
+    mock_0_indexed_translations = {
+        0: "Привет мир (retext).",
+        1: "Большое спасибо (retext).",
+        "FULL_TEXT": "Привет мир (retext). Большое спасибо (retext).",
+        "PADDED": {
+            0: "Привет мир (padded).",
+            1: "Большое спасибо (padded)."
+        }
+    }
+
+    with patch("kardenwort_controller.translate_source_text", return_value=mock_0_indexed_translations):
+        res = arbiter.retext_session(session_zid=session_zid, language="de", text_mode="multi")
+        assert res["status"] == "success"
+
+    # Verify SQLite sentences table: 1-indexed sentences updated cleanly without key-0 rejection
+    sents = adapter.db.get_sentences_by_session(session_zid)
+    assert len(sents) == 2
+    sents_map = {s["sentence_index"]: s for s in sents}
+
+    assert 1 in sents_map
+    assert sents_map[1]["sentence_destination"] == "Привет мир (retext)."
+    assert sents_map[1]["sentence_destination2"] == "Привет мир (padded)."
+
+    assert 2 in sents_map
+    assert sents_map[2]["sentence_destination"] == "Большое спасибо (retext)."
+    assert sents_map[2]["sentence_destination2"] == "Большое спасибо (padded)."
+
+    assert 0 not in sents_map
+
+
 def test_tab_reword_isolation_and_overview_sync(page, tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     raw_text = "Er geht nach Hause. Sie geht zum Park."

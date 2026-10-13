@@ -1997,37 +1997,71 @@ class SessionArbiter:
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
             mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
             role_fields = get_role_fields(mapping, headers)
-            col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
+            col_sentence_dest = headers.index('SentenceDestination') if 'SentenceDestination' in headers else (headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1)
+            col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else -1
             col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
 
-            if col_sentence_dest != -1:
+            if col_sentence_dest != -1 or col_sentence_dest2 != -1:
                 padded_dict = (sentence_trans.get('PADDED') or {}) if isinstance(sentence_trans, dict) else {}
+                is_zero_based = isinstance(sentence_trans, dict) and (0 in sentence_trans or '0' in sentence_trans)
                 for row in data_rows:
-                    if len(row) > col_sentence_dest and sentence_trans:
-                        if isinstance(sentence_trans, dict):
-                            s_idx_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
-                            trans_val = (padded_dict.get(s_idx_val) or padded_dict.get(s_idx_val - 1) or
-                                         sentence_trans.get(s_idx_val) or sentence_trans.get(s_idx_val - 1) or
-                                         list(sentence_trans.values())[0])
-                            row[col_sentence_dest] = str(trans_val)
-                        else:
-                            row[col_sentence_dest] = str(sentence_trans)
+                    if sentence_trans:
+                        s_idx_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
+                        trans_key = (s_idx_val - 1) if is_zero_based else s_idx_val
+                        if col_sentence_dest != -1 and len(row) > col_sentence_dest:
+                            if isinstance(sentence_trans, dict):
+                                trans_val = (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) or
+                                             (padded_dict.get(trans_key) or padded_dict.get(str(trans_key))) or
+                                             list(sentence_trans.values())[0])
+                                row[col_sentence_dest] = str(trans_val)
+                            else:
+                                row[col_sentence_dest] = str(sentence_trans)
+                        if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2 and (padded_dict or sentence_trans):
+                            p_val = (padded_dict.get(trans_key) or padded_dict.get(str(trans_key)) or
+                                     (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) if isinstance(sentence_trans, dict) else str(sentence_trans)))
+                            if p_val:
+                                row[col_sentence_dest2] = str(p_val)
 
                 if is_sqlite and isinstance(sentence_trans, dict):
+                    padded_dict = sentence_trans.get('PADDED') or {}
+                    is_zero_based = (0 in sentence_trans or '0' in sentence_trans)
                     for s_idx_raw, trans in sentence_trans.items():
-                        if s_idx_raw == 'PADDED':
+                        if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
                             continue
-                        try:
-                            s_idx = int(s_idx_raw)
-                        except (ValueError, TypeError):
+                        s_idx = int(s_idx_raw) + 1 if is_zero_based else int(s_idx_raw)
+                        if s_idx <= 0:
                             continue
                         if trans and isinstance(trans, str):
                             try:
                                 storage_adapter.update_sentence_translation(
                                     session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=active_text_prov
                                 )
+                            except TypeError:
+                                try:
+                                    storage_adapter.update_sentence_translation(
+                                        session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
                             except Exception as e:
                                 logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
+
+                        if padded_dict:
+                            padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
+                            if padded_trans and isinstance(padded_trans, str):
+                                try:
+                                    storage_adapter.update_sentence_translation(
+                                        session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=active_text_prov
+                                    )
+                                except TypeError:
+                                    try:
+                                        storage_adapter.update_sentence_translation(
+                                            session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid
+                                        )
+                                    except Exception:
+                                        pass
+                                except Exception:
+                                    pass
 
                 storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
 
