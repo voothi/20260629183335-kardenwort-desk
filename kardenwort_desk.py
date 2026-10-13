@@ -21826,7 +21826,6 @@ window.__CONFIG__ = {ui_config_json};
                         if (tc) {
                             tc.classList.remove('skeleton-loader');
                             tc.removeAttribute('data-pending');
-                            tc.innerHTML = tText;
                         }
                         if (window.AppState) window.AppState.translatedText = tText;
 
@@ -21834,12 +21833,6 @@ window.__CONFIG__ = {ui_config_json};
                             ? window.WorkspaceTabs.getCards()
                             : (window._kwSentenceCards || null);
                         if (wCards && wCards.length > 0) {
-                            var actCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function')
-                                ? window.WorkspaceTabs.getActiveCard()
-                                : null;
-                            var actSent = (actCard && actCard.sentence_idx !== undefined && actCard.sentence_idx !== null)
-                                ? actCard.sentence_idx
-                                : 0;
                             var lines = [];
                             if (tText.indexOf('<div') !== -1 || tText.indexOf('</div') !== -1) {
                                 var tmpDiv = document.createElement('div');
@@ -21856,24 +21849,39 @@ window.__CONFIG__ = {ui_config_json};
                             }
                             var cleanLines = lines.map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
 
+                            var pSents = (payload && payload.sentences) ? payload.sentences : null;
+                            var isZeroBasedSents = pSents ? (pSents[0] !== undefined || pSents['0'] !== undefined) : false;
+
                             for (var c = 0; c < wCards.length; c++) {
-                                if (actSent === 0) {
-                                    if (wCards[c].sentence_idx === 0) {
-                                        wCards[c].translated_text = tText;
-                                    } else if (wCards[c].sentence_idx > 0) {
-                                        var sIdx0 = wCards[c].sentence_idx - 1;
-                                        if (sIdx0 >= 0 && sIdx0 < cleanLines.length) {
-                                            wCards[c].translated_text = cleanLines[sIdx0];
+                                var cardSentIdx = wCards[c].sentence_idx;
+                                if (cardSentIdx === 0) {
+                                    wCards[c].translated_text = tText;
+                                } else if (cardSentIdx > 0) {
+                                    var sentTrans = null;
+                                    if (pSents) {
+                                        var sKey = isZeroBasedSents ? (cardSentIdx - 1) : cardSentIdx;
+                                        sentTrans = pSents[sKey] !== undefined ? pSents[sKey] : pSents[String(sKey)];
+                                        if (!sentTrans && !isZeroBasedSents) {
+                                            sentTrans = pSents[cardSentIdx - 1] !== undefined ? pSents[cardSentIdx - 1] : pSents[String(cardSentIdx - 1)];
                                         }
                                     }
-                                } else {
-                                    if (wCards[c].sentence_idx === actSent) {
-                                        wCards[c].translated_text = tText;
+                                    if (!sentTrans && cleanLines) {
+                                        var sIdx0 = cardSentIdx - 1;
+                                        if (sIdx0 >= 0 && sIdx0 < cleanLines.length) {
+                                            sentTrans = cleanLines[sIdx0];
+                                        }
+                                    }
+                                    if (sentTrans && typeof sentTrans === 'string') {
+                                        wCards[c].translated_text = sentTrans;
                                     }
                                 }
                             }
                             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.updateActiveTabTranslation === 'function') {
                                 window.WorkspaceTabs.updateActiveTabTranslation();
+                            }
+                        } else {
+                            if (tc) {
+                                tc.innerHTML = tText;
                             }
                         }
                     }
@@ -21882,7 +21890,9 @@ window.__CONFIG__ = {ui_config_json};
                             stage: "translated_text",
                             status: "success",
                             translatedText: tText,
-                            translated_text: tText
+                            translated_text: tText,
+                            sentences: (payload && payload.sentences) ? payload.sentences : null,
+                            rows: (payload && payload.rows) ? payload.rows : null
                         };
                         window.receiveUpdate(retextUpdate);
                     } else if (window.onUpdateClick) {
@@ -23169,15 +23179,37 @@ window.__CONFIG__ = {ui_config_json};
             function updateSentences(sents) {
                 if (!sents || !cards || cards.length === 0) return;
                 var updatedAny = false;
-                for (var i = 0; i < sents.length; i++) {
-                    var s = sents[i];
-                    var sIdx = (typeof s === 'object' && s !== null && s.sentence_index !== undefined) ? s.sentence_index : (i + 1);
-                    var sDst = (typeof s === 'string') ? s : ((s && (s.sentence_destination || s.translation)) || "");
-                    for (var c = 0; c < cards.length; c++) {
-                        if (cards[c].sentence_idx === sIdx) {
-                            if (cards[c].translated_text !== sDst) {
-                                cards[c].translated_text = sDst;
-                                updatedAny = true;
+                if (Array.isArray(sents)) {
+                    for (var i = 0; i < sents.length; i++) {
+                        var s = sents[i];
+                        var sIdx = (typeof s === 'object' && s !== null && s.sentence_index !== undefined) ? s.sentence_index : (i + 1);
+                        var sDst = (typeof s === 'string') ? s : ((s && (s.sentence_destination || s.translation)) || "");
+                        for (var c = 0; c < cards.length; c++) {
+                            if (cards[c].sentence_idx === sIdx) {
+                                if (cards[c].translated_text !== sDst) {
+                                    cards[c].translated_text = sDst;
+                                    updatedAny = true;
+                                }
+                            }
+                        }
+                    }
+                } else if (typeof sents === 'object') {
+                    var isZeroBased = (sents[0] !== undefined || sents['0'] !== undefined);
+                    for (var kRaw in sents) {
+                        if (sents.hasOwnProperty(kRaw)) {
+                            if (kRaw === 'PADDED' || kRaw === 'FULL_TEXT') continue;
+                            var num = parseInt(kRaw, 10);
+                            if (isNaN(num)) continue;
+                            var sIdx = isZeroBased ? (num + 1) : num;
+                            if (sIdx <= 0) continue;
+                            var sDst = typeof sents[kRaw] === 'string' ? sents[kRaw] : ((sents[kRaw] && (sents[kRaw].sentence_destination || sents[kRaw].translation)) || "");
+                            for (var c = 0; c < cards.length; c++) {
+                                if (cards[c].sentence_idx === sIdx) {
+                                    if (cards[c].translated_text !== sDst) {
+                                        cards[c].translated_text = sDst;
+                                        updatedAny = true;
+                                    }
+                                }
                             }
                         }
                     }
