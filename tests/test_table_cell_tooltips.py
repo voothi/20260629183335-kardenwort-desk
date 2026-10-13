@@ -657,3 +657,63 @@ def test_client_row_binding_preserves_numbered_tooltip_and_subtoken_isolation(pa
     assert title_after_delta == title_val
 
 
+def test_grammar_metadata_contract_server_client_parity(page, tmp_path):
+    """
+    Verifies that window.__CONFIG__.grammar is injected, server-rendered and client-rendered
+    tooltips exhibit 100% parity according to the unified kardenwort_grammar contract,
+    and client tooltips resolve directly from window.__CONFIG__.grammar.
+    """
+    import kardenwort_grammar
+    from tests.test_lookup_renderers import _create_render_test_env
+
+    config, resolved_paths = _create_render_test_env(tmp_path)
+    res_dir = tmp_path / "results"
+    res_dir.mkdir(exist_ok=True)
+    tsv_path = res_dir / "20261013211500-grammar-parity.de.tsv"
+    tsv_header = "WordSource\tWordSourceInflectedForm\tWordDestination\tWordSourcePOS\tWordSourceGender\tProvenance\n"
+    tsv_row = "Lieferpartner\tLieferpartner\tпартнёр по доставке\tn.\tm.\tlive:intellifiller\n"
+    tsv_path.write_text(tsv_header + tsv_row, encoding="utf-8")
+
+    html_out = run_render_flow(
+        text="Der Lieferpartner kommt heute.",
+        language="de",
+        zid="20261013211500",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path
+    )
+
+    page.set_content(html_out)
+
+    # 1. Verify window.__CONFIG__.grammar is injected and matches kardenwort_grammar payload
+    grammar_in_client = page.evaluate("window.__CONFIG__ && window.__CONFIG__.grammar")
+    assert grammar_in_client is not None
+    py_payload = kardenwort_grammar.get_grammar_payload()
+    assert grammar_in_client["german_articles"] == py_payload["german_articles"]
+    assert grammar_in_client["suffixes_masculine"] == py_payload["suffixes_masculine"]
+
+    # 2. Server-rendered HTML titles match kardenwort_grammar contract
+    expected_lemma_title = kardenwort_grammar.format_lemma_article_tooltip("Lieferpartner", gender="m.", lang="de", pos="n.")
+    expected_gender_title = kardenwort_grammar.format_gender_tooltip("m.", lemma="Lieferpartner", provenance="live:intellifiller")
+    assert expected_lemma_title == "der Lieferpartner"
+    assert expected_gender_title == "Masculine (AI: IntelliFiller · Suffix: -partner)"
+    assert f'title="{expected_lemma_title}"' in html_out
+    assert f'title="{expected_gender_title}"' in html_out
+
+    # 3. Client JS evaluation matches server and kardenwort_grammar exactly
+    js_lemma_title = page.evaluate("window.formatLemmaTooltip('Lieferpartner', 'm.', 'de', 'n.')")
+    js_gender_title = page.evaluate("window.formatGenderTooltip('m.', 'Lieferpartner', 'live:intellifiller')")
+    assert js_lemma_title == expected_lemma_title
+    assert js_gender_title == expected_gender_title
+
+    # 4. Verify client functions dynamically consume injected window.__CONFIG__.grammar
+    custom_pos = page.evaluate("""
+        (() => {
+            window.__CONFIG__.grammar.posMap['custom_tag'] = 'CustomCategory';
+            return window.formatPosTooltip('custom_tag');
+        })()
+    """)
+    assert custom_pos == "CustomCategory"
+
+

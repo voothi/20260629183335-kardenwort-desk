@@ -29,6 +29,26 @@ from dataclasses import dataclass
 from typing import Optional, Any, Union, List, FrozenSet, TypedDict, Tuple, Dict, Set
 from enum import Enum, auto
 
+from kardenwort_grammar import (
+    POS_FULL_NAME_MAP,
+    GENDER_FULL_NAME_MAP,
+    GERMAN_ARTICLES,
+    GERMAN_PRONOUNS,
+    GERMAN_NOUN_TAGS,
+    GERMAN_NON_NOUN_TAGS,
+    GERMAN_GENDER_SUFFIXES_MASCULINE,
+    GERMAN_GENDER_SUFFIXES_FEMININE,
+    GERMAN_GENDER_SUFFIXES_NEUTER,
+    GERMAN_SUFFIX_EXCLUDED_IN,
+    detect_german_gender_suffix as _grammar_detect_german_gender_suffix,
+    is_ai_provenance as _grammar_is_ai_provenance,
+    format_lemma_article_tooltip as _grammar_format_lemma_article_tooltip,
+    format_pos_tooltip as _grammar_format_pos_tooltip,
+    format_gender_tooltip as _grammar_format_gender_tooltip,
+    format_gender_badge as _grammar_format_gender_badge,
+    get_grammar_payload,
+)
+
 # Add local vendor directory for third-party dependencies (e.g. watchdog)
 vendor_dir = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'vendor')
 if vendor_dir not in sys.path:
@@ -2243,6 +2263,7 @@ def resolve_ui_config(config: Optional[configparser.ConfigParser] = None) -> Dic
         'highlight_same_lemma': False,
         'filter_selected_only': False,
         'compound_joiners': "".join(sorted(COMPOUND_JOINERS)),
+        'grammar': get_grammar_payload(),
     }
     if not config:
         return ui_cfg
@@ -2587,74 +2608,6 @@ def aggregate_sequential_distinct(
     return delimiter.join(result)
 
 
-POS_FULL_NAME_MAP = {
-    "n.": "Noun",
-    "n": "Noun",
-    "NOUN": "Noun",
-    "PROPN": "Noun",
-    "noun": "Noun",
-    "v.": "Verb",
-    "v": "Verb",
-    "VERB": "Verb",
-    "AUX": "Verb",
-    "verb": "Verb",
-    "adj.": "Adjective",
-    "adj": "Adjective",
-    "ADJ": "Adjective",
-    "adjective": "Adjective",
-    "adv.": "Adverb",
-    "adv": "Adverb",
-    "ADV": "Adverb",
-    "adverb": "Adverb",
-    "prep.": "Preposition",
-    "prep": "Preposition",
-    "ADP": "Preposition",
-    "PREP": "Preposition",
-    "preposition": "Preposition",
-    "art.": "Article",
-    "art": "Article",
-    "DET": "Article",
-    "ART": "Article",
-    "article": "Article",
-    "pron.": "Pronoun",
-    "pron": "Pronoun",
-    "PRON": "Pronoun",
-    "pronoun": "Pronoun",
-    "conj.": "Conjunction",
-    "conj": "Conjunction",
-    "CCONJ": "Conjunction",
-    "SCONJ": "Conjunction",
-    "CONJ": "Conjunction",
-    "conjunction": "Conjunction",
-    "num.": "Numeral",
-    "num": "Numeral",
-    "NUM": "Numeral",
-    "numeral": "Numeral",
-    "part.": "Particle",
-    "part": "Particle",
-    "PART": "Particle",
-    "particle": "Particle",
-    "intj.": "Interjection",
-    "intj": "Interjection",
-    "INTJ": "Interjection",
-    "interjection": "Interjection",
-}
-
-GENDER_FULL_NAME_MAP = {
-    "m": "Masculine",
-    "masc": "Masculine",
-    "masculine": "Masculine",
-    "der": "Masculine",
-    "f": "Feminine",
-    "fem": "Feminine",
-    "feminine": "Feminine",
-    "die": "Feminine",
-    "n": "Neuter",
-    "neut": "Neuter",
-    "neuter": "Neuter",
-    "das": "Neuter",
-}
-
 def to_unicode_bold(text: str) -> str:
     if not text:
         return ""
@@ -2845,149 +2798,24 @@ def format_lemma_article_tooltip(
     lang: str = "de",
     pos: Optional[str] = None
 ) -> str:
-    if not lemma:
-        return ""
-    clean_lemma = str(lemma).strip()
-    if not clean_lemma:
-        return ""
-    cur_lang = (lang or "de").strip().lower()
-    if cur_lang == "de":
-        lower_lemma = clean_lemma.lower()
-        german_articles = (
-            "der", "die", "das",
-            "ein", "eine", "einer", "eines", "einem", "einen",
-            "des", "dem", "den",
-            "kein", "keine", "keiner", "keines", "keinem", "keinen"
-        )
-        if lower_lemma in german_articles or lower_lemma.startswith(tuple(a + " " for a in german_articles)):
-            return clean_lemma
-
-        if pos:
-            pos_parts = [p.strip().rstrip('.').lower() for p in str(pos).split(',') if p.strip()]
-            noun_tags = {"n", "noun", "propn", "subst"}
-            non_noun_tags = {
-                "art", "det", "pron", "v", "verb", "aux",
-                "adv", "prep", "adp", "conj", "cconj", "sconj",
-                "intj", "num", "part", "adj"
-            }
-            has_noun = any(p in noun_tags for p in pos_parts)
-            has_non_noun = any(p in non_noun_tags for p in pos_parts)
-            if has_non_noun and not has_noun:
-                return clean_lemma
-        else:
-            if clean_lemma[0].islower():
-                return clean_lemma
-            german_pronouns = {
-                "er", "sie", "es", "wir", "ihr", "du", "ich",
-                "mich", "dich", "ihn", "ihm", "ihnen", "uns", "euch",
-                "mir", "dir", "sich", "mein", "dein", "sein", "unser", "euer"
-            }
-            if lower_lemma in german_pronouns:
-                return clean_lemma
-
-        g = (str(gender) if gender is not None else "").strip().rstrip('.').lower()
-        if g in ("m", "masc", "masculine", "der"):
-            return f"der {clean_lemma}"
-        elif g in ("f", "fem", "feminine", "die"):
-            return f"die {clean_lemma}"
-        elif g in ("n", "neut", "neuter", "das"):
-            return f"das {clean_lemma}"
-    return clean_lemma
+    return _grammar_format_lemma_article_tooltip(lemma, gender=gender, lang=lang, pos=pos)
 
 
 def format_pos_tooltip(pos_val: Optional[str]) -> str:
-    if not pos_val:
-        return ""
-    p_clean = str(pos_val).strip()
-    if not p_clean:
-        return ""
-    if "," in p_clean:
-        parts = [format_pos_tooltip(p.strip()) for p in p_clean.split(',') if p.strip()]
-        return ", ".join(parts)
-    if p_clean in POS_FULL_NAME_MAP:
-        return POS_FULL_NAME_MAP[p_clean]
-    if p_clean.upper() in POS_FULL_NAME_MAP:
-        return POS_FULL_NAME_MAP[p_clean.upper()]
-    if p_clean.lower() in POS_FULL_NAME_MAP:
-        return POS_FULL_NAME_MAP[p_clean.lower()]
-    return p_clean
+    return _grammar_format_pos_tooltip(pos_val)
 
-# German gender derivational and compound noun suffixes for lightweight morphological derivation:
-# Suffix lists sorted by length descending so longer suffixes match first
-GERMAN_GENDER_SUFFIXES_MASCULINE = (
-    "partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"
-)
-GERMAN_GENDER_SUFFIXES_FEMININE = (
-    "schaft", "heit", "keit", "ung", "ion", "tät", "enz", "anz", "ik", "ei", "in"
-)
-GERMAN_GENDER_SUFFIXES_NEUTER = (
-    "chen", "lein", "ment", "tum", "um"
-)
-
-GERMAN_SUFFIX_EXCLUDED_IN = {
-    "kinn", "sinn", "benzin", "ruin", "urin", "rubin", "cousin", "magazin", "berlin", "dublin"
-}
 
 def detect_german_gender_suffix(lemma: Optional[str], gender_code: str) -> Optional[str]:
-    if not lemma:
-        return None
-    w = str(lemma).strip().lower()
-    if not w:
-        return None
+    return _grammar_detect_german_gender_suffix(lemma, gender_code)
 
-    if gender_code == "m":
-        for suf in GERMAN_GENDER_SUFFIXES_MASCULINE:
-            min_len = 4 if suf in ("mann", "or") else (7 if suf == "partner" else (6 if suf == "ismus" else 5))
-            if len(w) >= min_len and w.endswith(suf):
-                return f"-{suf}"
-    elif gender_code == "f":
-        for suf in GERMAN_GENDER_SUFFIXES_FEMININE:
-            if suf == "in":
-                if len(w) > 4 and w not in GERMAN_SUFFIX_EXCLUDED_IN and w.endswith("in"):
-                    return "-in"
-            else:
-                min_len = 4 if suf in ("ik", "ei") else (6 if suf == "schaft" else 5)
-                if len(w) >= min_len and w.endswith(suf):
-                    return f"-{suf}"
-    elif gender_code == "n":
-        for suf in GERMAN_GENDER_SUFFIXES_NEUTER:
-            min_len = 4 if suf in ("tum", "um") else 5
-            if len(w) >= min_len and w.endswith(suf):
-                return f"-{suf}"
-    return None
 
 def is_ai_provenance(provenance: Optional[str]) -> bool:
-    if not provenance:
-        return False
-    p_str = str(provenance).strip().lower()
-    return "intellifiller" in p_str or p_str in ("ai", "live:ai")
+    return _grammar_is_ai_provenance(provenance)
+
 
 def format_gender_tooltip(gender_val: Optional[str], lemma: Optional[str] = None, provenance: Optional[str] = None) -> str:
-    if not gender_val:
-        return ""
-    g_clean = str(gender_val).strip().rstrip('.').lower()
-    if g_clean not in GENDER_FULL_NAME_MAP:
-        return ""
-    gender_name = GENDER_FULL_NAME_MAP[g_clean]
+    return _grammar_format_gender_tooltip(gender_val, lemma=lemma, provenance=provenance)
 
-    g_code = ""
-    if g_clean in ("m", "masc", "masculine", "der"):
-        g_code = "m"
-    elif g_clean in ("f", "fem", "feminine", "die"):
-        g_code = "f"
-    elif g_clean in ("n", "neut", "neuter", "das"):
-        g_code = "n"
-
-    ai_flag = is_ai_provenance(provenance)
-    suffix = detect_german_gender_suffix(lemma, g_code)
-
-    if ai_flag and suffix:
-        return f"{gender_name} (AI: IntelliFiller · Suffix: {suffix})"
-    elif suffix:
-        return f"{gender_name} (Suffix: {suffix})"
-    elif ai_flag:
-        return f"{gender_name} (AI: IntelliFiller)"
-    return gender_name
 
 def format_classification_tooltip(classification_val: Optional[str], role: str = "") -> str:
     if not classification_val:
@@ -3008,15 +2836,9 @@ def format_classification_tooltip(classification_val: Optional[str], role: str =
             return f"{clean_role.capitalize()}: {val_str}"
     return val_str
 
+
 def format_gender_badge(gender_val: Optional[str]) -> str:
-    g = (str(gender_val) if gender_val is not None else "").strip().rstrip('.').lower()
-    if g in ("m", "masc", "masculine", "der"):
-        return '<span class="kw-gender kw-gender-m">m</span>'
-    elif g in ("f", "fem", "feminine", "die"):
-        return '<span class="kw-gender kw-gender-f">f</span>'
-    elif g in ("n", "neut", "neuter", "das"):
-        return '<span class="kw-gender kw-gender-n">n</span>'
-    return ""
+    return _grammar_format_gender_badge(gender_val)
 
 def get_role_fields(mapping, headers):
     role_fields = {}
@@ -14231,6 +14053,13 @@ window.__CONFIG__ = {ui_config_json};
         return boldSentence || boldHeader;
     }
 
+    function getGrammarConfig() {
+        if (typeof window !== 'undefined' && window.__CONFIG__ && window.__CONFIG__.grammar) {
+            return window.__CONFIG__.grammar;
+        }
+        return null;
+    }
+
     function formatLemmaTooltip(lemma, gender, lang, pos) {
         if (!lemma) return "";
         var cleanLemma = String(lemma).trim();
@@ -14238,14 +14067,13 @@ window.__CONFIG__ = {ui_config_json};
         var currentLang = (lang || (window.AppConfig ? window.AppConfig.language : 'de') || 'de').toLowerCase();
         if (currentLang === 'de') {
             var lowerLemma = cleanLemma.toLowerCase();
-            var germanArticles = [
-                "der", "die", "das",
-                "ein", "eine", "einer", "eines", "einem", "einen",
-                "des", "dem", "den",
-                "kein", "keine", "keiner", "keines", "keinem", "keinen"
+            var grammar = getGrammarConfig();
+            var articles = (grammar && (grammar.german_articles || grammar.germanArticles)) || [
+                "der", "die", "das", "ein", "eine", "einer", "eines", "einem", "einen",
+                "des", "dem", "den", "kein", "keine", "keiner", "keines", "keinem", "keinen"
             ];
-            for (var i = 0; i < germanArticles.length; i++) {
-                var art = germanArticles[i];
+            for (var i = 0; i < articles.length; i++) {
+                var art = articles[i];
                 if (lowerLemma === art || lowerLemma.indexOf(art + " ") === 0) {
                     return cleanLemma;
                 }
@@ -14256,17 +14084,17 @@ window.__CONFIG__ = {ui_config_json};
                 var posParts = posStr.split(',').map(function(p) {
                     return p.trim().replace(/\\.+$/, '');
                 }).filter(Boolean);
-                var nounTags = { "n": true, "noun": true, "propn": true, "subst": true };
-                var nonNounTags = {
-                    "art": true, "det": true, "pron": true, "v": true, "verb": true, "aux": true,
-                    "adv": true, "prep": true, "adp": true, "conj": true, "cconj": true, "sconj": true,
-                    "intj": true, "num": true, "part": true, "adj": true
-                };
+                var nounTagsList = (grammar && (grammar.noun_tags || grammar.nounTags)) || ["n", "noun", "propn", "subst"];
+                var nonNounTagsList = (grammar && (grammar.non_noun_tags || grammar.nonNounTags)) || [
+                    "art", "det", "pron", "v", "verb", "aux",
+                    "adv", "prep", "adp", "conj", "cconj", "sconj",
+                    "intj", "num", "part", "adj"
+                ];
                 var hasNoun = false;
                 var hasNonNoun = false;
                 for (var j = 0; j < posParts.length; j++) {
-                    if (nounTags[posParts[j]]) hasNoun = true;
-                    if (nonNounTags[posParts[j]]) hasNonNoun = true;
+                    if (nounTagsList.indexOf(posParts[j]) !== -1) hasNoun = true;
+                    if (nonNounTagsList.indexOf(posParts[j]) !== -1) hasNonNoun = true;
                 }
                 if (hasNonNoun && !hasNoun) {
                     return cleanLemma;
@@ -14275,12 +14103,12 @@ window.__CONFIG__ = {ui_config_json};
                 if (/^[a-zäöüß]/.test(cleanLemma)) {
                     return cleanLemma;
                 }
-                var germanPronouns = {
-                    "er": true, "sie": true, "es": true, "wir": true, "ihr": true, "du": true, "ich": true,
-                    "mich": true, "dich": true, "ihn": true, "ihm": true, "ihnen": true, "uns": true, "euch": true,
-                    "mir": true, "dir": true, "sich": true, "mein": true, "dein": true, "sein": true, "unser": true, "euer": true
-                };
-                if (germanPronouns[lowerLemma]) {
+                var pronouns = (grammar && (grammar.german_pronouns || grammar.germanPronouns)) || [
+                    "er", "sie", "es", "wir", "ihr", "du", "ich",
+                    "mich", "dich", "ihn", "ihm", "ihnen", "uns", "euch",
+                    "mir", "dir", "sich", "mein", "dein", "sein", "unser", "euer"
+                ];
+                if (pronouns.indexOf(lowerLemma) !== -1) {
                     return cleanLemma;
                 }
             }
@@ -14293,21 +14121,6 @@ window.__CONFIG__ = {ui_config_json};
         return cleanLemma;
     }
 
-
-    var POS_FULL_NAME_MAP_JS = {
-        "n.": "Noun", "n": "Noun", "noun": "Noun", "NOUN": "Noun", "PROPN": "Noun",
-        "v.": "Verb", "v": "Verb", "verb": "Verb", "VERB": "Verb", "AUX": "Verb",
-        "adj.": "Adjective", "adj": "Adjective", "adjective": "Adjective", "ADJ": "Adjective",
-        "adv.": "Adverb", "adv": "Adverb", "adverb": "Adverb", "ADV": "Adverb",
-        "prep.": "Preposition", "prep": "Preposition", "preposition": "Preposition", "ADP": "Preposition", "PREP": "Preposition",
-        "art.": "Article", "art": "Article", "article": "Article", "DET": "Article", "ART": "Article",
-        "pron.": "Pronoun", "pron": "Pronoun", "pronoun": "Pronoun", "PRON": "Pronoun",
-        "conj.": "Conjunction", "conj": "Conjunction", "conjunction": "Conjunction", "CCONJ": "Conjunction", "SCONJ": "Conjunction", "CONJ": "Conjunction",
-        "num.": "Numeral", "num": "Numeral", "numeral": "Numeral", "NUM": "Numeral",
-        "part.": "Particle", "part": "Particle", "particle": "Particle", "PART": "Particle",
-        "intj.": "Interjection", "intj": "Interjection", "interjection": "Interjection", "INTJ": "Interjection"
-    };
-
     function formatPosTooltip(posVal) {
         if (!posVal) return "";
         var pClean = String(posVal).trim();
@@ -14316,46 +14129,45 @@ window.__CONFIG__ = {ui_config_json};
             var parts = pClean.split(',').map(function(p) { return formatPosTooltip(p.trim()); }).filter(Boolean);
             return parts.join(', ');
         }
-        if (POS_FULL_NAME_MAP_JS[pClean]) return POS_FULL_NAME_MAP_JS[pClean];
-        if (POS_FULL_NAME_MAP_JS[pClean.toUpperCase()]) return POS_FULL_NAME_MAP_JS[pClean.toUpperCase()];
-        if (POS_FULL_NAME_MAP_JS[pClean.toLowerCase()]) return POS_FULL_NAME_MAP_JS[pClean.toLowerCase()];
-        var pStripped = pClean.replace(/\\.+$/, '').toLowerCase();
-        if (POS_FULL_NAME_MAP_JS[pStripped]) return POS_FULL_NAME_MAP_JS[pStripped];
+        var grammar = getGrammarConfig();
+        if (grammar) {
+            if (grammar.posMap && grammar.posMap[pClean]) return grammar.posMap[pClean];
+            if (grammar.pos_full_name_map && grammar.pos_full_name_map[pClean]) return grammar.pos_full_name_map[pClean];
+            var posMap = grammar.posMap || grammar.pos_full_name_map;
+            if (posMap) {
+                if (posMap[pClean.toUpperCase()]) return posMap[pClean.toUpperCase()];
+                if (posMap[pClean.toLowerCase()]) return posMap[pClean.toLowerCase()];
+                var pStripped = pClean.replace(/\\.+$/, '').toLowerCase();
+                if (posMap[pStripped]) return posMap[pStripped];
+            }
+        }
         return pClean;
     }
-
-    var GENDER_FULL_NAME_MAP_JS = {
-        "m": "Masculine", "masc": "Masculine", "masculine": "Masculine", "der": "Masculine",
-        "f": "Feminine", "fem": "Feminine", "feminine": "Feminine", "die": "Feminine",
-        "n": "Neuter", "neut": "Neuter", "neuter": "Neuter", "das": "Neuter"
-    };
-
-    var GERMAN_GENDER_SUFFIXES_MASCULINE_JS = ["partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"];
-    var GERMAN_GENDER_SUFFIXES_FEMININE_JS = ["schaft", "heit", "keit", "ung", "ion", "tät", "enz", "anz", "ik", "ei", "in"];
-    var GERMAN_GENDER_SUFFIXES_NEUTER_JS = ["chen", "lein", "ment", "tum", "um"];
-    var GERMAN_SUFFIX_EXCLUDED_IN_JS = {
-        "kinn": true, "sinn": true, "benzin": true, "ruin": true, "urin": true,
-        "rubin": true, "cousin": true, "magazin": true, "berlin": true, "dublin": true
-    };
 
     function detectGermanGenderSuffix(lemma, genderCode) {
         if (!lemma) return null;
         var w = String(lemma).trim().toLowerCase();
         if (!w) return null;
 
+        var grammar = getGrammarConfig() || {};
+        var mascSuffixes = grammar.suffixes_masculine || grammar.suffixesMasculine || ["partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"];
+        var femSuffixes = grammar.suffixes_feminine || grammar.suffixesFeminine || ["schaft", "heit", "keit", "ung", "ion", "tät", "enz", "anz", "ik", "ei", "in"];
+        var neutSuffixes = grammar.suffixes_neuter || grammar.suffixesNeuter || ["chen", "lein", "ment", "tum", "um"];
+        var excludedIn = grammar.suffix_excluded_in || grammar.suffixExcludedIn || ["kinn", "sinn", "benzin", "ruin", "urin", "rubin", "cousin", "magazin", "berlin", "dublin"];
+
         if (genderCode === 'm') {
-            for (var i = 0; i < GERMAN_GENDER_SUFFIXES_MASCULINE_JS.length; i++) {
-                var suf = GERMAN_GENDER_SUFFIXES_MASCULINE_JS[i];
+            for (var i = 0; i < mascSuffixes.length; i++) {
+                var suf = mascSuffixes[i];
                 var minLen = (suf === 'mann' || suf === 'or') ? 4 : (suf === 'partner' ? 7 : (suf === 'ismus' ? 6 : 5));
                 if (w.length >= minLen && w.endsWith(suf)) {
                     return '-' + suf;
                 }
             }
         } else if (genderCode === 'f') {
-            for (var j = 0; j < GERMAN_GENDER_SUFFIXES_FEMININE_JS.length; j++) {
-                var sufF = GERMAN_GENDER_SUFFIXES_FEMININE_JS[j];
+            for (var j = 0; j < femSuffixes.length; j++) {
+                var sufF = femSuffixes[j];
                 if (sufF === 'in') {
-                    if (w.length > 4 && !GERMAN_SUFFIX_EXCLUDED_IN_JS[w] && w.endsWith('in')) {
+                    if (w.length > 4 && excludedIn.indexOf(w) === -1 && w.endsWith('in')) {
                         return '-in';
                     }
                 } else {
@@ -14366,8 +14178,8 @@ window.__CONFIG__ = {ui_config_json};
                 }
             }
         } else if (genderCode === 'n') {
-            for (var k = 0; k < GERMAN_GENDER_SUFFIXES_NEUTER_JS.length; k++) {
-                var sufN = GERMAN_GENDER_SUFFIXES_NEUTER_JS[k];
+            for (var k = 0; k < neutSuffixes.length; k++) {
+                var sufN = neutSuffixes[k];
                 var minLenN = (sufN === 'tum' || sufN === 'um') ? 4 : 5;
                 if (w.length >= minLenN && w.endsWith(sufN)) {
                     return '-' + sufN;
@@ -14386,8 +14198,14 @@ window.__CONFIG__ = {ui_config_json};
     function formatGenderTooltip(genderVal, lemma, provenance) {
         if (!genderVal) return "";
         var gClean = String(genderVal).trim().replace(/\\.+$/, '').toLowerCase();
-        if (!GENDER_FULL_NAME_MAP_JS[gClean]) return "";
-        var genderName = GENDER_FULL_NAME_MAP_JS[gClean];
+        var grammar = getGrammarConfig() || {};
+        var genderMap = grammar.gender_full_name_map || grammar.genderMap || {
+            "m": "Masculine", "masc": "Masculine", "masculine": "Masculine", "der": "Masculine",
+            "f": "Feminine", "fem": "Feminine", "feminine": "Feminine", "die": "Feminine",
+            "n": "Neuter", "neut": "Neuter", "neuter": "Neuter", "das": "Neuter"
+        };
+        if (!genderMap[gClean]) return "";
+        var genderName = genderMap[gClean];
 
         var gCode = "";
         if (gClean === 'm' || gClean === 'masc' || gClean === 'masculine' || gClean === 'der') gCode = 'm';
@@ -14456,6 +14274,7 @@ window.__CONFIG__ = {ui_config_json};
     window.formatLemmaTooltip = formatLemmaTooltip;
     window.formatPosTooltip = formatPosTooltip;
     window.formatGenderTooltip = formatGenderTooltip;
+    window.detectGermanGenderSuffix = detectGermanGenderSuffix;
     window.formatClassificationTooltip = formatClassificationTooltip;
     window.formatGenderBadge = formatGenderBadge;
 
@@ -23889,6 +23708,7 @@ setTimeout(function() {{
     html_page = html_page.replace("{mismatch_info_json}", json.dumps(mismatch_info) if mismatch_info else "null")
     ui_cfg = resolve_ui_config(config)
     ui_cfg["compound_joiners"] = "".join(sorted(COMPOUND_JOINERS))
+    ui_cfg["grammar"] = get_grammar_payload()
     html_page = html_page.replace("{ui_config_json}", json.dumps(ui_cfg))
     html_page = html_page.replace("{pos_display_order_json}", json.dumps(POS_DISPLAY_ORDER))
     html_page = html_page.replace("{same_lemma_active_class}", " active" if ui_cfg.get("highlight_same_lemma") else "")
