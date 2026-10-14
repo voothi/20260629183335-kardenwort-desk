@@ -100,6 +100,9 @@ window.fetch = async function(url, options) {
                 status: 'success',
                 retext_started: true,
                 translatedText: '<div>Переведенный текст обновлен</div>',
+                sentences: {
+                    1: 'Переведенный текст обновлен'
+                },
                 rows: {
                     0: {
                         lemma: 'Haus',
@@ -1162,7 +1165,10 @@ window.fetch = async function(url, options) {
                 ok: true,
                 status: 'success',
                 retext_started: true,
-                translatedText: '<div>Переведенный текст</div>'
+                translatedText: '<div>Переведенный текст</div>',
+                sentences: {
+                    1: 'Переведенный текст'
+                }
             })
         };
     }

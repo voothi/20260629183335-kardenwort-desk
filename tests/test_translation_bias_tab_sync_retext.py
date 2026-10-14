@@ -421,7 +421,11 @@ def test_on_retext_click_updates_workspace_tabs_cards(page, tmp_path):
                         status: 'success',
                         data: {
                             translatedText: '<div>Он идет домой (обновлено).</div><div>Она идет в парк (обновлено).</div>',
-                            translated_text: '<div>Он идет домой (обновлено).</div><div>Она идет в парк (обновлено).</div>'
+                            translated_text: '<div>Он идет домой (обновлено).</div><div>Она идет в парк (обновлено).</div>',
+                            sentences: {
+                                1: 'Он идет домой (обновлено).',
+                                2: 'Она идет в парк (обновлено).'
+                            }
                         }
                     });
                 }
