@@ -3226,9 +3226,12 @@ class SessionArbiter:
 # ---------------------------------------------------------------------------
 def generate_server_zid(server) -> str:
     now = datetime.now()
-    with server.seq_lock:
-        server.seq_counter = (server.seq_counter + 1) % 10000
-        seq = server.seq_counter
+    if hasattr(server, 'seq_lock') and hasattr(server, 'seq_counter'):
+        with server.seq_lock:
+            server.seq_counter = (server.seq_counter + 1) % 10000
+            seq = server.seq_counter
+    else:
+        seq = 0
     return f"{now:%Y%m%d%H%M%S}-{seq:04d}"
 
 
@@ -5287,6 +5290,53 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             if not target_path.exists() or not target_path.is_file():
                 raise StructuredError(ErrorCode.NOT_FOUND, f"Static asset '{req_rel}' not found")
+
+            self._serve_static_file(target_path)
+            return
+
+        # 5.1 Static Web Shell & Assets (web/ directory: /, /index.html, /css/*, /js/*, /favicon.ico)
+        if (
+            path in ('/', '/index.html', '/favicon.ico')
+            or path.startswith('/css/')
+            or path.startswith('/js/')
+            or path.startswith('/web/')
+        ):
+            if method != 'GET':
+                raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
+            desk_dir = Path(__file__).resolve().parent
+            web_dir = (desk_dir / "web").resolve()
+
+            if path in ('/', '/index.html'):
+                target_path = (web_dir / "index.html").resolve()
+            elif path == '/favicon.ico':
+                target_path = (web_dir / "favicon.ico").resolve()
+                if not target_path.exists():
+                    target_path = (desk_dir / "assets" / "favicon.ico").resolve()
+                if not target_path.exists():
+                    target_path = (desk_dir / "assets" / "numbers" / "1.ico").resolve()
+            elif path.startswith('/web/'):
+                req_rel = path[len('/web/'):]
+                target_path = (web_dir / req_rel).resolve()
+            else:
+                req_rel = path.lstrip('/')
+                target_path = (web_dir / req_rel).resolve()
+
+            allowed = False
+            try:
+                target_path.relative_to(web_dir)
+                allowed = True
+            except ValueError:
+                try:
+                    target_path.relative_to((desk_dir / "assets").resolve())
+                    allowed = True
+                except ValueError:
+                    pass
+
+            if not allowed:
+                raise StructuredError(ErrorCode.UNAUTHORIZED, "Path traversal forbidden")
+
+            if not target_path.exists() or not target_path.is_file():
+                raise StructuredError(ErrorCode.NOT_FOUND, f"Static asset '{path}' not found")
 
             self._serve_static_file(target_path)
             return

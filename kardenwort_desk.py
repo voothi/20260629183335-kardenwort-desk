@@ -24442,338 +24442,92 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         html_output += render_section(sec, ctx)
     html_output += '</div>\n'
     
-    theme = goldendict.get('theme', 'compact')
-    
-    css = ""
-    if theme == 'compact':
-        css = """
-        .kw-lookup-container {
-            --table-th-border: #ccc;
-            --table-border: #eee;
-            margin: 0;
-            padding: 2px;
-            font-family: inherit;
-            font-size: inherit;
-            line-height: inherit;
-            font-style: normal;
-            font-weight: normal;
-        }
-        .kw-source-text {
-            white-space: pre-wrap;
-            padding: 2px 0;
-            margin-bottom: 1em;
-            font-family: inherit;
-            font-style: normal;
-            font-weight: normal;
-        }
-        .kw-translation {
-            padding: 2px 0;
-            margin-bottom: 1em;
-            font-family: inherit;
-            font-style: normal;
-            font-weight: normal;
-        }
-        .kw-lemmas-table {
-            width: 100%;
-            border-collapse: collapse;
-            margin-top: 4px;
-        }
-        .kw-lemmas-table th {
-            text-align: left;
-            padding: 2px 4px;
-            border-bottom: 1px solid var(--table-th-border);
-        }
-        .kw-lemmas-table td {
-            padding: 2px 4px;
-        }
-        .kw-lemmas-table tr.kw-row-selected {
-            background-color: rgba(255, 225, 105, 0.4) !important;
-        }
-        .kw-lemmas-table th.col-pos, .kw-lemmas-table td.col-pos {
-            text-align: center;
-            width: 48px;
-            white-space: nowrap;
-        }
-        .kw-lemmas-table th.col-gender, .kw-lemmas-table td.col-gender {
-            text-align: center;
-            width: 48px;
-            white-space: nowrap;
-        }
-        .kw-lemmas-table th.col-classification, .kw-lemmas-table td.col-classification {
-            text-align: center;
-            width: 48px;
-            white-space: nowrap;
-        }
-        .kw-gender {
-            display: inline-block;
-            padding: 1px 5px;
-            border-radius: 3px;
-            font-weight: 600;
-            font-size: 11px;
-            line-height: 1.2;
-            text-transform: lowercase;
-            text-align: center;
-        }
-        .kw-gender-m {
-            background-color: rgba(30, 144, 255, 0.15);
-            color: #1e90ff;
-            border: 1px solid rgba(30, 144, 255, 0.4);
-        }
-        .kw-gender-f {
-            background-color: rgba(255, 75, 75, 0.15);
-            color: #ff4b4b;
-            border: 1px solid rgba(255, 75, 75, 0.4);
-        }
-        .kw-gender-n {
-            background-color: rgba(255, 204, 0, 0.15);
-            color: #eab308;
-            border: 1px solid rgba(255, 204, 0, 0.4);
-        }
-        .kw-tag-header {
-            width: 32px;
-            text-align: center;
-        }
-        .kw-tag-control {
-            text-align: center;
-            width: 32px;
-        }
-        .kw-tag-checkbox {
-            cursor: pointer;
-            width: 16px;
-            height: 16px;
-            accent-color: #0969da;
-        }
-        .kw-actions-bar {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 8px;
-            margin-bottom: 8px;
-        }
-        .kw-export-btn {
-            background-color: #f6f8fa;
-            color: #24292f;
-            border: 1px solid #d0d7de;
-            border-radius: 4px;
-            padding: 4px 12px;
-            height: 28px;
-            font-size: 13px;
-            font-weight: 500;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-            user-select: none;
-        }
-        .kw-export-btn:hover {
-            background-color: #eaeef2;
-            border-color: #afb8c1;
-        }
-        .kw-export-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .kw-interactive-status {
-            font-size: 12px;
-            font-weight: 500;
-            margin-left: 8px;
-            display: none;
-        }"""
-    else:
-        css = """
-        html, body {
-            background-color: #0d0f12;
-            color: #e3e6eb;
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
-            font-size: 14px;
-            line-height: 1.5;
-            margin: 0;
-            padding: 0;
-        }
-        .kw-lookup-container {
-            --bg-primary: #0d0f12;
-            --bg-secondary: #13161c;
-            --bg-card: #161a22;
-            --bg-hover: #1f242d;
-            --border-color: rgba(255, 255, 255, 0.1);
-            --border-subtle: rgba(255, 255, 255, 0.05);
-            --text-main: #e3e6eb;
-            --text-muted: #8b949e;
-            --font-size-xs: 12px;
-            --font-size-sm: 13px;
-            --font-size-base: 14px;
-            --font-size-md: 16px;
-            --radius-sm: 2px;
+    server_host = goldendict.get('server_host', '127.0.0.1') if isinstance(goldendict, dict) else '127.0.0.1'
+    server_port = goldendict.get('server_port', 18335) if isinstance(goldendict, dict) else 18335
+    server_url = f"http://{server_host}:{server_port}"
 
-            background-color: var(--bg-primary);
-            color: var(--text-main);
-            max-width: 1400px;
-            margin: 0 auto;
-            padding: 16px;
-            box-sizing: border-box;
-        }
-        .kw-section {
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: var(--radius-sm);
-            padding: 14px 16px;
-            margin-bottom: 14px;
-        }
-        h3, .kw-heading {
-            font-size: var(--font-size-xs);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            color: var(--text-muted);
-            margin: 0 0 8px 0;
-        }
-        .kw-source-text {
-            font-size: var(--font-size-md);
-            line-height: 1.6;
-            color: var(--text-main);
-            white-space: pre-wrap;
-            margin: 0;
-        }
-        .kw-translation {
-            font-size: var(--font-size-md);
-            line-height: 1.6;
-            color: var(--text-main);
-            white-space: pre-wrap;
-            margin: 0;
-        }
-        .kw-table-container {
-            border: 1px solid var(--border-color);
-            background: var(--bg-secondary);
-            border-radius: var(--radius-sm);
-            overflow-x: auto;
-            margin-top: 8px;
-        }
-        .kw-lemmas-table {
-            width: 100%;
-            border-collapse: collapse;
-            font-size: var(--font-size-base);
-        }
-        .kw-lemmas-table th {
-            background: var(--bg-card);
-            color: var(--text-muted);
-            font-size: var(--font-size-xs);
-            font-weight: 600;
-            text-transform: uppercase;
-            letter-spacing: 0.05em;
-            text-align: left;
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-color);
-        }
-        .kw-lemmas-table td {
-            padding: 8px 12px;
-            border-bottom: 1px solid var(--border-subtle);
-            color: var(--text-main);
-        }
-        .kw-lemmas-table tr:last-child td {
-            border-bottom: none;
-        }
-        .kw-lemmas-table tr:hover td {
-            background-color: var(--bg-hover);
-        }
-        .kw-lemmas-table tr.kw-row-selected td {
-            background-color: rgba(255, 204, 0, 0.2) !important;
-        }
-        .kw-tag-header {
-            width: 36px;
-            text-align: center;
-        }
-        .kw-tag-control {
-            text-align: center;
-            width: 36px;
-        }
-        .kw-tag-checkbox {
-            cursor: pointer;
-            width: 16px;
-            height: 16px;
-            accent-color: #388bfd;
-        }
-        .kw-actions-bar {
-            display: flex;
-            align-items: center;
-            gap: 10px;
-            margin-top: 12px;
-        }
-        .kw-export-btn {
-            background-color: var(--bg-card);
-            color: var(--text-main);
-            border: 1px solid var(--border-color);
-            border-radius: 4px;
-            padding: 4px 12px;
-            height: 28px;
-            font-size: var(--font-size-sm);
-            font-weight: 500;
-            cursor: pointer;
-            display: inline-flex;
-            align-items: center;
-            justify-content: center;
-            text-decoration: none;
-            transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
-            user-select: none;
-        }
-        .kw-export-btn:hover {
-            background-color: var(--bg-hover);
-            border-color: rgba(255, 255, 255, 0.2);
-        }
-        .kw-export-btn:disabled {
-            opacity: 0.4;
-            cursor: not-allowed;
-        }
-        .kw-interactive-status {
-            font-size: var(--font-size-xs);
-            font-weight: 500;
-            color: #3fb950;
-            margin-left: 8px;
-            display: none;
-            font-family: var(--font-mono, monospace);
-        }"""
-        if theme == 'light':
-            css = css.replace('#0d0f12', '#f6f8fa').replace('#13161c', '#ffffff').replace('#161a22', '#ffffff').replace('#e3e6eb', '#24292f').replace('rgba(255, 255, 255, 0.1)', 'rgba(0, 0, 0, 0.1)').replace('rgba(255, 255, 255, 0.05)', 'rgba(0, 0, 0, 0.05)')
+    session_payload = {
+        "zid": str(zid or session_zid or ""),
+        "session_zid": str(session_zid or zid or ""),
+        "language": str(language or ""),
+        "target_lang": str(target_lang or ""),
+        "source_text": str(text or ""),
+        "sentence_translation": str(sentence_translation or ""),
+        "headers": headers,
+        "data_rows": data_rows,
+        "server_enabled": bool(effective_server_enabled),
+        "api_token": str(effective_api_token or ""),
+        "fingerprint": str(fingerprint or ""),
+        "server_url": server_url,
+    }
+    session_json = json.dumps(session_payload, ensure_ascii=False)
 
-    if goldendict.get('disable_css', False):
-        base_html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Kardenwort Lookup</title>
-</head>
-<body>
-{html_output}
-</body>
-</html>"""
-    else:
-        base_html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Kardenwort Lookup</title>
-    <style>{css}
-    </style>
-</head>
-<body>
-{html_output}
-</body>
-</html>"""
+    web_dir = Path(__file__).resolve().parent / "web"
+    index_path = web_dir / "index.html"
+    theme = goldendict.get('theme', 'compact') if isinstance(goldendict, dict) else 'compact'
 
-    if effective_server_enabled and session_zid:
-        server_host = goldendict.get('server_host', '127.0.0.1')
-        server_port = goldendict.get('server_port', 18335)
-        server_url = f"http://{server_host}:{server_port}"
-        injected_script = (
-            INJECTED_JS_TEMPLATE
-            .replace("__SERVER_URL__", server_url)
-            .replace("__SESSION_ZID__", session_zid or "")
-            .replace("__API_TOKEN__", effective_api_token or "")
-            .replace("__LANGUAGE__", language or "")
-            .replace("__FINGERPRINT__", fingerprint or "")
+    if index_path.is_file():
+        base_html = index_path.read_text(encoding="utf-8")
+
+        # Inject theme class into <body>
+        base_html = base_html.replace('<body>', f'<body class="theme-{theme}">')
+
+        # Replace title
+        base_html = re.sub(r'<title>.*?</title>', '<title>Kardenwort Lookup</title>', base_html)
+
+        # Inject session JSON into #session-data
+        base_html = re.sub(
+            r'<script id="session-data" type="application/json">.*?</script>',
+            f'<script id="session-data" type="application/json">\n{session_json}\n</script>',
+            base_html,
+            flags=re.DOTALL
         )
-        base_html = base_html.replace("</body>", f"{injected_script}\n</body>")
+
+        # Inject rendered container
+        start_marker = '<div class="kw-lookup-container">'
+        end_marker = '<script id="session-data"'
+        start_idx = base_html.find(start_marker)
+        end_idx = base_html.find(end_marker)
+        if start_idx != -1 and end_idx != -1:
+            base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
+
+        # Offline CSS embedding if not disabled
+        if not (isinstance(goldendict, dict) and goldendict.get('disable_css', False)):
+            css_parts = []
+            for css_file in ("variables.css", "tokens.css", "table.css"):
+                p_css = web_dir / "css" / css_file
+                if p_css.is_file():
+                    css_parts.append(p_css.read_text(encoding="utf-8"))
+            if css_parts:
+                combined_css = "\n".join(css_parts)
+                base_html = base_html.replace('</head>', f'<style>\n{combined_css}\n</style>\n</head>')
+
+        # If server enabled and session ZID present, ensure client app.js logic is active
+        if effective_server_enabled and session_zid:
+            p_js = web_dir / "js" / "app.js"
+            if p_js.is_file():
+                app_js = p_js.read_text(encoding="utf-8")
+                base_html = base_html.replace('</body>', f'<script>\n{app_js}\n</script>\n</body>')
+    else:
+        # Fallback if web/index.html is absent
+        disable_css = goldendict.get('disable_css', False) if isinstance(goldendict, dict) else False
+        style_block = ""
+        if not disable_css:
+            style_block = "<style>.kw-lookup-container { padding: 2px; }</style>\n"
+        base_html = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Kardenwort Lookup</title>
+    {style_block}
+</head>
+<body>
+{html_output}
+<script id="session-data" type="application/json">
+{session_json}
+</script>
+</body>
+</html>"""
 
     return base_html
 

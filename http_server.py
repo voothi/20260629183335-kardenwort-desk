@@ -35,7 +35,12 @@ from kardenwort_desk import (
     spawn_ahk,
 )
 
+from pathlib import Path
+
 logger = logging.getLogger("kardenwort.desk.http_server")
+
+# Canonical static asset directory
+STATIC_WEB_DIR = Path(__file__).resolve().parent / "web"
 
 # Backward-compatibility alias
 APIRequestHandler = ControllerRequestHandler
