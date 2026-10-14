@@ -40,8 +40,10 @@ from pathlib import Path
 
 logger = logging.getLogger("kardenwort.desk.http_server")
 
-# Canonical static asset directory
+# Canonical static asset directory and sub-routes (/js/*, /css/*)
 STATIC_WEB_DIR = Path(__file__).resolve().parent / "web"
+STATIC_JS_DIR = STATIC_WEB_DIR / "js"
+STATIC_CSS_DIR = STATIC_WEB_DIR / "css"
 
 # Backward-compatibility alias
 APIRequestHandler = ControllerRequestHandler

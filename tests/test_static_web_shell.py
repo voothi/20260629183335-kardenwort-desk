@@ -64,6 +64,7 @@ def test_static_routes_http_delivery(test_server):
             assert '<table id="lemma-table"' in body
             assert '<div id="action-toolbar"' in body
             assert '<script id="session-data" type="application/json">' in body
+            assert '<script src="/js/components/WorkspaceTabs.js"></script>' in body
 
     # 2. GET /css/*
     for css_file in ('variables.css', 'tokens.css', 'table.css', 'main.css'):
@@ -84,6 +85,16 @@ def test_static_routes_http_delivery(test_server):
         body = resp.read().decode('utf-8')
         assert 'kwToggleTag' in body
         assert 'kwExportSelected' in body
+
+    # 3.1 GET /js/components/WorkspaceTabs.js
+    req = urllib.request.Request(f"{base_url}/js/components/WorkspaceTabs.js")
+    with urllib.request.urlopen(req) as resp:
+        assert resp.status == 200
+        content_type = resp.headers.get('Content-Type')
+        assert 'application/javascript' in content_type
+        body = resp.read().decode('utf-8')
+        assert 'WorkspaceTabs' in body
+        assert 'bindCardWordsToTbody' in body
 
     # 4. GET /favicon.ico
     req = urllib.request.Request(f"{base_url}/favicon.ico")
