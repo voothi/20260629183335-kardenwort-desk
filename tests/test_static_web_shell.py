@@ -152,3 +152,114 @@ def test_playwright_client_hydration_from_session_data(page, test_server):
     assert "Быстрая коричневая лиса" in page.locator("#translation-container").inner_text()
     assert page.locator("td:has-text('лиса')").is_visible()
     assert page.locator("td:has-text('springen')").is_visible()
+
+
+def test_playwright_client_hydration_from_kardenwort_bootstrap(page, test_server):
+    port = test_server
+
+    sample_bootstrap = {
+        "ui_config": {
+            "highlight_same_lemma": True,
+            "filter_selected_only": False,
+            "theme": "dark"
+        },
+        "sentence_cards": [
+            {
+                "seq_num": 1,
+                "selected_ids": [0],
+                "words": [{"word": "Fuchs", "lemma": "Fuchs"}]
+            }
+        ],
+        "delivery_mode": "container",
+        "web_tab_mode": "tabs",
+        "tab_bar_position": "top",
+        "session_data": {
+            "zid": "20261014210000",
+            "session_zid": "20261014210000",
+            "language": "de",
+            "target_lang": "ru",
+            "source_text": "Ein treuer Hund bewacht das Haus.",
+            "sentence_translation": "Верный пес охраняет дом.",
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "data_rows": [
+                ["Hund", "Hund", "n.", "пес"],
+                ["bewacht", "bewachen", "v.", "охраняет"]
+            ],
+            "server_enabled": True,
+            "api_token": "bootstrap-token"
+        }
+    }
+
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    page.evaluate(f"""
+        (function() {{
+            var el = document.getElementById('kardenwort-bootstrap');
+            el.textContent = JSON.stringify({json.dumps(sample_bootstrap)});
+            var ev = new Event('DOMContentLoaded');
+            document.dispatchEvent(ev);
+        }})();
+    """)
+
+    page.wait_for_selector("#source-container")
+    assert "Ein treuer Hund bewacht das Haus." in page.locator("#source-container").inner_text()
+    assert "Верный пес охраняет дом." in page.locator("#translation-container").inner_text()
+    assert page.locator("td:has-text('пес')").is_visible()
+    assert page.locator("td:has-text('bewachen')").is_visible()
+
+    # Verify window globals and AppState hydration
+    config_val = page.evaluate("() => window.__CONFIG__")
+    assert config_val.get("highlight_same_lemma") is True
+
+    app_state = page.evaluate("() => ({ hasState: !!window.AppState, hasCards: !!(window.AppState && window.AppState.sentenceCards), delivery: window.AppState && window.AppState.deliveryMode })")
+    assert app_state["hasState"] is True
+    assert app_state["hasCards"] is True
+    assert app_state["delivery"] == "container"
+
+
+def test_standalone_index_html_syntax_validity():
+    import re
+    desk_dir = Path(__file__).resolve().parent.parent
+    index_path = desk_dir / "web" / "index.html"
+    assert index_path.is_file()
+    content = index_path.read_text(encoding="utf-8")
+
+    # Document must contain kardenwort-bootstrap script tag
+    assert '<script id="kardenwort-bootstrap" type="application/json">' in content
+
+    # Zero unescaped Python template replacement tags ({...})
+    # Exclude normal CSS/JS braces by checking for standalone word identifiers like {title}, {lang_mismatch_body}
+    unescaped_python_placeholders = re.findall(r'\{[a-zA-Z0-9_]+\}', content)
+    assert unescaped_python_placeholders == [], f"Found unescaped template placeholders: {unescaped_python_placeholders}"
+
+
+def test_run_render_flow_contains_kardenwort_bootstrap(tmp_path):
+    desk_dir = Path(__file__).resolve().parent.parent
+    config, resolved_paths, _, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+    tsv_file = tmp_path / "20261014210000-test.de.tsv"
+    tsv_file.write_text("WordSource\tWordDestination\nKatze\tкошка\n", encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text="Die Katze schläft.",
+        language="de",
+        zid="20261014210000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=False,
+        return_children=False,
+        seq_num=1
+    )
+
+    import re
+    bootstrap_match = re.search(r'<script id="kardenwort-bootstrap" type="application/json">\s*([\s\S]*?)\s*</script>', html)
+    assert bootstrap_match is not None, "kardenwort-bootstrap script tag not found in rendered HTML"
+
+    payload = json.loads(bootstrap_match.group(1))
+    assert "ui_config" in payload
+    assert "sentence_cards" in payload
+    assert "delivery_mode" in payload
+    assert payload["zid"] == "20261014210000"
+    assert payload["language"] == "de"
+

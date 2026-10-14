@@ -207,17 +207,61 @@
     }
 
     function hydrateSession() {
+        var bootstrapEl = document.getElementById('kardenwort-bootstrap');
         var dataEl = document.getElementById('session-data');
-        if (!dataEl) return;
-        var raw = (dataEl.textContent || '').trim();
-        if (!raw || raw === '{}') return;
+
+        var rawBootstrap = bootstrapEl ? (bootstrapEl.textContent || '').trim() : '';
+        var rawSession = dataEl ? (dataEl.textContent || '').trim() : '';
+
+        var bootstrapPayload = null;
+        if (rawBootstrap && rawBootstrap !== '{}') {
+            try {
+                bootstrapPayload = JSON.parse(rawBootstrap);
+            } catch (err) {
+                console.error('Error parsing #kardenwort-bootstrap JSON:', err);
+            }
+        }
+
+        var sessionPayload = null;
+        if (rawSession && rawSession !== '{}') {
+            try {
+                sessionPayload = JSON.parse(rawSession);
+            } catch (err) {
+                console.error('Error parsing #session-data JSON:', err);
+            }
+        }
+
+        if (!bootstrapPayload && !sessionPayload) {
+            return;
+        }
+
+        var session = (bootstrapPayload && (bootstrapPayload.session_data || bootstrapPayload)) || sessionPayload || {};
 
         try {
-            var session = JSON.parse(raw);
+            // Unpack Unified Bootstrap State into window globals & AppState
+            if (bootstrapPayload) {
+                window.__CONFIG__ = bootstrapPayload.ui_config || window.__CONFIG__ || {};
+                window.AppState = window.AppState || {};
+                window.AppState.config = window.__CONFIG__;
+                window.AppState.bootstrap = bootstrapPayload;
+                if (bootstrapPayload.sentence_cards) {
+                    window.AppState.sentenceCards = bootstrapPayload.sentence_cards;
+                    window.AppState.sentence_cards = bootstrapPayload.sentence_cards;
+                    window.sentence_cards = bootstrapPayload.sentence_cards;
+                }
+                if (bootstrapPayload.delivery_mode) {
+                    window.AppState.deliveryMode = bootstrapPayload.delivery_mode;
+                }
+            } else if (session) {
+                window.__CONFIG__ = window.__CONFIG__ || {};
+                window.AppState = window.AppState || {};
+                window.AppState.config = window.__CONFIG__;
+            }
+
             SESSION_ZID = session.session_zid || session.zid || '';
             API_TOKEN = session.api_token || '';
             LANGUAGE = session.language || 'de';
-            TARGET_LANG = session.target_lang || 'ru';
+            TARGET_LANG = session.target_lang || session.target_language || 'ru';
             FINGERPRINT = session.fingerprint || '';
             SERVER_ENABLED = Boolean(session.server_enabled);
             if (session.server_url) {

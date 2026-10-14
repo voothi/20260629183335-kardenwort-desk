@@ -13785,6 +13785,9 @@ html, body {{
   </div>
 </div>
 <div class="kw-toast-container" id="kw-toast-container"></div>
+<script id="kardenwort-bootstrap" type="application/json">
+{kardenwort_bootstrap_json}
+</script>
 <script id="ui-config" type="application/json">
 {ui_config_json}
 </script>
@@ -23564,6 +23567,23 @@ window.__CONFIG__ = {ui_config_json};
             } catch(e) {}
         }
 
+        var bootstrapScript = document.getElementById('kardenwort-bootstrap');
+        if (bootstrapScript) {
+            try {
+                var bData = JSON.parse(bootstrapScript.textContent || bootstrapScript.innerText || '{}');
+                if (bData && typeof bData === 'object') {
+                    window.__CONFIG__ = window.__CONFIG__ || bData.ui_config || {};
+                    window.AppState = window.AppState || {};
+                    window.AppState.config = window.__CONFIG__;
+                    window.AppState.bootstrap = bData;
+                    if (bData.sentence_cards) {
+                        window.AppState.sentenceCards = bData.sentence_cards;
+                        window.AppState.sentence_cards = bData.sentence_cards;
+                    }
+                }
+            } catch(e) {}
+        }
+
         updateToolbarState();
 
         if (window.WorkspaceTabs) {
@@ -23697,6 +23717,35 @@ setTimeout(function() {{
     filter_selected = bool(ui_cfg.get("filter_selected_only", False))
     html_page = html_page.replace("{filter_selected_active_class}", "btn-filter-active" if filter_selected else "")
     html_page = html_page.replace("{filter_selected_table_class}", ' class="kw-filter-selected-only"' if filter_selected else "")
+
+    eff_prov = sentence_provenance if (has_real_text and not is_mismatch and sentence_provenance) else ""
+    bootstrap_payload = {
+        "ui_config": ui_cfg,
+        "sentence_cards": sentence_cards,
+        "delivery_mode": smc.delivery_mode,
+        "web_tab_mode": smc.web_tab_mode,
+        "tab_bar_position": smc.tab_bar_position,
+        "mismatch_info": mismatch_info,
+        "token_manifest": token_manifest,
+        "working_tsv_path": str(working_tsv_path),
+        "llm_filled": llm_filled,
+        "zid": zid,
+        "session_zid": zid,
+        "language": language,
+        "target_language": target_lang,
+        "display_mode": "progressive" if is_progressive else "monolithic",
+        "text_mode": eff_mode,
+        "auto_inject_updates": auto_inject_updates,
+        "run_enrichment": run_enrich,
+        "worker_launched": bool(worker_launched),
+        "text_base_provider": main_text_provider,
+        "lemma_base_provider": base_provider,
+        "sentence_provenance": eff_prov,
+        "pos_display_order": POS_DISPLAY_ORDER,
+        "zoom_level": zoom_level,
+    }
+    kardenwort_bootstrap_json = json.dumps(bootstrap_payload, ensure_ascii=False)
+    html_page = html_page.replace("{kardenwort_bootstrap_json}", kardenwort_bootstrap_json)
 
     html_page = html_page.replace("{language}", language)
     html_page = html_page.replace("{target_language}", target_lang)
@@ -24408,6 +24457,37 @@ def get_bundled_css(web_dir=None) -> str:
             css_parts.append(p_css.read_text(encoding="utf-8"))
     return "\n".join(css_parts)
 
+_WEB_INDEX_HTML_CACHE = None
+
+def get_web_index_html(reload=False):
+    global _WEB_INDEX_HTML_CACHE
+    if _WEB_INDEX_HTML_CACHE is None or reload:
+        p = Path(__file__).resolve().parent / "web" / "index.html"
+        if p.is_file():
+            _WEB_INDEX_HTML_CACHE = p.read_text(encoding="utf-8")
+        else:
+            _WEB_INDEX_HTML_CACHE = ""
+    return _WEB_INDEX_HTML_CACHE
+
+def render_declarative_web_shell(bootstrap_payload, theme="compact", disable_css=False):
+    base_html = get_web_index_html()
+    if not base_html:
+        return ""
+    base_html = base_html.replace('<body>', f'<body class="theme-{theme}">')
+    bootstrap_json = json.dumps(bootstrap_payload, ensure_ascii=False)
+    base_html = re.sub(
+        r'<script id="kardenwort-bootstrap" type="application/json">.*?</script>',
+        f'<script id="kardenwort-bootstrap" type="application/json">\n{bootstrap_json}\n</script>',
+        base_html,
+        flags=re.DOTALL
+    )
+    if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
+        base_html = base_html.replace(
+            '<!-- KARDENWORT_BOOTSTRAP -->',
+            f'<script id="kardenwort-bootstrap" type="application/json">\n{bootstrap_json}\n</script>'
+        )
+    return base_html
+
 def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
     with TraceTimer("html_generation", zid, config, resolved_paths):
         return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
@@ -24485,8 +24565,9 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     index_path = web_dir / "index.html"
     theme = goldendict.get('theme', 'compact') if isinstance(goldendict, dict) else 'compact'
 
-    if index_path.is_file():
-        base_html = index_path.read_text(encoding="utf-8")
+    raw_template = get_web_index_html()
+    if raw_template or index_path.is_file():
+        base_html = raw_template if raw_template else index_path.read_text(encoding="utf-8")
 
         # Inject theme class into <body>
         base_html = base_html.replace('<body>', f'<body class="theme-{theme}">')
@@ -24501,6 +24582,38 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             base_html,
             flags=re.DOTALL
         )
+
+        # Inject bootstrap payload into #kardenwort-bootstrap
+        lookup_bootstrap = {
+            "ui_config": goldendict if isinstance(goldendict, dict) else {},
+            "session_data": session_payload,
+            "sentence_cards": [],
+            "delivery_mode": "container",
+            "zid": session_payload["zid"],
+            "session_zid": session_payload["session_zid"],
+            "language": session_payload["language"],
+            "target_language": session_payload["target_lang"],
+            "data_rows": session_payload["data_rows"],
+            "headers": session_payload["headers"],
+            "source_text": session_payload["source_text"],
+            "sentence_translation": session_payload["sentence_translation"],
+            "server_enabled": session_payload["server_enabled"],
+            "api_token": session_payload["api_token"],
+            "server_url": session_payload["server_url"],
+            "fingerprint": session_payload["fingerprint"],
+        }
+        lookup_bootstrap_json = json.dumps(lookup_bootstrap, ensure_ascii=False)
+        base_html = re.sub(
+            r'<script id="kardenwort-bootstrap" type="application/json">.*?</script>',
+            f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>',
+            base_html,
+            flags=re.DOTALL
+        )
+        if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
+            base_html = base_html.replace(
+                '<!-- KARDENWORT_BOOTSTRAP -->',
+                f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>'
+            )
 
         # Inject rendered container
         start_marker = '<div class="kw-lookup-container">'

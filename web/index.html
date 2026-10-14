@@ -20,6 +20,9 @@
             </div>
         </header>
 
+        <!-- Workspace Tab Navigation -->
+        <nav id="workspace-tab-bar" class="kw-tab-bar"><!-- WORKSPACE_TAB_BAR --></nav>
+
         <!-- Source Text Container -->
         <section id="source-container" class="kw-section source-container">
             <h3>Source Text</h3>
@@ -55,11 +58,42 @@
                 <button id="kw-export-btn" class="kw-export-btn" onclick="kwExportSelected()">Export to Anki</button>
                 <span id="kw-interactive-status" class="kw-interactive-status"></span>
             </div>
+
+            <!-- Action Toolbar Controls -->
+            <div class="kw-action-toolbar" id="kw-action-toolbar">
+                <button type="button" id="kw-btn-same-lemma" class="btn-toggle" title="Toggle Lemma-wide highlighting">Lemma</button>
+                <button type="button" id="kw-btn-filter-selected" title="Toggle view: show only selected words">Selected</button>
+                <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
+                <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
+                <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
+                <button type="button" id="kw-btn-reword" title="Re-process selected words">Re-word</button>
+                <button type="button" id="kw-btn-export" title="Send selected rows to Anki">Send to Anki</button>
+                <button type="button" id="kw-btn-hand-tool" title="Toggle Text Selection / Hand Tool (Ctrl+Shift+A)">Hand Tool</button>
+                <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">Delete</button>
+            </div>
         </section>
+
+        <!-- Language Verification Modal -->
+        <div class="kw-modal-backdrop" id="kw-lang-modal" style="display: none;">
+            <div class="kw-modal-box">
+                <div class="kw-modal-header" id="kw-lang-modal-title">Language Verification</div>
+                <div class="kw-modal-body" id="kw-lang-modal-body"></div>
+                <div class="kw-modal-actions">
+                    <button type="button" id="kw-btn-lang-yes" class="btn-primary">Yes</button>
+                    <button type="button" id="kw-btn-lang-no">No</button>
+                    <button type="button" id="kw-btn-lang-cancel">Cancel</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- Toast Notifications -->
+        <div class="kw-toast-container" id="kw-toast-container"></div>
     </div>
 
-    <!-- State Hydration JSON Block -->
+    <!-- State Hydration JSON Data Islands -->
     <script id="session-data" type="application/json">{}</script>
+    <!-- KARDENWORT_BOOTSTRAP -->
+    <script id="kardenwort-bootstrap" type="application/json">{}</script>
     <script src="/js/app.js"></script>
 </body>
 </html>
