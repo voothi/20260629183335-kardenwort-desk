@@ -186,7 +186,17 @@
             if (typeof w.formatProviderSkeletonLabel === 'function') {
                 return w.formatProviderSkeletonLabel(provider);
             }
-            return provider ? 'Translating (' + provider + ')...' : 'Translating...';
+            if (!provider) return "Loading...";
+            var name = String(provider).trim().toLowerCase();
+            /** @type {Object<string, string>} */
+            var map = {
+                'argos': 'Argos...',
+                'google': 'Google...',
+                'deepl': 'DeepL...',
+                'intellifiller': 'IntelliFiller...'
+            };
+            if (map[name]) return map[name];
+            return name.charAt(0).toUpperCase() + name.slice(1) + '...';
         }
 
         /**

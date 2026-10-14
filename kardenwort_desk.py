@@ -14284,6 +14284,7 @@ window.__CONFIG__ = {ui_config_json};
     window.detectGermanGenderSuffix = detectGermanGenderSuffix;
     window.formatClassificationTooltip = formatClassificationTooltip;
     window.formatGenderBadge = formatGenderBadge;
+    window.formatProviderSkeletonLabel = formatProviderSkeletonLabel;
 
     function getTextBaseProvider() {
         var el = document.getElementById('text-base-provider');
