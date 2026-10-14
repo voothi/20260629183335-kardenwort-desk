@@ -1,0 +1,262 @@
+/* web/css/table.css - Vocabulary table, sticky headers, cell editing, and tooltips */
+
+/* Layout Containers */
+.kw-lookup-container,
+.container {
+    max-width: 1400px;
+    margin: 0 auto;
+    padding: 16px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+/* Header & Session Badge */
+.session-header,
+#session-header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    margin-bottom: 16px;
+    padding-bottom: 12px;
+    border-bottom: 1px solid var(--border-color);
+}
+
+.session-title,
+#session-title {
+    font-size: var(--font-size-lg, 18px);
+    font-weight: 600;
+    color: var(--text-main);
+    margin: 0;
+}
+
+.session-meta {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+}
+
+.session-badge,
+#lang-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 3px 10px;
+    border-radius: 12px;
+    background: var(--bg-secondary);
+    border: 1px solid var(--border-color);
+    font-size: var(--font-size-xs, 12px);
+    font-weight: 500;
+    color: var(--text-muted);
+}
+
+.sse-status,
+#sse-status {
+    width: 8px;
+    height: 8px;
+    border-radius: 50%;
+    background-color: var(--text-muted, #8b949e);
+    display: inline-block;
+    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+}
+
+.sse-status.connected {
+    background-color: var(--status-success, #3fb950);
+    box-shadow: 0 0 6px var(--status-success, #3fb950);
+}
+
+.sse-status.error {
+    background-color: var(--status-error, #f85149);
+}
+
+/* Sections */
+.kw-section,
+.section {
+    background: var(--bg-card);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md, 4px);
+    padding: 14px 16px;
+    margin-bottom: 14px;
+    box-sizing: border-box;
+    width: 100%;
+}
+
+.kw-section h3,
+.section-title,
+.kw-heading {
+    font-size: var(--font-size-xs, 12px);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    color: var(--text-muted);
+    margin: 0 0 8px 0;
+}
+
+/* Table Container & Sticky Header */
+.kw-table-container {
+    border: 1px solid var(--border-color);
+    background: var(--bg-secondary);
+    border-radius: var(--radius-md, 4px);
+    overflow-x: auto;
+    margin-top: 8px;
+}
+
+.kw-lemmas-table,
+.lemma-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: var(--font-size-base, 14px);
+}
+
+.kw-lemmas-table th {
+    background: var(--bg-card);
+    color: var(--text-muted);
+    font-size: var(--font-size-xs, 12px);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    text-align: left;
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-color);
+    position: sticky;
+    top: 0;
+    z-index: 2;
+}
+
+.kw-lemmas-table td {
+    padding: 8px 12px;
+    border-bottom: 1px solid var(--border-subtle);
+    color: var(--text-main);
+}
+
+.kw-lemmas-table tr:last-child td {
+    border-bottom: none;
+}
+
+.kw-lemmas-table tr:hover td {
+    background-color: var(--bg-hover);
+}
+
+.kw-lemmas-table tr.kw-row-selected,
+.kw-lemmas-table tr.kw-row-selected td {
+    background-color: var(--selected-row-bg, rgba(255, 204, 0, 0.15)) !important;
+}
+
+/* Structured Columns */
+.kw-lemmas-table th.col-pos,
+.kw-lemmas-table td.col-pos {
+    text-align: center;
+    width: 48px;
+    white-space: nowrap;
+}
+
+.kw-lemmas-table th.col-gender,
+.kw-lemmas-table td.col-gender {
+    text-align: center;
+    width: 48px;
+    white-space: nowrap;
+}
+
+.kw-lemmas-table th.col-classification,
+.kw-lemmas-table td.col-classification {
+    text-align: center;
+    width: 48px;
+    white-space: nowrap;
+}
+
+/* Badges */
+.kw-gender {
+    display: inline-block;
+    padding: 1px 5px;
+    border-radius: 3px;
+    font-weight: 600;
+    font-size: 11px;
+    line-height: 1.2;
+    text-transform: lowercase;
+    text-align: center;
+}
+
+.kw-gender-m {
+    background-color: rgba(30, 144, 255, 0.15);
+    color: #1e90ff;
+    border: 1px solid rgba(30, 144, 255, 0.4);
+}
+
+.kw-gender-f {
+    background-color: rgba(255, 75, 75, 0.15);
+    color: #ff4b4b;
+    border: 1px solid rgba(255, 75, 75, 0.4);
+}
+
+.kw-gender-n {
+    background-color: rgba(255, 204, 0, 0.15);
+    color: #eab308;
+    border: 1px solid rgba(255, 204, 0, 0.4);
+}
+
+/* Tag Checkbox Control */
+.kw-tag-header {
+    width: 36px;
+    text-align: center;
+}
+
+.kw-tag-control {
+    text-align: center;
+    width: 36px;
+}
+
+.kw-tag-checkbox {
+    cursor: pointer;
+    width: 16px;
+    height: 16px;
+    accent-color: var(--accent-color, #388bfd);
+}
+
+/* Action Toolbar & Interactive Status */
+.kw-actions-bar,
+#action-toolbar {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    margin-top: 12px;
+}
+
+.kw-export-btn,
+.kw-btn {
+    background-color: var(--bg-card);
+    color: var(--text-main);
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md, 4px);
+    padding: 4px 12px;
+    height: 30px;
+    font-size: var(--font-size-sm, 13px);
+    font-weight: 500;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    text-decoration: none;
+    transition: background-color 0.15s ease, border-color 0.15s ease, opacity 0.15s ease;
+    user-select: none;
+}
+
+.kw-export-btn:hover,
+.kw-btn:hover {
+    background-color: var(--bg-hover);
+    border-color: rgba(255, 255, 255, 0.2);
+}
+
+.kw-export-btn:disabled,
+.kw-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+.kw-interactive-status,
+#kw-interactive-status {
+    font-size: var(--font-size-xs, 12px);
+    font-weight: 500;
+    color: var(--status-success, #3fb950);
+    margin-left: 8px;
+    display: none;
+    font-family: var(--font-mono, monospace);
+}

@@ -1,0 +1,65 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Kardenwort Desk</title>
+    <link rel="icon" type="image/x-icon" href="/favicon.ico">
+    <link rel="stylesheet" href="/css/variables.css">
+    <link rel="stylesheet" href="/css/tokens.css">
+    <link rel="stylesheet" href="/css/table.css">
+</head>
+<body>
+    <div class="kw-lookup-container">
+        <!-- Session Header: Title, Language Badge, SSE Status -->
+        <header id="session-header" class="session-header">
+            <h1 id="session-title" class="session-title">Kardenwort Desk</h1>
+            <div class="session-meta">
+                <span id="lang-badge" class="session-badge">de &rarr; ru</span>
+                <span id="sse-status" class="sse-status" title="SSE Disconnected"></span>
+            </div>
+        </header>
+
+        <!-- Source Text Container -->
+        <section id="source-container" class="kw-section source-container">
+            <h3>Source Text</h3>
+            <div class="kw-source-text" id="source-text"><!-- SOURCE_TEXT --></div>
+        </section>
+
+        <!-- Translation Container -->
+        <section id="translation-container" class="kw-section translation-container">
+            <h3>Translation</h3>
+            <div class="kw-translation" id="translation-text"><!-- TRANSLATION_TEXT --></div>
+        </section>
+
+        <!-- Lemma Extraction Table -->
+        <section id="lemmas-section" class="kw-section">
+            <h3>Lemmas</h3>
+            <div class="kw-table-container">
+                <table id="lemma-table" class="kw-lemmas-table lemma-table">
+                    <thead>
+                        <tr>
+                            <th class="kw-tag-header">&#9733;</th>
+                            <th class="col-inflected">Inflected</th>
+                            <th class="col-lemma">Lemma</th>
+                            <th class="col-pos">POS</th>
+                            <th class="col-translation">Translation</th>
+                        </tr>
+                    </thead>
+                    <tbody><!-- TABLE_ROWS --></tbody>
+                </table>
+            </div>
+
+            <!-- Action Toolbar: Audio, Copy, Export to Anki -->
+            <div id="action-toolbar" class="kw-actions-bar">
+                <button id="kw-export-btn" class="kw-export-btn" onclick="kwExportSelected()">Export to Anki</button>
+                <span id="kw-interactive-status" class="kw-interactive-status"></span>
+            </div>
+        </section>
+    </div>
+
+    <!-- State Hydration JSON Block -->
+    <script id="session-data" type="application/json">{}</script>
+    <script src="/js/app.js"></script>
+</body>
+</html>
