@@ -17,7 +17,7 @@ import urllib.error
 import concurrent.futures
 from pathlib import Path
 from datetime import datetime, timezone, timedelta
-from typing import Dict, Any, List, Optional, Tuple
+from typing import Dict, Any, List, Optional, Tuple, Union
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 from b64util import encode
 
@@ -1877,6 +1877,159 @@ class SessionArbiter:
 
         return res
 
+    def _persist_retext_updates(
+        self,
+        session_zid: str,
+        sentence_trans: Any,
+        active_text_prov: Optional[str] = None,
+        req_zid: Optional[str] = None,
+        tsv_path: Optional[Union[Path, str]] = None,
+    ) -> Dict[str, Any]:
+        """
+        Encapsulates row updates, SQLite sentence translation updates, and TSV synchronization
+        for a session's sentence translation deltas.
+        """
+        req_zid = req_zid or generate_unique_zid()
+        storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
+        is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
+
+        resolved_tsv_path: Optional[Path] = None
+        if tsv_path:
+            resolved_tsv_path = Path(tsv_path)
+        else:
+            with self._lock:
+                if session_zid in self.sessions:
+                    cand_str = self.sessions[session_zid].get("tsv_path")
+                    if cand_str:
+                        resolved_tsv_path = Path(cand_str)
+            if not resolved_tsv_path:
+                lang = (self.sessions.get(session_zid, {}).get("language")
+                        if session_zid in self.sessions else None) or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
+                results_dir = resolve_results_dir(self.resolved_paths, self.config)
+                resolved_tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
+                if not resolved_tsv_path:
+                    resolved_tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
+
+        if not resolved_tsv_path.exists():
+            with self._lock:
+                if session_zid in self.sessions:
+                    sess = self.sessions[session_zid]
+                    comments = sess.get("comments", [])
+                    headers = sess.get("headers", [])
+                    data_rows = sess.get("data_rows", [])
+                    if headers and data_rows:
+                        try:
+                            resolved_tsv_path.parent.mkdir(parents=True, exist_ok=True)
+                            save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
+                        except Exception:
+                            pass
+
+        eff_active_text_prov = active_text_prov or getattr(sentence_trans, "provenance", "live:retext")
+
+        with storage_adapter.file_lock(resolved_tsv_path):
+            comments, headers, data_rows = storage_adapter.load_tsv_rows(resolved_tsv_path)
+            mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
+            role_fields = (self.sessions.get(session_zid, {}).get("role_fields")
+                           if session_zid in self.sessions else None) or get_role_fields(mapping, headers)
+            col_sentence_dest = headers.index('SentenceDestination') if 'SentenceDestination' in headers else (headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1)
+            col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else -1
+            col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+
+            if col_sentence_dest != -1 or col_sentence_dest2 != -1:
+                padded_dict = (sentence_trans.get('PADDED') or {}) if isinstance(sentence_trans, dict) else {}
+                is_zero_based = isinstance(sentence_trans, dict) and (0 in sentence_trans or '0' in sentence_trans)
+                for row in data_rows:
+                    if sentence_trans:
+                        s_idx_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
+                        trans_key = (s_idx_val - 1) if is_zero_based else s_idx_val
+                        if col_sentence_dest != -1 and len(row) > col_sentence_dest:
+                            if isinstance(sentence_trans, dict):
+                                trans_val = (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) or
+                                             (padded_dict.get(trans_key) or padded_dict.get(str(trans_key))) or
+                                             list(sentence_trans.values())[0])
+                                row[col_sentence_dest] = str(trans_val)
+                            else:
+                                row[col_sentence_dest] = str(sentence_trans)
+                        if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2 and (padded_dict or sentence_trans):
+                            p_val = (padded_dict.get(trans_key) or padded_dict.get(str(trans_key)) or
+                                     (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) if isinstance(sentence_trans, dict) else str(sentence_trans)))
+                            if p_val:
+                                row[col_sentence_dest2] = str(p_val)
+
+                if is_sqlite and isinstance(sentence_trans, dict):
+                    padded_dict = sentence_trans.get('PADDED') or {}
+                    is_zero_based = (0 in sentence_trans or '0' in sentence_trans)
+                    for s_idx_raw, trans in sentence_trans.items():
+                        if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
+                            continue
+                        s_idx = int(s_idx_raw) + 1 if is_zero_based else int(s_idx_raw)
+                        if s_idx <= 0:
+                            continue
+                        if trans and isinstance(trans, str):
+                            try:
+                                storage_adapter.update_sentence_translation(
+                                    session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=eff_active_text_prov
+                                )
+                            except TypeError:
+                                try:
+                                    storage_adapter.update_sentence_translation(
+                                        session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid
+                                    )
+                                except Exception as e:
+                                    logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
+                            except Exception as e:
+                                logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
+
+                        if padded_dict:
+                            padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
+                            if padded_trans and isinstance(padded_trans, str):
+                                try:
+                                    storage_adapter.update_sentence_translation(
+                                        session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=eff_active_text_prov
+                                    )
+                                except TypeError:
+                                    try:
+                                        storage_adapter.update_sentence_translation(
+                                            session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid
+                                        )
+                                    except Exception as e:
+                                        logger.warning(f"Failed to update sentence {s_idx} destination2 in DB: {e}")
+                                except Exception as e:
+                                    logger.warning(f"Failed to update sentence {s_idx} destination2 in DB: {e}")
+                elif is_sqlite and isinstance(sentence_trans, str):
+                    try:
+                        storage_adapter.update_sentence_translation(
+                            session_zid, 1, sentence_trans, target_field="sentence_destination", zid=req_zid, provenance=eff_active_text_prov
+                        )
+                    except TypeError:
+                        try:
+                            storage_adapter.update_sentence_translation(
+                                session_zid, 1, sentence_trans, target_field="sentence_destination", zid=req_zid
+                            )
+                        except Exception as e:
+                            logger.warning(f"Failed to update sentence 1 translation in DB: {e}")
+                    except Exception as e:
+                        logger.warning(f"Failed to update sentence 1 translation in DB: {e}")
+
+                storage_adapter.save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
+
+        new_fp = compute_content_fingerprint(data_rows)
+        with self._lock:
+            if session_zid in self.sessions:
+                self.sessions[session_zid]["data_rows"] = data_rows
+                self.sessions[session_zid]["fingerprint"] = new_fp
+
+        return {
+            "status": "success",
+            "session_zid": session_zid,
+            "data_rows": data_rows,
+            "headers": headers,
+            "comments": comments,
+            "role_fields": role_fields,
+            "fingerprint": new_fp,
+            "tsv_path": resolved_tsv_path,
+        }
+
     def retext_session(
         self,
         session_zid: str,
@@ -1993,83 +2146,18 @@ class SessionArbiter:
 
         active_text_prov = getattr(sentence_trans, "provenance", f"live:{active_text_provider}")
 
-        with storage_adapter.file_lock(tsv_path):
-            comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-            mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
-            role_fields = get_role_fields(mapping, headers)
-            col_sentence_dest = headers.index('SentenceDestination') if 'SentenceDestination' in headers else (headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1)
-            col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else -1
-            col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
+        persist_res = self._persist_retext_updates(
+            session_zid=session_zid,
+            sentence_trans=sentence_trans,
+            active_text_prov=active_text_prov,
+            req_zid=req_zid,
+            tsv_path=tsv_path,
+        )
 
-            if col_sentence_dest != -1 or col_sentence_dest2 != -1:
-                padded_dict = (sentence_trans.get('PADDED') or {}) if isinstance(sentence_trans, dict) else {}
-                is_zero_based = isinstance(sentence_trans, dict) and (0 in sentence_trans or '0' in sentence_trans)
-                for row in data_rows:
-                    if sentence_trans:
-                        s_idx_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
-                        trans_key = (s_idx_val - 1) if is_zero_based else s_idx_val
-                        if col_sentence_dest != -1 and len(row) > col_sentence_dest:
-                            if isinstance(sentence_trans, dict):
-                                trans_val = (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) or
-                                             (padded_dict.get(trans_key) or padded_dict.get(str(trans_key))) or
-                                             list(sentence_trans.values())[0])
-                                row[col_sentence_dest] = str(trans_val)
-                            else:
-                                row[col_sentence_dest] = str(sentence_trans)
-                        if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2 and (padded_dict or sentence_trans):
-                            p_val = (padded_dict.get(trans_key) or padded_dict.get(str(trans_key)) or
-                                     (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) if isinstance(sentence_trans, dict) else str(sentence_trans)))
-                            if p_val:
-                                row[col_sentence_dest2] = str(p_val)
-
-                if is_sqlite and isinstance(sentence_trans, dict):
-                    padded_dict = sentence_trans.get('PADDED') or {}
-                    is_zero_based = (0 in sentence_trans or '0' in sentence_trans)
-                    for s_idx_raw, trans in sentence_trans.items():
-                        if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
-                            continue
-                        s_idx = int(s_idx_raw) + 1 if is_zero_based else int(s_idx_raw)
-                        if s_idx <= 0:
-                            continue
-                        if trans and isinstance(trans, str):
-                            try:
-                                storage_adapter.update_sentence_translation(
-                                    session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=active_text_prov
-                                )
-                            except TypeError:
-                                try:
-                                    storage_adapter.update_sentence_translation(
-                                        session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
-                            except Exception as e:
-                                logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
-
-                        if padded_dict:
-                            padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
-                            if padded_trans and isinstance(padded_trans, str):
-                                try:
-                                    storage_adapter.update_sentence_translation(
-                                        session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=active_text_prov
-                                    )
-                                except TypeError:
-                                    try:
-                                        storage_adapter.update_sentence_translation(
-                                            session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid
-                                        )
-                                    except Exception:
-                                        pass
-                                except Exception:
-                                    pass
-
-                storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-
-        new_fp = compute_content_fingerprint(data_rows)
-        with self._lock:
-            if session_zid in self.sessions:
-                self.sessions[session_zid]["data_rows"] = data_rows
-                self.sessions[session_zid]["fingerprint"] = new_fp
+        data_rows = persist_res["data_rows"]
+        headers = persist_res["headers"]
+        role_fields = persist_res["role_fields"]
+        new_fp = persist_res["fingerprint"]
 
         # Enforce strict server payload contract: normalize sentences to 1-indexed integers
         normalized_sentences: Dict[int, str] = {}
