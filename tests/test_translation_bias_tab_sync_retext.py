@@ -781,4 +781,106 @@ def test_retext_session_backend_normalized_sentences_contract(tmp_path):
         assert res_str["sentences"] == {1: "Единый перевод строки."}
 
 
+def test_persist_retext_updates_isolated_command_execution(tmp_path):
+    db_file = tmp_path / "test_persist_retext.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    resolved_paths["sqlite_db_path"] = str(db_file)
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = str(results_dir)
+
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.storage_adapter = adapter
+
+    session_zid = "20261014095500"
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "SentenceDestination2", "WordDestination"
+    ]
+    initial_rows = [
+        ["0", "Eins", "eins", "1", "Satz eins.", "Alter Satz 1", "", "один"],
+        ["1", "Zwei", "zwei", "2", "Satz zwei.", "Alter Satz 2", "", "два"]
+    ]
+
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="test-isolated-retext",
+        source_language="de",
+        target_language="ru",
+        text_mode="multi",
+        source_raw_text="Satz eins.\nSatz zwei.",
+        data_rows=initial_rows,
+        headers=headers,
+    )
+
+    tsv_file = results_dir / f"{session_zid}.de.tsv"
+    tsv_file.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in initial_rows), encoding="utf-8")
+
+    arbiter.sessions[session_zid] = {
+        "session_zid": session_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Satz eins.\nSatz zwei.",
+        "tsv_path": str(tsv_file),
+        "comments": [],
+        "headers": headers,
+        "data_rows": [list(r) for r in initial_rows],
+        "role_fields": {
+            "sentence_destination": "SentenceDestination",
+            "sentence_index": "SentenceSourceIndex"
+        }
+    }
+
+    synthetic_trans = {
+        1: "Übersetzung 1",
+        2: "Übersetzung 2",
+        "PADDED": {1: "Padded Übersetzung 1", 2: "Padded Übersetzung 2"}
+    }
+
+    # Verify storage mutations occur directly without calling external translation services
+    with patch("kardenwort_controller.translate_source_text") as mock_translate:
+        mock_translate.side_effect = RuntimeError("External translation query should not be invoked!")
+        res = arbiter._persist_retext_updates(
+            session_zid=session_zid,
+            sentence_trans=synthetic_trans,
+            active_text_prov="test:synthetic",
+            req_zid="20261014095501",
+            tsv_path=tsv_file
+        )
+
+        mock_translate.assert_not_called()
+        assert res["status"] == "success"
+        assert res["session_zid"] == session_zid
+        assert len(res["data_rows"]) == 2
+
+        out_headers = res["headers"]
+        col_dst = out_headers.index("SentenceDestination")
+        col_dst2 = out_headers.index("SentenceDestination2")
+        assert res["data_rows"][0][col_dst] == "Übersetzung 1"
+        assert res["data_rows"][0][col_dst2] == "Padded Übersetzung 1"
+        assert res["data_rows"][1][col_dst] == "Übersetzung 2"
+        assert res["data_rows"][1][col_dst2] == "Padded Übersetzung 2"
+
+    # Verify SQLite sentences table updated cleanly
+    sents = adapter.db.get_sentences_by_session(session_zid)
+    assert len(sents) == 2
+    sents_by_idx = {s["sentence_index"]: s for s in sents}
+    assert sents_by_idx[1]["sentence_destination"] == "Übersetzung 1"
+    assert sents_by_idx[1]["sentence_destination2"] == "Padded Übersetzung 1"
+    assert sents_by_idx[2]["sentence_destination"] == "Übersetzung 2"
+    assert sents_by_idx[2]["sentence_destination2"] == "Padded Übersetzung 2"
+
+    # Verify session memory state updated
+    assert arbiter.sessions[session_zid]["data_rows"][0][col_dst] == "Übersetzung 1"
+    assert arbiter.sessions[session_zid]["fingerprint"] == res["fingerprint"]
+
+    # Verify disk TSV updated
+    _, disk_headers, disk_rows = adapter.load_tsv_rows(tsv_file)
+    disk_col_dst = disk_headers.index("SentenceDestination")
+    assert disk_rows[0][disk_col_dst] == "Übersetzung 1"
+    assert disk_rows[1][disk_col_dst] == "Übersetzung 2"
+
+
+
 
