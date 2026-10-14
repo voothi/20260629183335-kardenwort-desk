@@ -21637,8 +21637,12 @@ window.__CONFIG__ = {ui_config_json};
             .then(function(resObj) {
                 setButtonLoading(retextBtn, false, "", "Re-text");
                 if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success' || (resObj.data.data && (resObj.data.data.ok || resObj.data.data.status === 'success')) || resObj.data.retext_started)) {
-                    window.showToast("Retext completed", "success");
                     var payload = (resObj.data && resObj.data.data) ? resObj.data.data : resObj.data;
+                    if (!payload || !payload.sentences || typeof payload.sentences !== 'object' || Array.isArray(payload.sentences)) {
+                        window.showToast("Retext failed: invalid sentence translation payload from server", "error");
+                        return;
+                    }
+                    window.showToast("Retext completed", "success");
                     var tText = payload ? (payload.translatedText || payload.translated_text) : null;
                     if (tText) {
                         var tc = document.getElementById('translation-container');
@@ -21652,43 +21656,18 @@ window.__CONFIG__ = {ui_config_json};
                             ? window.WorkspaceTabs.getCards()
                             : (window._kwSentenceCards || null);
                         if (wCards && wCards.length > 0) {
-                            var lines = [];
-                            if (tText.indexOf('<div') !== -1 || tText.indexOf('</div') !== -1) {
-                                var tmpDiv = document.createElement('div');
-                                tmpDiv.innerHTML = tText;
-                                var childDivs = tmpDiv.querySelectorAll('div');
-                                if (childDivs.length > 0) {
-                                    for (var cd = 0; cd < childDivs.length; cd++) {
-                                        lines.push((childDivs[cd].textContent || childDivs[cd].innerText || '').trim());
-                                    }
-                                }
-                            }
-                            if (lines.length === 0) {
-                                lines = tText.replace(new RegExp(String.fromCharCode(13), 'g'), '').split(String.fromCharCode(10));
-                            }
-                            var cleanLines = lines.map(function(l) { return l.trim(); }).filter(function(l) { return l.length > 0; });
-
-                            var pSents = (payload && payload.sentences) ? payload.sentences : null;
-                            var isZeroBasedSents = pSents ? (pSents[0] !== undefined || pSents['0'] !== undefined) : false;
+                            var pSents = payload.sentences;
+                            var isZeroBasedSents = (pSents[0] !== undefined || pSents['0'] !== undefined);
 
                             for (var c = 0; c < wCards.length; c++) {
                                 var cardSentIdx = wCards[c].sentence_idx;
                                 if (cardSentIdx === 0) {
                                     wCards[c].translated_text = tText;
                                 } else if (cardSentIdx > 0) {
-                                    var sentTrans = null;
-                                    if (pSents) {
-                                        var sKey = isZeroBasedSents ? (cardSentIdx - 1) : cardSentIdx;
-                                        sentTrans = pSents[sKey] !== undefined ? pSents[sKey] : pSents[String(sKey)];
-                                        if (!sentTrans && !isZeroBasedSents) {
-                                            sentTrans = pSents[cardSentIdx - 1] !== undefined ? pSents[cardSentIdx - 1] : pSents[String(cardSentIdx - 1)];
-                                        }
-                                    }
-                                    if (!sentTrans && cleanLines) {
-                                        var sIdx0 = cardSentIdx - 1;
-                                        if (sIdx0 >= 0 && sIdx0 < cleanLines.length) {
-                                            sentTrans = cleanLines[sIdx0];
-                                        }
+                                    var sKey = isZeroBasedSents ? (cardSentIdx - 1) : cardSentIdx;
+                                    var sentTrans = pSents[sKey] !== undefined ? pSents[sKey] : pSents[String(sKey)];
+                                    if (!sentTrans && !isZeroBasedSents) {
+                                        sentTrans = pSents[cardSentIdx - 1] !== undefined ? pSents[cardSentIdx - 1] : pSents[String(cardSentIdx - 1)];
                                     }
                                     if (sentTrans && typeof sentTrans === 'string') {
                                         wCards[c].translated_text = sentTrans;
@@ -21710,7 +21689,7 @@ window.__CONFIG__ = {ui_config_json};
                             status: "success",
                             translatedText: tText,
                             translated_text: tText,
-                            sentences: (payload && payload.sentences) ? payload.sentences : null,
+                            sentences: payload.sentences,
                             rows: (payload && payload.rows) ? payload.rows : null
                         };
                         window.receiveUpdate(retextUpdate);

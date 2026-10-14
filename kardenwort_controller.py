@@ -2071,6 +2071,26 @@ class SessionArbiter:
                 self.sessions[session_zid]["data_rows"] = data_rows
                 self.sessions[session_zid]["fingerprint"] = new_fp
 
+        # Enforce strict server payload contract: normalize sentences to 1-indexed integers
+        normalized_sentences: Dict[int, str] = {}
+        if isinstance(sentence_trans, dict):
+            is_zero_based = (0 in sentence_trans or '0' in sentence_trans)
+            for k, v in sentence_trans.items():
+                if k in ('FULL_TEXT', 'PADDED') or not (isinstance(k, int) or str(k).isdigit()):
+                    continue
+                s_idx = (int(k) + 1) if is_zero_based else int(k)
+                if s_idx > 0 and v is not None:
+                    normalized_sentences[s_idx] = str(v)
+            if not normalized_sentences:
+                fallback_txt = sentence_trans.get('FULL_TEXT')
+                if fallback_txt:
+                    normalized_sentences[1] = str(fallback_txt)
+        elif sentence_trans:
+            normalized_sentences[1] = str(sentence_trans)
+
+        if not normalized_sentences:
+            raise StructuredError(ErrorCode.DESK_FAILED, "Retext translation produced no valid sentence mapping.")
+
         translated_html = format_translated_html(sentence_trans, text_mode=text_mode, text=text, config=self.config)
         sorted_rows = sort_session_data_rows(data_rows, headers, language, self.config, self.resolved_paths, role_fields=role_fields)
         structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
@@ -2083,6 +2103,7 @@ class SessionArbiter:
             status="success",
             source_text="",
             translated_text=translated_html,
+            sentences=normalized_sentences,
             zid=session_zid,
             config=self.config
         )
@@ -2093,7 +2114,8 @@ class SessionArbiter:
             "status": "success",
             "fingerprint": new_fp,
             "translated_text": translated_html,
-            "translatedText": translated_html
+            "translatedText": translated_html,
+            "sentences": normalized_sentences,
         })
 
         return {
@@ -2104,7 +2126,7 @@ class SessionArbiter:
             "rows": structured_rows,
             "translated_text": translated_html,
             "translatedText": translated_html,
-            "sentences": sentence_trans if isinstance(sentence_trans, dict) else {1: str(sentence_trans)},
+            "sentences": normalized_sentences,
             "active_provider": active_text_provider,
             "text_provenance": active_text_prov,
         }

@@ -607,3 +607,174 @@ def test_retext_from_child_sentence_tab_synchronizes_all_cards(page, tmp_path):
     assert sents_map[1] == "Он шагает домой (backend)."
     assert sents_map[2] == "Она шагает в парк (backend)."
     assert 0 not in sents_map
+
+
+def test_on_retext_click_failfast_when_sentences_missing_or_malformed(page, tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    raw_text = "Er geht nach Hause. Sie geht zum Park."
+    tsv_content = (
+        "TokenOrder\tQuotation\tWordSource\tWordSourcePOS\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tWordDestination\n"
+        "1\tgeht\tgehen\tv.\t1\tEr geht nach Hause.\tОн идет домой.\tидти\n"
+        "5\tgeht\tgehen\tv.\t2\tSie geht zum Park.\tОна идет в парк.\tидти\n"
+    )
+    tsv_file = tmp_path / "20261013211705-test.de.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html_out = kardenwort_desk.run_render_flow(
+        text=raw_text,
+        language="de",
+        zid="20261013211705",
+        text_mode="multi",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        spawn_children=True,
+        return_children=False,
+    )
+    page.set_content(html_out)
+    page.wait_for_timeout(150)
+
+    # Record initial card translations
+    initial_cards = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({ sent_idx: c.sentence_idx, trans: c.translated_text }));
+    }""")
+
+    # 1. Test missing 'sentences' in payload
+    toast_messages = []
+    page.expose_function("recordToastFailfast", lambda msg, typ: toast_messages.append((msg, typ)))
+    page.evaluate("""() => {
+        const origToast = window.showToast;
+        window.showToast = function(msg, typ) {
+            window.recordToastFailfast(msg, typ);
+            if (origToast) origToast(msg, typ);
+        };
+        const origFetch = window.fetch;
+        window.fetch = function(url, options) {
+            if (url === '/session/retext' || (typeof url === 'string' && url.indexOf('/session/retext') !== -1)) {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: function() {
+                        return Promise.resolve({
+                            status: 'success',
+                            data: {
+                                translatedText: '<div>Corrupt line 1</div><div>Corrupt line 2</div>',
+                                translated_text: '<div>Corrupt line 1</div><div>Corrupt line 2</div>'
+                            }
+                        });
+                    }
+                });
+            }
+            return origFetch ? origFetch(url, options) : Promise.reject('unhandled');
+        };
+        window.onRetextClick();
+    }""")
+    page.wait_for_timeout(100)
+
+    assert any("Retext failed: invalid sentence translation payload from server" in t[0] and t[1] == "error" for t in toast_messages)
+
+    current_cards = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({ sent_idx: c.sentence_idx, trans: c.translated_text }));
+    }""")
+    assert current_cards == initial_cards
+
+    # 2. Test malformed 'sentences' (array instead of mapping object)
+    toast_messages.clear()
+    page.evaluate("""() => {
+        const origFetch = window.fetch;
+        window.fetch = function(url, options) {
+            if (url === '/session/retext' || (typeof url === 'string' && url.indexOf('/session/retext') !== -1)) {
+                return Promise.resolve({
+                    ok: true,
+                    status: 200,
+                    json: function() {
+                        return Promise.resolve({
+                            status: 'success',
+                            data: {
+                                translatedText: '<div>Line 1</div>',
+                                translated_text: '<div>Line 1</div>',
+                                sentences: ['malformed', 'array']
+                            }
+                        });
+                    }
+                });
+            }
+            return origFetch ? origFetch(url, options) : Promise.reject('unhandled');
+        };
+        window.onRetextClick();
+    }""")
+    page.wait_for_timeout(100)
+
+    assert any("Retext failed: invalid sentence translation payload from server" in t[0] and t[1] == "error" for t in toast_messages)
+
+    current_cards_after_array = page.evaluate("""() => {
+        var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+        return cards.map(c => ({ sent_idx: c.sentence_idx, trans: c.translated_text }));
+    }""")
+    assert current_cards_after_array == initial_cards
+
+
+def test_retext_session_backend_normalized_sentences_contract(tmp_path):
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = str(results_dir)
+
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    session_zid = "20261013211706"
+
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "WordDestination"
+    ]
+    rows = [
+        ["0", "Eins", "eins", "1", "Satz eins.", "Старый 1", "один"],
+        ["1", "Zwei", "zwei", "2", "Satz zwei.", "Старый 2", "два"]
+    ]
+    tsv_file = results_dir / f"{session_zid}.de.tsv"
+    tsv_file.write_text("\t".join(headers) + "\n" + "\n".join("\t".join(r) for r in rows), encoding="utf-8")
+
+    arbiter.sessions[session_zid] = {
+        "session_zid": session_zid,
+        "language": "de",
+        "target_lang": "ru",
+        "text": "Satz eins.\nSatz zwei.",
+        "tsv_path": str(tsv_file),
+        "comments": [],
+        "headers": headers,
+        "data_rows": rows,
+        "role_fields": {
+            "sentence_destination": "SentenceDestination",
+            "sentence_index": "SentenceSourceIndex"
+        }
+    }
+
+    # 1. 0-indexed dict with FULL_TEXT and PADDED metadata must normalize to clean 1-indexed integers
+    mock_0_indexed = {
+        0: "Перевод первого предложения.",
+        1: "Перевод второго предложения.",
+        "FULL_TEXT": "Перевод первого предложения. Перевод второго предложения.",
+        "PADDED": {0: "Padded 1", 1: "Padded 2"}
+    }
+    with patch("kardenwort_controller.translate_source_text", return_value=mock_0_indexed):
+        res = arbiter.retext_session(session_zid=session_zid, language="de", text_mode="multi")
+        assert res["status"] == "success"
+        assert res["sentences"] == {
+            1: "Перевод первого предложения.",
+            2: "Перевод второго предложения."
+        }
+        # Non-integer keys must be excluded from sentences mapping
+        assert "FULL_TEXT" not in res["sentences"]
+        assert "PADDED" not in res["sentences"]
+        assert 0 not in res["sentences"]
+
+    # 2. String translation must normalize to 1-indexed dict {1: text}
+    with patch("kardenwort_controller.translate_source_text", return_value="Единый перевод строки."):
+        res_str = arbiter.retext_session(session_zid=session_zid, language="de", text_mode="single")
+        assert res_str["status"] == "success"
+        assert res_str["sentences"] == {1: "Единый перевод строки."}
+
+
+
