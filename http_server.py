@@ -33,6 +33,7 @@ from kardenwort_desk import (
     SEC_SETTINGS,
     persist_default_language,
     spawn_ahk,
+    get_bundled_css,
 )
 
 from pathlib import Path

@@ -12625,6 +12625,9 @@ html, body {{
 <meta http-equiv="X-UA-Compatible" content="IE=edge">
 <title>{page_title}</title>
 <link rel="icon" type="image/x-icon" href="{favicon_href}">
+<link rel="stylesheet" href="/css/variables.css">
+<link rel="stylesheet" href="/css/tokens.css">
+<link rel="stylesheet" href="/css/table.css">
 <style id="hl-mvp-style">
   
  
@@ -24389,6 +24392,22 @@ def render_section(token, ctx):
         
     return html_output
 
+def get_bundled_css(web_dir=None) -> str:
+    """
+    Load and concatenate modular CSS stylesheets from web/css/ (variables.css, tokens.css, table.css)
+    for standalone offline HTML embedding and export.
+    """
+    if web_dir is None:
+        web_dir = Path(__file__).resolve().parent / "web"
+    elif isinstance(web_dir, str):
+        web_dir = Path(web_dir)
+    css_parts = []
+    for css_file in ("variables.css", "tokens.css", "table.css"):
+        p_css = web_dir / "css" / css_file
+        if p_css.is_file():
+            css_parts.append(p_css.read_text(encoding="utf-8"))
+    return "\n".join(css_parts)
+
 def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
     with TraceTimer("html_generation", zid, config, resolved_paths):
         return _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=session_zid, api_token=api_token, server_enabled=server_enabled, fingerprint=fingerprint)
@@ -24493,13 +24512,8 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
 
         # Offline CSS embedding if not disabled
         if not (isinstance(goldendict, dict) and goldendict.get('disable_css', False)):
-            css_parts = []
-            for css_file in ("variables.css", "tokens.css", "table.css"):
-                p_css = web_dir / "css" / css_file
-                if p_css.is_file():
-                    css_parts.append(p_css.read_text(encoding="utf-8"))
-            if css_parts:
-                combined_css = "\n".join(css_parts)
+            combined_css = get_bundled_css(web_dir)
+            if combined_css:
                 base_html = base_html.replace('</head>', f'<style>\n{combined_css}\n</style>\n</head>')
 
         # If server enabled and session ZID present, ensure client app.js logic is active
