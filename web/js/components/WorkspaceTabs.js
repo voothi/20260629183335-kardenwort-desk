@@ -20,7 +20,7 @@
  * @property {string} [morphology]
  * @property {string} [provenance]
  * @property {string} [highlight_class]
- * @property {string} [selected]
+ * @property {string|number|boolean} [selected]
  * @property {string|null} [row_html]
  * @property {Array<string|number>} [all_row_ids]
  * @property {number} [sentence_idx]
@@ -441,6 +441,9 @@
                 addEvent(track, 'scroll', updateNavButtons);
                 var tabTabBar = document.getElementById('kw-workspace-tab-bar');
                 if (tabTabBar) {
+                    /**
+                     * @param {any} [e]
+                     */
                     var handleTabWheel = function(e) {
                         e = e || window.event;
                         var delta = e.deltaY || e.deltaX || (e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0));
@@ -772,10 +775,13 @@
                         var filledCount = 0;
                         var maxSentenceIdx = 0;
                         for (var sc = 0; sc < cards.length; sc++) {
-                            if (cards[sc].sentence_idx > maxSentenceIdx) {
-                                maxSentenceIdx = cards[sc].sentence_idx;
+                            var scCard = cards[sc];
+                            if (!scCard) continue;
+                            if (scCard.sentence_idx > maxSentenceIdx) {
+                                maxSentenceIdx = scCard.sentence_idx;
                             }
-                            if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
+                            var scTrans = scCard.translated_text;
+                            if (scCard.sentence_idx > 0 && scTrans && scTrans.trim()) {
                                 filledCount++;
                             }
                         }
@@ -786,9 +792,11 @@
                                 slots[si] = "";
                             }
                             for (var sc2 = 0; sc2 < cards.length; sc2++) {
-                                var cIdx = cards[sc2].sentence_idx;
+                                var sc2Card = cards[sc2];
+                                if (!sc2Card) continue;
+                                var cIdx = sc2Card.sentence_idx;
                                 if (cIdx > 0 && cIdx <= maxSentenceIdx) {
-                                    slots[cIdx - 1] = (cards[sc2].translated_text || "").trim();
+                                    slots[cIdx - 1] = (sc2Card.translated_text || "").trim();
                                 }
                             }
                             tText = slots.join(String.fromCharCode(10));
@@ -877,7 +885,9 @@
 
             if (w.AppState && w.AppState.activeTokenSelections && w.AppState.activeTokenSelections.length > 0) {
                 if (activeSentenceIdx > 0) {
-                    w.AppState.activeTokenSelections = w.AppState.activeTokenSelections.filter(function(item) {
+                    w.AppState.activeTokenSelections = w.AppState.activeTokenSelections.filter(
+                        /** @param {any} item */
+                        function(item) {
                         var sIdx = item.sentence_idx;
                         if (sIdx === undefined || sIdx === null || isNaN(sIdx)) {
                             if (typeof w.findTokenDataByVisualIdx === 'function') {
@@ -1140,17 +1150,23 @@
                 isSingleMode = false;
             }
             for (var c3 = 0; c3 < cards.length; c3++) {
-                if (cards[c3].sentence_idx === 0) {
+                var c3Card = cards[c3];
+                if (!c3Card) continue;
+                if (c3Card.sentence_idx === 0) {
                     var filledCount = 0;
                     var maxSentenceIdx = 0;
                     for (var sc = 0; sc < cards.length; sc++) {
-                        if (cards[sc].sentence_idx > maxSentenceIdx) {
-                            maxSentenceIdx = cards[sc].sentence_idx;
+                        var scItem = cards[sc];
+                        if (!scItem) continue;
+                        if (scItem.sentence_idx > maxSentenceIdx) {
+                            maxSentenceIdx = scItem.sentence_idx;
                         }
-                        if (cards[sc].sentence_idx > 0 && cards[sc].translated_text && cards[sc].translated_text.trim()) {
+                        var scTrans = scItem.translated_text;
+                        if (scItem.sentence_idx > 0 && scTrans && scTrans.trim()) {
                             filledCount++;
                         }
                     }
+                    var c3Trans = c3Card.translated_text;
                     if (filledCount > 1 && !isSingleMode) {
                         /** @type {Array<string>} */
                         var slots = new Array(maxSentenceIdx);
@@ -1158,21 +1174,26 @@
                             slots[si] = "";
                         }
                         for (var sc2 = 0; sc2 < cards.length; sc2++) {
-                            var cIdx = cards[sc2].sentence_idx;
+                            var sc2Item = cards[sc2];
+                            if (!sc2Item) continue;
+                            var cIdx = sc2Item.sentence_idx;
                             if (cIdx > 0 && cIdx <= maxSentenceIdx) {
-                                slots[cIdx - 1] = (cards[sc2].translated_text || "").trim();
+                                slots[cIdx - 1] = (sc2Item.translated_text || "").trim();
                             }
                         }
-                        cards[c3].translated_text = slots.join(String.fromCharCode(10));
-                    } else if (filledCount === 1 && !isSingleMode && (!cards[c3].translated_text || !cards[c3].translated_text.trim())) {
+                        c3Card.translated_text = slots.join(String.fromCharCode(10));
+                    } else if (filledCount === 1 && !isSingleMode && (!c3Trans || !c3Trans.trim())) {
                         for (var sc3 = 0; sc3 < cards.length; sc3++) {
-                            if (cards[sc3].sentence_idx > 0 && cards[sc3].translated_text && cards[sc3].translated_text.trim()) {
-                                cards[c3].translated_text = cards[sc3].translated_text.trim();
+                            var sc3Item = cards[sc3];
+                            if (!sc3Item) continue;
+                            var sc3Trans = sc3Item.translated_text;
+                            if (sc3Item.sentence_idx > 0 && sc3Trans && sc3Trans.trim()) {
+                                c3Card.translated_text = sc3Trans.trim();
                                 break;
                             }
                         }
                     } else if (w.AppState && w.AppState.translatedText) {
-                        cards[c3].translated_text = w.AppState.translatedText;
+                        c3Card.translated_text = w.AppState.translatedText;
                     }
                     break;
                 }
