@@ -1224,7 +1224,8 @@
             getTranslationHtml: getTranslationHtml,
             updateActiveTabTranslation: updateActiveTabTranslation,
             updateSentences: updateSentences,
-            rebindActiveTab: rebindActiveTab
+            rebindActiveTab: rebindActiveTab,
+            bindCardWordsToTbody: bindCardWordsToTbody
         };
     })();
 

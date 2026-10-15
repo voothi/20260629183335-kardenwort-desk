@@ -95,6 +95,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     js = js.replace("{text_color}", "black")
     js = js.replace("{input_border}", "gray")
     js = js.replace("{ui_config_json}", "{}")
+    js = js.replace("{workspace_tabs_component_js}", kardenwort_desk.get_workspace_tabs_js())
     
     return js
 
