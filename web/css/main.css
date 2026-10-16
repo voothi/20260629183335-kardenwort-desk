@@ -2,3 +2,10 @@
 @import url("variables.css");
 @import url("tokens.css");
 @import url("table.css");
+
+.kw-lookup-container {
+    zoom: var(--zoom-level, 100%);
+    width: var(--inverse-zoom-width, 100%);
+    max-width: var(--inverse-zoom-width, 100%);
+}
+

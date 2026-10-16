@@ -59,10 +59,12 @@ def test_static_routes_http_delivery(test_server):
             assert 'text/html' in content_type
             body = resp.read().decode('utf-8')
             assert '<header id="session-header"' in body
-            assert '<section id="source-container"' in body
-            assert '<section id="translation-container"' in body
+            assert '<section id="source-section"' in body
+            assert 'id="source-container"' in body
+            assert '<section id="translation-section"' in body
+            assert 'id="translation-container"' in body
             assert '<table id="lemma-table"' in body
-            assert '<div id="action-toolbar"' in body
+            assert 'id="kw-action-toolbar"' in body
             assert '<script id="session-data" type="application/json">' in body
             assert '<script src="/js/components/WorkspaceTabs.js"></script>' in body
 
@@ -122,7 +124,7 @@ def test_playwright_standalone_index_loads_containers(page, test_server):
     assert page.locator("#source-container").is_visible()
     assert page.locator("#translation-container").is_visible()
     assert page.locator("#lemma-table").is_visible()
-    assert page.locator("#action-toolbar").is_visible()
+    assert page.locator("#kw-action-toolbar").is_visible()
 
 
 def test_playwright_client_hydration_from_session_data(page, test_server):

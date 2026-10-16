@@ -279,13 +279,13 @@
             }
 
             // Hydrate Source
-            var srcEl = document.querySelector('#source-container .kw-source-text');
+            var srcEl = document.getElementById('source-container');
             if (srcEl && !srcEl.children.length && !srcEl.textContent.trim() && session.source_text) {
                 srcEl.textContent = session.source_text;
             }
 
             // Hydrate Translation
-            var transEl = document.querySelector('#translation-container .kw-translation');
+            var transEl = document.getElementById('translation-container');
             if (transEl && !transEl.children.length && !transEl.textContent.trim() && session.sentence_translation) {
                 transEl.textContent = session.sentence_translation;
             }
@@ -294,10 +294,20 @@
             var tbody = document.querySelector('#lemma-table tbody');
             if (tbody && !tbody.children.length && session.data_rows && session.data_rows.length) {
                 var headers = session.headers || [];
-                var colLemma = headers.indexOf('WordSource');
-                var colDest = headers.indexOf('WordDestination');
                 var colInf = headers.indexOf('WordSourceInflectedForm');
+                var colLemma = headers.indexOf('WordSource');
+                if (colLemma === -1) colLemma = headers.indexOf('lemma');
+                var colDest = headers.indexOf('WordDestination');
+                if (colDest === -1) colDest = headers.indexOf('word_translation');
+                var colIpa = headers.indexOf('WordSourceIPA');
+                if (colIpa === -1) colIpa = headers.indexOf('ipa');
+                var colMorph = headers.indexOf('WordSourceMorphologyAI');
+                if (colMorph === -1) colMorph = headers.indexOf('morphology');
                 var colPos = headers.indexOf('WordSourcePOS');
+                if (colPos === -1) colPos = headers.indexOf('pos');
+                var colGen = headers.indexOf('WordSourceGender');
+                if (colGen === -1) colGen = headers.indexOf('gender');
+                if (colGen === -1) colGen = headers.indexOf('g');
 
                 session.data_rows.forEach(function (row, idx) {
                     var tr = document.createElement('tr');
@@ -317,28 +327,51 @@
                         tr.appendChild(tdTag);
                     }
 
-                    var tdInf = document.createElement('td');
-                    tdInf.className = 'col-inflected';
-                    tdInf.textContent = (colInf !== -1 && row[colInf]) ? row[colInf] : '';
-                    tr.appendChild(tdInf);
+                    function makeCell(cls, colName, text, isEditable) {
+                        var td = document.createElement('td');
+                        td.className = (isEditable ? 'editable ' : '') + cls;
+                        if (colName) td.setAttribute('data-col', colName);
+                        var scrollDiv = document.createElement('div');
+                        scrollDiv.className = 'scrollable-cell';
+                        scrollDiv.textContent = text || '';
+                        td.appendChild(scrollDiv);
+                        return td;
+                    }
 
-                    var tdLem = document.createElement('td');
-                    tdLem.className = 'col-lemma';
-                    tdLem.textContent = (colLemma !== -1 && row[colLemma]) ? row[colLemma] : (row[0] || '');
-                    tr.appendChild(tdLem);
+                    var valInf = (colInf !== -1 && row[colInf]) ? row[colInf] : '';
+                    var valLem = (colLemma !== -1 && row[colLemma]) ? row[colLemma] : (row[0] || '');
+                    var valDest = (colDest !== -1 && row[colDest]) ? row[colDest] : (row[1] || '');
+                    var valIpa = (colIpa !== -1 && row[colIpa]) ? row[colIpa] : '';
+                    var valMorph = (colMorph !== -1 && row[colMorph]) ? row[colMorph] : '';
+                    var valPos = (colPos !== -1 && row[colPos]) ? row[colPos] : '';
+                    var valGen = (colGen !== -1 && row[colGen]) ? row[colGen] : '';
 
-                    var tdPos = document.createElement('td');
-                    tdPos.className = 'col-pos';
-                    tdPos.textContent = (colPos !== -1 && row[colPos]) ? row[colPos] : '';
-                    tr.appendChild(tdPos);
-
-                    var tdDest = document.createElement('td');
-                    tdDest.className = 'col-translation';
-                    tdDest.textContent = (colDest !== -1 && row[colDest]) ? row[colDest] : (row[1] || '');
-                    tr.appendChild(tdDest);
+                    tr.appendChild(makeCell('col-inflected', 'WordSourceInflectedForm', valInf, true));
+                    tr.appendChild(makeCell('col-lemma', 'WordSource', valLem, true));
+                    tr.appendChild(makeCell('col-translation', 'WordDestination', valDest, true));
+                    tr.appendChild(makeCell('col-ipa', 'WordSourceIPA', valIpa, false));
+                    tr.appendChild(makeCell('col-morphology', 'WordSourceMorphologyAI', valMorph, false));
+                    tr.appendChild(makeCell('col-pos', 'WordSourcePOS', valPos, false));
+                    tr.appendChild(makeCell('col-gender', 'WordSourceGender', valGen, false));
 
                     tbody.appendChild(tr);
                 });
+            }
+
+            // Synchronize thead tag header with actual checkboxes
+            var theadTr = document.querySelector('#lemma-table thead tr');
+            if (theadTr) {
+                var existingTagTh = theadTr.querySelector('.kw-tag-header');
+                var hasCheckboxes = !!document.querySelector('#lemma-table tbody .kw-tag-control, #lemma-table tbody .kw-tag-checkbox');
+                var shouldHaveTagHeader = SERVER_ENABLED && hasCheckboxes;
+                if (!shouldHaveTagHeader && existingTagTh) {
+                    existingTagTh.parentNode.removeChild(existingTagTh);
+                } else if (shouldHaveTagHeader && !existingTagTh) {
+                    var newTh = document.createElement('th');
+                    newTh.className = 'kw-tag-header';
+                    newTh.innerHTML = '&#9733;';
+                    theadTr.insertBefore(newTh, theadTr.firstChild);
+                }
             }
 
             if (SERVER_ENABLED && SESSION_ZID) {

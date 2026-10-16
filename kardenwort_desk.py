@@ -23436,13 +23436,13 @@ def render_section(token, ctx):
         heading = make_heading("source", "Source Text")
         normalized_text = normalize_blank_lines(ctx["text"])
         safe_text = normalized_text.replace('\r', '')
-        html_output += f'<div class="kw-section source-container" id="source-container">{heading}<div class="kw-source-text">{safe_text}</div></div>\n'
+        html_output += f'<section class="kw-section source-section" id="source-section">{heading}<div class="kw-source-text source-text" id="source-container">{safe_text}</div></section>\n'
         
     elif token == "translation":
         heading = make_heading("translation", "Translation")
         normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
         safe_trans = html.escape(normalized_trans.replace('\r', ''))
-        html_output += f'<div class="kw-section">{heading}<div class="kw-translation">{safe_trans}</div></div>\n'
+        html_output += f'<section class="kw-section translation-section" id="translation-section">{heading}<div class="kw-translation translation-text" id="translation-container">{safe_trans}</div></section>\n'
         
     elif token == "lemmas":
         heading = make_heading("lemmas", "Lemmas")
@@ -23506,6 +23506,7 @@ def render_section(token, ctx):
         col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
         lookup_col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else (headers.index('WordSource') if 'WordSource' in headers else (headers.index('lemma') if 'lemma' in headers else -1))
         lookup_col_prov = headers.index(role_fields['provenance']) if 'provenance' in role_fields and role_fields['provenance'] in headers else (headers.index('Provenance') if 'Provenance' in headers else (headers.index('provenance') if 'provenance' in headers else -1))
+        use_scroll = ctx.get('scrollable_cells', False)
         for row_id, row in enumerate(data_rows):
             sel_val = row[selected_col_idx] if selected_col_idx != -1 and len(row) > selected_col_idx else ""
             is_checked_bool = str(sel_val).strip() in ("1", "true", "True")
@@ -23525,7 +23526,10 @@ def render_section(token, ctx):
                     lem_v = row[lem_idx] if lem_idx != -1 and len(row) > lem_idx else ""
                     inf_tooltip = format_inflected_sentence_tooltip(ctx.get('text', ''), val, token_order=token_order_val, lemma=lem_v)
                     inf_title_attr = f' title="{html.escape(inf_tooltip)}"' if inf_tooltip else ''
-                    html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="editable col-inflected" data-col="WordSourceInflectedForm"{inf_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-inflected"{inf_title_attr}>{val}</td>'
                 elif t == "lemma":
                     gender_idx = col_indices.get('gender', col_indices.get('g', -1))
                     g_val = row[gender_idx] if gender_idx != -1 and len(row) > gender_idx else ""
@@ -23533,36 +23537,60 @@ def render_section(token, ctx):
                     pos_val_for_lem = row[pos_idx] if pos_idx != -1 and len(row) > pos_idx else ""
                     lem_tooltip = format_lemma_article_tooltip(val, g_val, lang=ctx.get('language', 'de'), pos=pos_val_for_lem)
                     lem_title_attr = f' title="{html.escape(lem_tooltip)}"' if lem_tooltip else ''
-                    html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="editable col-lemma" data-col="WordSource"{lem_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-lemma"{lem_title_attr}>{val}</td>'
                 elif t == "translation":
                     prov_val = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else ""
                     trans_tooltip = format_translation_cell_tooltip(val, prov_val)
                     trans_title_attr = f' title="{html.escape(trans_tooltip)}"' if trans_tooltip else ''
-                    html_output += f'<td class="col-translation"{trans_title_attr}>{val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="editable col-translation" data-col="WordDestination"{trans_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-translation"{trans_title_attr}>{val}</td>'
                 elif t == "ipa":
                     ipa_title_attr = f' title="{html.escape(val)}"' if val else ''
-                    html_output += f'<td class="col-ipa"{ipa_title_attr}>{val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="col-ipa" data-col="WordSourceIPA"{ipa_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-ipa"{ipa_title_attr}>{val}</td>'
                 elif t == "morphology":
                     morph_title_attr = f' title="{html.escape(val)}"' if val else ''
-                    html_output += f'<td class="col-morphology"{morph_title_attr}>{val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="col-morphology" data-col="WordSourceMorphologyAI"{morph_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-morphology"{morph_title_attr}>{val}</td>'
                 elif t == "pos":
                     cell_val = format_pos_cell(val)
                     pos_tooltip = format_pos_tooltip(val)
                     pos_title_attr = f' title="{html.escape(pos_tooltip)}"' if pos_tooltip else ''
-                    html_output += f'<td class="col-pos"{pos_title_attr}>{cell_val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="col-pos" data-col="WordSourcePOS"{pos_title_attr}><div class="scrollable-cell">{cell_val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-pos"{pos_title_attr}>{cell_val}</td>'
                 elif t in ("gender", "g"):
                     cell_val = format_gender_badge(val)
                     lem_val_for_g = row[lookup_col_lemma] if lookup_col_lemma != -1 and len(row) > lookup_col_lemma else ""
                     prov_val_for_g = row[lookup_col_prov] if lookup_col_prov != -1 and len(row) > lookup_col_prov else None
                     g_tooltip = format_gender_tooltip(val, lemma=lem_val_for_g, provenance=prov_val_for_g)
                     g_title_attr = f' title="{html.escape(g_tooltip)}"' if g_tooltip else ''
-                    html_output += f'<td class="col-gender"{g_title_attr}>{cell_val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="col-gender" data-col="WordSourceGender"{g_title_attr}><div class="scrollable-cell">{cell_val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-gender"{g_title_attr}>{cell_val}</td>'
                 elif t in ("oxford", "cambridge", "goethe", "cefr", "classification"):
                     cls_tooltip = format_classification_tooltip(val, role=t)
                     cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
-                    html_output += f'<td class="col-classification"{cls_title_attr}>{val}</td>'
+                    if use_scroll:
+                        html_output += f'<td class="col-classification" data-col="{t}"{cls_title_attr}><div class="scrollable-cell">{val}</div></td>'
+                    else:
+                        html_output += f'<td class="col-classification"{cls_title_attr}>{val}</td>'
                 else:
-                    html_output += f'<td>{val}</td>'
+                    if use_scroll:
+                        html_output += f'<td><div class="scrollable-cell">{val}</div></td>'
+                    else:
+                        html_output += f'<td>{val}</td>'
             html_output += '</tr>\n'
 
         html_output += '</tbody></table></div>\n'
@@ -23767,13 +23795,102 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
                 f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>'
             )
 
-        # Inject rendered container
-        start_marker = '<div class="kw-lookup-container">'
-        end_marker = '<script id="session-data"'
-        start_idx = base_html.find(start_marker)
-        end_idx = base_html.find(end_marker)
-        if start_idx != -1 and end_idx != -1:
-            base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
+        # Check if slot markers exist in base_html (modular shell)
+        if '<!-- SECTION_SOURCE_START -->' in base_html:
+            # 1. Configurable Zoom (Task 2.9, R50)
+            zoom_val = None
+            if isinstance(goldendict, dict):
+                zoom_val = goldendict.get('defaultzoom') or goldendict.get('default_zoom') or goldendict.get('zoom')
+            if not zoom_val and config:
+                if config.has_section('settings'):
+                    zoom_val = config.get('settings', 'defaultzoom', fallback=None) or config.get('settings', 'default_zoom', fallback=None)
+                if not zoom_val and config.has_section('rendering'):
+                    zoom_val = config.get('rendering', 'default_zoom', fallback=None)
+            if not zoom_val:
+                zoom_val = "100"
+            zoom_str = str(zoom_val).strip()
+            zoom_num = re.sub(r'[^\d.]', '', zoom_str)
+            try:
+                zoom_float = float(zoom_num) if zoom_num else 100.0
+            except ValueError:
+                zoom_float = 100.0
+            if zoom_float <= 0:
+                zoom_float = 100.0
+            factor = zoom_float / 100.0
+            zoom_style = f"zoom: {zoom_float:g}%; max-width: calc(100% / {factor:.4g}); width: calc(100% / {factor:.4g});"
+            base_html = base_html.replace(
+                '<div class="kw-lookup-container">',
+                f'<div class="kw-lookup-container" style="{zoom_style}">'
+            )
+
+            # 2. Language Badge
+            if language and target_lang:
+                base_html = base_html.replace(
+                    '<span id="lang-badge" class="session-badge">de &rarr; ru</span>',
+                    f'<span id="lang-badge" class="session-badge">{html.escape(language)} &rarr; {html.escape(target_lang)}</span>'
+                )
+
+            # 3. Source Section Slot (Task 2.7, 2.8, R33, R44)
+            if 'source' not in sections:
+                base_html = re.sub(r'<!-- SECTION_SOURCE_START -->.*?<!-- SECTION_SOURCE_END -->\s*', '', base_html, flags=re.DOTALL)
+            else:
+                h_source = headings.get('source', '')
+                if h_source == '__default__':
+                    h_source = "Source Text"
+                if h_source:
+                    base_html = re.sub(r'<h3>Source Text</h3>', f'<h3>{html.escape(h_source)}</h3>', base_html)
+                else:
+                    base_html = re.sub(r'<h3>Source Text</h3>\s*', '', base_html)
+                normalized_text = normalize_blank_lines(ctx["text"])
+                safe_text = normalized_text.replace('\r', '')
+                base_html = base_html.replace('<!-- SOURCE_TEXT -->', safe_text)
+
+            # 4. Translation Section Slot (Task 2.7, 2.8, R33, R44)
+            if 'translation' not in sections:
+                base_html = re.sub(r'<!-- SECTION_TRANSLATION_START -->.*?<!-- SECTION_TRANSLATION_END -->\s*', '', base_html, flags=re.DOTALL)
+            else:
+                h_trans = headings.get('translation', '')
+                if h_trans == '__default__':
+                    h_trans = "Translation"
+                if h_trans:
+                    base_html = re.sub(r'<h3>Translation</h3>', f'<h3>{html.escape(h_trans)}</h3>', base_html)
+                else:
+                    base_html = re.sub(r'<h3>Translation</h3>\s*', '', base_html)
+                normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
+                safe_trans = html.escape(normalized_trans.replace('\r', ''))
+                base_html = base_html.replace('<!-- TRANSLATION_TEXT -->', safe_trans)
+
+            # 5. Lemmas Section Slot (Task 2.7, 3.8, R33, R24)
+            if 'lemmas' not in sections:
+                base_html = re.sub(r'<!-- SECTION_LEMMAS_START -->.*?<!-- SECTION_LEMMAS_END -->\s*', '', base_html, flags=re.DOTALL)
+            else:
+                h_lemmas = headings.get('lemmas', '')
+                if h_lemmas == '__default__':
+                    h_lemmas = "Lemmas"
+                if h_lemmas:
+                    base_html = re.sub(r'<h3>Lemmas</h3>', f'<h3>{html.escape(h_lemmas)}</h3>', base_html)
+                else:
+                    base_html = re.sub(r'<h3>Lemmas</h3>\s*', '', base_html)
+
+                ctx_scroll = dict(ctx)
+                ctx_scroll['scrollable_cells'] = True
+                lemmas_sec_html = render_section('lemmas', ctx_scroll)
+                thead_m = re.search(r'<thead>(.*?)</thead>', lemmas_sec_html, re.DOTALL)
+                tbody_m = re.search(r'<tbody>(.*?)</tbody>', lemmas_sec_html, re.DOTALL)
+                if thead_m:
+                    base_html = re.sub(r'<thead>.*?</thead>', f'<thead>{thead_m.group(1)}</thead>', base_html, flags=re.DOTALL)
+                if tbody_m:
+                    base_html = base_html.replace('<!-- TABLE_ROWS -->', tbody_m.group(1).strip())
+                else:
+                    base_html = base_html.replace('<!-- TABLE_ROWS -->', '')
+        else:
+            # Inject rendered container
+            start_marker = '<div class="kw-lookup-container">'
+            end_marker = '<script id="session-data"'
+            start_idx = base_html.find(start_marker)
+            end_idx = base_html.find(end_marker)
+            if start_idx != -1 and end_idx != -1:
+                base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
 
         # Offline CSS embedding if not disabled
         if not (isinstance(goldendict, dict) and goldendict.get('disable_css', False)):

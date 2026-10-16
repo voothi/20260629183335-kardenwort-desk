@@ -8,6 +8,7 @@
     <link rel="stylesheet" href="/css/variables.css">
     <link rel="stylesheet" href="/css/tokens.css">
     <link rel="stylesheet" href="/css/table.css">
+    <link rel="stylesheet" href="/css/main.css">
 </head>
 <body>
     <div class="kw-lookup-container">
@@ -24,39 +25,40 @@
         <nav id="workspace-tab-bar" class="kw-tab-bar"><!-- WORKSPACE_TAB_BAR --></nav>
 
         <!-- Source Text Container -->
-        <section id="source-container" class="kw-section source-container">
+        <!-- SECTION_SOURCE_START -->
+        <section id="source-section" class="kw-section source-section">
             <h3>Source Text</h3>
-            <div class="kw-source-text" id="source-text"><!-- SOURCE_TEXT --></div>
+            <div class="kw-source-text source-text" id="source-container"><!-- SOURCE_TEXT --></div>
         </section>
+        <!-- SECTION_SOURCE_END -->
 
         <!-- Translation Container -->
-        <section id="translation-container" class="kw-section translation-container">
+        <!-- SECTION_TRANSLATION_START -->
+        <section id="translation-section" class="kw-section translation-section">
             <h3>Translation</h3>
-            <div class="kw-translation" id="translation-text"><!-- TRANSLATION_TEXT --></div>
+            <div class="kw-translation translation-text" id="translation-container"><!-- TRANSLATION_TEXT --></div>
         </section>
+        <!-- SECTION_TRANSLATION_END -->
 
         <!-- Lemma Extraction Table -->
-        <section id="lemmas-section" class="kw-section">
+        <!-- SECTION_LEMMAS_START -->
+        <section id="lemmas-section" class="kw-section lemmas-section">
             <h3>Lemmas</h3>
             <div class="kw-table-container">
                 <table id="lemma-table" class="kw-lemmas-table lemma-table">
                     <thead>
                         <tr>
-                            <th class="kw-tag-header">&#9733;</th>
                             <th class="col-inflected">Inflected</th>
                             <th class="col-lemma">Lemma</th>
-                            <th class="col-pos">POS</th>
                             <th class="col-translation">Translation</th>
+                            <th class="col-ipa">IPA</th>
+                            <th class="col-morphology">Morphology</th>
+                            <th class="col-pos">POS</th>
+                            <th class="col-gender">Gender</th>
                         </tr>
                     </thead>
                     <tbody><!-- TABLE_ROWS --></tbody>
                 </table>
-            </div>
-
-            <!-- Action Toolbar: Audio, Copy, Export to Anki -->
-            <div id="action-toolbar" class="kw-actions-bar">
-                <button id="kw-export-btn" class="kw-export-btn" onclick="kwExportSelected()">Export to Anki</button>
-                <span id="kw-interactive-status" class="kw-interactive-status"></span>
             </div>
 
             <!-- Action Toolbar Controls -->
@@ -72,6 +74,7 @@
                 <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">Delete</button>
             </div>
         </section>
+        <!-- SECTION_LEMMAS_END -->
 
         <!-- Language Verification Modal -->
         <div class="kw-modal-backdrop" id="kw-lang-modal" style="display: none;">
@@ -91,6 +94,7 @@
     </div>
 
     <!-- State Hydration JSON Data Islands -->
+    <script id="hl-mvp-script" type="text/plain" data-bookmarks="3" data-rainbow="1" data-enabled="1"></script>
     <script id="session-data" type="application/json">{}</script>
     <!-- KARDENWORT_BOOTSTRAP -->
     <script id="kardenwort-bootstrap" type="application/json">{}</script>
