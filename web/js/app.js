@@ -211,21 +211,46 @@
 
     function initSSE(sessionZid) {
         if (!sessionZid || typeof window.EventSource === 'undefined') return;
+        // R25, Task 7.9: Guard against local file:/// filesystem URI errors
+        if (window.location.protocol === 'file:' && !SERVER_URL) return;
+
         try {
-            if (sseSource) {
-                sseSource.close();
+            // R5, Task 7.5: Active connection guard: only single EventSource per session
+            if (window._kwEvtSource) {
+                try { window._kwEvtSource.close(); } catch (e) {}
+                window._kwEvtSource = null;
             }
-            sseSource = new EventSource('/events?zid=' + encodeURIComponent(sessionZid));
+            if (sseSource) {
+                try { sseSource.close(); } catch (e) {}
+                sseSource = null;
+            }
+
+            // R25, Task 7.9: Construct safe URL with SERVER_URL
+            var base = (SERVER_URL || '').replace(/\/+$/, '');
+            var sseUrl = (base ? base : '') + '/events?zid=' + encodeURIComponent(sessionZid);
+            sseSource = new EventSource(sseUrl);
+            window._kwEvtSource = sseSource;
+
             sseSource.onopen = function () {
                 setSseStatus('connected');
             };
             sseSource.onerror = function () {
                 setSseStatus('error');
             };
+
+            // R12, Task 7.6: Wire sseSource.onmessage to process progressive updates
             sseSource.onmessage = function (e) {
                 try {
                     var data = JSON.parse(e.data);
-                    if (data.type === 'tag_updated') {
+                    if (!data) return;
+
+                    if (data.type === 'provider_failover') {
+                        if (typeof window.updateActiveProvider === 'function') {
+                            var tType = data.task_type || data.task;
+                            var nProv = data.new_provider || data.to || data.provider;
+                            if (nProv) window.updateActiveProvider(tType, nProv);
+                        }
+                    } else if (data.type === 'tag_updated') {
                         var cb = document.querySelector('.kw-tag-checkbox[data-token-order="' + data.row_id + '"]');
                         if (cb && cb.checked !== data.status) {
                             cb.checked = data.status;
@@ -234,6 +259,10 @@
                                 if (data.status) r.classList.add('kw-row-selected');
                                 else r.classList.remove('kw-row-selected');
                             }
+                        }
+                    } else if (data.type === 'update' || data.stage === 'translated_text' || data.rows || data.stage === 'enrichment' || data.is_finished) {
+                        if (typeof window.receiveUpdate === 'function') {
+                            window.receiveUpdate(data);
                         }
                     }
                 } catch (err) {
@@ -1811,6 +1840,7 @@
             try {
                 var selIds = getSelectedRowIds();
                 window.ahkCall('selection', selIds.join(','));
+                window.ahkCall('dirty', (typeof window.isDirty === 'function' && window.isDirty()) ? 'true' : 'false');
             } catch (e) {}
         }
     }
@@ -2141,6 +2171,851 @@
     });
 
     // ----------------------------------------------------
+    // Progressive Watchdog, Skeleton Cleanup & Updates (R12, R40, R43)
+    // ----------------------------------------------------
+
+    function countPendingSkeletons() {
+        var skels = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
+        return skels.length;
+    }
+    window.countPendingSkeletons = countPendingSkeletons;
+
+    function cleanupOrphanSkeletons() {
+        var skels = document.querySelectorAll('.skeleton-loader, [data-pending="true"]');
+        skels.forEach(function (el) {
+            el.classList.remove('skeleton-loader');
+            el.removeAttribute('data-pending');
+        });
+        if (typeof window.normalizeCardSkeletons === 'function') {
+            window.normalizeCardSkeletons('timeout');
+        }
+    }
+    window.cleanupOrphanSkeletons = cleanupOrphanSkeletons;
+
+    function initWatchdog() {
+        window._kwWatchdogResolved = false;
+        if (window._kwSkeletonPollTimer) {
+            clearInterval(window._kwSkeletonPollTimer);
+            window._kwSkeletonPollTimer = null;
+        }
+        if (window._kwWatchdogMaxTimer) {
+            clearTimeout(window._kwWatchdogMaxTimer);
+            window._kwWatchdogMaxTimer = null;
+        }
+
+        var isWebMode = (window.location.protocol !== 'file:') || (document.body && document.body.getAttribute('data-web-mode') === 'true') || Boolean(SERVER_URL);
+        var curZid = getSessionZid();
+        var hasSkeletons = countPendingSkeletons() > 0;
+
+        if (isWebMode && curZid && hasSkeletons) {
+            var maxBudgetMs = 30000;
+            var totalActiveElapsedMs = 0;
+            var lastVisibleTime = (!document.hidden) ? Date.now() : null;
+
+            var getActiveElapsedMs = function () {
+                var elapsed = totalActiveElapsedMs;
+                if (!document.hidden && lastVisibleTime) {
+                    elapsed += (Date.now() - lastVisibleTime);
+                }
+                return elapsed;
+            };
+
+            var pauseWatchdogTimer = function () {
+                if (lastVisibleTime) {
+                    totalActiveElapsedMs += (Date.now() - lastVisibleTime);
+                    lastVisibleTime = null;
+                }
+                if (window._kwWatchdogMaxTimer) {
+                    clearTimeout(window._kwWatchdogMaxTimer);
+                    window._kwWatchdogMaxTimer = null;
+                }
+            };
+
+            var resumeWatchdogTimer = function () {
+                if (window._kwWatchdogResolved) return;
+                if (document.hidden) return;
+                if (!lastVisibleTime) lastVisibleTime = Date.now();
+                if (window._kwWatchdogMaxTimer) {
+                    clearTimeout(window._kwWatchdogMaxTimer);
+                    window._kwWatchdogMaxTimer = null;
+                }
+                var remaining = maxBudgetMs - getActiveElapsedMs();
+                if (remaining <= 0) {
+                    cleanupOrphanSkeletons();
+                    if (typeof window.showToast === 'function') {
+                        window.showToast("Background loading timed out. Restored table editing.", "warning");
+                    }
+                } else {
+                    window._kwWatchdogMaxTimer = setTimeout(function () {
+                        if (!window._kwWatchdogResolved) {
+                            cleanupOrphanSkeletons();
+                            if (typeof window.showToast === 'function') {
+                                window.showToast("Background loading timed out. Restored table editing.", "warning");
+                            }
+                        }
+                    }, remaining);
+                }
+            };
+
+            resumeWatchdogTimer();
+
+            var pollStatus = function () {
+                if (document.hidden || window._kwWatchdogResolved) return;
+                var sUrl = (SERVER_URL || '') + '/session/status?zid=' + encodeURIComponent(curZid);
+                fetch(sUrl, { headers: { 'Accept': 'application/json' } })
+                .then(function (res) { if (res.ok) return res.json(); })
+                .then(function (resObj) {
+                    if (!resObj) return;
+                    var payload = (resObj && resObj.data) ? resObj.data : resObj;
+                    if (payload && typeof window.receiveUpdate === 'function') {
+                        window.receiveUpdate(payload);
+                    }
+                    var isDone = payload ? (payload.is_finished === true || payload.stage === 'finished' || (payload.status && payload.status.is_finished)) : false;
+                    if (isDone || countPendingSkeletons() === 0) {
+                        window._kwWatchdogResolved = true;
+                        if (window._kwSkeletonPollTimer) {
+                            clearInterval(window._kwSkeletonPollTimer);
+                            window._kwSkeletonPollTimer = null;
+                        }
+                        if (window._kwWatchdogMaxTimer) {
+                            clearTimeout(window._kwWatchdogMaxTimer);
+                            window._kwWatchdogMaxTimer = null;
+                        }
+                    }
+                })
+                .catch(function () {});
+            };
+
+            window._kwSkeletonPollTimer = setInterval(pollStatus, 1500);
+
+            if (!window._kwWatchdogVisibilityBound) {
+                window._kwWatchdogVisibilityBound = true;
+                document.addEventListener('visibilitychange', function () {
+                    if (document.visibilityState === 'hidden') {
+                        pauseWatchdogTimer();
+                    } else {
+                        resumeWatchdogTimer();
+                        pollStatus();
+                    }
+                });
+            }
+        }
+    }
+    window.initWatchdog = initWatchdog;
+    window.ensureWatchdogActive = function () {
+        if (countPendingSkeletons() > 0 && !window._kwSkeletonPollTimer) {
+            initWatchdog();
+        }
+    };
+
+    // Task 7.11 (R40): window.receiveUpdate(payload)
+    window.receiveUpdate = function (payload) {
+        if (!payload) return;
+        var data = (payload.data && typeof payload.data === 'object' && !payload.stage) ? payload.data : payload;
+
+        // 1. Process sentence translation update
+        var tText = data.translatedText || data.translated_text;
+        if (tText) {
+            window.AppState = window.AppState || {};
+            window.AppState.translatedText = tText;
+            window.AppState.translated_text = tText;
+            var tc = document.getElementById('translation-container');
+            if (tc) {
+                tc.classList.remove('skeleton-loader');
+                tc.removeAttribute('data-pending');
+                tc.innerHTML = tText;
+                tokenizeTranslation();
+            }
+            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.updateActiveTabTranslation === 'function') {
+                var actCard = window.WorkspaceTabs.getActiveCard();
+                if (actCard) {
+                    actCard.translated_text = tText;
+                }
+                window.WorkspaceTabs.updateActiveTabTranslation();
+            }
+        }
+
+        // 2. Process multi-sentence distribution (R51, Task 7.18)
+        if (data.sentences && window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
+            var cards = window.WorkspaceTabs.getCards();
+            var pSents = data.sentences;
+            var isZeroBased = (pSents[0] !== undefined || pSents['0'] !== undefined);
+            for (var c = 0; c < cards.length; c++) {
+                var sIdx = cards[c].sentence_idx;
+                if (sIdx === 0 && tText) {
+                    cards[c].translated_text = tText;
+                } else if (sIdx > 0) {
+                    var k = isZeroBased ? (sIdx - 1) : sIdx;
+                    var val = pSents[k] !== undefined ? pSents[k] : pSents[String(k)];
+                    if (val && typeof val === 'string') cards[c].translated_text = val;
+                }
+            }
+            window.WorkspaceTabs.updateActiveTabTranslation();
+        }
+
+        // 3. Process table row updates
+        var rows = data.rows;
+        if (rows && typeof rows === 'object') {
+            for (var rowId in rows) {
+                if (!rows.hasOwnProperty(rowId)) continue;
+                var rData = rows[rowId];
+                var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]');
+                if (!tr) continue;
+
+                if (rData.trans || rData.word_translation || rData.WordDestination) {
+                    var val = rData.trans || rData.word_translation || rData.WordDestination;
+                    var cell = tr.querySelector('td.col-translation, td[data-col="WordDestination"]');
+                    if (cell) {
+                        cell.classList.remove('skeleton-loader');
+                        cell.removeAttribute('data-pending');
+                        var sDiv = cell.querySelector('.scrollable-cell') || cell;
+                        sDiv.textContent = val;
+                        if (rData.provenance) cell.setAttribute('data-provenance', rData.provenance);
+                        updateCellTooltip(cell, val);
+                    }
+                }
+                if (rData.lemma || rData.WordSource) {
+                    var valLem = rData.lemma || rData.WordSource;
+                    var cellLem = tr.querySelector('td.col-lemma, td[data-col="WordSource"]');
+                    if (cellLem) {
+                        cellLem.classList.remove('skeleton-loader');
+                        cellLem.removeAttribute('data-pending');
+                        var sDivLem = cellLem.querySelector('.scrollable-cell') || cellLem;
+                        sDivLem.textContent = valLem;
+                        updateCellTooltip(cellLem, valLem);
+                    }
+                }
+                if (rData.ipa || rData.WordSourceIPA) {
+                    var valIpa = rData.ipa || rData.WordSourceIPA;
+                    var cellIpa = tr.querySelector('td.col-ipa, td[data-col="WordSourceIPA"]');
+                    if (cellIpa) {
+                        cellIpa.classList.remove('skeleton-loader');
+                        var sDivIpa = cellIpa.querySelector('.scrollable-cell') || cellIpa;
+                        sDivIpa.textContent = valIpa;
+                    }
+                }
+                if (rData.morph || rData.morphology || rData.WordSourceMorphologyAI) {
+                    var valMorph = rData.morph || rData.morphology || rData.WordSourceMorphologyAI;
+                    var cellMorph = tr.querySelector('td.col-morphology, td[data-col="WordSourceMorphologyAI"]');
+                    if (cellMorph) {
+                        cellMorph.classList.remove('skeleton-loader');
+                        var sDivMorph = cellMorph.querySelector('.scrollable-cell') || cellMorph;
+                        sDivMorph.textContent = valMorph;
+                    }
+                }
+                if (rData.pos || rData.WordSourcePOS) {
+                    var valPos = rData.pos || rData.WordSourcePOS;
+                    var cellPos = tr.querySelector('td.col-pos, td[data-col="WordSourcePOS"]');
+                    if (cellPos) {
+                        cellPos.classList.remove('skeleton-loader');
+                        var sDivPos = cellPos.querySelector('.scrollable-cell') || cellPos;
+                        sDivPos.textContent = valPos;
+                        var tipPos = formatPosTooltip(valPos);
+                        if (tipPos) cellPos.setAttribute('title', tipPos);
+                    }
+                }
+                if (rData.gender || rData.WordSourceGender) {
+                    var valGen = rData.gender || rData.WordSourceGender;
+                    var cellGen = tr.querySelector('td.col-gender, td[data-col="WordSourceGender"]');
+                    if (cellGen) {
+                        cellGen.classList.remove('skeleton-loader');
+                        var sDivGen = cellGen.querySelector('.scrollable-cell') || cellGen;
+                        sDivGen.textContent = valGen;
+                    }
+                }
+                if (rData.classifications) {
+                    for (var colName in rData.classifications) {
+                        if (!rData.classifications.hasOwnProperty(colName)) continue;
+                        var classVal = rData.classifications[colName];
+                        var cTd = tr.querySelector('td[data-col="' + colName + '"]');
+                        if (cTd) {
+                            var levelClass = 'level-' + String(classVal).toLowerCase().split(':')[0];
+                            cTd.innerHTML = '<span class="' + levelClass + '">' + escapeHtml(classVal) + '</span>';
+                        }
+                    }
+                }
+            }
+        }
+
+        if (data.is_finished === true || data.stage === 'finished') {
+            cleanupOrphanSkeletons();
+        }
+
+        buildLcIndex();
+        if (typeof window.updateBidirectionalHighlights === 'function') {
+            window.updateBidirectionalHighlights();
+        }
+    };
+
+    // ----------------------------------------------------
+    // Audio Pronunciation Engine (R46, Task 7.16)
+    // ----------------------------------------------------
+
+    function sanitizeSpokenText(text) {
+        if (!text) return "";
+        var s = String(text).replace(/<[^>]+>/g, ' ');
+        s = s.replace(/[\{\}\(\)\[\]"'\`]/g, ' ');
+        s = s.replace(/(^|\s)[0-9]+(?=\s|$)/g, ' ');
+        return s.replace(/\s+/g, ' ').trim();
+    }
+
+    function playAudio(text, lang) {
+        if (!text) return;
+        lang = lang || getSessionLang() || 'de';
+        var clean = sanitizeSpokenText(text);
+        if (!clean) return;
+
+        var uiCfg = (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.ui_config) || window.__CONFIG__ || {};
+        var pythonExe = uiCfg.audio_python_exe || window.__audioPythonExe || '';
+        var ttsCli = uiCfg.audio_anki_tts_cli || window.__audioAnkiTtsCli || '';
+
+        if (window.ahkCall && ttsCli && pythonExe) {
+            var sanitizedText = clean.replace(/\r?\n|\r/g, ' ');
+            var escapedText = sanitizedText.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+            try {
+                window.ahkCall('play', pythonExe + "\n" + ttsCli + "\n" + lang + "\n" + escapedText);
+            } catch (e) {}
+        } else if (typeof fetch === 'function') {
+            var tok = getApiToken();
+            var headers = { 'Content-Type': 'application/json' };
+            if (tok) headers['X-API-Token'] = tok;
+            var url = (SERVER_URL || '') + '/api/v1/audio/play';
+            fetch(url, {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify({ text: clean, language: lang })
+            }).catch(function (e) {
+                fetch((SERVER_URL || '') + '/session/play', {
+                    method: 'POST',
+                    headers: headers,
+                    body: JSON.stringify({ text: clean, language: lang })
+                }).catch(function () {});
+            });
+        }
+    }
+    window.playAudio = playAudio;
+
+    // ----------------------------------------------------
+    // Filter Selected Only & Same Lemma Controls (R8, R39, Tasks 7.1, 7.10)
+    // ----------------------------------------------------
+
+    function setFilterSelectedOnly(active) {
+        window.AppState = window.AppState || {};
+        window.AppState.filterSelectedOnly = Boolean(active);
+        if (window.__CONFIG__) {
+            window.__CONFIG__.filter_selected_only = Boolean(active);
+        }
+        var btn = document.getElementById('kw-btn-filter-selected');
+        var table = document.getElementById('lemma-table');
+        if (btn) {
+            if (active) btn.classList.add('btn-filter-active');
+            else btn.classList.remove('btn-filter-active');
+        }
+        if (table) {
+            if (active) table.classList.add('kw-filter-selected-only');
+            else table.classList.remove('kw-filter-selected-only');
+        }
+        updateEmptySelectionState();
+        try {
+            fetch((SERVER_URL || '') + '/api/v1/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(Boolean(active)) })
+            }).catch(function () {});
+        } catch (e) {}
+    }
+    window.setFilterSelectedOnly = setFilterSelectedOnly;
+
+    function toggleFilterSelectedOnly() {
+        var cur = Boolean(window.AppState && window.AppState.filterSelectedOnly);
+        var next = !cur;
+        setFilterSelectedOnly(next);
+        window.showToast(next ? "Selected rows filter enabled" : "Selected rows filter disabled", "info");
+    }
+    window.toggleFilterSelectedOnly = toggleFilterSelectedOnly;
+
+    function updateEmptySelectionState() {
+        var table = document.getElementById('lemma-table');
+        if (!table) return;
+        var tbody = table.querySelector('tbody');
+        if (!tbody) return;
+        var existingEmptyRow = tbody.querySelector('tr.kw-empty-selection-row');
+
+        var isFilter = Boolean(window.AppState && window.AppState.filterSelectedOnly);
+        var selCount = getSelectedRowIds().length;
+
+        if (isFilter && selCount === 0) {
+            if (!existingEmptyRow) {
+                var emptyTr = document.createElement('tr');
+                emptyTr.className = 'kw-empty-selection-row kw-empty-visible';
+                emptyTr.innerHTML = '<td colspan="8" class="kw-empty-selection-cell">No rows selected. <a href="#" id="kw-btn-empty-clear-filter" class="kw-empty-clear-filter-btn" style="color: var(--accent-color, #58a6ff); text-decoration: underline;">Show all rows</a></td>';
+                tbody.appendChild(emptyTr);
+                var clearLink = emptyTr.querySelector('#kw-btn-empty-clear-filter');
+                if (clearLink) {
+                    clearLink.addEventListener('click', function (e) {
+                        e.preventDefault();
+                        setFilterSelectedOnly(false);
+                    });
+                }
+            } else {
+                existingEmptyRow.classList.add('kw-empty-visible');
+            }
+        } else {
+            if (existingEmptyRow) {
+                existingEmptyRow.classList.remove('kw-empty-visible');
+                if (existingEmptyRow.parentNode) {
+                    existingEmptyRow.parentNode.removeChild(existingEmptyRow);
+                }
+            }
+        }
+    }
+    window.updateEmptySelectionState = updateEmptySelectionState;
+
+    function setHighlightSameLemma(active) {
+        window.AppState = window.AppState || {};
+        window.AppState.highlightSameLemma = Boolean(active);
+        if (window.__CONFIG__) {
+            window.__CONFIG__.highlight_same_lemma = Boolean(active);
+        }
+        var btn = document.getElementById('kw-btn-same-lemma');
+        if (btn) {
+            if (active) btn.classList.add('active');
+            else btn.classList.remove('active');
+        }
+        if (typeof window.updateBidirectionalHighlights === 'function') {
+            window.updateBidirectionalHighlights();
+        }
+        try {
+            fetch((SERVER_URL || '') + '/api/v1/config', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(Boolean(active)) })
+            }).catch(function () {});
+        } catch (e) {}
+    }
+    window.setHighlightSameLemma = setHighlightSameLemma;
+
+    function toggleHighlightSameLemma() {
+        var cur = Boolean(window.AppState && window.AppState.highlightSameLemma);
+        var next = !cur;
+        setHighlightSameLemma(next);
+        window.showToast(next ? "Lemma highlighting enabled" : "Lemma highlighting disabled", "info");
+    }
+    window.toggleHighlightSameLemma = toggleHighlightSameLemma;
+
+    // ----------------------------------------------------
+    // Action Toolbar Actions (R8, R21, R51, R52, Tasks 7.1, 7.7, 7.18, 7.19)
+    // ----------------------------------------------------
+
+    window.onUpdateClick = function (forceReload) {
+        if (window.commitActiveEdit) window.commitActiveEdit();
+        var sZid = getSessionZid();
+        if (forceReload || !sZid) {
+            if (window.location && window.location.reload) window.location.reload();
+            return;
+        }
+        var updateBtn = document.getElementById('kw-btn-update');
+        setButtonLoading(updateBtn, true, "Updating...", "Update");
+
+        var tok = getApiToken();
+        var headers = { 'Accept': 'application/json' };
+        if (tok) headers['X-API-Token'] = tok;
+
+        fetch((SERVER_URL || '') + '/session/status?zid=' + encodeURIComponent(sZid), { headers: headers })
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (resObj) {
+            setButtonLoading(updateBtn, false, "", "Update");
+            var payload = (resObj && resObj.data) ? resObj.data : resObj;
+            if (payload && typeof window.receiveUpdate === 'function') {
+                window.receiveUpdate(payload);
+                window.showToast("Session updated", "success");
+            }
+            if (countPendingSkeletons() > 0) {
+                initWatchdog();
+            }
+        })
+        .catch(function (err) {
+            setButtonLoading(updateBtn, false, "", "Update");
+            window.showToast("Update failed: " + err.message, "error");
+        });
+    };
+
+    window.onRetextClick = function () {
+        if (window.commitActiveEdit) window.commitActiveEdit();
+        var sZid = getSessionZid();
+        if (!sZid) {
+            window.showToast("Session ZID missing.", "error");
+            return;
+        }
+        var retextBtn = document.getElementById('kw-btn-retext');
+        setButtonLoading(retextBtn, true, "Retexting...", "Re-text");
+        window.showToast("Retexting session...", "info");
+
+        var tok = getApiToken();
+        var headers = { 'Content-Type': 'application/json' };
+        if (tok) headers['X-API-Token'] = tok;
+
+        var body = { session_zid: sZid, language: getSessionLang() };
+        if (tok) body.token = tok;
+
+        fetch((SERVER_URL || '') + '/session/retext', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(body)
+        })
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (resObj) {
+            setButtonLoading(retextBtn, false, "", "Re-text");
+            var payload = (resObj && resObj.data) ? resObj.data : resObj;
+            window.showToast("Retext completed", "success");
+            if (payload && typeof window.receiveUpdate === 'function') {
+                window.receiveUpdate(payload);
+            }
+        })
+        .catch(function (err) {
+            setButtonLoading(retextBtn, false, "", "Re-text");
+            window.showToast("Retext error: " + err.message, "error");
+        });
+    };
+
+    window.onRewordClick = function () {
+        if (window.commitActiveEdit) window.commitActiveEdit();
+        var sZid = getSessionZid();
+        if (!sZid) {
+            window.showToast("Session ZID missing.", "error");
+            return;
+        }
+        var selectedRows = getSelectedRowIds();
+        var activeTokens = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
+        if (selectedRows.length === 0 && activeTokens.length === 0) {
+            window.showToast("Please select rows to re-word.", "warning");
+            return;
+        }
+        var rewordBtn = document.getElementById('kw-btn-reword');
+        setButtonLoading(rewordBtn, true, "Rewording...", "Re-word");
+
+        var targetCoordinates = [];
+        activeTokens.forEach(function (t) {
+            if (t.visual_idx !== undefined && t.visual_idx !== null) {
+                targetCoordinates.push({
+                    visual_idx: t.visual_idx,
+                    sentence_idx: t.sentence_idx || 1,
+                    token_order: t.token_order || 0
+                });
+            }
+        });
+
+        var tok = getApiToken();
+        var headers = { 'Content-Type': 'application/json' };
+        if (tok) headers['X-API-Token'] = tok;
+
+        var body = {
+            session_zid: sZid,
+            row_ids: selectedRows,
+            token_orders: selectedRows,
+            language: getSessionLang(),
+            target_coordinates: targetCoordinates
+        };
+        if (tok) body.token = tok;
+
+        fetch((SERVER_URL || '') + '/session/reword', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(body)
+        })
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (resObj) {
+            setButtonLoading(rewordBtn, false, "", "Re-word");
+            var payload = (resObj && resObj.data) ? resObj.data : resObj;
+            window.showToast("Re-word completed for " + selectedRows.length + " rows", "success");
+            if (payload && typeof window.receiveUpdate === 'function') {
+                window.receiveUpdate(payload);
+            }
+        })
+        .catch(function (err) {
+            setButtonLoading(rewordBtn, false, "", "Re-word");
+            window.showToast("Re-word error: " + err.message, "error");
+        });
+    };
+
+    window.onSendToAnkiClick = function () {
+        if (window.commitActiveEdit) window.commitActiveEdit();
+        var selected = getSelectedRowIds();
+        if (selected.length === 0) {
+            window.showToast("Please select rows to export.", "warning");
+            return;
+        }
+        var sZid = getSessionZid();
+        if (!sZid) {
+            window.showToast("Session ZID missing.", "error");
+            return;
+        }
+        var exportBtn = document.getElementById('kw-btn-export');
+        setButtonLoading(exportBtn, true, "Sending...", "Send to Anki");
+        window.showToast("Exporting to Anki...", "info");
+
+        var tok = getApiToken();
+        var headers = { 'Content-Type': 'application/json' };
+        if (tok) headers['X-API-Token'] = tok;
+
+        var body = {
+            session_zid: sZid,
+            row_ids: selected,
+            selected_row_ids: selected,
+            language: getSessionLang()
+        };
+        if (tok) body.token = tok;
+
+        fetch((SERVER_URL || '') + '/api/v1/export', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(body)
+        })
+        .then(function (res) {
+            if (!res.ok) throw new Error('HTTP ' + res.status);
+            return res.json();
+        })
+        .then(function (resObj) {
+            setButtonLoading(exportBtn, false, "", "Send to Anki");
+            var count = selected.length;
+            var word = count === 1 ? "card" : "cards";
+            window.showToast("✓ " + count + " " + word + " exported to Anki", "success");
+        })
+        .catch(function (err) {
+            fetch((SERVER_URL || '') + '/session/export', {
+                method: 'POST',
+                headers: headers,
+                body: JSON.stringify(body)
+            })
+            .then(function (res2) {
+                if (!res2.ok) throw new Error('HTTP ' + res2.status);
+                return res2.json();
+            })
+            .then(function () {
+                setButtonLoading(exportBtn, false, "", "Send to Anki");
+                var count = selected.length;
+                var word = count === 1 ? "card" : "cards";
+                window.showToast("✓ " + count + " " + word + " exported to Anki", "success");
+            })
+            .catch(function (err2) {
+                setButtonLoading(exportBtn, false, "", "Send to Anki");
+                window.showToast("Export error: " + err2.message, "error");
+            });
+        });
+    };
+
+    window.onHandToolClick = function () {
+        var newMode = !window.__persistentSelectableMode;
+        setSelectableTextMode(newMode, newMode);
+        var handBtn = document.getElementById('kw-btn-hand-tool');
+        if (handBtn) {
+            if (newMode) handBtn.classList.add('active');
+            else handBtn.classList.remove('active');
+        }
+        window.showToast(newMode ? "Text selection mode active" : "Hand tool / Table interaction active", "info", 1500);
+    };
+
+    window.onDeleteClick = function () {
+        var rows = getSelectedRowIds();
+        if (!rows.length) {
+            window.showToast("Please select rows to delete.", "warning");
+            return;
+        }
+        window.deleteSelectedRows();
+        window.showToast("Deleted " + rows.length + " rows (Ctrl+Z to undo)", "info", 2000);
+    };
+
+    // ----------------------------------------------------
+    // Language Verification Modal Handlers (R8, Task 7.2)
+    // ----------------------------------------------------
+
+    window.showLanguageVerificationModal = function (info) {
+        info = info || {};
+        var detCode = info.detected_language || "";
+        var expCode = info.expected_language || getSessionLang() || "";
+        var promptMsg = "The text appears to be " + (detCode ? detCode.toUpperCase() : "different") +
+                        ", but the active profile is " + (expCode ? expCode.toUpperCase() : "unknown") +
+                        ".\n\nSwitch language?";
+        var modal = document.getElementById('kw-lang-modal');
+        var bodyEl = document.getElementById('kw-lang-modal-body');
+        if (bodyEl) bodyEl.textContent = promptMsg;
+        if (modal) {
+            modal.style.display = 'flex';
+            window.__langMismatchInfo = info;
+            var yesBtn = document.getElementById('kw-btn-lang-yes');
+            if (yesBtn) yesBtn.focus();
+        }
+    };
+
+    window.hideLanguageVerificationModal = function () {
+        var modal = document.getElementById('kw-lang-modal');
+        if (modal) modal.style.display = 'none';
+    };
+
+    window.onLangYes = function () {
+        var info = window.__langMismatchInfo || {};
+        var detLang = info.detected_language;
+        if (!detLang) {
+            window.hideLanguageVerificationModal();
+            return;
+        }
+        var sZid = getSessionZid();
+        window.hideLanguageVerificationModal();
+        window.showToast("Switching language to " + detLang + "...", "info");
+        try {
+            fetch((SERVER_URL || '') + '/api/v1/set-language', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ language: detLang, session_zid: sZid })
+            }).then(function () {
+                window.location.reload();
+            }).catch(function () {
+                window.location.reload();
+            });
+        } catch (e) {
+            window.location.reload();
+        }
+    };
+
+    window.onLangNo = function () {
+        window.hideLanguageVerificationModal();
+        window.showToast("Proceeding with active language...", "info");
+    };
+
+    window.onLangCancel = function () {
+        window.hideLanguageVerificationModal();
+        window.showToast("Language verification cancelled.", "info");
+    };
+
+    function wireActionToolbar() {
+        var btnSame = document.getElementById('kw-btn-same-lemma');
+        if (btnSame && !btnSame.__kw_bound) {
+            btnSame.__kw_bound = true;
+            btnSame.addEventListener('click', function (e) {
+                e.preventDefault();
+                toggleHighlightSameLemma();
+            });
+            if (window.AppState && window.AppState.highlightSameLemma) {
+                btnSame.classList.add('active');
+            }
+        }
+
+        var btnFilter = document.getElementById('kw-btn-filter-selected');
+        if (btnFilter && !btnFilter.__kw_bound) {
+            btnFilter.__kw_bound = true;
+            btnFilter.addEventListener('click', function (e) {
+                e.preventDefault();
+                toggleFilterSelectedOnly();
+            });
+            if (window.AppState && window.AppState.filterSelectedOnly) {
+                btnFilter.classList.add('btn-filter-active');
+                var table = document.getElementById('lemma-table');
+                if (table) table.classList.add('kw-filter-selected-only');
+            }
+        }
+
+        var btnSave = document.getElementById('kw-btn-save');
+        if (btnSave && !btnSave.__kw_bound) {
+            btnSave.__kw_bound = true;
+            btnSave.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onSaveClick();
+            });
+        }
+
+        var btnUpdate = document.getElementById('kw-btn-update');
+        if (btnUpdate && !btnUpdate.__kw_bound) {
+            btnUpdate.__kw_bound = true;
+            btnUpdate.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onUpdateClick();
+            });
+        }
+
+        var btnRetext = document.getElementById('kw-btn-retext');
+        if (btnRetext && !btnRetext.__kw_bound) {
+            btnRetext.__kw_bound = true;
+            btnRetext.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onRetextClick();
+            });
+        }
+
+        var btnReword = document.getElementById('kw-btn-reword');
+        if (btnReword && !btnReword.__kw_bound) {
+            btnReword.__kw_bound = true;
+            btnReword.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onRewordClick();
+            });
+        }
+
+        var btnExport = document.getElementById('kw-btn-export');
+        if (btnExport && !btnExport.__kw_bound) {
+            btnExport.__kw_bound = true;
+            btnExport.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onSendToAnkiClick();
+            });
+        }
+
+        var btnHand = document.getElementById('kw-btn-hand-tool');
+        if (btnHand && !btnHand.__kw_bound) {
+            btnHand.__kw_bound = true;
+            btnHand.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onHandToolClick();
+            });
+        }
+
+        var btnDelete = document.getElementById('kw-btn-delete');
+        if (btnDelete && !btnDelete.__kw_bound) {
+            btnDelete.__kw_bound = true;
+            btnDelete.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onDeleteClick();
+            });
+        }
+
+        var btnLangYes = document.getElementById('kw-btn-lang-yes');
+        if (btnLangYes && !btnLangYes.__kw_bound) {
+            btnLangYes.__kw_bound = true;
+            btnLangYes.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onLangYes();
+            });
+        }
+
+        var btnLangNo = document.getElementById('kw-btn-lang-no');
+        if (btnLangNo && !btnLangNo.__kw_bound) {
+            btnLangNo.__kw_bound = true;
+            btnLangNo.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onLangNo();
+            });
+        }
+
+        var btnLangCancel = document.getElementById('kw-btn-lang-cancel');
+        if (btnLangCancel && !btnLangCancel.__kw_bound) {
+            btnLangCancel.__kw_bound = true;
+            btnLangCancel.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onLangCancel();
+            });
+        }
+    }
+    window.wireActionToolbar = wireActionToolbar;
+
+    // ----------------------------------------------------
     // Inline Editing & Table State Machine (R17, R36, R37, R49)
     // ----------------------------------------------------
 
@@ -2426,6 +3301,22 @@
         var isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
         var keyCode = e.keyCode || e.which;
 
+        // Language modal key trapping (R8, Task 7.2)
+        var langModal = document.getElementById('kw-lang-modal');
+        var isModalOpen = langModal && langModal.style.display !== 'none';
+        if (isModalOpen) {
+            if (keyCode === 27 || e.key === 'Escape') {
+                e.preventDefault();
+                window.onLangCancel();
+                return;
+            }
+            if (keyCode === 13 || e.key === 'Enter') {
+                e.preventDefault();
+                window.onLangYes();
+                return;
+            }
+        }
+
         // Escape: cancel edit, or clear bookmark pins, or clear selections
         if (keyCode === 27 || e.key === 'Escape') {
             if (window.cancelActiveEdit) {
@@ -2448,8 +3339,24 @@
         // If typing in input, do not intercept table navigation or action shortcuts
         if (isInput) return;
 
+        // F5: Update / re-render (R14, Task 7.4)
+        if (keyCode === 116 || e.key === 'F5') {
+            e.preventDefault();
+            if (typeof window.onUpdateClick === 'function') {
+                window.onUpdateClick();
+            }
+            return;
+        }
+
+        // Ctrl+Shift+A: Deselect all rows (R14, Task 7.4)
+        if ((e.ctrlKey || e.metaKey) && e.shiftKey && (keyCode === 65 || e.key === 'a' || e.key === 'A')) {
+            e.preventDefault();
+            clearAllSelections();
+            return;
+        }
+
         // Ctrl+S: Save
-        if ((e.ctrlKey || e.metaKey) && (keyCode === 83 || e.key === 's' || e.key === 'S')) {
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (keyCode === 83 || e.key === 's' || e.key === 'S')) {
             e.preventDefault();
             var saveBtn = document.getElementById('kw-btn-save');
             if (saveBtn && !saveBtn.disabled) {
@@ -2895,14 +3802,40 @@
         if (typeof window.rebindTableRows === 'function') {
             window.rebindTableRows();
         }
-        var saveBtn = document.getElementById('kw-btn-save');
-        if (saveBtn) {
-            saveBtn.addEventListener('click', function (e) {
-                e.preventDefault();
-                window.onSaveClick();
-            });
-        }
+        wireActionToolbar();
         updateToolbarState();
+        initWatchdog();
+
+        // Audio RMB contextmenu listener (R46, Task 7.16)
+        var handleRmbAudio = function (e) {
+            var uiCfg = (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.ui_config) || window.__CONFIG__ || {};
+            if (!uiCfg.audio_rmb_play) return;
+            var target = e.target;
+            var span = target && target.closest ? target.closest('#source-container span.word, #translation-container span.word') : null;
+            var row = target && target.closest ? target.closest('#lemma-table tbody tr') : null;
+            if (span) {
+                e.preventDefault();
+                var isSource = span.closest('#source-container') !== null;
+                var lang = isSource ? getSessionLang() : (TARGET_LANG || 'ru');
+                var text = span.getAttribute('data-word') || span.textContent;
+                playAudio(text, lang);
+            } else if (row) {
+                e.preventDefault();
+                var lemCell = row.querySelector('.col-lemma');
+                var transCell = row.querySelector('.col-translation');
+                var isTrans = (uiCfg.audio_rmb_source === 'word_translation');
+                var text = isTrans ? (transCell ? transCell.textContent.trim() : '') : (lemCell ? lemCell.textContent.trim() : '');
+                var lang = isTrans ? (TARGET_LANG || 'ru') : getSessionLang();
+                if (text) playAudio(text, lang);
+            }
+        };
+        var sc = document.getElementById('source-container');
+        var tc = document.getElementById('translation-container');
+        var lt = document.getElementById('lemma-table');
+        if (sc) sc.addEventListener('contextmenu', handleRmbAudio);
+        if (tc) tc.addEventListener('contextmenu', handleRmbAudio);
+        if (lt) lt.addEventListener('contextmenu', handleRmbAudio);
+
         var hasMulti = !!document.getElementById('sentence-cards') || (window.AppState && window.AppState.sentenceCards && window.AppState.sentenceCards.length > 1);
         if (hasMulti && window.WorkspaceTabs && typeof window.WorkspaceTabs.init === 'function') {
             window.WorkspaceTabs.init();

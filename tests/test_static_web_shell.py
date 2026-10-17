@@ -500,3 +500,186 @@ def test_playwright_table_inline_editing_history_and_navigation(page, test_serve
     assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
 
 
+def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
+    port = test_server
+
+    sample_bootstrap = {
+        "ui_config": {
+            "highlight_same_lemma": False,
+            "filter_selected_only": False,
+            "theme": "dark"
+        },
+        "sentence_cards": [
+            {
+                "seq_num": 1,
+                "selected_ids": [],
+                "words": [
+                    {"word": "Fuchs", "lemma": "Fuchs", "row_id": 0, "token_order": 0},
+                    {"word": "springt", "lemma": "springen", "row_id": 1, "token_order": 1}
+                ]
+            }
+        ],
+        "delivery_mode": "container",
+        "session_data": {
+            "zid": "20261017230000",
+            "session_zid": "20261017230000",
+            "language": "de",
+            "target_lang": "ru",
+            "source_text": "Ein schneller Fuchs springt.",
+            "sentence_translation": "Быстрая лиса прыгает.",
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "data_rows": [
+                ["Fuchs", "Fuchs", "n.", "лиса"],
+                ["springt", "springen", "v.", "прыгает"]
+            ],
+            "server_enabled": True,
+            "api_token": "bootstrap-token"
+        }
+    }
+
+    calls = []
+    page.route("**/api/v1/config", lambda route: (
+        calls.append(("config", route.request.post_data)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
+    ))
+    page.route("**/session/status*", lambda route: (
+        calls.append(("status", route.request.url)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok", "stage": "finished"}))
+    ))
+    page.route("**/session/retext", lambda route: (
+        calls.append(("retext", route.request.post_data)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok", "sentences": ["Быстрая лисица скачет."]}))
+    ))
+    page.route("**/session/reword", lambda route: (
+        calls.append(("reword", route.request.post_data)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
+    ))
+    page.route("**/session/export", lambda route: (
+        calls.append(("export", route.request.post_data)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok", "exported_count": 1}))
+    ))
+    page.route("**/api/v1/audio/play", lambda route: (
+        calls.append(("audio", route.request.post_data)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
+    ))
+
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    page.evaluate(f"""
+        (function() {{
+            var el = document.getElementById('kardenwort-bootstrap');
+            el.textContent = JSON.stringify({json.dumps(sample_bootstrap)});
+            var ev = new Event('DOMContentLoaded');
+            document.dispatchEvent(ev);
+        }})();
+    """)
+
+    page.wait_for_selector("#lemma-table tbody tr[data-row-id='0']")
+
+    # 1. Action Toolbar: Same Lemma Toggle (Task 7.1, 7.10)
+    same_btn = page.locator("#kw-btn-same-lemma")
+    assert not same_btn.is_disabled()
+    same_btn.click()
+    assert "active" in (same_btn.get_attribute("class") or "")
+    assert page.evaluate("() => window.AppState.highlightSameLemma") is True
+
+    # 2. Action Toolbar: Filter Selected Only Toggle & Empty Row (Task 7.10, R39)
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    filter_btn.click()
+    assert "btn-filter-active" in (filter_btn.get_attribute("class") or "")
+    assert "kw-filter-selected-only" in (page.locator("#lemma-table").get_attribute("class") or "")
+    # Since 0 rows selected, kw-empty-selection-row must be visible
+    empty_row = page.locator("#lemma-table tbody tr.kw-empty-selection-row")
+    assert empty_row.is_visible()
+    # Click link inside empty row to clear filter
+    page.locator("#kw-btn-empty-clear-filter").click()
+    assert "btn-filter-active" not in (filter_btn.get_attribute("class") or "")
+    assert "kw-filter-selected-only" not in (page.locator("#lemma-table").get_attribute("class") or "")
+    assert not empty_row.is_visible()
+
+    # 3. Action Toolbar: Hand Tool Toggle (Task 7.1)
+    hand_btn = page.locator("#kw-btn-hand-tool")
+    hand_btn.click()
+    assert "active" in (hand_btn.get_attribute("class") or "")
+    assert page.evaluate("() => Boolean(window.__selectableTextMode)") is True
+    assert "text-selection-mode-active" in (page.locator("body").get_attribute("class") or "")
+    hand_btn.click()
+    assert page.evaluate("() => Boolean(window.__selectableTextMode)") is False
+
+    # 4. Toast Notification & Button Loading (Task 7.3)
+    page.evaluate("() => window.showToast('Test Toast Notification', 'success')")
+    toast = page.locator(".kw-toast.kw-toast-success")
+    assert toast.is_visible()
+    assert "Test Toast Notification" in toast.inner_text()
+
+    page.evaluate("() => window.setButtonLoading('kw-btn-update', true, 'Processing...')")
+    update_btn = page.locator("#kw-btn-update")
+    assert update_btn.is_disabled()
+    assert update_btn.inner_text() == "Processing..."
+    page.evaluate("() => window.setButtonLoading('kw-btn-update', false)")
+    assert not update_btn.is_disabled()
+
+    # 5. Language Verification Modal (Task 7.2)
+    modal = page.locator("#kw-lang-modal")
+    assert not modal.is_visible()
+    page.evaluate("() => window.showLanguageVerificationModal({ detected_language: 'es', expected_language: 'de' })")
+    assert modal.is_visible()
+    assert "ES" in page.locator("#kw-lang-modal-body").inner_text()
+    # Click No dismisses modal
+    page.locator("#kw-btn-lang-no").click()
+    assert not modal.is_visible()
+
+    # 6. Global Shortcuts: F5 triggers update, Ctrl+A selects all, Ctrl+Shift+A deselects (Task 7.4, R14)
+    calls.clear()
+    page.keyboard.press("F5")
+    page.wait_for_timeout(200)
+    assert any(c[0] == "status" for c in calls)
+
+    # Ctrl+A selects all rows (Task 6.6, R36)
+    page.evaluate("() => window.clearAllSelections()")
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 0
+    page.keyboard.press("Control+a")
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 2
+
+    # Ctrl+Shift+A deselects all rows (Task 7.4, R14)
+    page.keyboard.press("Control+Shift+A")
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 0
+
+    # 7. Retext & Reword endpoints (Task 7.18, 7.19)
+    calls.clear()
+    page.locator("#kw-btn-retext").click()
+    page.wait_for_timeout(200)
+    assert any(c[0] == "retext" for c in calls)
+
+    # Select row 0 before reword
+    page.locator("#lemma-table tbody tr[data-row-id='0']").click()
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+
+    calls.clear()
+    page.locator("#kw-btn-reword").click()
+    page.wait_for_timeout(200)
+    assert any(c[0] == "reword" for c in calls)
+
+    # 8. Audio Pronunciation & AHK Bridge (Task 7.16, 7.17)
+    calls.clear()
+    page.evaluate("() => window.playAudio('Fuchs', 'de')")
+    page.wait_for_timeout(200)
+    assert any(c[0] == "audio" for c in calls)
+
+    # AHK Bridge
+    page.evaluate("""
+        (function() {
+            window.__ahkEvents = [];
+            window.ahkCall = function(action, val) {
+                window.__ahkEvents.push({ action: action, val: val });
+            };
+            window.notifyAHKSelection();
+        })();
+    """)
+    ahk_events = page.evaluate("() => window.__ahkEvents")
+    assert len(ahk_events) >= 2
+    assert any(e["action"] == "selection" for e in ahk_events)
+    assert any(e["action"] == "dirty" for e in ahk_events)
+
+
+
