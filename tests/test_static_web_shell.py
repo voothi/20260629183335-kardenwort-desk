@@ -50,8 +50,8 @@ def test_static_routes_http_delivery(test_server):
     port = test_server
     base_url = f"http://127.0.0.1:{port}"
 
-    # 1. GET /index.html and /web/index.html
-    for path in ('/index.html', '/web/index.html'):
+    # 1. GET /, /index.html and /web/index.html
+    for path in ('/', '/index.html', '/web/index.html'):
         req = urllib.request.Request(f"{base_url}{path}")
         with urllib.request.urlopen(req) as resp:
             assert resp.status == 200

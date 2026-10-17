@@ -12628,7 +12628,6 @@ html, body {{
 <link rel="stylesheet" href="/css/variables.css">
 <link rel="stylesheet" href="/css/tokens.css">
 <link rel="stylesheet" href="/css/table.css">
-<script src="/js/components/WorkspaceTabs.js"></script>
 <style id="hl-mvp-style">
   
  
@@ -12813,7 +12812,7 @@ html, body {{
   body.theme-dark #translation-container span.word.hl-mvp-pin-6 { border: none !important; margin: 0 !important; box-shadow: 0 0 0 2px #ff7b72 !important; border-radius: 4px !important; }
   body.theme-dark #source-container span.word.hl-mvp-pin-7,
   body.theme-dark #translation-container span.word.hl-mvp-pin-7 { border: none !important; margin: 0 !important; box-shadow: 0 0 0 2px #a5b4fc !important; border-radius: 4px !important; }
-  #lemma-table tbody tr td:first-child { border-left: 4px solid transparent !important; }
+  #lemma-table tbody tr td:first-child { border-left: 3px solid transparent !important; }
   body.theme-dark #lemma-table tbody tr.hl-mvp-pin-0 td:first-child { border-left-color: #39d353 !important; }
   body.theme-dark #lemma-table tbody tr.hl-mvp-pin-1 td:first-child { border-left-color: #b78cf7 !important; }
   body.theme-dark #lemma-table tbody tr.hl-mvp-pin-2 td:first-child { border-left-color: #ff9c3a !important; }
@@ -23764,8 +23763,10 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         )
 
         # Inject bootstrap payload into #kardenwort-bootstrap
+        lookup_ui_config = dict(goldendict) if isinstance(goldendict, dict) else {}
+        lookup_ui_config["grammar"] = get_grammar_payload()
         lookup_bootstrap = {
-            "ui_config": goldendict if isinstance(goldendict, dict) else {},
+            "ui_config": lookup_ui_config,
             "session_data": session_payload,
             "sentence_cards": [],
             "delivery_mode": "container",
@@ -23883,6 +23884,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
                     base_html = base_html.replace('<!-- TABLE_ROWS -->', tbody_m.group(1).strip())
                 else:
                     base_html = base_html.replace('<!-- TABLE_ROWS -->', '')
+            base_html = base_html.replace('<!-- WORKSPACE_TAB_BAR -->', '')
         else:
             # Inject rendered container
             start_marker = '<div class="kw-lookup-container">'
@@ -23892,11 +23894,13 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             if start_idx != -1 and end_idx != -1:
                 base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
 
-        # Offline CSS embedding if not disabled
+        # Offline CSS embedding if not disabled (Task 3.9, R27)
         if not (isinstance(goldendict, dict) and goldendict.get('disable_css', False)):
             combined_css = get_bundled_css(web_dir)
             if combined_css:
-                base_html = base_html.replace('</head>', f'<style>\n{combined_css}\n</style>\n</head>')
+                # Strip external /css/ link tags to prevent 404 errors in offline/GoldenDict mode
+                base_html = re.sub(r'<link\s+rel=["\']stylesheet["\']\s+href=["\']/css/[^"\']+["\']\s*/?>\s*', '', base_html)
+                base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
 
         # If server enabled and session ZID present, ensure client app.js logic is active
         tabs_js = get_workspace_tabs_js(web_dir)
@@ -23910,7 +23914,13 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             p_js = web_dir / "js" / "app.js"
             if p_js.is_file():
                 app_js = p_js.read_text(encoding="utf-8")
-                base_html = base_html.replace('</body>', f'<script>\n{app_js}\n</script>\n</body>')
+                if '<script src="/js/app.js"></script>' in base_html:
+                    base_html = base_html.replace(
+                        '<script src="/js/app.js"></script>',
+                        f'<script>\n{app_js}\n</script>'
+                    )
+                else:
+                    base_html = base_html.replace('</body>', f'<script>\n{app_js}\n</script>\n</body>')
     else:
         # Fallback if web/index.html is absent
         disable_css = goldendict.get('disable_css', False) if isinstance(goldendict, dict) else False

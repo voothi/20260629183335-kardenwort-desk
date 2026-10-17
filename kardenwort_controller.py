@@ -4265,7 +4265,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
 
         # 4. Consolidated Legacy & Reader Endpoints (from http_server.py & web reader)
-        if path in ('/', '/lookup', '/session/render'):
+        if path in ('/lookup', '/session/render') or (path == '/' and (qs.get('text', [None])[0] or qs.get('session_zid', [None])[0] or qs.get('zid', [None])[0] or qs.get('project_id', [None])[0] or qs.get('project', [None])[0])):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
 
@@ -4614,14 +4614,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 self.wfile.write(body)
                 return
 
-            if path == '/':
-                tok = qs.get('token', [None])[0]
-                target = f"/admin?token={urllib.parse.quote(tok)}" if tok else "/admin"
-                self.send_response(302)
-                self._send_cors_headers()
-                self.send_header('Location', target)
-                self.end_headers()
-                return
 
             if not text:
                 raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'text' or 'session_zid' or 'project_id' query parameter")
