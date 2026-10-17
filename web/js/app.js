@@ -64,6 +64,10 @@
         return selected;
     }
     window.getSelectedRowIds = getSelectedRowIds;
+    window.getSelectedRowsArray = getSelectedRowIds;
+    window.getSelectedRows = function () {
+        return JSON.stringify(getSelectedRowIds());
+    };
 
     function setStatusMessage(msg, isError) {
         var statusEl = document.getElementById('kw-interactive-status');
@@ -1313,35 +1317,1260 @@
         }
     });
 
+    // ----------------------------------------------------
+    // Grammar & Tooltip Helpers (R11, R17)
+    // ----------------------------------------------------
+
+    function getGrammarConfig() {
+        if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.grammar_config) {
+            return window.AppState.bootstrap.grammar_config;
+        }
+        if (window.kardenwort_grammar) {
+            return window.kardenwort_grammar;
+        }
+        return {};
+    }
+
+    function formatLemmaTooltip(lemma, gender, lang, pos) {
+        if (!lemma) return "";
+        var cleanLemma = String(lemma).trim();
+        if (!cleanLemma) return "";
+        var currentLang = (lang || (window.AppConfig ? window.AppConfig.language : 'de') || getSessionLang() || 'de').toLowerCase();
+        if (currentLang === 'de') {
+            var lowerLemma = cleanLemma.toLowerCase();
+            var grammar = getGrammarConfig();
+            var articles = (grammar && (grammar.german_articles || grammar.germanArticles)) || [
+                "der", "die", "das", "ein", "eine", "einer", "eines", "einem", "einen",
+                "des", "dem", "den", "kein", "keine", "keiner", "keines", "keinem", "keinen"
+            ];
+            for (var i = 0; i < articles.length; i++) {
+                var art = articles[i];
+                if (lowerLemma === art || lowerLemma.indexOf(art + " ") === 0) {
+                    return cleanLemma;
+                }
+            }
+
+            if (pos) {
+                var posStr = String(pos).toLowerCase();
+                var posParts = posStr.split(',').map(function (p) {
+                    return p.trim().replace(/\.+$/, '');
+                }).filter(Boolean);
+                var nounTagsList = (grammar && (grammar.noun_tags || grammar.nounTags)) || ["n", "noun", "propn", "subst"];
+                var nonNounTagsList = (grammar && (grammar.non_noun_tags || grammar.nonNounTags)) || [
+                    "art", "det", "pron", "v", "verb", "aux",
+                    "adv", "prep", "adp", "conj", "cconj", "sconj",
+                    "intj", "num", "part", "adj"
+                ];
+                var hasNoun = false;
+                var hasNonNoun = false;
+                for (var j = 0; j < posParts.length; j++) {
+                    if (nounTagsList.indexOf(posParts[j]) !== -1) hasNoun = true;
+                    if (nonNounTagsList.indexOf(posParts[j]) !== -1) hasNonNoun = true;
+                }
+                if (hasNonNoun && !hasNoun) {
+                    return cleanLemma;
+                }
+            } else {
+                if (/^[a-zäöüß]/.test(cleanLemma)) {
+                    return cleanLemma;
+                }
+                var pronouns = (grammar && (grammar.german_pronouns || grammar.germanPronouns)) || [
+                    "er", "sie", "es", "wir", "ihr", "du", "ich",
+                    "mich", "dich", "ihn", "ihm", "ihnen", "uns", "euch",
+                    "mir", "dir", "sich", "mein", "dein", "sein", "unser", "euer"
+                ];
+                if (pronouns.indexOf(lowerLemma) !== -1) {
+                    return cleanLemma;
+                }
+            }
+
+            var g = (gender ? String(gender).trim().replace(/\.+$/, '').toLowerCase() : "");
+            if (g === 'm' || g === 'masc' || g === 'masculine' || g === 'der') return 'der ' + cleanLemma;
+            if (g === 'f' || g === 'fem' || g === 'feminine' || g === 'die') return 'die ' + cleanLemma;
+            if (g === 'n' || g === 'neut' || g === 'neuter' || g === 'das') return 'das ' + cleanLemma;
+        }
+        return cleanLemma;
+    }
+    window.formatLemmaTooltip = formatLemmaTooltip;
+
+    function formatPosTooltip(posVal) {
+        if (!posVal) return "";
+        var pClean = String(posVal).trim();
+        if (!pClean) return "";
+        if (pClean.indexOf(',') !== -1) {
+            var parts = pClean.split(',').map(function (p) { return formatPosTooltip(p.trim()); }).filter(Boolean);
+            return parts.join(', ');
+        }
+        var grammar = getGrammarConfig();
+        if (grammar) {
+            if (grammar.posMap && grammar.posMap[pClean]) return grammar.posMap[pClean];
+            if (grammar.pos_full_name_map && grammar.pos_full_name_map[pClean]) return grammar.pos_full_name_map[pClean];
+            var posMap = grammar.posMap || grammar.pos_full_name_map;
+            if (posMap) {
+                if (posMap[pClean.toUpperCase()]) return posMap[pClean.toUpperCase()];
+                if (posMap[pClean.toLowerCase()]) return posMap[pClean.toLowerCase()];
+                var pStripped = pClean.replace(/\.+$/, '').toLowerCase();
+                if (posMap[pStripped]) return posMap[pStripped];
+            }
+        }
+        return pClean;
+    }
+    window.formatPosTooltip = formatPosTooltip;
+
+    function formatGenderTooltip(gender, lemma, prov) {
+        if (!gender) return "";
+        var gClean = String(gender).trim().toLowerCase().replace(/\.+$/, '');
+        var gNames = {
+            'm': 'Masculine (der)',
+            'masc': 'Masculine (der)',
+            'masculine': 'Masculine (der)',
+            'f': 'Feminine (die)',
+            'fem': 'Feminine (die)',
+            'feminine': 'Feminine (die)',
+            'n': 'Neuter (das)',
+            'neut': 'Neuter (das)',
+            'neuter': 'Neuter (das)'
+        };
+        var res = gNames[gClean] || gender;
+        if (prov) {
+            var pTitle = formatProvenanceTooltip(prov);
+            if (pTitle) res += ' (' + pTitle + ')';
+        }
+        return res;
+    }
+    window.formatGenderTooltip = formatGenderTooltip;
+
+    function formatProvenanceTooltip(prov) {
+        if (!prov) return "";
+        var p = String(prov).trim();
+        if (p.indexOf('live:') === 0) p = p.substring(5);
+        else if (p.indexOf('provider:') === 0) p = p.substring(9);
+        var pLower = p.toLowerCase();
+        if (pLower === 'argos') return 'Translated via Argos (offline)';
+        if (pLower === 'google') return 'Translated via Google';
+        if (pLower === 'deepl') return 'Translated via DeepL';
+        if (pLower === 'lingva') return 'Translated via Lingva';
+        if (pLower === 'intellifiller' || pLower === 'ai') return 'Translated via IntelliFiller (AI)';
+        if (pLower === 'corpus:wordfill' || pLower === 'wordfill:corpus') return 'Pre-filled from Corpus (WordFill)';
+        if (pLower.indexOf('corpus:wordfill:') === 0) return 'Pre-filled from Corpus (ZID: ' + prov.substring(16) + ')';
+        if (pLower === 'cached:sqlite') return 'Loaded from session cache (SQLite)';
+        if (pLower === 'cached:file') return 'Loaded from translation file cache';
+        if (pLower.indexOf('fallback:') === 0) return 'Translated via fallback (' + prov.substring(9) + ')';
+        if (prov.indexOf('live:') === 0 || prov.indexOf('provider:') === 0) return 'Translated via ' + p.charAt(0).toUpperCase() + p.slice(1);
+        return prov;
+    }
+    window.formatProvenanceTooltip = formatProvenanceTooltip;
+
+    function formatTranslationCellTooltip(translation, provenance) {
+        var cleanTrans = (translation || '').replace(/<[^>]+>/g, '').trim();
+        if (!cleanTrans || cleanTrans.indexOf('skeleton-loader') !== -1) return '';
+        var pTitle = formatProvenanceTooltip(provenance);
+        if (pTitle) return cleanTrans + ' (' + pTitle + ')';
+        return cleanTrans;
+    }
+    window.formatTranslationCellTooltip = formatTranslationCellTooltip;
+
+    function toUnicodeBold(text) {
+        if (!text) return "";
+        var res = "";
+        for (var i = 0; i < text.length; i++) {
+            var code = text.charCodeAt(i);
+            if (code >= 65 && code <= 90) {
+                res += String.fromCodePoint(0x1D5D4 + (code - 65));
+            } else if (code >= 97 && code <= 122) {
+                res += String.fromCodePoint(0x1D5EE + (code - 97));
+            } else if (code >= 48 && code <= 57) {
+                res += String.fromCodePoint(0x1D7EC + (code - 48));
+            } else {
+                res += text[i];
+            }
+        }
+        return res;
+    }
+    window.toUnicodeBold = toUnicodeBold;
+
+    function formatInflectedTooltip(sentenceText, inflectedVal, tokenOrder, lemma) {
+        if (!sentenceText) return (inflectedVal || "").trim();
+        if (!inflectedVal) return sentenceText.trim();
+        var targetWords = {};
+        var lemmaClean = (lemma && String(lemma).trim()) ? String(lemma).trim().toLowerCase() : null;
+        if (lemmaClean) targetWords[lemmaClean] = true;
+        var rawComponents = String(inflectedVal || "").split(',');
+        for (var c = 0; c < rawComponents.length; c++) {
+            var comp = rawComponents[c].trim().toLowerCase();
+            if (comp) targetWords[comp] = true;
+        }
+
+        var tokens = sentenceText.split(/([a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]+)/);
+        for (var k = 0; k < tokens.length; k++) {
+            var tok = tokens[k];
+            if (/[a-zA-Z0-9äöüÄÖÜßа-яА-ЯёЁ]/.test(tok)) {
+                if (targetWords[tok.toLowerCase()]) {
+                    tokens[k] = toUnicodeBold(tok);
+                }
+            }
+        }
+        var boldSentence = tokens.join('').trim();
+        var boldHeader = toUnicodeBold(String(inflectedVal).trim());
+        if (boldHeader && boldSentence) {
+            return boldHeader + '\n' + boldSentence;
+        }
+        return boldSentence || boldHeader;
+    }
+    window.formatInflectedTooltip = formatInflectedTooltip;
+
+    function updateCellTooltip(cell, newValue) {
+        if (!cell) return;
+        var tr = cell.parentElement;
+        var div = cell.querySelector('.scrollable-cell');
+        var colName = cell.getAttribute('data-col');
+        if (colName === 'WordDestination' || cell.classList.contains('col-translation')) {
+            var prov = cell.getAttribute('data-provenance');
+            var tip = formatTranslationCellTooltip(newValue, prov);
+            if (tip) {
+                cell.setAttribute('title', tip);
+                if (div) div.setAttribute('title', tip);
+            } else {
+                cell.removeAttribute('title');
+                if (div) div.removeAttribute('title');
+            }
+        } else if (colName === 'WordSource' || cell.classList.contains('col-lemma')) {
+            var curGenCell = tr ? tr.querySelector('td.col-gender, td[data-col="WordSourceGender"], td[data-col="gender"]') : null;
+            var curGen = curGenCell ? (curGenCell.textContent || '').trim() : '';
+            var curPosCell = tr ? tr.querySelector('td.col-pos, td[data-col="WordSourcePos"], td[data-col="pos"]') : null;
+            var curPos = curPosCell ? (curPosCell.textContent || '').trim() : '';
+            var activeLang = getSessionLang();
+            var tip = formatLemmaTooltip(newValue, curGen, activeLang, curPos);
+            if (tip) {
+                cell.setAttribute('title', tip);
+                if (div) div.setAttribute('title', tip);
+            } else {
+                cell.removeAttribute('title');
+                if (div) div.removeAttribute('title');
+            }
+        } else if (colName === 'WordSourceInflectedForm' || cell.classList.contains('col-inflected')) {
+            var lemCell = tr ? tr.querySelector('td.col-lemma, td[data-col="WordSource"]') : null;
+            var lemVal = lemCell ? (lemCell.textContent || '').trim() : '';
+            var cardSent = (window.AppState ? window.AppState.sourceText : '') || '';
+            var tokenOrder = tr ? tr.getAttribute('data-token-order') : null;
+            var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '') ? parseInt(tokenOrder, 10) : 0;
+            var tip = formatInflectedTooltip(cardSent, newValue, tokenOrderVal, lemVal);
+            if (tip) {
+                cell.setAttribute('title', tip);
+                if (div) div.setAttribute('title', tip);
+            } else {
+                cell.removeAttribute('title');
+                if (div) div.removeAttribute('title');
+            }
+        }
+    }
+
+    function applyOccurrenceRow(tr) {
+        if (!tr || !tr.hasAttribute('data-occ')) return;
+        var sels = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
+        var cellMap = { 'col-inflected': 'form', 'col-translation': 'trans', 'col-morphology': 'morph', 'col-pos': 'pos' };
+        var posNameMap = {
+            'art.': 'Article',
+            'pron.': 'Pronoun',
+            'det.': 'Determiner',
+            'prep.': 'Preposition',
+            'n.': 'Noun',
+            'v.': 'Verb',
+            'adj.': 'Adjective',
+            'adv.': 'Adverb',
+            'conj.': 'Conjunction'
+        };
+        var occ = null;
+        try { occ = JSON.parse(tr.getAttribute('data-occ')); } catch (e) { occ = null; }
+        var picked = [];
+        if (occ) {
+            var keys = [];
+            for (var s = 0; s < sels.length; s++) {
+                var k = String(typeof sels[s] === 'object' ? sels[s].visual_idx : sels[s]);
+                if (occ.hasOwnProperty(k) && keys.indexOf(k) === -1) keys.push(k);
+            }
+            keys.sort(function (a, b) { return parseInt(a, 10) - parseInt(b, 10); });
+            for (var q = 0; q < keys.length; q++) picked.push(occ[keys[q]]);
+        }
+        for (var cls in cellMap) {
+            if (!cellMap.hasOwnProperty(cls)) continue;
+            var td = tr.querySelector('td.' + cls);
+            if (!td) continue;
+            var cell = td.querySelector('.scrollable-cell') || td;
+            if (!td.hasAttribute('data-orig-html')) td.setAttribute('data-orig-html', cell.innerHTML);
+            if (!td.hasAttribute('data-orig-title')) td.setAttribute('data-orig-title', td.getAttribute('title') || '');
+            if (cell !== td && !cell.hasAttribute('data-orig-title')) cell.setAttribute('data-orig-title', cell.getAttribute('title') || '');
+
+            if (picked.length === 0) {
+                var rId = tr.getAttribute('data-row-id');
+                var rData = (window.AppState && window.AppState.rows && rId !== null) ? window.AppState.rows[rId] : null;
+                if (rData && cls === 'col-translation' && rData.provenance) {
+                    var prov = td.getAttribute('data-provenance') || rData.provenance;
+                    var pTitle = formatProvenanceTooltip(prov);
+                    var tVal = rData.trans || cell.textContent || '';
+                    var fullTip = tVal + ' (' + pTitle + ')';
+                    td.setAttribute('title', fullTip);
+                    if (cell !== td) cell.setAttribute('title', fullTip);
+                } else {
+                    if (cell.innerHTML !== td.getAttribute('data-orig-html')) cell.innerHTML = td.getAttribute('data-orig-html');
+                    var origTdTitle = td.getAttribute('data-orig-title');
+                    if (origTdTitle) td.setAttribute('title', origTdTitle); else td.removeAttribute('title');
+                    if (cell !== td) {
+                        var origCellTitle = cell.getAttribute('data-orig-title');
+                        if (origCellTitle) cell.setAttribute('title', origCellTitle); else cell.removeAttribute('title');
+                    }
+                }
+                continue;
+            }
+            var vals = [];
+            for (var p = 0; p < picked.length; p++) {
+                var v = (picked[p][cellMap[cls]] || '').trim();
+                if (v && vals.indexOf(v) === -1) vals.push(v);
+            }
+            if (vals.length > 0) {
+                var newTooltip = '';
+                if (cls === 'col-pos') {
+                    cell.textContent = vals.join(', ');
+                    newTooltip = vals.map(function (p) {
+                        var lower = p.toLowerCase();
+                        return posNameMap[lower] || p;
+                    }).join(', ');
+                } else if (cls === 'col-morphology') {
+                    cell.textContent = vals.join('; ');
+                    newTooltip = vals.join('; ');
+                } else if (cls === 'col-translation') {
+                    cell.textContent = vals.join(', ');
+                    var prov = td.getAttribute('data-provenance');
+                    newTooltip = vals.join(', ');
+                    if (prov) {
+                        var pTitle = formatProvenanceTooltip(prov);
+                        newTooltip += ' (' + (pTitle || prov) + ')';
+                    }
+                } else if (cls === 'col-inflected') {
+                    cell.textContent = vals.join(', ');
+                    var formsStr = vals.join(', ');
+                    var boldHeader = toUnicodeBold(formsStr);
+                    newTooltip = boldHeader || formsStr;
+                }
+                if (newTooltip) {
+                    td.setAttribute('title', newTooltip);
+                    if (cell !== td) cell.setAttribute('title', newTooltip);
+                }
+            }
+        }
+    }
+    window.applyOccurrenceRow = applyOccurrenceRow;
+
+    function applyOccurrenceView() {
+        var rows = document.querySelectorAll('#lemma-table tbody tr[data-occ]');
+        rows.forEach(function (r) {
+            applyOccurrenceRow(r);
+        });
+    }
+    window.applyOccurrenceView = applyOccurrenceView;
+
+    // ----------------------------------------------------
+    // Toast, Session Helpers, & Repaint
+    // ----------------------------------------------------
+
+    window.forceRepaint = function () {
+        return document.body ? document.body.offsetHeight : 0;
+    };
+
+    window.showToast = function (msg, type, durationMs, onClick) {
+        type = type || 'info';
+        durationMs = durationMs || 3000;
+        var container = document.getElementById('kw-toast-container');
+        if (!container) return;
+        var toast = document.createElement('div');
+        toast.className = 'kw-toast kw-toast-' + type;
+
+        var icon = 'i';
+        if (type === 'success') icon = '✓';
+        else if (type === 'warning') icon = '!';
+        else if (type === 'error') icon = '✕';
+
+        toast.innerHTML = '<span class="kw-toast-icon">' + icon + '</span><span class="kw-toast-msg">' + escapeHtml(msg) + '</span>';
+
+        function dismiss() {
+            if (toast.classList.contains('kw-toast-hiding')) return;
+            toast.classList.add('kw-toast-hiding');
+            setTimeout(function () {
+                if (toast.parentNode) toast.parentNode.removeChild(toast);
+            }, 250);
+        }
+
+        if (typeof onClick === 'function') {
+            toast.style.cursor = 'pointer';
+            toast.onclick = function (e) {
+                onClick(e);
+                dismiss();
+            };
+        } else {
+            toast.onclick = dismiss;
+        }
+        container.appendChild(toast);
+        setTimeout(dismiss, durationMs);
+    };
+
+    function setButtonLoading(btn, isLoading, loadingText, defaultText) {
+        if (typeof btn === 'string') {
+            btn = document.getElementById(btn);
+        }
+        if (!btn) return;
+        if (isLoading) {
+            if (!btn.hasAttribute('data-default-text')) {
+                btn.setAttribute('data-default-text', defaultText || btn.textContent || btn.innerText || '');
+            }
+            btn.disabled = true;
+            btn.textContent = loadingText || 'Loading...';
+            if (btn._recoveryTimer) {
+                clearTimeout(btn._recoveryTimer);
+            }
+            btn._recoveryTimer = setTimeout(function () {
+                btn.disabled = false;
+                var original = btn.getAttribute('data-default-text') || defaultText;
+                if (original) btn.textContent = original;
+                if (btn.id === 'kw-btn-save') {
+                    updateToolbarState();
+                }
+                btn._recoveryTimer = null;
+                window.showToast('Action timed out. Restored toolbar controls.', 'warning');
+            }, 25000);
+        } else {
+            if (btn._recoveryTimer) {
+                clearTimeout(btn._recoveryTimer);
+                btn._recoveryTimer = null;
+            }
+            btn.disabled = false;
+            var original = btn.getAttribute('data-default-text') || defaultText;
+            if (original) btn.textContent = original;
+            if (btn.id === 'kw-btn-save') {
+                updateToolbarState();
+            }
+        }
+    }
+    window.setButtonLoading = setButtonLoading;
+
+    function getSessionZid() {
+        if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
+            var c = window.WorkspaceTabs.getActiveCard();
+            if (c && c.zid) return c.zid;
+        }
+        var el = document.getElementById('session-zid');
+        var zidVal = el ? (el.textContent || el.innerText || '').trim() : '';
+        if (!zidVal) {
+            try {
+                var urlParams = new URLSearchParams(window.location.search);
+                zidVal = urlParams.get('zid') || urlParams.get('session_zid') || '';
+            } catch (e) {}
+        }
+        if (!zidVal && window.AppState && window.AppState.bootstrap) {
+            zidVal = window.AppState.bootstrap.session_zid || window.AppState.bootstrap.zid || '';
+        }
+        if (!zidVal && SESSION_ZID) {
+            zidVal = SESSION_ZID;
+        }
+        return zidVal;
+    }
+    window.getSessionZid = getSessionZid;
+
+    function getSessionLang() {
+        var el = document.getElementById('session-lang');
+        var langVal = el ? (el.textContent || el.innerText || '').trim() : '';
+        if (!langVal && window.AppState && window.AppState.language) {
+            langVal = window.AppState.language;
+        }
+        if (!langVal && window.AppState && window.AppState.bootstrap) {
+            langVal = window.AppState.bootstrap.language || '';
+        }
+        return langVal || LANGUAGE || 'de';
+    }
+    window.getSessionLang = getSessionLang;
+
+    function getApiToken() {
+        if (typeof API_TOKEN !== 'undefined' && API_TOKEN && API_TOKEN !== '__API_TOKEN__') {
+            return API_TOKEN;
+        }
+        if (typeof window.API_TOKEN !== 'undefined' && window.API_TOKEN) {
+            return window.API_TOKEN;
+        }
+        try {
+            var params = new URLSearchParams(window.location.search);
+            var tok = params.get('token') || params.get('api_token') || '';
+            if (tok) return tok;
+            var stored = sessionStorage.getItem('kw_api_token') || localStorage.getItem('kw_api_token');
+            if (stored) return stored;
+        } catch (e) {}
+        return '';
+    }
+    window.getApiToken = getApiToken;
+
+    function notifyAHKSelection() {
+        if (typeof window.ahkCall === 'function') {
+            try {
+                var selIds = getSelectedRowIds();
+                window.ahkCall('selection', selIds.join(','));
+            } catch (e) {}
+        }
+    }
+    window.notifyAHKSelection = notifyAHKSelection;
+
+    // ----------------------------------------------------
+    // History Stack, Undo/Redo, Deltas, & Save Handlers (R17, R34, R35)
+    // ----------------------------------------------------
+
+    var historyStack = [];
+    var historyIndex = -1;
+    var deltas = [];
+
+    function pushHistory(action) {
+        historyStack.splice(historyIndex + 1);
+        historyStack.push(action);
+        historyIndex++;
+    }
+
+    function applyAction(action) {
+        if (action.type === 'edit') {
+            var div = action.cell.querySelector('.scrollable-cell');
+            if (div) div.textContent = action.newValue;
+            else action.cell.textContent = action.newValue;
+            updateCellTooltip(action.cell, action.newValue);
+        } else if (action.type === 'delete') {
+            for (var j = 0; j < action.rowIds.length; j++) {
+                var rId = action.rowIds[j];
+                var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rId + '"]');
+                if (tr) tr.style.display = 'none';
+            }
+            if (typeof window.clearAllSelections === 'function') {
+                window.clearAllSelections();
+            }
+        }
+    }
+
+    function revertAction(action) {
+        if (action.type === 'edit') {
+            var div = action.cell.querySelector('.scrollable-cell');
+            if (div) div.textContent = action.oldValue;
+            else action.cell.textContent = action.oldValue;
+            updateCellTooltip(action.cell, action.oldValue);
+        } else if (action.type === 'delete') {
+            for (var j = 0; j < action.rowIds.length; j++) {
+                var rId = action.rowIds[j];
+                var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rId + '"]');
+                if (tr) tr.style.display = '';
+            }
+        }
+    }
+
+    function rebuildDeltas() {
+        deltas = [];
+        var dirtyCells = document.querySelectorAll('#lemma-table tbody td.dirty');
+        dirtyCells.forEach(function (td) {
+            td.classList.remove('dirty');
+        });
+
+        for (var i = 0; i <= historyIndex; i++) {
+            var action = historyStack[i];
+            if (action.type === 'edit') {
+                var found = false;
+                for (var k = 0; k < deltas.length; k++) {
+                    if (deltas[k].row_id === action.rowId && deltas[k].column === action.column) {
+                        deltas[k].value = action.newValue;
+                        deltas[k].token_order = action.tokenOrder;
+                        deltas[k].sentence_idx = action.sentenceIdx;
+                        found = true;
+                        break;
+                    }
+                }
+                if (!found) {
+                    deltas.push({
+                        row_id: action.rowId,
+                        token_order: action.tokenOrder,
+                        sentence_idx: action.sentenceIdx,
+                        column: action.column,
+                        value: action.newValue
+                    });
+                }
+            } else if (action.type === 'delete') {
+                for (var j = 0; j < action.rowIds.length; j++) {
+                    var rId = action.rowIds[j];
+                    var tOrd = (action.tokenOrders && action.tokenOrders[j] !== undefined) ? action.tokenOrders[j] : rId;
+                    var sIdx = (action.sentenceIndices && action.sentenceIndices[j] !== undefined) ? action.sentenceIndices[j] : 1;
+                    deltas.push({
+                        row_id: rId,
+                        token_order: tOrd,
+                        sentence_idx: sIdx,
+                        column: '_delete',
+                        value: true
+                    });
+                }
+            }
+        }
+
+        for (var dIdx = 0; dIdx < deltas.length; dIdx++) {
+            var d = deltas[dIdx];
+            if (d.column !== '_delete') {
+                var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + d.row_id + '"]');
+                if (tr) {
+                    var cell = tr.querySelector('td[data-col="' + d.column + '"]');
+                    if (!cell) {
+                        if (d.column === 'WordDestination') cell = tr.querySelector('td.col-translation');
+                        else if (d.column === 'WordSource') cell = tr.querySelector('td.col-lemma');
+                        else if (d.column === 'WordSourceInflectedForm') cell = tr.querySelector('td.col-inflected');
+                    }
+                    if (cell) cell.classList.add('dirty');
+                }
+            }
+        }
+
+        if (window.AppState) {
+            window.AppState.deltas = deltas;
+        }
+
+        updateToolbarState();
+        if (typeof window.ahkCall === 'function') {
+            try {
+                window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
+            } catch (e) {}
+        }
+        if (window.forceRepaint) window.forceRepaint();
+    }
+
+    window.undo = function () {
+        if (historyIndex < 0) return;
+        var action = historyStack[historyIndex];
+        historyIndex--;
+        revertAction(action);
+        rebuildDeltas();
+        if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
+    };
+
+    window.redo = function () {
+        if (historyIndex >= historyStack.length - 1) return;
+        historyIndex++;
+        var action = historyStack[historyIndex];
+        applyAction(action);
+        rebuildDeltas();
+        if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
+    };
+
+    window.isDirty = function () {
+        return deltas.length > 0;
+    };
+
+    window.getDeltas = function () {
+        return JSON.stringify(deltas);
+    };
+
+    window.clearDirty = function () {
+        historyStack = [];
+        historyIndex = -1;
+        deltas = [];
+        var dirtyCells = document.querySelectorAll('#lemma-table tbody td.dirty');
+        dirtyCells.forEach(function (td) {
+            td.classList.remove('dirty');
+        });
+        if (window.AppState) {
+            window.AppState.deltas = [];
+        }
+        updateToolbarState();
+        if (typeof window.ahkCall === 'function') {
+            try {
+                window.ahkCall('dirty', 'false');
+            } catch (e) {}
+        }
+    };
+
+    window.deleteSelectedRows = function () {
+        var selected = getSelectedRowIds();
+        if (selected.length === 0) return;
+        var tOrders = [];
+        var sIndices = [];
+        for (var i = 0; i < selected.length; i++) {
+            var rId = selected[i];
+            var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rId + '"]');
+            var tOrd = rId;
+            var sIdx = 1;
+            if (tr) {
+                var toAttr = tr.getAttribute('data-token-order');
+                if (toAttr !== null && toAttr !== '') tOrd = parseInt(toAttr, 10);
+                var siAttr = tr.getAttribute('data-sentence-idx');
+                if (siAttr !== null && siAttr !== '') sIdx = parseInt(siAttr, 10);
+            }
+            tOrders.push(tOrd);
+            sIndices.push(sIdx);
+        }
+        var action = {
+            type: 'delete',
+            rowIds: selected,
+            tokenOrders: tOrders,
+            sentenceIndices: sIndices
+        };
+        pushHistory(action);
+        applyAction(action);
+        rebuildDeltas();
+        if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
+    };
+
+    function updateToolbarState() {
+        var saveBtn = document.getElementById('kw-btn-save');
+        if (saveBtn) {
+            saveBtn.disabled = !window.isDirty();
+        }
+    }
+    window.updateToolbarState = updateToolbarState;
+
+    window.onSaveClick = function (quiet) {
+        if (window.commitActiveEdit) window.commitActiveEdit();
+        if (!window.isDirty()) {
+            if (!quiet) window.showToast("No changes to save.", "info");
+            return;
+        }
+        var sZid = getSessionZid();
+        if (!sZid) {
+            if (!quiet) window.showToast("Session ZID missing, cannot save.", "error");
+            return;
+        }
+        var deltasJson = [];
+        try {
+            deltasJson = JSON.parse(window.getDeltas());
+        } catch (e) {}
+
+        var saveBtn = document.getElementById('kw-btn-save');
+        setButtonLoading(saveBtn, true, "Saving...", "Save (Ctrl+S)");
+
+        var tok = getApiToken();
+        var headers = { 'Content-Type': 'application/json' };
+        if (tok) headers['X-API-Token'] = tok;
+        var bodyPayload = {
+            session_zid: sZid,
+            deltas: deltasJson,
+            language: getSessionLang()
+        };
+        if (tok) bodyPayload.token = tok;
+
+        fetch('/session/save', {
+            method: 'POST',
+            headers: headers,
+            body: JSON.stringify(bodyPayload)
+        })
+        .then(function (res) {
+            return res.json().then(function (data) { return { status: res.status, ok: res.ok, data: data }; });
+        })
+        .then(function (resObj) {
+            setButtonLoading(saveBtn, false, "", "Save (Ctrl+S)");
+            if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success')) {
+                window.clearDirty();
+                updateToolbarState();
+                window.showToast("Edits saved successfully", "success");
+            } else {
+                updateToolbarState();
+                var msg = (resObj.data && (resObj.data.message || resObj.data.error)) || "Server error";
+                window.showToast("Save failed: " + msg, "error");
+            }
+        })
+        .catch(function (err) {
+            setButtonLoading(saveBtn, false, "", "Save (Ctrl+S)");
+            updateToolbarState();
+            window.showToast("Save error: " + (err.message || String(err)), "error");
+        });
+    };
+
+    var autoSaveDebounceTimer = null;
+    window.triggerAutoSaveOnEdit = function () {
+        var uiCfg = (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.ui_config) || window.__CONFIG__ || {};
+        if (!uiCfg.auto_save_on_edit) return;
+        if (autoSaveDebounceTimer) {
+            clearTimeout(autoSaveDebounceTimer);
+        }
+        autoSaveDebounceTimer = setTimeout(function () {
+            if (window.isDirty && window.isDirty() && typeof window.onSaveClick === 'function') {
+                window.onSaveClick(true);
+            }
+        }, 300);
+    };
+
+    function performSilentAutoSaveOnClose() {
+        var uiCfg = (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.ui_config) || window.__CONFIG__ || {};
+        if (!uiCfg.auto_save_on_close && !uiCfg.auto_save_on_edit) return;
+        if (typeof window.commitActiveEdit === 'function') {
+            try { window.commitActiveEdit(); } catch (e) {}
+        }
+        if (!window.isDirty || !window.isDirty()) return;
+        var sZid = getSessionZid();
+        if (!sZid) return;
+        var deltasJson = [];
+        try {
+            deltasJson = JSON.parse(window.getDeltas());
+        } catch (e) {}
+        if (!deltasJson || deltasJson.length === 0) return;
+
+        var tok = getApiToken();
+        var headers = { 'Content-Type': 'application/json' };
+        if (tok) headers['X-API-Token'] = tok;
+        var bodyPayload = {
+            session_zid: sZid,
+            deltas: deltasJson,
+            language: getSessionLang()
+        };
+        if (tok) bodyPayload.token = tok;
+        var bodyStr = JSON.stringify(bodyPayload);
+
+        try {
+            fetch('/session/save', {
+                method: 'POST',
+                headers: headers,
+                body: bodyStr,
+                keepalive: true
+            });
+        } catch (e) {
+            if (navigator && navigator.sendBeacon) {
+                try {
+                    var blob = new Blob([bodyStr], { type: 'application/json' });
+                    navigator.sendBeacon('/session/save', blob);
+                } catch (e2) {}
+            }
+        }
+    }
+    window.addEventListener('pagehide', performSilentAutoSaveOnClose);
+    window.addEventListener('visibilitychange', function () {
+        if (document.visibilityState === 'hidden') {
+            performSilentAutoSaveOnClose();
+        }
+    });
+
+    // ----------------------------------------------------
+    // Inline Editing & Table State Machine (R17, R36, R37, R49)
+    // ----------------------------------------------------
+
+    var lastClickedCell = null;
+    var lastHoveredCell = null;
+    var focusedRowId = null;
+    var isDragSelecting = false;
+    var dragOccurred = false;
+    var dragStartX = 0;
+    var dragStartY = 0;
+    var dragStartVisualIdx = -1;
+    var lastClickedVisualIdx = -1;
+    var lastClickedRowId = null;
+    var dragSelectMode = true;
+
+    function makeEditable(cell) {
+        if (!cell) return;
+        if (cell.querySelector('input')) return;
+
+        var scrollDiv = cell.querySelector('.scrollable-cell');
+        var originalValue = scrollDiv ? (scrollDiv.textContent || scrollDiv.innerText || '') : (cell.textContent || cell.innerText || '');
+        var colName = cell.getAttribute('data-col') || (cell.classList.contains('col-translation') ? 'WordDestination' : (cell.classList.contains('col-lemma') ? 'WordSource' : (cell.classList.contains('col-inflected') ? 'WordSourceInflectedForm' : '')));
+        var trParent = cell.parentElement;
+        var rowId = trParent ? trParent.getAttribute('data-row-id') : null;
+        var rowIdVal = (rowId !== null && rowId !== '') ? parseInt(rowId, 10) : 0;
+        var tokenOrder = trParent ? trParent.getAttribute('data-token-order') : null;
+        var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '') ? parseInt(tokenOrder, 10) : rowIdVal;
+        var sentenceIdx = trParent ? trParent.getAttribute('data-sentence-idx') : null;
+        var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '') ? parseInt(sentenceIdx, 10) : 1;
+
+        var input = document.createElement('input');
+        input.type = 'text';
+        input.className = 'edit-input cell-editor';
+        input.value = originalValue;
+        input.style.width = '100%';
+        input.style.boxSizing = 'border-box';
+        input.style.background = 'var(--bg-primary, #0d1117)';
+        input.style.color = 'var(--text-primary, #c9d1d9)';
+        input.style.border = '1px solid var(--border-color, #30363d)';
+        input.style.borderRadius = '4px';
+        input.style.padding = '4px';
+        input.style.fontSize = 'inherit';
+        input.style.fontFamily = 'inherit';
+
+        cell.innerHTML = '';
+        cell.classList.add('editing');
+        cell.appendChild(input);
+        input.focus();
+        try {
+            input.select();
+        } catch (e) {}
+
+        window.cancelActiveEdit = function () {
+            window.cancelActiveEdit = null;
+            window.commitActiveEdit = null;
+            cell.innerHTML = '';
+            var div = document.createElement('div');
+            div.className = 'scrollable-cell';
+            div.textContent = originalValue;
+            cell.appendChild(div);
+            cell.classList.remove('editing');
+            updateCellTooltip(cell, originalValue);
+            if (window.forceRepaint) window.forceRepaint();
+        };
+
+        function commit() {
+            if (!window.cancelActiveEdit) return;
+            window.cancelActiveEdit = null;
+            window.commitActiveEdit = null;
+            var newValue = input.value;
+            cell.innerHTML = '';
+            var div = document.createElement('div');
+            div.className = 'scrollable-cell';
+            div.textContent = newValue;
+            cell.appendChild(div);
+            cell.classList.remove('editing');
+            updateCellTooltip(cell, newValue);
+
+            if (newValue !== originalValue) {
+                var action = {
+                    type: 'edit',
+                    rowId: rowIdVal,
+                    tokenOrder: tokenOrderVal,
+                    sentenceIdx: sentIdxVal,
+                    column: colName,
+                    oldValue: originalValue,
+                    newValue: newValue,
+                    cell: cell
+                };
+                pushHistory(action);
+                rebuildDeltas();
+                if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
+            }
+            if (window.forceRepaint) window.forceRepaint();
+        }
+        window.commitActiveEdit = commit;
+
+        input.addEventListener('keydown', function (e) {
+            var keyCode = e.keyCode || e.which;
+            if (e.ctrlKey && (keyCode === 65 || e.key === 'a')) {
+                e.preventDefault();
+                input.select();
+            } else if (keyCode === 13 || e.key === 'Enter') {
+                e.preventDefault();
+                commit();
+            } else if (keyCode === 27 || e.key === 'Escape') {
+                e.preventDefault();
+                if (window.cancelActiveEdit) window.cancelActiveEdit();
+            } else if (keyCode === 9 || e.key === 'Tab') {
+                e.preventDefault();
+                commit();
+
+                var editables = Array.prototype.slice.call(document.querySelectorAll('#lemma-table tbody tr:not([style*="display: none"]) td.editable'));
+                var idx = editables.indexOf(cell);
+                if (idx !== -1) {
+                    var nextIdx = e.shiftKey ? idx - 1 : idx + 1;
+                    if (nextIdx >= 0 && nextIdx < editables.length) {
+                        makeEditable(editables[nextIdx]);
+                    }
+                }
+            }
+        });
+
+        input.addEventListener('blur', function () {
+            commit();
+        });
+    }
+    window.makeEditable = makeEditable;
+
+    function editFocusedCell() {
+        var cellToEdit = null;
+        if (lastHoveredCell) {
+            var rId = parseInt(lastHoveredCell.parentElement.getAttribute('data-row-id'), 10);
+            if (rId === focusedRowId) cellToEdit = lastHoveredCell;
+        }
+        if (!cellToEdit && lastClickedCell) {
+            var rId = parseInt(lastClickedCell.parentElement.getAttribute('data-row-id'), 10);
+            if (rId === focusedRowId) cellToEdit = lastClickedCell;
+        }
+        if (!cellToEdit && focusedRowId !== null) {
+            var row = document.querySelector('#lemma-table tbody tr[data-row-id="' + focusedRowId + '"]');
+            if (row) {
+                var editables = row.querySelectorAll('td.editable');
+                if (editables.length > 0) cellToEdit = editables[0];
+            }
+        }
+        if (cellToEdit) {
+            makeEditable(cellToEdit);
+        }
+    }
+    window.editFocusedCell = editFocusedCell;
+
+    function updateRowFocus() {
+        var rows = document.querySelectorAll('#lemma-table tbody tr');
+        rows.forEach(function (row) {
+            var rId = row.getAttribute('data-row-id');
+            var parsedId = (rId !== null && rId !== '') ? parseInt(rId, 10) : null;
+            if (parsedId !== null && parsedId === focusedRowId) {
+                row.style.outline = '1px solid #58a6ff';
+                row.classList.add('focused-row');
+                if (typeof row.scrollIntoView === 'function') {
+                    row.scrollIntoView({ block: 'nearest' });
+                }
+            } else {
+                row.style.outline = 'none';
+                row.classList.remove('focused-row');
+            }
+        });
+    }
+    window.updateRowFocus = updateRowFocus;
+
+    function selectAllRows() {
+        var rows = document.querySelectorAll('#lemma-table tbody tr');
+        window.AppState = window.AppState || {};
+        window.AppState.selected_ids = window.AppState.selected_ids || [];
+        window.AppState.selectedLemmas = window.AppState.selectedLemmas || {};
+
+        rows.forEach(function (row) {
+            selectTableRow(row);
+        });
+
+        if (typeof window.syncSelectionsToCardsAndState === 'function') {
+            window.syncSelectionsToCardsAndState();
+        }
+        window.updateRowStyles();
+        if (typeof window.updateBidirectionalHighlights === 'function') {
+            window.updateBidirectionalHighlights();
+        }
+        notifyAHKSelection();
+    }
+    window.selectAllRows = selectAllRows;
+
+    function clearAllSelections() {
+        window.AppState = window.AppState || {};
+        window.AppState.selected_ids = [];
+        window.AppState.selectedLemmas = {};
+        window.AppState.activeTokenSelections = [];
+
+        var rows = document.querySelectorAll('#lemma-table tbody tr');
+        rows.forEach(function (row) {
+            row.classList.remove('selected', 'kw-row-selected');
+            row.setAttribute('data-selected', '0');
+            var cb = row.querySelector('.kw-tag-checkbox');
+            if (cb) cb.checked = false;
+        });
+
+        if (window.clearMVPBookmarks) window.clearMVPBookmarks();
+        if (typeof window.syncSelectionsToCardsAndState === 'function') {
+            window.syncSelectionsToCardsAndState();
+        }
+        lastClickedRowId = null;
+        lastClickedVisualIdx = -1;
+        window.updateRowStyles();
+        if (typeof window.updateBidirectionalHighlights === 'function') {
+            window.updateBidirectionalHighlights();
+        }
+        notifyAHKSelection();
+    }
+    window.clearAllSelections = clearAllSelections;
+    window.clearAllSelectionsAndNotify = clearAllSelections;
+
+    window.setSelectedRows = function (rowsJsonStr) {
+        try {
+            var arr = typeof rowsJsonStr === 'string' ? JSON.parse(rowsJsonStr) : rowsJsonStr;
+            window.AppState = window.AppState || {};
+            window.AppState.selected_ids = [];
+            window.AppState.selectedLemmas = {};
+
+            var idMap = {};
+            for (var i = 0; i < arr.length; i++) {
+                var num = parseInt(arr[i], 10);
+                if (!isNaN(num)) {
+                    idMap[num] = true;
+                    idMap[String(num)] = true;
+                    window.AppState.selected_ids.push(num);
+                }
+            }
+
+            var rows = document.querySelectorAll('#lemma-table tbody tr');
+            rows.forEach(function (row) {
+                var rId = row.getAttribute('data-row-id');
+                var isSel = (rId !== null && (idMap[rId] || idMap[parseInt(rId, 10)]));
+                if (isSel) {
+                    selectTableRow(row);
+                } else {
+                    deselectTableRow(row);
+                }
+            });
+
+            if (typeof window.syncSelectionsToCardsAndState === 'function') {
+                window.syncSelectionsToCardsAndState();
+            }
+            window.updateRowStyles();
+            if (typeof window.updateBidirectionalHighlights === 'function') {
+                window.updateBidirectionalHighlights();
+            }
+            notifyAHKSelection();
+            if (window.forceRepaint) window.forceRepaint();
+        } catch (e) {}
+    };
+
+    function syncSelectionsToCardsAndState() {
+        if (window.WorkspaceTabs && typeof window.WorkspaceTabs.syncSelectionsToCardsAndState === 'function') {
+            window.WorkspaceTabs.syncSelectionsToCardsAndState();
+            return;
+        }
+        var appState = window.AppState;
+        if (!appState) return;
+        var cards = appState.sentenceCards || (appState.bootstrap && appState.bootstrap.sentence_cards);
+        if (cards && cards.length > 0) {
+            var selIds = getSelectedRowIds();
+            var activeCard = (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') ? window.WorkspaceTabs.getActiveCard() : null;
+            if (activeCard) {
+                activeCard.selected_ids = selIds;
+            }
+        }
+    }
+    window.syncSelectionsToCardsAndState = syncSelectionsToCardsAndState;
+
+    // Single consolidated keydown listener
     window.addEventListener('keydown', function (e) {
-        if (e.key === 'Escape' || e.keyCode === 27) {
-            if (document.querySelector('#lemma-table td.editing, #lemma-table input.cell-editor')) {
+        var target = e.target;
+        var isInput = target && (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable);
+        var keyCode = e.keyCode || e.which;
+
+        // Escape: cancel edit, or clear bookmark pins, or clear selections
+        if (keyCode === 27 || e.key === 'Escape') {
+            if (window.cancelActiveEdit) {
+                e.preventDefault();
+                window.cancelActiveEdit();
                 return;
             }
             if (window.mvpBookmarks && window.mvpBookmarks.length > 0) {
+                e.preventDefault();
                 window.clearMVPBookmarks();
                 if (typeof window.updateBidirectionalHighlights === 'function') {
                     window.updateBidirectionalHighlights();
                 }
-            } else {
-                if (window.AppState) {
-                    window.AppState.selected_ids = [];
-                    window.AppState.selectedLemmas = {};
-                }
-                var selRows = document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected');
-                selRows.forEach(function (r) {
-                    r.classList.remove('selected', 'kw-row-selected');
-                    r.setAttribute('data-selected', '0');
-                });
-                var cbs = document.querySelectorAll('.kw-tag-checkbox:checked');
-                cbs.forEach(function (cb) { cb.checked = false; });
-                if (typeof window.updateRowStyles === 'function') {
-                    window.updateRowStyles();
-                }
-                if (typeof window.updateBidirectionalHighlights === 'function') {
-                    window.updateBidirectionalHighlights();
+                return;
+            }
+            clearAllSelections();
+            return;
+        }
+
+        // If typing in input, do not intercept table navigation or action shortcuts
+        if (isInput) return;
+
+        // Ctrl+S: Save
+        if ((e.ctrlKey || e.metaKey) && (keyCode === 83 || e.key === 's' || e.key === 'S')) {
+            e.preventDefault();
+            var saveBtn = document.getElementById('kw-btn-save');
+            if (saveBtn && !saveBtn.disabled) {
+                saveBtn.click();
+            } else if (typeof window.onSaveClick === 'function') {
+                window.onSaveClick();
+            }
+            return;
+        }
+
+        // Ctrl+A: Select all rows
+        if ((e.ctrlKey || e.metaKey) && (keyCode === 65 || e.key === 'a' || e.key === 'A')) {
+            e.preventDefault();
+            selectAllRows();
+            return;
+        }
+
+        // Ctrl+Z: Undo (single stroke)
+        if ((e.ctrlKey || e.metaKey) && !e.shiftKey && (keyCode === 90 || e.key === 'z' || e.key === 'Z')) {
+            e.preventDefault();
+            window.undo();
+            return;
+        }
+
+        // Ctrl+Y or Ctrl+Shift+Z: Redo (single stroke)
+        if (((e.ctrlKey || e.metaKey) && (keyCode === 89 || e.key === 'y' || e.key === 'Y')) ||
+            ((e.ctrlKey || e.metaKey) && e.shiftKey && (keyCode === 90 || e.key === 'z' || e.key === 'Z'))) {
+            e.preventDefault();
+            window.redo();
+            return;
+        }
+
+        // Delete: Delete selected rows
+        if (keyCode === 46 || e.key === 'Delete') {
+            if (getSelectedRowIds().length > 0) {
+                e.preventDefault();
+                window.deleteSelectedRows();
+                return;
+            }
+        }
+
+        // ArrowUp / ArrowDown: Row traversal
+        if (keyCode === 38 || keyCode === 40 || e.key === 'ArrowUp' || e.key === 'ArrowDown') {
+            e.preventDefault();
+            var rows = Array.prototype.slice.call(document.querySelectorAll('#lemma-table tbody tr:not([style*="display: none"])'));
+            if (rows.length === 0) return;
+
+            var currentIdx = -1;
+            for (var v = 0; v < rows.length; v++) {
+                var rId = parseInt(rows[v].getAttribute('data-row-id'), 10);
+                if (rId === focusedRowId) {
+                    currentIdx = v;
+                    break;
                 }
             }
+
+            var nextIdx = 0;
+            if (currentIdx === -1) {
+                nextIdx = (keyCode === 38 || e.key === 'ArrowUp') ? (rows.length - 1) : 0;
+            } else {
+                if (keyCode === 40 || e.key === 'ArrowDown') {
+                    nextIdx = Math.min(currentIdx + 1, rows.length - 1);
+                } else {
+                    nextIdx = Math.max(currentIdx - 1, 0);
+                }
+            }
+
+            var nextRow = rows[nextIdx];
+            if (nextRow) {
+                focusedRowId = parseInt(nextRow.getAttribute('data-row-id'), 10);
+                updateRowFocus();
+            }
+            return;
+        }
+
+        // Space: Toggle selection of focused row
+        if (keyCode === 32 || e.key === ' ') {
+            e.preventDefault();
+            if (focusedRowId !== null) {
+                var fRow = document.querySelector('#lemma-table tbody tr[data-row-id="' + focusedRowId + '"]');
+                if (fRow) {
+                    var isCurrentlySelected = fRow.classList.contains('kw-row-selected') || fRow.classList.contains('selected') || fRow.getAttribute('data-selected') === '1';
+                    if (isCurrentlySelected) {
+                        deselectTableRow(fRow);
+                    } else {
+                        selectTableRow(fRow);
+                    }
+                    if (typeof window.syncSelectionsToCardsAndState === 'function') {
+                        window.syncSelectionsToCardsAndState();
+                    }
+                    window.updateRowStyles();
+                    if (typeof window.updateBidirectionalHighlights === 'function') {
+                        window.updateBidirectionalHighlights();
+                    }
+                    notifyAHKSelection();
+                }
+            }
+            return;
+        }
+
+        // F2: Edit focused cell
+        if (keyCode === 113 || e.key === 'F2') {
+            e.preventDefault();
+            editFocusedCell();
+            return;
+        }
+    });
+
+    window.addEventListener('mouseup', function (e) {
+        if (isDragSelecting) {
+            var table = document.getElementById('lemma-table');
+            if (table) table.classList.remove('kw-table-dragging');
+            isDragSelecting = false;
+            if (typeof window.syncSelectionsToCardsAndState === 'function') {
+                window.syncSelectionsToCardsAndState();
+            }
+            window.updateRowStyles();
+            if (typeof window.updateBidirectionalHighlights === 'function') {
+                window.updateBidirectionalHighlights();
+            }
+            notifyAHKSelection();
         }
     });
 
@@ -1518,59 +2747,133 @@
     };
 
     window.rebindTableRows = function () {
+        var table = document.getElementById('lemma-table');
         var rows = document.querySelectorAll('#lemma-table tbody tr');
+
         rows.forEach(function (row) {
             if (row.__kw_bound) return;
             row.__kw_bound = true;
 
-            row.addEventListener('click', function (e) {
-                if (e.target && (e.target.tagName === 'INPUT' || e.target.isContentEditable)) return;
-                var rId = row.getAttribute('data-row-id');
-                var currentlySel = row.classList.contains('kw-row-selected') || row.getAttribute('data-selected') === '1';
-                var newSel = !currentlySel;
+            row.addEventListener('mousedown', function (e) {
+                if (window.__selectableTextMode) return;
+                var target = e.target;
+                if (target && (target.tagName === 'INPUT' || target.closest('.editing'))) return;
+                if (e.button !== 0) return;
 
-                if (newSel) {
-                    row.classList.add('selected', 'kw-row-selected');
-                    row.setAttribute('data-selected', '1');
+                if (table) table.classList.add('kw-table-dragging');
+                isDragSelecting = true;
+                dragOccurred = false;
+                dragStartX = e.clientX;
+                dragStartY = e.clientY;
+
+                var allRows = Array.prototype.slice.call(document.querySelectorAll('#lemma-table tbody tr'));
+                var rowVisualIdx = allRows.indexOf(row);
+                var rIdStr = row.getAttribute('data-row-id');
+                var rowId = (rIdStr !== null && rIdStr !== '') ? parseInt(rIdStr, 10) : rowVisualIdx;
+
+                if (e.shiftKey && lastClickedVisualIdx !== -1) {
+                    var start = Math.min(lastClickedVisualIdx, rowVisualIdx);
+                    var end = Math.max(lastClickedVisualIdx, rowVisualIdx);
+                    for (var k = start; k <= end; k++) {
+                        if (allRows[k]) selectTableRow(allRows[k]);
+                    }
+                    if (typeof window.syncSelectionsToCardsAndState === 'function') {
+                        window.syncSelectionsToCardsAndState();
+                    }
+                    window.updateRowStyles();
+                    if (typeof window.updateBidirectionalHighlights === 'function') {
+                        window.updateBidirectionalHighlights();
+                    }
+                    notifyAHKSelection();
+                } else if (e.ctrlKey || e.metaKey) {
+                    var isCur = row.classList.contains('kw-row-selected') || row.classList.contains('selected') || row.getAttribute('data-selected') === '1';
+                    dragSelectMode = !isCur;
+                    if (dragSelectMode) selectTableRow(row);
+                    else deselectTableRow(row);
+
+                    dragStartVisualIdx = rowVisualIdx;
+                    lastClickedVisualIdx = rowVisualIdx;
+                    lastClickedRowId = dragSelectMode ? rowId : null;
+                    focusedRowId = rowId;
+                    updateRowFocus();
+
+                    if (typeof window.syncSelectionsToCardsAndState === 'function') {
+                        window.syncSelectionsToCardsAndState();
+                    }
+                    window.updateRowStyles();
+                    if (typeof window.updateBidirectionalHighlights === 'function') {
+                        window.updateBidirectionalHighlights();
+                    }
+                    notifyAHKSelection();
                 } else {
-                    row.classList.remove('selected', 'kw-row-selected');
-                    row.setAttribute('data-selected', '0');
+                    var isCur = row.classList.contains('kw-row-selected') || row.classList.contains('selected') || row.getAttribute('data-selected') === '1';
+                    dragSelectMode = !isCur;
+                    if (dragSelectMode) selectTableRow(row);
+                    else deselectTableRow(row);
+
+                    dragStartVisualIdx = rowVisualIdx;
+                    lastClickedVisualIdx = rowVisualIdx;
+                    lastClickedRowId = dragSelectMode ? rowId : null;
+                    focusedRowId = rowId;
+                    updateRowFocus();
+
+                    if (typeof window.syncSelectionsToCardsAndState === 'function') {
+                        window.syncSelectionsToCardsAndState();
+                    }
+                    window.updateRowStyles();
+                    if (typeof window.updateBidirectionalHighlights === 'function') {
+                        window.updateBidirectionalHighlights();
+                    }
+                    notifyAHKSelection();
+                }
+            });
+
+            row.addEventListener('mouseover', function (e) {
+                if (window.__selectableTextMode) return;
+                if (!isDragSelecting) return;
+                if (e.buttons !== undefined && (e.buttons & 1) === 0) {
+                    if (table) table.classList.remove('kw-table-dragging');
+                    isDragSelecting = false;
+                    return;
+                }
+                if (!dragOccurred) {
+                    var dx = e.clientX - dragStartX;
+                    var dy = e.clientY - dragStartY;
+                    if (Math.sqrt(dx * dx + dy * dy) < 5) return;
+                    dragOccurred = true;
                 }
 
-                var lemCell = row.querySelector('.col-lemma');
-                var lem = lemCell ? (lemCell.textContent || '').trim().toLowerCase() : '';
-                window.AppState = window.AppState || {};
-                window.AppState.selectedLemmas = window.AppState.selectedLemmas || {};
-                window.AppState.selected_ids = window.AppState.selected_ids || [];
+                var allRows = Array.prototype.slice.call(document.querySelectorAll('#lemma-table tbody tr'));
+                var rowVisualIdx = allRows.indexOf(row);
+                if (rowVisualIdx === -1 || dragStartVisualIdx === -1) return;
 
-                if (lem) {
-                    if (newSel) window.AppState.selectedLemmas[lem] = true;
-                    else delete window.AppState.selectedLemmas[lem];
-                }
-
-                if (rId !== null) {
-                    var numId = parseInt(rId, 10);
-                    var strId = String(rId);
-                    if (newSel) {
-                        if (window.AppState.selected_ids.indexOf(strId) === -1 && window.AppState.selected_ids.indexOf(numId) === -1) {
-                            window.AppState.selected_ids.push(strId);
-                        }
-                    } else {
-                        window.AppState.selected_ids = window.AppState.selected_ids.filter(function (id) {
-                            return id !== strId && id !== numId;
-                        });
+                var start = Math.min(dragStartVisualIdx, rowVisualIdx);
+                var end = Math.max(dragStartVisualIdx, rowVisualIdx);
+                for (var k = start; k <= end; k++) {
+                    if (allRows[k]) {
+                        if (dragSelectMode) selectTableRow(allRows[k]);
+                        else deselectTableRow(allRows[k]);
                     }
                 }
-
-                if (typeof window.syncSelectionsToCardsAndState === 'function') {
-                    window.syncSelectionsToCardsAndState();
-                }
-                if (typeof window.updateRowStyles === 'function') {
-                    window.updateRowStyles();
-                }
+                window.updateRowStyles();
                 if (typeof window.updateBidirectionalHighlights === 'function') {
                     window.updateBidirectionalHighlights();
                 }
+            });
+
+            var editables = row.querySelectorAll('td.editable');
+            editables.forEach(function (cell) {
+                cell.addEventListener('click', function () {
+                    lastClickedCell = cell;
+                });
+                cell.addEventListener('mouseover', function () {
+                    lastHoveredCell = cell;
+                });
+                cell.addEventListener('dblclick', function (e) {
+                    if (window.__selectableTextMode) return;
+                    e.preventDefault();
+                    makeEditable(cell);
+                });
             });
         });
 
@@ -1592,6 +2895,14 @@
         if (typeof window.rebindTableRows === 'function') {
             window.rebindTableRows();
         }
+        var saveBtn = document.getElementById('kw-btn-save');
+        if (saveBtn) {
+            saveBtn.addEventListener('click', function (e) {
+                e.preventDefault();
+                window.onSaveClick();
+            });
+        }
+        updateToolbarState();
         var hasMulti = !!document.getElementById('sentence-cards') || (window.AppState && window.AppState.sentenceCards && window.AppState.sentenceCards.length > 1);
         if (hasMulti && window.WorkspaceTabs && typeof window.WorkspaceTabs.init === 'function') {
             window.WorkspaceTabs.init();

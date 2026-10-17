@@ -366,3 +366,137 @@ def test_playwright_word_token_hover_click_delegation_and_translation_pipeline(p
     assert "hl-mvp-pin" not in (fuchs_first.get_attribute("class") or "")
     assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
 
+
+def test_playwright_table_inline_editing_history_and_navigation(page, test_server):
+    port = test_server
+
+    sample_bootstrap = {
+        "ui_config": {
+            "highlight_same_lemma": True,
+            "filter_selected_only": False,
+            "theme": "dark"
+        },
+        "sentence_cards": [
+            {
+                "seq_num": 1,
+                "selected_ids": [],
+                "words": [
+                    {"word": "Fuchs", "lemma": "Fuchs", "row_id": 0, "token_order": 0},
+                    {"word": "springt", "lemma": "springen", "row_id": 1, "token_order": 1}
+                ]
+            }
+        ],
+        "delivery_mode": "container",
+        "session_data": {
+            "zid": "20261017230000",
+            "session_zid": "20261017230000",
+            "language": "de",
+            "target_lang": "ru",
+            "source_text": "Ein schneller Fuchs springt.",
+            "sentence_translation": "Быстрая лиса прыгает.",
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "data_rows": [
+                ["Fuchs", "Fuchs", "n.", "лиса"],
+                ["springt", "springen", "v.", "прыгает"]
+            ],
+            "server_enabled": True,
+            "api_token": "bootstrap-token"
+        }
+    }
+
+    # Intercept /session/save network endpoint for mock fulfillment
+    page.route("**/session/save", lambda route: route.fulfill(
+        status=200,
+        content_type="application/json",
+        body=json.dumps({"status": "success", "saved": True})
+    ))
+
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    page.evaluate(f"""
+        (function() {{
+            var el = document.getElementById('kardenwort-bootstrap');
+            el.textContent = JSON.stringify({json.dumps(sample_bootstrap)});
+            var ev = new Event('DOMContentLoaded');
+            document.dispatchEvent(ev);
+        }})();
+    """)
+
+    page.wait_for_selector("#lemma-table tbody tr[data-row-id='0']")
+
+    # 1. Inline editing on double-click (Task 6.1, R17)
+    dest_cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
+    assert "editable" in (dest_cell.get_attribute("class") or "")
+    dest_cell.dblclick()
+
+    input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input.cell-editor")
+    input_el.wait_for(state="visible", timeout=2000)
+    assert input_el.input_value() == "лиса"
+
+    # Tab navigation to next editable cell commits and opens next cell (Task 6.2, R17)
+    input_el.fill("рыжая лисица")
+    page.keyboard.press("Tab")
+
+    # Verify previous cell updated and marked dirty (Task 6.3, R17)
+    assert dest_cell.locator(".scrollable-cell").inner_text() == "рыжая лисица"
+    assert "dirty" in (dest_cell.get_attribute("class") or "")
+    assert page.evaluate("() => window.isDirty()") is True
+
+    # Save button is enabled
+    save_btn = page.locator("#kw-btn-save")
+    assert not save_btn.is_disabled()
+
+    # Cancel active edit opened by Tab via Escape
+    page.keyboard.press("Escape")
+
+    # 2. Undo edit via Ctrl+Z (Task 6.7, R35)
+    page.keyboard.press("Control+z")
+    assert dest_cell.locator(".scrollable-cell").inner_text() == "лиса"
+    assert page.evaluate("() => window.isDirty()") is False
+
+    # Redo edit via Ctrl+Y
+    page.keyboard.press("Control+y")
+    assert dest_cell.locator(".scrollable-cell").inner_text() == "рыжая лисица"
+    assert page.evaluate("() => window.isDirty()") is True
+
+    # 3. Save button execution and clearing dirty states (Task 6.4, R17)
+    save_btn.click()
+    page.wait_for_timeout(200)
+    assert page.evaluate("() => window.isDirty()") is False
+    assert "dirty" not in (dest_cell.get_attribute("class") or "")
+    assert save_btn.is_disabled()
+
+    # 4. Table keyboard navigation & row selection (Task 6.5, 6.6, R36, R37)
+    row0 = page.locator("tr[data-row-id='0']")
+    row1 = page.locator("tr[data-row-id='1']")
+
+    # Click row 0 toggles selection
+    row0.click()
+    assert "kw-row-selected" in (row0.get_attribute("class") or "")
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+
+    # ArrowDown navigates focus to row 1
+    page.keyboard.press("ArrowDown")
+    assert "focused-row" in (row1.get_attribute("class") or "")
+
+    # Space toggles selection on row 1
+    page.keyboard.press("Space")
+    assert "kw-row-selected" in (row1.get_attribute("class") or "")
+    assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
+
+    # Ctrl+A selects all rows
+    page.keyboard.press("Control+a")
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 2
+
+    # 5. Contiguous Shift+Click selection (Task 6.9, R49)
+    # Clear selections by clicking row 0 with Ctrl
+    page.evaluate("() => window.clearAllSelections()")
+    assert len(page.evaluate("() => window.getSelectedRowsArray()")) == 0
+
+    # Click row 0 then Shift+Click row 1 selects range 0..1
+    row0.click()
+    row1.click(modifiers=["Shift"])
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+    assert 1 in page.evaluate("() => window.getSelectedRowsArray()")
+
+
