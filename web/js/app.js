@@ -18,17 +18,52 @@
     var sseSource = null;
 
     function getSelectedRowIds() {
-        var checkboxes = document.querySelectorAll('.kw-tag-checkbox');
         var selected = [];
-        checkboxes.forEach(function (cb) {
-            if (cb.checked) {
-                var tOrd = cb.getAttribute('data-token-order');
-                var rId = cb.getAttribute('data-row-id');
-                selected.push(parseInt((tOrd !== null && tOrd !== '') ? tOrd : rId, 10));
+        var seen = {};
+
+        var checkedBoxes = document.querySelectorAll('.kw-tag-checkbox:checked');
+        checkedBoxes.forEach(function (cb) {
+            var rId = cb.getAttribute('data-row-id');
+            if (rId === null || rId === '') {
+                rId = cb.getAttribute('data-token-order');
+            }
+            if (rId !== null && rId !== '') {
+                var num = parseInt(rId, 10);
+                if (!isNaN(num) && !seen[num]) {
+                    seen[num] = true;
+                    selected.push(num);
+                }
             }
         });
+
+        var selectedRows = document.querySelectorAll('#lemma-table tbody tr.kw-row-selected, #lemma-table tbody tr.selected, #lemma-table tbody tr[data-selected="1"]');
+        selectedRows.forEach(function (row) {
+            var rId = row.getAttribute('data-row-id');
+            if (rId === null || rId === '') {
+                rId = row.getAttribute('data-token-order');
+            }
+            if (rId !== null && rId !== '') {
+                var num = parseInt(rId, 10);
+                if (!isNaN(num) && !seen[num]) {
+                    seen[num] = true;
+                    selected.push(num);
+                }
+            }
+        });
+
+        if (selected.length === 0 && window.AppState && Array.isArray(window.AppState.selected_ids)) {
+            window.AppState.selected_ids.forEach(function (id) {
+                var num = parseInt(id, 10);
+                if (!isNaN(num) && !seen[num]) {
+                    seen[num] = true;
+                    selected.push(num);
+                }
+            });
+        }
+
         return selected;
     }
+    window.getSelectedRowIds = getSelectedRowIds;
 
     function setStatusMessage(msg, isError) {
         var statusEl = document.getElementById('kw-interactive-status');
@@ -268,6 +303,15 @@
                 SERVER_URL = session.server_url;
             }
 
+            if (session.sentence_translation || session.translated_text) {
+                window.AppState.translatedText = session.sentence_translation || session.translated_text;
+                window.AppState.translated_text = window.AppState.translatedText;
+            }
+            if (session.source_text) {
+                window.AppState.sourceText = session.source_text;
+                window.AppState.source_text = session.source_text;
+            }
+
             // Hydrate Header
             var titleEl = document.getElementById('session-title');
             if (titleEl && SESSION_ZID) {
@@ -374,6 +418,17 @@
                 }
             }
 
+            // Invoke WorkspaceTabs.init() if multi-sentence session data is present (R9)
+            var cardList = (bootstrapPayload && bootstrapPayload.sentence_cards) || (sessionPayload && sessionPayload.sentence_cards) || (window.AppState && window.AppState.sentenceCards);
+            var cardScript = document.getElementById('sentence-cards');
+            var cardCount = (cardList && cardList.length) || (cardScript ? 2 : 0);
+            var isMultiMode = (bootstrapPayload && (bootstrapPayload.text_mode === 'multi')) || (sessionPayload && (sessionPayload.text_mode === 'multi'));
+            var hasMultiSentence = (cardCount > 1) || isMultiMode;
+
+            if (hasMultiSentence && window.WorkspaceTabs && typeof window.WorkspaceTabs.init === 'function') {
+                window.WorkspaceTabs.init();
+            }
+
             if (SERVER_ENABLED && SESSION_ZID) {
                 initSSE(SESSION_ZID);
             }
@@ -382,8 +437,171 @@
         }
     }
 
+    // WorkspaceTabs lifecycle callback pipeline exposed on window (R38)
+    window.clearMVPBookmarks = function () {
+        var cleared = false;
+        if (window.mvpBookmarks && window.mvpBookmarks.length > 0) {
+            cleared = true;
+            window.mvpBookmarks = [];
+        }
+        var pinned = document.querySelectorAll('.hl-mvp-pin, [class*="hl-mvp-pin-"], .hl-mvp-hover, .hl-mvp-active');
+        pinned.forEach(function (el) {
+            el.classList.remove('hl-mvp-pin', 'hl-mvp-hover', 'hl-mvp-active');
+            for (var k = 0; k < 8; k++) {
+                el.classList.remove('hl-mvp-pin-' + k);
+            }
+        });
+        if (typeof window.refreshBookmarkClasses === 'function') {
+            window.refreshBookmarkClasses();
+        }
+        return cleared;
+    };
+
+    window.refreshBookmarkClasses = function () {
+        var allSpans = document.querySelectorAll('#source-container span.word, #translation-container span.word, #translation-container span.hl-mvp');
+        allSpans.forEach(function (span) {
+            span.classList.remove('hl-mvp-pin');
+            for (var k = 0; k < 8; k++) {
+                span.classList.remove('hl-mvp-pin-' + k);
+            }
+        });
+        var allRows = document.querySelectorAll('#lemma-table tbody tr');
+        allRows.forEach(function (row) {
+            row.classList.remove('hl-mvp-pin');
+            for (var k = 0; k < 8; k++) {
+                row.classList.remove('hl-mvp-pin-' + k);
+            }
+        });
+
+        var bookmarks = window.mvpBookmarks || [];
+        bookmarks.forEach(function (b) {
+            if (b.srcSpan) {
+                b.srcSpan.classList.add('hl-mvp-pin');
+                if (b.slot !== undefined) b.srcSpan.classList.add('hl-mvp-pin-' + b.slot);
+            }
+            if (b.transSpan) {
+                b.transSpan.classList.add('hl-mvp-pin');
+                if (b.slot !== undefined) b.transSpan.classList.add('hl-mvp-pin-' + b.slot);
+            }
+            if (b.rowId !== undefined) {
+                var targetRow = document.querySelector('#lemma-table tbody tr[data-row-id="' + b.rowId + '"]');
+                if (targetRow) {
+                    targetRow.classList.add('hl-mvp-pin');
+                    if (b.slot !== undefined) targetRow.classList.add('hl-mvp-pin-' + b.slot);
+                }
+            }
+        });
+    };
+
+    window.updateRowStyles = function () {
+        window.AppState = window.AppState || {};
+        var selectedLemmas = window.AppState.selectedLemmas || {};
+        var selectedIds = window.AppState.selected_ids || [];
+
+        var rows = document.querySelectorAll('#lemma-table tbody tr');
+        rows.forEach(function (row) {
+            var rId = row.getAttribute('data-row-id');
+            var lemCell = row.querySelector('.col-lemma');
+            var lem = lemCell ? (lemCell.textContent || '').trim().toLowerCase() : '';
+            
+            var isSel = (lem && selectedLemmas[lem]) ||
+                        (rId !== null && selectedIds.indexOf(rId) !== -1) ||
+                        (rId !== null && selectedIds.indexOf(parseInt(rId, 10)) !== -1) ||
+                        row.getAttribute('data-selected') === '1' ||
+                        row.classList.contains('kw-row-selected');
+
+            if (isSel) {
+                row.classList.add('selected', 'kw-row-selected');
+                row.setAttribute('data-selected', '1');
+            } else {
+                row.classList.remove('selected', 'kw-row-selected');
+                row.setAttribute('data-selected', '0');
+            }
+        });
+
+        if (typeof window.updateToolbarState === 'function') {
+            window.updateToolbarState();
+        }
+        if (typeof window.updateEmptySelectionState === 'function') {
+            window.updateEmptySelectionState();
+        }
+    };
+
+    window.rebindTableRows = function () {
+        var rows = document.querySelectorAll('#lemma-table tbody tr');
+        rows.forEach(function (row) {
+            if (row.__kw_bound) return;
+            row.__kw_bound = true;
+
+            row.addEventListener('click', function (e) {
+                if (e.target && (e.target.tagName === 'INPUT' || e.target.isContentEditable)) return;
+                var rId = row.getAttribute('data-row-id');
+                var currentlySel = row.classList.contains('kw-row-selected') || row.getAttribute('data-selected') === '1';
+                var newSel = !currentlySel;
+
+                if (newSel) {
+                    row.classList.add('selected', 'kw-row-selected');
+                    row.setAttribute('data-selected', '1');
+                } else {
+                    row.classList.remove('selected', 'kw-row-selected');
+                    row.setAttribute('data-selected', '0');
+                }
+
+                var lemCell = row.querySelector('.col-lemma');
+                var lem = lemCell ? (lemCell.textContent || '').trim().toLowerCase() : '';
+                window.AppState = window.AppState || {};
+                window.AppState.selectedLemmas = window.AppState.selectedLemmas || {};
+                window.AppState.selected_ids = window.AppState.selected_ids || [];
+
+                if (lem) {
+                    if (newSel) window.AppState.selectedLemmas[lem] = true;
+                    else delete window.AppState.selectedLemmas[lem];
+                }
+
+                if (rId !== null) {
+                    var numId = parseInt(rId, 10);
+                    var strId = String(rId);
+                    if (newSel) {
+                        if (window.AppState.selected_ids.indexOf(strId) === -1 && window.AppState.selected_ids.indexOf(numId) === -1) {
+                            window.AppState.selected_ids.push(strId);
+                        }
+                    } else {
+                        window.AppState.selected_ids = window.AppState.selected_ids.filter(function (id) {
+                            return id !== strId && id !== numId;
+                        });
+                    }
+                }
+
+                if (typeof window.syncSelectionsToCardsAndState === 'function') {
+                    window.syncSelectionsToCardsAndState();
+                }
+                if (typeof window.updateRowStyles === 'function') {
+                    window.updateRowStyles();
+                }
+                if (typeof window.updateBidirectionalHighlights === 'function') {
+                    window.updateBidirectionalHighlights();
+                }
+            });
+        });
+
+        window.updateRowStyles();
+        if (typeof window.updateBidirectionalHighlights === 'function') {
+            window.updateBidirectionalHighlights();
+        }
+        if (typeof window.refreshBookmarkClasses === 'function') {
+            window.refreshBookmarkClasses();
+        }
+    };
+
     function init() {
         hydrateSession();
+        if (typeof window.rebindTableRows === 'function') {
+            window.rebindTableRows();
+        }
+        var hasMulti = !!document.getElementById('sentence-cards') || (window.AppState && window.AppState.sentenceCards && window.AppState.sentenceCards.length > 1);
+        if (hasMulti && window.WorkspaceTabs && typeof window.WorkspaceTabs.init === 'function') {
+            window.WorkspaceTabs.init();
+        }
     }
 
     if (document.readyState === 'loading') {
