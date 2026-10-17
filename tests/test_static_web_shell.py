@@ -276,3 +276,93 @@ def test_run_render_flow_contains_kardenwort_bootstrap(tmp_path):
     assert payload["zid"] == "20261014210000"
     assert payload["language"] == "de"
 
+
+def test_playwright_word_token_hover_click_delegation_and_translation_pipeline(page, test_server):
+    port = test_server
+
+    sample_bootstrap = {
+        "ui_config": {
+            "highlight_same_lemma": True,
+            "filter_selected_only": False,
+            "theme": "dark"
+        },
+        "sentence_cards": [
+            {
+                "seq_num": 1,
+                "selected_ids": [],
+                "words": [
+                    {"word": "Fuchs", "lemma": "Fuchs", "row_id": 0, "token_order": 0},
+                    {"word": "springt", "lemma": "springen", "row_id": 1, "token_order": 1}
+                ]
+            }
+        ],
+        "delivery_mode": "container",
+        "session_data": {
+            "zid": "20261017220000",
+            "session_zid": "20261017220000",
+            "language": "de",
+            "target_lang": "ru",
+            "source_text": "Ein schneller Fuchs springt über den Fuchs.",
+            "sentence_translation": "Быстрая лиса прыгает через лису.",
+            "headers": ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"],
+            "data_rows": [
+                ["Fuchs", "Fuchs", "n.", "лиса"],
+                ["springt", "springen", "v.", "прыгает"]
+            ],
+            "server_enabled": True,
+            "api_token": "bootstrap-token"
+        }
+    }
+
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    page.evaluate(f"""
+        (function() {{
+            var el = document.getElementById('kardenwort-bootstrap');
+            el.textContent = JSON.stringify({json.dumps(sample_bootstrap)});
+            var ev = new Event('DOMContentLoaded');
+            document.dispatchEvent(ev);
+        }})();
+    """)
+
+    page.wait_for_selector("#source-container span.word")
+    page.wait_for_selector("#translation-container span.word")
+
+    # 1. Verify translation tokens parsed into span.word.hl-mvp with data-word and data-order (R30, Task 5.4)
+    trans_spans = page.locator("#translation-container span.word.hl-mvp")
+    assert trans_spans.count() >= 4
+    first_trans = trans_spans.first
+    assert first_trans.get_attribute("data-word") is not None
+    assert first_trans.get_attribute("data-order") is not None
+
+    # 2. Hover over source word "springt" -> synchronizes .hl-mvp-hover on token and row 1 (R15, Task 5.1)
+    springt_span = page.locator('#source-container span.word:has-text("springt")').first
+    springt_span.hover()
+    assert "hl-mvp-hover" in (springt_span.get_attribute("class") or "")
+    springt_row = page.locator('#lemma-table tbody tr[data-row-id="1"]')
+    assert "hl-mvp-hover" in (springt_row.get_attribute("class") or "")
+
+    # 3. Mouse out clears .hl-mvp-hover from token and table row (R15, Task 5.3)
+    page.mouse.move(0, 0)
+    assert "hl-mvp-hover" not in (springt_span.get_attribute("class") or "")
+    assert "hl-mvp-hover" not in (springt_row.get_attribute("class") or "")
+
+    # 4. Same-lemma peer highlight (Task 5.1)
+    fuchs_first = page.locator('#source-container span.word:has-text("Fuchs")').first
+    fuchs_last = page.locator('#source-container span.word:has-text("Fuchs")').nth(1)
+    fuchs_first.hover()
+    assert "lemma-peer-highlight" in (fuchs_last.get_attribute("class") or "")
+
+    # 5. Token click cycles rainbow pin levels (hl-mvp-pin-0) and syncs tr.kw-row-selected (R15, Task 5.2)
+    fuchs_first.click()
+    assert "hl-mvp-pin" in (fuchs_first.get_attribute("class") or "")
+    assert "hl-mvp-pin-0" in (fuchs_first.get_attribute("class") or "")
+    fuchs_row = page.locator('#lemma-table tbody tr[data-row-id="0"]')
+    assert "kw-row-selected" in (fuchs_row.get_attribute("class") or "")
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+
+    # 6. Escape key clears bookmark pin while preserving table selection
+    page.keyboard.press("Escape")
+    assert "hl-mvp-pin" not in (fuchs_first.get_attribute("class") or "")
+    assert 0 in page.evaluate("() => window.getSelectedRowsArray()")
+
