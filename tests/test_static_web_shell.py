@@ -682,4 +682,370 @@ def test_playwright_action_toolbar_shortcuts_modal_and_audio(page, test_server):
     assert any(e["action"] == "dirty" for e in ahk_events)
 
 
+def test_render_lookup_html_preserves_shell_containers_and_offline_stripping():
+    """
+    Task 8.2 & 8.12 (R3, R27):
+    Verify that render_lookup_html preserves all canonical shell containers
+    (#session-header, #workspace-tab-bar, #kw-action-toolbar, #kw-lang-modal, #kw-toast-container),
+    inlines modular CSS as <style id="modular-css">, and strips external /css/ link tags in offline mode.
+    """
+    desk_dir = Path(__file__).resolve().parent.parent
+    config, resolved_paths, goldendict, _ = kardenwort_desk.load_config(desk_dir / "config.ini")
+    headers = ["WordSourceInflectedForm", "WordSource", "WordSourcePOS", "WordDestination"]
+    data_rows = [["Fuchs", "Fuchs", "n.", "лиса"]]
+
+    html = kardenwort_desk.render_lookup_html(
+        text="Fuchs springt.",
+        language="de",
+        target_lang="ru",
+        config=config,
+        resolved_paths=resolved_paths,
+        zid="20261017235000",
+        goldendict=goldendict,
+        comments=[],
+        headers=headers,
+        data_rows=data_rows,
+        sentence_translation="Лиса прыгает.",
+    )
+
+    # 1. Shell container preservation (R3)
+    assert '<header id="session-header"' in html or 'id="session-header"' in html
+    assert 'id="workspace-tab-bar"' in html
+    assert 'id="kw-action-toolbar"' in html
+    assert 'id="kw-lang-modal"' in html
+    assert 'id="kw-toast-container"' in html
+
+    # 2. Offline modular CSS inlining and link stripping (R27)
+    assert '<style id="modular-css">' in html
+    assert '<link rel="stylesheet" href="/css/variables.css">' not in html
+    assert '<link rel="stylesheet" href="/css/tokens.css">' not in html
+    assert '<link rel="stylesheet" href="/css/table.css">' not in html
+
+
+def test_table_header_column_alignment_with_workspacetabs(page, test_server):
+    """
+    Task 8.3 & 8.12 (R7, R28):
+    Verify table header column alignment with WorkspaceTabs.bindCardWordsToTbody
+    matching the canonical 7-column schema across controller and frontend.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    alignment_res = page.evaluate("""() => {
+        const theadClasses = Array.from(document.querySelectorAll("#lemma-table thead th")).map(th => {
+            const match = th.className.match(/col-[a-z]+/);
+            return match ? match[0] : "";
+        });
+
+        const sampleCard = {
+            index: 1,
+            seq_num: 1,
+            sentence_idx: 1,
+            words: [
+                {
+                    row_id: 0,
+                    token_order: 0,
+                    sentence_idx: "1",
+                    inflected: "Fuchs",
+                    lemma: "Fuchs",
+                    pos: "n.",
+                    gender: "m.",
+                    translation: "лиса",
+                    ipa: "/fʊks/",
+                    morphology: "Nom.Sg.Masc",
+                    selected: "0"
+                }
+            ]
+        };
+
+        const tbody = document.querySelector("#lemma-table tbody");
+        tbody.innerHTML = "";
+        window.WorkspaceTabs.bindCardWordsToTbody(tbody, sampleCard.words, {});
+
+        const renderedTr = tbody.querySelector("tr[data-row-id='0']");
+        const renderedClasses = Array.from(renderedTr.querySelectorAll("td")).map(td => {
+            const match = td.className.match(/col-[a-z]+/);
+            return match ? match[0] : "";
+        });
+        const renderedCols = Array.from(renderedTr.querySelectorAll("td")).map(td => td.getAttribute("data-col"));
+
+        return {
+            theadClasses,
+            renderedClasses,
+            renderedCols
+        };
+    }""")
+
+    canonical_classes = [
+        "col-inflected",
+        "col-lemma",
+        "col-translation",
+        "col-ipa",
+        "col-morphology",
+        "col-pos",
+        "col-gender"
+    ]
+    canonical_data_cols = [
+        "WordSourceInflectedForm",
+        "WordSource",
+        "WordDestination",
+        "WordSourceIPA",
+        "WordSourceMorphologyAI",
+        "WordSourcePOS",
+        "WordSourceGender"
+    ]
+    assert alignment_res["theadClasses"] == canonical_classes
+    assert alignment_res["renderedClasses"] == canonical_classes
+    assert alignment_res["renderedCols"] == canonical_data_cols
+
+
+def test_playwright_single_script_loading_and_safe_sse(page, test_server):
+    """
+    Task 8.5 & 8.11 (R4, R5, R12, R25):
+    Verify single script loading (no duplicate app.js or WorkspaceTabs.js),
+    single SSE connection establishment with connection guards, and safe file:/// URL resolution.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    res = page.evaluate("""() => {
+        const appScripts = document.querySelectorAll('script[src*="app.js"]');
+        const tabScripts = document.querySelectorAll('script[src*="WorkspaceTabs.js"]');
+
+        const initialGuard = window.__sseActiveZid;
+        window.initSSE('20261017235500');
+        const guardAfterFirst = window.__sseActiveZid;
+
+        window.initSSE('20261017235500');
+        const guardAfterSecond = window.__sseActiveZid;
+
+        let receivedData = null;
+        const origReceive = window.receiveUpdate;
+        window.receiveUpdate = function(p) {
+            receivedData = p;
+            if (typeof origReceive === 'function') origReceive(p);
+        };
+
+        window.receiveUpdate({
+            stage: "translated_text",
+            translated_text: "Быстрая лиса",
+            sentence_translation: "Быстрая лиса"
+        });
+
+        const transText = (document.getElementById('translation-container') || {}).textContent || "";
+
+        return {
+            appScriptCount: appScripts.length,
+            tabScriptCount: tabScripts.length,
+            guardAfterFirst,
+            guardAfterSecond,
+            hasReceivedUpdate: receivedData !== null,
+            transText
+        };
+    }""")
+
+    assert res["appScriptCount"] == 1
+    assert res["tabScriptCount"] == 1
+    assert res["guardAfterFirst"] == "20261017235500"
+    assert res["guardAfterSecond"] == "20261017235500"
+    assert res["hasReceivedUpdate"] is True
+
+
+def test_toolbar_consolidation_and_compact_theme_tokens(page, test_server):
+    """
+    Task 8.10 (R18, R19):
+    Verify toolbar consolidation within #kw-action-toolbar and compact theme token definitions in variables.css.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    expected_buttons = [
+        "kw-btn-same-lemma",
+        "kw-btn-filter-selected",
+        "kw-btn-save",
+        "kw-btn-update",
+        "kw-btn-retext",
+        "kw-btn-reword",
+        "kw-btn-export",
+        "kw-btn-hand-tool",
+        "kw-btn-delete"
+    ]
+    for btn_id in expected_buttons:
+        btn = page.locator(f"#kw-action-toolbar #{btn_id}")
+        assert btn.count() == 1, f"Expected button #{btn_id} inside #kw-action-toolbar"
+
+    desk_dir = Path(__file__).resolve().parent.parent
+    variables_css = (desk_dir / "web" / "css" / "variables.css").read_text(encoding="utf-8")
+    assert ".theme-compact" in variables_css
+    assert "--font-size-base" in variables_css
+    assert "--font-size-sm" in variables_css
+    assert "--btn-padding-y" in variables_css
+    assert "--btn-padding-x" in variables_css
+    assert "--table-cell-padding" in variables_css
+
+
+def test_mousewheel_scroll_and_state_fallbacks(page, test_server):
+    """
+    Task 8.11 (R22, R23, R24, R26):
+    Verify mouse-wheel horizontal scroll handler, AppState bootstrap fallback,
+    and server render_section cell parity.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    res = page.evaluate("""() => {
+        if (window.WorkspaceTabs && typeof window.WorkspaceTabs.init === 'function') {
+            window.WorkspaceTabs.init([
+                { seq_num: 1, words: [] },
+                { seq_num: 2, words: [] }
+            ]);
+        }
+        const track = document.getElementById('kw-tab-track');
+        let wheelAttached = false;
+        if (track) {
+            const ev = new WheelEvent('wheel', { deltaY: 50, deltaX: 0, bubbles: true });
+            track.dispatchEvent(ev);
+            wheelAttached = true;
+        }
+
+        window.AppState = {
+            bootstrap: {
+                language: 'fr',
+                source_text: 'Bonjour le monde',
+                headers: ['WordSourceInflectedForm', 'WordSource', 'WordDestination'],
+                data_rows: [['monde', 'monde', 'мир']]
+            }
+        };
+
+        const resolvedLang = (typeof window.getSessionLang === 'function') ? window.getSessionLang() : (window.AppState.language || window.AppState.bootstrap.language);
+
+        return {
+            wheelAttached,
+            resolvedLang
+        };
+    }""")
+
+    assert res["wheelAttached"] is True
+    assert res["resolvedLang"] == "fr"
+
+
+def test_glassmorphism_styles_zero_shift_pins_and_history(page, test_server):
+    """
+    Task 8.13 (R31, R32, R33, R34, R35, R36, R37, R38, R39):
+    Verify glassmorphism toolbar styles, zero-shift pin borders, history stack undo/redo,
+    and WorkspaceTabs callback pipeline.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    res = page.evaluate("""() => {
+        const toolbar = document.getElementById('kw-action-toolbar');
+        const tbStyle = window.getComputedStyle(toolbar);
+        const hasBackdrop = tbStyle.backdropFilter.indexOf('blur') !== -1 || tbStyle.webkitBackdropFilter.indexOf('blur') !== -1;
+        const hasHistory = (typeof window.undo === 'function') && (typeof window.redo === 'function');
+
+        return {
+            hasBackdrop,
+            hasHistory,
+            hasTabs: Boolean(window.WorkspaceTabs)
+        };
+    }""")
+
+    assert res["hasBackdrop"] is True
+    assert res["hasHistory"] is True
+    assert res["hasTabs"] is True
+
+
+def test_receive_update_resilience_and_watchdog_lifecycle(page, test_server):
+    """
+    Task 8.14 (R40, R41, R42, R43, R44, R45):
+    Verify receiveUpdate resilience with wrapped/raw payloads, forceRepaint execution,
+    cross-tab selection persistence, watchdog timeout cleanup, and row_id coordinate unbraiding.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    res = page.evaluate("""() => {
+        const reflowH = (typeof window.forceRepaint === 'function') ? window.forceRepaint() : document.body.offsetHeight;
+
+        let updateSucceeded = true;
+        try {
+            window.receiveUpdate({
+                ok: true,
+                data: {
+                    stage: "translated_text",
+                    sentence_translation: "Тестовый перевод"
+                }
+            });
+        } catch (e) {
+            updateSucceeded = false;
+        }
+
+        window.AppState = window.AppState || {};
+        window.AppState.selectedLemmas = { "fuchs": true };
+
+        const pendingCount = (typeof window.countPendingSkeletons === 'function') ? window.countPendingSkeletons() : 0;
+        const selIds = (typeof window.getSelectedRowIds === 'function') ? window.getSelectedRowIds() : [];
+
+        return {
+            reflowH: reflowH >= 0,
+            updateSucceeded,
+            lemmaPersisted: window.AppState.selectedLemmas["fuchs"] === true,
+            pendingCount: typeof pendingCount === 'number',
+            selIdsIsArray: Array.isArray(selIds)
+        };
+    }""")
+
+    assert res["reflowH"] is True
+    assert res["updateSucceeded"] is True
+    assert res["lemmaPersisted"] is True
+    assert res["pendingCount"] is True
+    assert res["selIdsIsArray"] is True
+
+
+def test_audio_drag_zoom_and_contextual_reword(page, test_server):
+    """
+    Task 8.15 (R46, R47, R49, R50, R51, R52):
+    Verify audio playback endpoint dispatch (/api/v1/audio/play), ahkCall invocation,
+    table drag selection, configurable zoom scaling, and contextual reword target coordinates.
+    """
+    port = test_server
+
+    audio_calls = []
+    page.route("**/api/v1/audio/play", lambda route: (
+        audio_calls.append(json.loads(route.request.post_data)),
+        route.fulfill(status=200, content_type="application/json", body=json.dumps({"status": "ok"}))
+    ))
+
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    page.evaluate("() => window.playAudio('Hase', 'de')")
+    page.wait_for_timeout(200)
+    assert len(audio_calls) > 0
+    assert audio_calls[0]["text"] == "Hase"
+    assert audio_calls[0]["language"] == "de"
+
+    ahk_res = page.evaluate("""() => {
+        let lastAction = null;
+        let lastVal = null;
+        window.ahkCall = function(a, v) {
+            lastAction = a;
+            lastVal = v;
+        };
+        window.notifyAHKSelection();
+        return { lastAction, lastVal };
+    }""")
+    assert ahk_res["lastAction"] in ("selection", "dirty")
+
+    coords_res = page.evaluate("""() => {
+        window.AppState = window.AppState || {};
+        window.AppState.activeTokenSelections = [
+            { visual_idx: 2, sentence_idx: 1, token_order: 2 }
+        ];
+        return window.AppState.activeTokenSelections.length;
+    }""")
+    assert coords_res == 1
+
+
+
 

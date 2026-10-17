@@ -447,17 +447,19 @@
             return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
         }
 
-        function init() {
+        function init(explicitCards) {
             var w = /** @type {any} */ (window);
-            if (w._kwWorkspaceTabsInitialized) {
+            if (w._kwWorkspaceTabsInitialized && !explicitCards) {
                 updateNavButtons();
                 return;
             }
             w._kwWorkspaceTabsInitialized = true;
 
             var scriptEl = document.getElementById('sentence-cards');
-            var cached = w._cachedSentenceCards;
-            if (scriptEl) {
+            var cached = explicitCards || w._cachedSentenceCards;
+            if (explicitCards && explicitCards.length > 0) {
+                cards = explicitCards;
+            } else if (scriptEl) {
                 try {
                     cards = (cached && cached.length > 0) ? cached : JSON.parse(scriptEl.textContent || scriptEl.innerText || '[]');
                 } catch(e) {

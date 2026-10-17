@@ -219,6 +219,7 @@
             if (window._kwEvtSource) {
                 try { window._kwEvtSource.close(); } catch (e) {}
                 window._kwEvtSource = null;
+                window.__sseActiveZid = null;
             }
             if (sseSource) {
                 try { sseSource.close(); } catch (e) {}
@@ -230,6 +231,7 @@
             var sseUrl = (base ? base : '') + '/events?zid=' + encodeURIComponent(sessionZid);
             sseSource = new EventSource(sseUrl);
             window._kwEvtSource = sseSource;
+            window.__sseActiveZid = sessionZid;
 
             sseSource.onopen = function () {
                 setSseStatus('connected');
@@ -273,6 +275,7 @@
             setSseStatus('error');
         }
     }
+    window.initSSE = initSSE;
 
     function hydrateSession() {
         var bootstrapEl = document.getElementById('kardenwort-bootstrap');

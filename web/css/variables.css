@@ -71,6 +71,9 @@
     --radius-sm: 3px;
     --radius-md: 4px;
     --radius-lg: 8px;
+    --btn-padding-y: 4px;
+    --btn-padding-x: 12px;
+    --table-cell-padding: 3px 6px;
 }
 
 .theme-light,
@@ -194,6 +197,12 @@
     --hl-rainbow-5: #0891b2;
     --hl-rainbow-6: #e11d48;
     --hl-rainbow-7: #7c3aed;
+
+    --font-size-base: 13px;
+    --font-size-sm: 12px;
+    --btn-padding-y: 2px;
+    --btn-padding-x: 8px;
+    --table-cell-padding: 2px 4px;
 }
 
 /* Invariant box sizing */

@@ -1209,3 +1209,83 @@ def test_word_span_layout_metrics_invariance_on_flip_and_hover(page, tmp_path):
     assert metrics_check["flippedBorderL"] in ("0px", "none"), "Border width non-zero on flipped"
     assert "rgb" in metrics_check["flippedBoxShadow"] or "inset" in metrics_check["flippedBoxShadow"], "Expected box-shadow on flipped"
 
+
+def test_playwright_computed_style_token_and_row_highlight_states(page, tmp_path):
+    """
+    Task 8.1 (R1, R2, R48):
+    Verify that unselected tokens and rows have transparent backgrounds,
+    .highlight-orange-active and selected rows display their respective highlight backgrounds,
+    and #translation-container span.word preserves padding: 0px (zero metric reflow).
+    """
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    source_text = "Fuchs springt."
+    tsv_content = (
+        "# comment\n"
+        "TokenOrder\tWordSource\tWordDestination\tSentenceSourceIndex\n"
+        "0\tFuchs\tЛиса\t1\n"
+        "1\tspringt\tпрыгает\t1\n"
+    )
+    tsv_file = tmp_path / "20261017234000-highlight-style-test.de.tsv"
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    html = kardenwort_desk.run_render_flow(
+        text=source_text,
+        language="de",
+        zid="20261017234000",
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+    )
+    bundled_css = kardenwort_desk.get_bundled_css()
+    if bundled_css:
+        html = html.replace("</head>", f"<style>{bundled_css}</style></head>")
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+
+    styles = page.evaluate("""() => {
+        const srcSpan = document.querySelector("#source-container span.word");
+        const transSpan = document.querySelector("#translation-container span.word");
+        const row = document.querySelector("#lemma-table tbody tr");
+
+        const unselectedSpanBg = window.getComputedStyle(srcSpan).backgroundColor;
+        const unselectedRowBg = window.getComputedStyle(row).backgroundColor;
+
+        // Apply .highlight-orange-active on token
+        srcSpan.style.transition = 'none';
+        srcSpan.classList.add('highlight-orange-active');
+        void srcSpan.offsetHeight;
+        const activeSpanBg = window.getComputedStyle(srcSpan).backgroundColor;
+
+        // Apply .kw-row-selected on row
+        row.classList.add('kw-row-selected');
+        const firstTd = row.querySelector('td') || row;
+        void firstTd.offsetHeight;
+        const selectedRowBg = window.getComputedStyle(firstTd).backgroundColor;
+
+        // Check translation container span padding
+        let transPadding = "0px";
+        if (transSpan) {
+            const transStyle = window.getComputedStyle(transSpan);
+            transPadding = transStyle.paddingTop + " " + transStyle.paddingRight + " " + transStyle.paddingBottom + " " + transStyle.paddingLeft;
+        }
+
+        return {
+            unselectedSpanBg,
+            unselectedRowBg,
+            activeSpanBg,
+            selectedRowBg,
+            transPadding
+        };
+    }""")
+
+    # Transparent background for unselected tokens and rows (rgba(0, 0, 0, 0))
+    assert styles["unselectedSpanBg"] in ("rgba(0, 0, 0, 0)", "transparent")
+    # Active span background displays highlight background (R1, R2)
+    assert styles["activeSpanBg"] == "rgba(255, 204, 0, 0.25)"
+    # Selected row background displays highlight background (R1, R2)
+    assert styles["selectedRowBg"] == "rgba(255, 204, 0, 0.15)"
+    # Translation token padding preserves 0px (zero displacement, R48)
+    assert styles["transPadding"] in ("0px 0px 0px 0px", "0px")
+
+
