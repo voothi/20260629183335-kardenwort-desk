@@ -50,22 +50,42 @@
 }
 
 .sse-status,
-#sse-status {
-    width: 8px;
-    height: 8px;
-    border-radius: 50%;
-    background-color: var(--text-muted, #8b949e);
-    display: inline-block;
-    transition: background-color 0.2s ease, box-shadow 0.2s ease;
+#sse-status,
+.kw-sse-status {
+    font-size: var(--font-size-xs, 11px);
+    font-weight: 400;
+    padding: 2px 8px;
+    border-radius: 12px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    background: rgba(139, 148, 158, 0.15);
+    color: var(--text-muted, #8b949e);
+    border: 1px solid var(--border-color, #30363d);
+    transition: background-color 0.2s ease, border-color 0.2s ease, box-shadow 0.2s ease;
 }
 
-.sse-status.connected {
-    background-color: var(--status-success, #3fb950);
-    box-shadow: 0 0 6px var(--status-success, #3fb950);
+.sse-status.connected,
+.kw-sse-status.kw-status-connected {
+    background: rgba(63, 185, 80, 0.15);
+    color: var(--status-success, #3fb950);
+    border-color: rgba(63, 185, 80, 0.4);
+    box-shadow: 0 0 6px rgba(63, 185, 80, 0.25);
 }
 
-.sse-status.error {
-    background-color: var(--status-error, #f85149);
+.sse-status.reconnecting,
+.kw-sse-status.kw-status-reconnecting {
+    background: rgba(210, 153, 34, 0.15);
+    color: #d29922;
+    border-color: rgba(210, 153, 34, 0.4);
+}
+
+.sse-status.error,
+.kw-sse-status.kw-status-disconnected,
+.kw-sse-status.kw-status-error {
+    background: rgba(248, 81, 73, 0.15);
+    color: var(--status-error, #f85149);
+    border-color: rgba(248, 81, 73, 0.4);
 }
 
 /* Sections */

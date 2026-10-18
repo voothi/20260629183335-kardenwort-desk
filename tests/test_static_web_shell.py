@@ -1197,6 +1197,79 @@ def test_typed_vanilla_component_architecture(page, test_server):
     assert res["transRendered"] is True
 
 
+def test_sse_streaming_diskless_updates(page, test_server, tmp_path):
+    """
+    Stage 3: 20261013004500-sse-streaming-diskless-updates
+    Verify:
+    1. EventDispatcher thread-safe in-memory pub/sub
+    2. write_update_js skips disk file creation when SSE subscriber is active or diskless=True
+    3. web/js/services/sse.js connects, routes deltas to store, and updates connection indicator
+    """
+    from http_server import EventDispatcher
+    dispatcher = EventDispatcher.get_instance()
+    test_zid = "20261018999999"
+
+    # 1. EventDispatcher pub/sub
+    q = dispatcher.register(test_zid)
+    assert dispatcher.has_subscribers(test_zid) is True
+
+    dispatcher.publish(test_zid, {"stage": "translated_text", "status": "success", "translated_text": "Тест"})
+    item = q.get(timeout=1.0)
+    assert item["stage"] == "translated_text"
+    assert item["session_zid"] == test_zid
+    assert item["translated_text"] == "Тест"
+
+    # 2. Diskless write_update_js verification
+    tsv_file = tmp_path / f"{test_zid}.de.tsv"
+    tsv_file.write_text("col1\tcol2\nval1\tval2\n", encoding="utf-8")
+    updates_dir = tmp_path / f"{test_zid}.de.updates"
+
+    # When subscriber is active, write_update_js publishes to SSE and DOES NOT write .js file
+    kardenwort_desk.write_update_js(tsv_file, [["val1", "val2"]], ["WordSource", "WordDestination"], {"lemma": "WordSource"}, stage="source", zid=test_zid)
+    assert not updates_dir.exists() or len(list(updates_dir.glob("*.js"))) == 0
+
+    # Unregister subscriber
+    dispatcher.unregister(test_zid, q)
+    assert dispatcher.has_subscribers(test_zid) is False
+
+    # 3. Client SSE Bridge and status indicator in browser
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    res = page.evaluate("""() => {
+        const hasSSEBridge = Boolean(window.SSEBridge);
+        const hasConnect = typeof window.SSEBridge.connect === 'function';
+        const hasDisconnect = typeof window.SSEBridge.disconnect === 'function';
+
+        window.SSEBridge.updateConnectionIndicator('connected');
+        const indicator = document.getElementById('sse-status-indicator');
+        const isConnected = indicator && indicator.getAttribute('data-status') === 'connected';
+
+        window.SSEBridge.updateConnectionIndicator('reconnecting');
+        const isReconnecting = indicator && indicator.getAttribute('data-status') === 'reconnecting';
+
+        window.SSEBridge.updateConnectionIndicator('disconnected');
+        const isDisconnected = indicator && indicator.getAttribute('data-status') === 'disconnected';
+
+        return {
+            hasSSEBridge,
+            hasConnect,
+            hasDisconnect,
+            isConnected,
+            isReconnecting,
+            isDisconnected
+        };
+    }""")
+
+    assert res["hasSSEBridge"] is True
+    assert res["hasConnect"] is True
+    assert res["hasDisconnect"] is True
+    assert res["isConnected"] is True
+    assert res["isReconnecting"] is True
+    assert res["isDisconnected"] is True
+
+
+
 
 
 

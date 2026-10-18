@@ -25836,6 +25836,21 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     if active_ap:
         update_data["active_provider"] = active_ap
 
+    # Task 1.3 & 3.1: Publish to in-memory EventDispatcher for active SSE subscribers
+    try:
+        from http_server import EventDispatcher
+        dispatcher = EventDispatcher.get_instance()
+        if zid:
+            dispatcher.publish(zid, update_data)
+        has_sse_subscribers = dispatcher.has_subscribers(zid) if zid else False
+    except Exception:
+        has_sse_subscribers = False
+
+    # Task 3.1: Deprecate disk update file creation when SSE client is active or diskless mode is requested
+    is_diskless = bool(extra_kwargs.get("diskless") or (config and config.getboolean("server", "diskless_updates", fallback=False)))
+    if has_sse_subscribers or is_diskless:
+        return update_js_path
+
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
     
     temp_path = update_js_path.with_name(update_js_path.name + '.tmp')

@@ -45,6 +45,65 @@ STATIC_WEB_DIR = Path(__file__).resolve().parent / "web"
 STATIC_JS_DIR = STATIC_WEB_DIR / "js"
 STATIC_CSS_DIR = STATIC_WEB_DIR / "css"
 
+import queue
+import threading
+from typing import Dict, List, Any, Optional
+
+class EventDispatcher:
+    """
+    Thread-safe Server-Sent Events (SSE) dispatcher for session-scoped in-memory streams.
+    Manages subscriber queues without requiring disk-based update files.
+    """
+    _instance: Optional["EventDispatcher"] = None
+    _singleton_lock = threading.Lock()
+
+    def __init__(self):
+        self._subscribers: Dict[str, List[queue.Queue]] = {}
+        self._lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls) -> "EventDispatcher":
+        with cls._singleton_lock:
+            if cls._instance is None:
+                cls._instance = EventDispatcher()
+            return cls._instance
+
+    def register(self, session_zid: str) -> queue.Queue:
+        q = queue.Queue(maxsize=1000)
+        with self._lock:
+            if session_zid not in self._subscribers:
+                self._subscribers[session_zid] = []
+            self._subscribers[session_zid].append(q)
+        return q
+
+    def unregister(self, session_zid: str, q: queue.Queue):
+        with self._lock:
+            if session_zid in self._subscribers:
+                try:
+                    self._subscribers[session_zid].remove(q)
+                    if not self._subscribers[session_zid]:
+                        del self._subscribers[session_zid]
+                except ValueError:
+                    pass
+
+    def has_subscribers(self, session_zid: str) -> bool:
+        with self._lock:
+            return bool(self._subscribers.get(session_zid))
+
+    def publish(self, session_zid: str, event_data: Dict[str, Any]):
+        payload = dict(event_data)
+        from datetime import datetime, timezone
+        if "timestamp" not in payload:
+            payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+        payload["session_zid"] = session_zid
+        with self._lock:
+            queues = list(self._subscribers.get(session_zid, []))
+        for q in queues:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                pass
+
 # Backward-compatibility alias
 APIRequestHandler = ControllerRequestHandler
 

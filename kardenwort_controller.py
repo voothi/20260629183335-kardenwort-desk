@@ -1671,6 +1671,12 @@ class SessionArbiter:
             except queue.Full:
                 pass
 
+        try:
+            from http_server import EventDispatcher
+            EventDispatcher.get_instance().publish(session_zid, event_payload)
+        except Exception:
+            pass
+
     def create_session(
         self,
         text: str,
@@ -3387,8 +3393,18 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_sse_events(self, zid: str):
         """Streams Server-Sent Events (SSE) for the specified session ZID."""
-        arbiter: SessionArbiter = self.server.arbiter
-        q = arbiter.register_subscriber(zid)
+        arbiter = getattr(self.server, 'arbiter', None)
+        try:
+            from http_server import EventDispatcher
+            dispatcher = EventDispatcher.get_instance()
+        except Exception:
+            dispatcher = None
+
+        q = None
+        if arbiter:
+            q = arbiter.register_subscriber(zid)
+        elif dispatcher:
+            q = dispatcher.register(zid)
 
         self.send_response(200)
         self._send_cors_headers()
@@ -3405,7 +3421,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         try:
             while True:
                 try:
-                    event = q.get(timeout=10.0)
+                    event = q.get(timeout=10.0) if q else queue.Queue().get(timeout=10.0)
                     msg = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     self.wfile.write(msg.encode('utf-8'))
                     self.wfile.flush()
@@ -3416,7 +3432,10 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         except (socket.error, ConnectionResetError, BrokenPipeError):
             pass
         finally:
-            arbiter.unregister_subscriber(zid, q)
+            if arbiter and q:
+                arbiter.unregister_subscriber(zid, q)
+            elif dispatcher and q:
+                dispatcher.unregister(zid, q)
 
     def _dispatch_route(self, method: str):
         parsed_url = urllib.parse.urlparse(self.path)
@@ -3478,12 +3497,12 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             return
 
         # 2. Server-Sent Events (SSE) Stream
-        if path == '/events':
+        if path in ('/events', '/api/v1/events'):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
-            zid = qs.get('zid', [''])[0]
+            zid = qs.get('session', [''])[0] or qs.get('zid', [''])[0]
             if not zid:
-                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'zid' query parameter for SSE stream")
+                raise StructuredError(ErrorCode.MISSING_FIELD, "Missing required 'session' or 'zid' query parameter for SSE stream")
             self._handle_sse_events(zid)
             return
 
