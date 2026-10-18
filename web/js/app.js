@@ -1036,15 +1036,7 @@
         }
         return false;
     }
-    function escapeHtml(str) {
-        if (!str) return '';
-        return str
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
-    }
+
 
     function formatProviderSkeletonLabel(providerName) {
         if (!providerName) return "Loading...";
@@ -1692,241 +1684,7 @@
     }
     window.refreshBookmarkClasses = refreshBookmarkClasses;
 
-    function tokenizeText(text) {
-        var rx = /([a-zA-Z0-9'\u00C0-\u024F\u0400-\u04FF\u0500-\u052F\u1E00-\u1EFF]+)/g;
-        return text.split(rx);
-    }
 
-    function tokenizeTranslation() {
-        var tc = document.getElementById('translation-container');
-        if (!tc) return;
-        if (tc.querySelector('[data-pending="true"]') || tc.querySelector('.skeleton-loader') || tc.classList.contains('skeleton-loader')) {
-            return;
-        }
-
-        var sc = document.getElementById('source-container');
-        var maxSourceSent = 1;
-        if (sc) {
-            var scChunks = sc.querySelectorAll('.kw-sentence-chunk, span.word[data-sentence-idx]');
-            for (var scIdx = 0; scIdx < scChunks.length; scIdx++) {
-                var sVal = parseInt(scChunks[scIdx].getAttribute('data-sentence-idx'), 10);
-                if (!isNaN(sVal) && sVal > maxSourceSent) maxSourceSent = sVal;
-            }
-        }
-        if (maxSourceSent === 1 && window._kwSentenceCards && window._kwSentenceCards.length > 1) {
-            maxSourceSent = window._kwSentenceCards.length - 1;
-        }
-        var isSingleChildTab = (tc.getAttribute('data-sentence-idx') && parseInt(tc.getAttribute('data-sentence-idx'), 10) > 0);
-        var hasMultiSent = (!isSingleChildTab && maxSourceSent > 1);
-
-        var divs = tc.getElementsByTagName('div');
-        if (divs.length === 0) {
-            var tcSentIdx = tc.getAttribute('data-sentence-idx') || '1';
-            var tcLineIdx = tc.getAttribute('data-line-idx') || '0';
-            var firstChild = tc.firstChild;
-            if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
-                var childSpans = tc.getElementsByTagName('span');
-                for (var j = 0; j < childSpans.length; j++) {
-                    var span = childSpans[j];
-                    if (span.classList && span.classList.contains('word')) {
-                        if (!span.classList.contains('hl-mvp')) addClass(span, 'hl-mvp');
-                        if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', tcLineIdx);
-                        if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', tcSentIdx);
-                        if (!span.getAttribute('data-word')) span.setAttribute('data-word', (span.textContent || '').trim());
-                        if (!span.getAttribute('data-order')) span.setAttribute('data-order', String(j));
-                    }
-                }
-            } else {
-                var text = tc.textContent || tc.innerText || '';
-                var parts = tokenizeText(text);
-                var html = '';
-                var curSent = hasMultiSent ? 1 : parseInt(tcSentIdx, 10) || 1;
-                var wordCounter = 0;
-                for (var k = 0; k < parts.length; k++) {
-                    var part = parts[k];
-                    if (!part) continue;
-                    if (k % 2 === 1) {
-                        var lc = part.toLowerCase();
-                        html += '<span class="word hl-mvp" data-word="' + escapeHtml(part) + '" data-order="' + wordCounter + '" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + escapeHtml(tcLineIdx) + '" data-sentence-idx="' + curSent + '">' + escapeHtml(part) + '</span>';
-                        wordCounter++;
-                    } else {
-                        if (hasMultiSent && (/[.!?]/.test(part) || part.indexOf(String.fromCharCode(10)) !== -1 || part.indexOf(String.fromCharCode(13)) !== -1)) {
-                            if (curSent < maxSourceSent) curSent++;
-                        }
-                        html += escapeHtml(part);
-                    }
-                }
-                tc.innerHTML = html;
-            }
-        } else if (divs.length === 1 && hasMultiSent) {
-            var div = divs[0];
-            var firstChild = div.firstChild;
-            if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
-                var childSpans = div.getElementsByTagName('span');
-                for (var j = 0; j < childSpans.length; j++) {
-                    var span = childSpans[j];
-                    if (span.classList && span.classList.contains('word')) {
-                        if (!span.classList.contains('hl-mvp')) addClass(span, 'hl-mvp');
-                        if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', '0');
-                        if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', '1');
-                        if (!span.getAttribute('data-word')) span.setAttribute('data-word', (span.textContent || '').trim());
-                        if (!span.getAttribute('data-order')) span.setAttribute('data-order', String(j));
-                    }
-                }
-            } else {
-                var text = div.textContent || div.innerText || '';
-                var parts = tokenizeText(text);
-                var html = '';
-                var curSent = 1;
-                var wordCounter = 0;
-                for (var k = 0; k < parts.length; k++) {
-                    var part = parts[k];
-                    if (!part) continue;
-                    if (k % 2 === 1) {
-                        var lc = part.toLowerCase();
-                        html += '<span class="word hl-mvp" data-word="' + escapeHtml(part) + '" data-order="' + wordCounter + '" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="0" data-sentence-idx="' + curSent + '">' + escapeHtml(part) + '</span>';
-                        wordCounter++;
-                    } else {
-                        if (hasMultiSent && (/[.!?]/.test(part) || part.indexOf(String.fromCharCode(10)) !== -1 || part.indexOf(String.fromCharCode(13)) !== -1)) {
-                            if (curSent < maxSourceSent) curSent++;
-                        }
-                        html += escapeHtml(part);
-                    }
-                }
-                div.innerHTML = html;
-            }
-        } else {
-            for (var i = 0; i < divs.length; i++) {
-                var div = divs[i];
-                var divSentIdx = div.getAttribute('data-sentence-idx') || String(i + 1);
-                div.setAttribute('data-sentence-idx', divSentIdx);
-                div.setAttribute('data-line-idx', String(i));
-                var firstChild = div.firstChild;
-                if (firstChild && firstChild.nodeType === 1 && firstChild.tagName === 'SPAN' && firstChild.classList && firstChild.classList.contains('word')) {
-                    var childSpans = div.getElementsByTagName('span');
-                    for (var j = 0; j < childSpans.length; j++) {
-                        var span = childSpans[j];
-                        if (span.classList && span.classList.contains('word')) {
-                            if (!span.classList.contains('hl-mvp')) addClass(span, 'hl-mvp');
-                            if (!span.getAttribute('data-line-idx')) span.setAttribute('data-line-idx', String(i));
-                            if (!span.getAttribute('data-sentence-idx')) span.setAttribute('data-sentence-idx', divSentIdx);
-                            if (!span.getAttribute('data-word')) span.setAttribute('data-word', (span.textContent || '').trim());
-                            if (!span.getAttribute('data-order')) span.setAttribute('data-order', String(j));
-                        }
-                    }
-                } else {
-                    var text = div.textContent || div.innerText || '';
-                    var parts = tokenizeText(text);
-                    var html = '';
-                    var wordCounter = 0;
-                    for (var k = 0; k < parts.length; k++) {
-                        var part = parts[k];
-                        if (!part) continue;
-                        if (k % 2 === 1) {
-                            var lc = part.toLowerCase();
-                            html += '<span class="word hl-mvp" data-word="' + escapeHtml(part) + '" data-order="' + wordCounter + '" data-lower-clean="' + escapeHtml(lc) + '" data-line-idx="' + i + '" data-sentence-idx="' + escapeHtml(divSentIdx) + '">' + escapeHtml(part) + '</span>';
-                            wordCounter++;
-                        } else {
-                            html += escapeHtml(part);
-                        }
-                    }
-                    div.innerHTML = html;
-                }
-            }
-        }
-        var effProv = (window.AppState ? (window.AppState.textProvenance || window.AppState.text_provenance || window.AppState.provenance) : null) || tc.getAttribute('data-provenance');
-        if (!effProv) {
-            var provScript = document.getElementById('sentence-provenance');
-            if (provScript) {
-                var sProv = (provScript.textContent || provScript.innerText || '').trim();
-                if (sProv) effProv = sProv;
-            }
-        }
-        if (!effProv && window.AppState && window.AppState.translatedText && !window.AppState.textTranslationFailed) {
-            var provEl = document.getElementById('text-base-provider');
-            var baseProv = provEl ? (provEl.textContent || provEl.innerText || '').trim() : 'google';
-            effProv = 'live:' + (baseProv || 'google');
-        }
-        if (effProv) {
-            var pTitle = formatProvenanceTooltip(effProv);
-            if (pTitle) {
-                tc.setAttribute('data-provenance', effProv);
-                tc.setAttribute('title', pTitle);
-                var spans = tc.getElementsByTagName('span');
-                for (var sIdx = 0; sIdx < spans.length; sIdx++) {
-                    if (spans[sIdx].classList && spans[sIdx].classList.contains('word')) {
-                        spans[sIdx].setAttribute('data-provenance', effProv);
-                        spans[sIdx].setAttribute('title', pTitle);
-                    }
-                }
-            }
-        }
-        buildLcIndex();
-        if (typeof wireMvpEvents === 'function') {
-            wireMvpEvents();
-        }
-        window.tokenizeTranslation = tokenizeTranslation;
-        window.buildLcIndex = buildLcIndex;
-        window.wireMvpEvents = wireMvpEvents;
-    }
-    window.tokenizeTranslation = tokenizeTranslation;
-    window.buildLcIndex = buildLcIndex;
-    window.wireMvpEvents = wireMvpEvents;
-
-    function buildLcIndex() {
-        sourceSpansArray = [];
-        transSpansArray = [];
-        var sc = document.getElementById('source-container');
-        if (sc) {
-            var srcSpans = sc.getElementsByTagName('span');
-            if (srcSpans.length > 0) isMvpIndexBuilt = true;
-            for (var i = 0; i < srcSpans.length; i++) {
-                var span = srcSpans[i];
-                if (span.classList && span.classList.contains('word')) {
-                    var chunk = span.closest ? span.closest('.kw-sentence-chunk') : span.parentElement;
-                    if (chunk && chunk.classList && chunk.classList.contains('kw-sentence-chunk') && chunk.style && chunk.style.display === 'none') {
-                        continue;
-                    }
-                    span.setAttribute('data-mvp-idx', String(sourceSpansArray.length));
-                    span.setAttribute('data-mvp-type', 'source');
-                    var sentIdx = span.getAttribute('data-sentence-idx');
-                    if (!sentIdx && chunk && chunk.getAttribute) {
-                        sentIdx = chunk.getAttribute('data-sentence-idx');
-                        if (sentIdx) span.setAttribute('data-sentence-idx', sentIdx);
-                    }
-                    sourceSpansArray.push(span);
-                }
-            }
-        }
-        var tc = document.getElementById('translation-container');
-        if (tc) {
-            var tcSentIdx = tc.getAttribute('data-sentence-idx');
-            var transSpans = tc.getElementsByTagName('span');
-            for (var j = 0; j < transSpans.length; j++) {
-                var span = transSpans[j];
-                if (span.classList && span.classList.contains('hl-mvp')) {
-                    var chunk = span.closest ? span.closest('div') : span.parentElement;
-                    if (chunk && chunk.style && chunk.style.display === 'none') {
-                        continue;
-                    }
-                    span.setAttribute('data-mvp-idx', String(transSpansArray.length));
-                    span.setAttribute('data-mvp-type', 'trans');
-                    var spanSentIdx = span.getAttribute('data-sentence-idx');
-                    if (!spanSentIdx) {
-                        if (chunk && chunk.getAttribute && chunk.getAttribute('data-sentence-idx')) {
-                            spanSentIdx = chunk.getAttribute('data-sentence-idx');
-                        } else if (tcSentIdx) {
-                            spanSentIdx = tcSentIdx;
-                        }
-                        if (spanSentIdx) {
-                            span.setAttribute('data-sentence-idx', spanSentIdx);
-                        }
-                    }
-                    transSpansArray.push(span);
-                }
-            }
-        }
-    }
 
     function getTargetIdx(idx, isSource) {
         var sourceArray = isSource ? sourceSpansArray : transSpansArray;
@@ -2254,6 +2012,7 @@
             }
         }
     }
+    window.wireMvpEvents = wireMvpEvents;
 
     function isTokenPinnedInMVP(span) {
         if (!span || !mvpBookmarks || mvpBookmarks.length === 0) return false;
@@ -8655,12 +8414,27 @@
         function getDeliveryMode() {
             var el = document.getElementById('delivery-mode');
             if (el) {
-                var txt = (el.textContent || el.innerText || "").trim();
-                if (txt) return txt;
+                var t = (el.textContent || el.innerText || '').trim();
+                if (t) return t.toLowerCase();
             }
-            if (window.AppState && window.AppState.deliveryMode) return window.AppState.deliveryMode;
-            if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.delivery_mode) return window.AppState.bootstrap.delivery_mode;
-            return "";
+            if (window.AppState && window.AppState.deliveryMode) return String(window.AppState.deliveryMode).toLowerCase();
+            if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.delivery_mode) return String(window.AppState.bootstrap.delivery_mode).toLowerCase();
+            var bootEl = document.getElementById('kardenwort-bootstrap');
+            if (bootEl) {
+                try {
+                    var b = JSON.parse(bootEl.textContent || '{}');
+                    if (b && b.delivery_mode) return String(b.delivery_mode).toLowerCase();
+                } catch(e) {
+                    console.error('[getDeliveryMode] Malformed bootstrap JSON:', e);
+                }
+            }
+            var legacyEl = document.getElementById('web-tab-mode');
+            if (legacyEl) {
+                var lt = (legacyEl.textContent || legacyEl.innerText || '').trim().toLowerCase();
+                if (lt === 'tabs') return 'multi_window';
+                if (lt === 'container') return 'container';
+            }
+            return 'container';
         }
 
         function getSessionZid() {
@@ -9673,29 +9447,7 @@
             return results;
         }
 
-        function getDeliveryMode() {
-            var el = document.getElementById('delivery-mode');
-            if (el) {
-                var t = (el.textContent || el.innerText || '').trim();
-                if (t) return t.toLowerCase();
-            }
-            if (window.AppState && window.AppState.deliveryMode) return String(window.AppState.deliveryMode).toLowerCase();
-            if (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.delivery_mode) return String(window.AppState.bootstrap.delivery_mode).toLowerCase();
-            var bootEl = document.getElementById('kardenwort-bootstrap');
-            if (bootEl) {
-                try {
-                    var b = JSON.parse(bootEl.textContent || '{}');
-                    if (b && b.delivery_mode) return String(b.delivery_mode).toLowerCase();
-                } catch(e) {}
-            }
-            var legacyEl = document.getElementById('web-tab-mode');
-            if (legacyEl) {
-                var lt = (legacyEl.textContent || legacyEl.innerText || '').trim().toLowerCase();
-                if (lt === 'tabs') return 'multi_window';
-                if (lt === 'container') return 'container';
-            }
-            return 'container';
-        }
+
 
         function getWebTabMode() {
             return getDeliveryMode() === 'container' ? 'container' : 'tabs';
