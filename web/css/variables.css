@@ -13,7 +13,7 @@
     --text-muted: #8b949e;
     --text-color: #e3e6eb;
     --bg-color: #0d0f12;
-    --section-bg: #161a22;
+    --section-bg: rgba(255, 255, 255, 0.03);
     --section-border: rgba(255, 255, 255, 0.1);
     --table-border: rgba(255, 255, 255, 0.05);
     --table-th-border: rgba(255, 255, 255, 0.1);

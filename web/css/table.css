@@ -91,9 +91,14 @@
 /* Sections */
 .section,
 .kw-section {
+    background: var(--section-bg, rgba(255, 255, 255, 0.03));
+    border: 1px solid var(--section-border, rgba(255, 255, 255, 0.1));
+    border-radius: 4px;
+    padding: 14px 16px;
+    margin-bottom: 12px;
+    box-sizing: border-box;
     width: 100%;
     max-width: 100%;
-    box-sizing: border-box;
 }
 
 /* Source & Translation Containers */
@@ -119,6 +124,7 @@
     margin-top: 8px;
 }
 
+#lemma-table,
 .kw-lemmas-table,
 .lemma-table {
     width: 100%;
@@ -126,27 +132,34 @@
     font-size: var(--font-size-base, 14px);
 }
 
+#lemma-table th,
 .kw-lemmas-table th {
-    background: var(--bg-card);
-    color: var(--text-muted);
-    font-size: var(--font-size-xs, 12px);
+    background: transparent;
+    color: var(--text-muted, #8b949e);
+    font-size: 11px;
     font-weight: 600;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.5px;
     text-align: left;
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-color);
+    padding: 8px 8px;
+    border-bottom: 1px solid var(--table-th-border, rgba(255, 255, 255, 0.1));
+    user-select: none;
+    -webkit-user-select: none;
     position: sticky;
     top: 0;
     z-index: 2;
 }
 
+#lemma-table td,
 .kw-lemmas-table td {
-    padding: 8px 12px;
-    border-bottom: 1px solid var(--border-subtle);
-    color: var(--text-main);
+    padding: 8px 8px;
+    border-bottom: 1px solid var(--table-border, rgba(255, 255, 255, 0.05));
+    color: var(--text-main, #e3e6eb);
+    box-sizing: border-box;
+    vertical-align: middle;
 }
 
+#lemma-table tr:last-child td,
 .kw-lemmas-table tr:last-child td {
     border-bottom: none;
 }
