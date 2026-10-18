@@ -1047,5 +1047,66 @@ def test_audio_drag_zoom_and_contextual_reword(page, test_server):
     assert coords_res == 1
 
 
+def test_unslop_code_hygiene_and_contract_hardening(page, test_server):
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    # 1. Canonical escapeHtml exposed on window
+    escaped = page.evaluate("() => window.escapeHtml('<script>alert(1)</script>')")
+    assert escaped == "&lt;script&gt;alert(1)&lt;/script&gt;"
+
+    # 2. WorkspaceTabs exports syncSelectionsToCardsAndState
+    has_sync = page.evaluate("() => typeof window.WorkspaceTabs.syncSelectionsToCardsAndState === 'function'")
+    assert has_sync is True
+
+    # 3. Active tab chip and action toolbar button font-weight box metric invariance (font-weight: 400)
+    chip_weight = page.evaluate("""() => {
+        const chip = document.createElement('div');
+        chip.className = 'kw-tab-chip active';
+        chip.textContent = '[2]';
+        document.body.appendChild(chip);
+        const weight = window.getComputedStyle(chip).fontWeight;
+        chip.remove();
+        return weight;
+    }""")
+    assert chip_weight in ('400', 'normal')
+
+    btn_weight = page.evaluate("""() => {
+        const toolbar = document.getElementById('kw-action-toolbar');
+        const btn = document.getElementById('kw-btn-same-lemma');
+        btn.classList.add('active');
+        const weight = window.getComputedStyle(btn).fontWeight;
+        btn.classList.remove('active');
+        return weight;
+    }""")
+    assert btn_weight in ('400', 'normal')
+
+    # 4. Fail-fast error throwing on malformed #kardenwort-bootstrap JSON
+    error_thrown = page.evaluate("""() => {
+        let bootEl = document.getElementById('kardenwort-bootstrap');
+        let created = false;
+        if (!bootEl) {
+            bootEl = document.createElement('script');
+            bootEl.id = 'kardenwort-bootstrap';
+            bootEl.type = 'application/json';
+            document.body.appendChild(bootEl);
+            created = true;
+        }
+        const orig = bootEl.textContent;
+        bootEl.textContent = '{ invalid json }}}';
+        try {
+            window.hydrateSession();
+            if (created) bootEl.remove();
+            else bootEl.textContent = orig;
+            return false;
+        } catch (e) {
+            if (created) bootEl.remove();
+            else bootEl.textContent = orig;
+            return e.message.indexOf('Malformed #kardenwort-bootstrap JSON') !== -1;
+        }
+    }""")
+    assert error_thrown is True
+
+
 
 

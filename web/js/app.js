@@ -217,12 +217,12 @@
         try {
             // R5, Task 7.5: Active connection guard: only single EventSource per session
             if (window._kwEvtSource) {
-                try { window._kwEvtSource.close(); } catch (e) {}
+                try { window._kwEvtSource.close(); } catch (e) { console.warn('[Kardenwort] Error closing active EventSource:', e); }
                 window._kwEvtSource = null;
                 window.__sseActiveZid = null;
             }
             if (sseSource) {
-                try { sseSource.close(); } catch (e) {}
+                try { sseSource.close(); } catch (e) { console.warn('[Kardenwort] Error closing local EventSource:', e); }
                 sseSource = null;
             }
 
@@ -290,6 +290,7 @@
                 bootstrapPayload = JSON.parse(rawBootstrap);
             } catch (err) {
                 console.error('Error parsing #kardenwort-bootstrap JSON:', err);
+                throw new Error('Malformed #kardenwort-bootstrap JSON: ' + (err.message || String(err)));
             }
         }
 
@@ -299,6 +300,7 @@
                 sessionPayload = JSON.parse(rawSession);
             } catch (err) {
                 console.error('Error parsing #session-data JSON:', err);
+                throw new Error('Malformed #session-data JSON: ' + (err.message || String(err)));
             }
         }
 
@@ -514,6 +516,7 @@
             console.error('Error hydrating session data:', e);
         }
     }
+    window.hydrateSession = hydrateSession;
 
     // ----------------------------------------------------
     // Translation Tokenization Pipeline & Bidirectional Cross-Highlighting (R15, R30)
@@ -544,6 +547,7 @@
             .replace(/"/g, '&quot;')
             .replace(/'/g, '&#39;');
     }
+    window.escapeHtml = escapeHtml;
 
     function tokenizeSource() {
         var sc = document.getElementById('source-container');
@@ -1793,9 +1797,13 @@
         var zidVal = el ? (el.textContent || el.innerText || '').trim() : '';
         if (!zidVal) {
             try {
-                var urlParams = new URLSearchParams(window.location.search);
-                zidVal = urlParams.get('zid') || urlParams.get('session_zid') || '';
-            } catch (e) {}
+                if (window.location && window.location.search) {
+                    var urlParams = new URLSearchParams(window.location.search);
+                    zidVal = urlParams.get('zid') || urlParams.get('session_zid') || '';
+                }
+            } catch (e) {
+                console.warn('[Kardenwort] URLSearchParams parsing error in getSessionZid:', e);
+            }
         }
         if (!zidVal && window.AppState && window.AppState.bootstrap) {
             zidVal = window.AppState.bootstrap.session_zid || window.AppState.bootstrap.zid || '';
@@ -1828,12 +1836,16 @@
             return window.API_TOKEN;
         }
         try {
-            var params = new URLSearchParams(window.location.search);
-            var tok = params.get('token') || params.get('api_token') || '';
-            if (tok) return tok;
+            if (window.location && window.location.search) {
+                var params = new URLSearchParams(window.location.search);
+                var tok = params.get('token') || params.get('api_token') || '';
+                if (tok) return tok;
+            }
             var stored = sessionStorage.getItem('kw_api_token') || localStorage.getItem('kw_api_token');
             if (stored) return stored;
-        } catch (e) {}
+        } catch (e) {
+            console.warn('[Kardenwort] Storage/URL error in getApiToken:', e);
+        }
         return '';
     }
     window.getApiToken = getApiToken;
@@ -1844,7 +1856,9 @@
                 var selIds = getSelectedRowIds();
                 window.ahkCall('selection', selIds.join(','));
                 window.ahkCall('dirty', (typeof window.isDirty === 'function' && window.isDirty()) ? 'true' : 'false');
-            } catch (e) {}
+            } catch (e) {
+                console.error('[Kardenwort] Failed to notify AutoHotkey host via ahkCall:', e);
+            }
         }
     }
     window.notifyAHKSelection = notifyAHKSelection;
@@ -1965,7 +1979,9 @@
         if (typeof window.ahkCall === 'function') {
             try {
                 window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
-            } catch (e) {}
+            } catch (e) {
+                console.error('[Kardenwort] Failed to notify AHK of dirty state:', e);
+            }
         }
         if (window.forceRepaint) window.forceRepaint();
     }
@@ -2011,7 +2027,9 @@
         if (typeof window.ahkCall === 'function') {
             try {
                 window.ahkCall('dirty', 'false');
-            } catch (e) {}
+            } catch (e) {
+                console.error('[Kardenwort] Failed to notify AHK of clean state:', e);
+            }
         }
     };
 
@@ -2068,7 +2086,9 @@
         var deltasJson = [];
         try {
             deltasJson = JSON.parse(window.getDeltas());
-        } catch (e) {}
+        } catch (e) {
+            console.error('[Kardenwort] Failed to parse deltas JSON during save:', e);
+        }
 
         var saveBtn = document.getElementById('kw-btn-save');
         setButtonLoading(saveBtn, true, "Saving...", "Save (Ctrl+S)");
@@ -2128,7 +2148,11 @@
         var uiCfg = (window.AppState && window.AppState.bootstrap && window.AppState.bootstrap.ui_config) || window.__CONFIG__ || {};
         if (!uiCfg.auto_save_on_close && !uiCfg.auto_save_on_edit) return;
         if (typeof window.commitActiveEdit === 'function') {
-            try { window.commitActiveEdit(); } catch (e) {}
+            try {
+                window.commitActiveEdit();
+            } catch (e) {
+                console.warn('[Kardenwort] Error committing active edit before close:', e);
+            }
         }
         if (!window.isDirty || !window.isDirty()) return;
         var sZid = getSessionZid();
@@ -2136,7 +2160,9 @@
         var deltasJson = [];
         try {
             deltasJson = JSON.parse(window.getDeltas());
-        } catch (e) {}
+        } catch (e) {
+            console.error('[Kardenwort] Failed to parse deltas JSON on page close:', e);
+        }
         if (!deltasJson || deltasJson.length === 0) return;
 
         var tok = getApiToken();
@@ -2162,7 +2188,9 @@
                 try {
                     var blob = new Blob([bodyStr], { type: 'application/json' });
                     navigator.sendBeacon('/session/save', blob);
-                } catch (e2) {}
+                } catch (e2) {
+                    console.error('[Kardenwort] sendBeacon save failed:', e2);
+                }
             }
         }
     }
@@ -2286,7 +2314,9 @@
                         }
                     }
                 })
-                .catch(function () {});
+                .catch(function (pollErr) {
+                    console.warn('[Kardenwort] Watchdog status poll failed:', pollErr);
+                });
             };
 
             window._kwSkeletonPollTimer = setInterval(pollStatus, 1500);
@@ -2477,7 +2507,9 @@
             var escapedText = sanitizedText.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
             try {
                 window.ahkCall('play', pythonExe + "\n" + ttsCli + "\n" + lang + "\n" + escapedText);
-            } catch (e) {}
+            } catch (e) {
+                console.error('[Kardenwort] ahkCall play failed:', e);
+            }
         } else if (typeof fetch === 'function') {
             var tok = getApiToken();
             var headers = { 'Content-Type': 'application/json' };
@@ -2488,11 +2520,14 @@
                 headers: headers,
                 body: JSON.stringify({ text: clean, language: lang })
             }).catch(function (e) {
+                console.warn('[Kardenwort] /api/v1/audio/play failed, attempting /session/play fallback:', e);
                 fetch((SERVER_URL || '') + '/session/play', {
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify({ text: clean, language: lang })
-                }).catch(function () {});
+                }).catch(function (fallbackErr) {
+                    console.error('[Kardenwort] Both audio playback endpoints failed:', fallbackErr);
+                });
             });
         }
     }
@@ -2524,8 +2559,12 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(Boolean(active)) })
-            }).catch(function () {});
-        } catch (e) {}
+            }).catch(function (err) {
+                console.warn('[Kardenwort] Persisting filter_selected_only config failed:', err);
+            });
+        } catch (e) {
+            console.warn('[Kardenwort] Dispatching filter_selected_only config fetch error:', e);
+        }
     }
     window.setFilterSelectedOnly = setFilterSelectedOnly;
 
@@ -2593,8 +2632,12 @@
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(Boolean(active)) })
-            }).catch(function () {});
-        } catch (e) {}
+            }).catch(function (err) {
+                console.warn('[Kardenwort] Persisting highlight_same_lemma config failed:', err);
+            });
+        } catch (e) {
+            console.warn('[Kardenwort] Dispatching highlight_same_lemma config fetch error:', e);
+        }
     }
     window.setHighlightSameLemma = setHighlightSameLemma;
 
@@ -3067,9 +3110,13 @@
         cell.classList.add('editing');
         cell.appendChild(input);
         input.focus();
-        try {
-            input.select();
-        } catch (e) {}
+        if (typeof input.select === 'function') {
+            try {
+                input.select();
+            } catch (e) {
+                console.warn('[Kardenwort] input.select() failed:', e);
+            }
+        }
 
         window.cancelActiveEdit = function () {
             window.cancelActiveEdit = null;
@@ -3277,7 +3324,9 @@
             }
             notifyAHKSelection();
             if (window.forceRepaint) window.forceRepaint();
-        } catch (e) {}
+        } catch (e) {
+            console.error('[Kardenwort] setSelectedRows error:', e);
+        }
     };
 
     function syncSelectionsToCardsAndState() {

@@ -688,7 +688,8 @@ body.theme-compact .kw-tab-nav:hover:not(:disabled),
     background: var(--flipped-bg, rgba(56, 166, 255, 0.22));
     border-color: var(--flipped-border, rgba(165, 214, 255, 0.6));
     color: var(--flipped-text, #a5d6ff);
-    font-weight: 600;
+    font-weight: 400;
+    box-shadow: 0 0 0 1px var(--flipped-border, rgba(165, 214, 255, 0.4));
 }
 
 body.theme-light .kw-tab-chip,
@@ -862,7 +863,8 @@ body.theme-compact .kw-action-toolbar:hover,
     background: #d29922;
     border-color: #f0883e;
     color: #0d1117;
-    font-weight: 600;
+    font-weight: 400;
+    box-shadow: 0 0 0 1px #f0883e;
 }
 
 .kw-action-toolbar button#kw-btn-same-lemma.active:hover:not(:disabled) {
@@ -875,7 +877,8 @@ body.theme-compact .kw-action-toolbar:hover,
     background: #d29922;
     border-color: #f0883e;
     color: #0d1117;
-    font-weight: 600;
+    font-weight: 400;
+    box-shadow: 0 0 0 1px #f0883e;
 }
 
 .kw-action-toolbar button.btn-filter-active:hover:not(:disabled) {

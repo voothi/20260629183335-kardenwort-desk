@@ -82,13 +82,17 @@
          * @returns {string}
          */
         function escapeHtml(str) {
+            var w = /** @type {any} */ (window);
+            if (typeof w.escapeHtml === 'function') {
+                return w.escapeHtml(str);
+            }
             if (!str) return '';
             return String(str)
                 .replace(/&/g, '&amp;')
                 .replace(/</g, '&lt;')
                 .replace(/>/g, '&gt;')
                 .replace(/"/g, '&quot;')
-                .replace(/'/g, '&#039;');
+                .replace(/'/g, '&#39;');
         }
 
         /**
@@ -171,7 +175,9 @@
                     var parsed = JSON.parse(bootEl.textContent || '');
                     if (parsed.text_mode) return parsed.text_mode;
                     if (parsed.session_data && parsed.session_data.text_mode) return parsed.session_data.text_mode;
-                } catch(e) {}
+                } catch(e) {
+                    console.error('[Kardenwort] getTextMode: error parsing kardenwort-bootstrap JSON:', e);
+                }
             }
             return 'single';
         }
@@ -201,7 +207,9 @@
                     var parsed = JSON.parse(bootEl.textContent || '');
                     if (parsed.text_base_provider || parsed.provider) return parsed.text_base_provider || parsed.provider;
                     if (parsed.ui_config && parsed.ui_config.text_base_provider) return parsed.ui_config.text_base_provider;
-                } catch(e) {}
+                } catch(e) {
+                    console.error('[Kardenwort] getTextBaseProvider: error parsing kardenwort-bootstrap JSON:', e);
+                }
             }
             return '';
         }
@@ -213,14 +221,19 @@
             var w = /** @type {any} */ (window);
             if (typeof w.getSessionLang === 'function') return w.getSessionLang();
             var el = document.getElementById('session-lang');
-            if (el) return (el.textContent || el.innerText || '').trim();
+            if (el) {
+                var elText = (el.textContent || el.innerText || '').trim();
+                if (elText) return elText;
+            }
             if (w.AppState && w.AppState.bootstrap) {
-                if (w.AppState.bootstrap.language || w.AppState.bootstrap.lang) {
-                    return w.AppState.bootstrap.language || w.AppState.bootstrap.lang;
-                }
+                var bootLang = w.AppState.bootstrap.language || w.AppState.bootstrap.lang;
+                if (bootLang) return bootLang;
                 if (w.AppState.bootstrap.session_data && (w.AppState.bootstrap.session_data.language || w.AppState.bootstrap.session_data.lang)) {
                     return w.AppState.bootstrap.session_data.language || w.AppState.bootstrap.session_data.lang;
                 }
+            }
+            if (w.AppState && w.AppState.language) {
+                return w.AppState.language;
             }
             if (w.__CONFIG__ && (w.__CONFIG__.language || w.__CONFIG__.lang)) {
                 return w.__CONFIG__.language || w.__CONFIG__.lang;
@@ -233,9 +246,12 @@
                     if (parsed.session_data && (parsed.session_data.language || parsed.session_data.lang)) {
                         return parsed.session_data.language || parsed.session_data.lang;
                     }
-                } catch(e) {}
+                } catch(e) {
+                    console.error('[Kardenwort] getSessionLang: error parsing kardenwort-bootstrap JSON:', e);
+                }
             }
-            return 'en';
+            console.error('[Kardenwort] getSessionLang: unable to resolve session language from bootstrap or session-lang');
+            throw new Error('Missing session language in bootstrap state');
         }
 
         /**
@@ -282,10 +298,7 @@
             if (typeof w.formatTranslationCellTooltip === 'function') {
                 return w.formatTranslationCellTooltip(translation, provenance);
             }
-            var cleanTrans = (translation || '').replace(/<[^>]+>/g, '').trim();
-            if (!cleanTrans || cleanTrans.indexOf('skeleton-loader') !== -1) return '';
-            var pTitle = formatProvenanceTooltip(provenance);
-            return pTitle ? (cleanTrans + ' (' + pTitle + ')') : cleanTrans;
+            return translation || '';
         }
 
         /**
@@ -364,12 +377,7 @@
         }
 
         function syncSelectionsToCardsAndState() {
-            var w = /** @type {any} */ (window);
-            if (typeof w.syncSelectionsToCardsAndState === 'function') {
-                w.syncSelectionsToCardsAndState();
-                return;
-            }
-            var appState = w.AppState;
+            var appState = /** @type {any} */ (window).AppState;
             if (!appState) return;
             var selMap = appState.selectedLemmas || {};
             if (cards && cards.length > 0) {
@@ -690,7 +698,9 @@
                                 }
                             }
                         })
-                        .catch(function() {});
+                        .catch(function(err) {
+                            console.warn('[Kardenwort] Initial status fetch error in WorkspaceTabs.init:', err);
+                        });
                 }
             }
         }
@@ -1200,7 +1210,12 @@
          */
         function updateTitle(targetCard) {
             var w = /** @type {any} */ (window);
-            var lang = getSessionLang() || 'en';
+            var lang = '';
+            try {
+                lang = getSessionLang();
+            } catch (e) {
+                lang = 'unknown';
+            }
             var tMode = getTextMode() || 'single';
             var cardTsv = (targetCard && targetCard.tsv_filename) ? targetCard.tsv_filename : '';
             if (!cardTsv) {
@@ -1409,7 +1424,8 @@
             updateActiveTabTranslation: updateActiveTabTranslation,
             updateSentences: updateSentences,
             rebindActiveTab: rebindActiveTab,
-            bindCardWordsToTbody: bindCardWordsToTbody
+            bindCardWordsToTbody: bindCardWordsToTbody,
+            syncSelectionsToCardsAndState: syncSelectionsToCardsAndState
         };
     })();
 
