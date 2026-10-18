@@ -492,7 +492,7 @@
             effProv = 'live:' + (baseProv || 'google');
         }
         if (effProv) {
-            var pTitle = (typeof window.formatProvenanceTooltip === 'function') ? window.formatProvenanceTooltip(effProv) : ('Translated via ' + effProv);
+            var pTitle = (typeof formatProvenanceTooltip === 'function') ? formatProvenanceTooltip(effProv) : ((typeof window.formatProvenanceTooltip === 'function') ? window.formatProvenanceTooltip(effProv) : ('Translated via ' + effProv));
             if (pTitle) {
                 tc.setAttribute('data-provenance', effProv);
                 tc.setAttribute('title', pTitle);
@@ -817,7 +817,7 @@
                 try {
                     var mParsed = JSON.parse(mismEl.textContent);
                     if (mParsed && mParsed.is_mismatch) isMismatch = true;
-                } catch(e) {}
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
             if (!isMismatch && bootstrapPayload && bootstrapPayload.mismatch_info && bootstrapPayload.mismatch_info.is_mismatch) isMismatch = true;
             if (!isMismatch && session && session.mismatch_info && session.mismatch_info.is_mismatch) isMismatch = true;
@@ -1024,10 +1024,14 @@
     window.__mvpInitialized = true;
 
     function removeClass(el, name) {
-        try { if (el && el.classList) el.classList.remove(name); } catch(e) {}
+        if (el && el.classList) {
+            el.classList.remove(name);
+        }
     }
     function addClass(el, name) {
-        try { if (el && el.classList) el.classList.add(name); } catch(e) {}
+        if (el && el.classList) {
+            el.classList.add(name);
+        }
     }
     function isAttached(el) {
         while (el) {
@@ -1087,6 +1091,7 @@
         }
         return prov;
     }
+    window.formatProvenanceTooltip = formatProvenanceTooltip;
 
     function formatTranslationCellTooltip(translation, provenance) {
         var cleanTrans = (translation || '').replace(/<[^>]+>/g, '').trim();
@@ -1099,6 +1104,7 @@
         }
         return cleanTrans;
     }
+    window.formatTranslationCellTooltip = formatTranslationCellTooltip;
 
     function toUnicodeBold(text) {
         if (!text) return "";
@@ -2120,12 +2126,12 @@
                     if (entry.srcSpan && isAttached(entry.srcSpan)) {
                         removeClass(entry.srcSpan, 'hl-mvp-hover');
                     }
-                } catch(e) {}
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                 try {
                     if (entry.transSpan && isAttached(entry.transSpan)) {
                         removeClass(entry.transSpan, 'hl-mvp-hover');
                     }
-                } catch(e) {}
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
             mvpBookmarks = [];
             refreshBookmarkClasses();
@@ -2319,7 +2325,7 @@
             var tokenMapEl = document.getElementById('token-map');
             var jsonStr = tokenMapEl.text || tokenMapEl.textContent || tokenMapEl.innerHTML || "[]";
             tokenMap = JSON.parse(jsonStr);
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         
         var isProgressive = false;
         try {
@@ -2327,19 +2333,19 @@
             if (progEl && (progEl.textContent || progEl.innerText).trim() === 'progressive') {
                 isProgressive = true;
             }
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         
         var initialSameLemma = (window.__CONFIG__ && window.__CONFIG__.highlight_same_lemma) ? true : false;
         try {
             var lsVal = localStorage.getItem('kw_highlight_same_lemma');
             if (lsVal !== null) initialSameLemma = (lsVal === 'true');
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         var initialFilterSelectedOnly = (window.__CONFIG__ && window.__CONFIG__.filter_selected_only) ? true : false;
         try {
             var lsFilterVal = localStorage.getItem('kw_filter_selected_only');
             if (lsFilterVal !== null) initialFilterSelectedOnly = (lsFilterVal === 'true');
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         var existingState = window.AppState || {};
         window.AppState = existingState;
@@ -2365,8 +2371,7 @@
                         if (document.body) {
                             document.body.setAttribute('data-worker-status', 'finished');
                         }
-                    } catch (e) {
-                    }
+                    } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                 }
                 
                 if (data.stage) {
@@ -2794,8 +2799,7 @@
                 if (isTerminal && window.ahkCall) {
                     try {
                         window.ahkCall('finished', '');
-                    } catch (e) {
-                    }
+                    } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                 }
             };
 
@@ -3416,7 +3420,7 @@
                     }
                 }
             }
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         try {
             var initRows = document.querySelectorAll('tr[data-row-id]');
@@ -3437,7 +3441,7 @@
                     }
                 }
             }
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         var _cachedSentenceCards = null;
         function getCardModels() {
@@ -3632,7 +3636,7 @@
                 window._kwSseSafetyTimer = null;
             }
             if (window._kwEvtSource) {
-                try { window._kwEvtSource.close(); } catch(e) {}
+                try { if (window._kwEvtSource) window._kwEvtSource.close(); } catch(e) { console.debug("[EventSource] Close failed:", e); }
                 window._kwEvtSource = null;
             }
 
@@ -3753,7 +3757,7 @@
                                     window.receiveUpdate(data);
                                 }
                             })
-                            .catch(function() {});
+                            .catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
                     }
                 };
 
@@ -3781,7 +3785,7 @@
                         var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
                         var cController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
                         var cTimeoutId = cController ? setTimeout(function() {
-                            try { cController.abort(); } catch(e) {}
+                            try { if (cController) cController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
                         }, 4000) : null;
                         var cOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
                         if (cController) cOpts.signal = cController.signal;
@@ -3862,7 +3866,7 @@
 
                 var closeEvtSource = function() {
                     if (window._kwEvtSource) {
-                        try { window._kwEvtSource.close(); } catch(err) {}
+                        try { if (window._kwEvtSource) window._kwEvtSource.close(); } catch(e) { console.debug("[EventSource] Close failed:", e); }
                         window._kwEvtSource = null;
                     }
                     if (window._kwSseSafetyTimer) {
@@ -3902,7 +3906,7 @@
                     var statusUrl = "/session/status?zid=" + encodeURIComponent(curZid);
                     var controller = (typeof AbortController !== 'undefined') ? new AbortController() : null;
                     var timeoutId = controller ? setTimeout(function() {
-                        try { controller.abort(); } catch(e) {}
+                        try { controller.abort(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                     }, 4000) : null;
                     var fetchOpts = { method: 'GET', headers: { 'Accept': 'application/json' } };
                     if (controller) {
@@ -3975,7 +3979,7 @@
                             var renderCheckUrl = "/?session_zid=" + encodeURIComponent(curZid);
                             var rcController = (typeof AbortController !== 'undefined') ? new AbortController() : null;
                             var rcTimeoutId = rcController ? setTimeout(function() {
-                                try { rcController.abort(); } catch(e) {}
+                                try { if (rcController) rcController.abort(); } catch(e) { console.debug("[AbortController] Abort failed:", e); }
                             }, 4000) : null;
                             var rcOpts = { method: 'GET' };
                             if (rcController) rcOpts.signal = rcController.signal;
@@ -3996,7 +4000,7 @@
                                         }
                                     }
                                 })
-                                .catch(function() {})
+                                .catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); })
                                 .finally(function() {
                                     if (rcTimeoutId) clearTimeout(rcTimeoutId);
                                 });
@@ -4068,7 +4072,7 @@
                         if (!forceReconnect && window._kwEvtSource.readyState !== 2) {
                             return;
                         }
-                        try { window._kwEvtSource.close(); } catch(err) {}
+                        try { if (window._kwEvtSource) window._kwEvtSource.close(); } catch(e) { console.debug("[EventSource] Close failed:", e); }
                         window._kwEvtSource = null;
                     }
                     if (forceReconnect) {
@@ -4094,7 +4098,7 @@
                                             window.updateActiveProvider(tType, nProv);
                                         }
                                     }
-                                } catch(err) {}
+                                } catch(err) { console.debug("[Diagnostic] Handled exception:", err); }
                             });
                         }
 
@@ -4161,7 +4165,7 @@
                                         }
                                     }
                                 }
-                            } catch(err) {}
+                            } catch(err) { console.debug("[Diagnostic] Handled exception:", err); }
                         };
                     } catch(sseErr) {
                         closeEvtSource();
@@ -4217,7 +4221,7 @@
         window.initWatchdog = initWatchdog;
         try {
             initWatchdog();
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
 
         var workerLaunched = false;
         try {
@@ -4225,7 +4229,7 @@
             if (wlEl && (wlEl.textContent || wlEl.innerText).trim() === 'true') {
                 workerLaunched = true;
             }
-        } catch(e) {}
+        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         
         var sourceContainer = document.getElementById('source-container');
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
@@ -4810,7 +4814,7 @@
                 } else {
                     sessionStorage.removeItem(key);
                 }
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         }
 
         function restoreActiveTokensFromStorage() {
@@ -4854,7 +4858,7 @@
                         }
                     }
                 }
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         }
 
         function clearTokenSelections() {
@@ -5257,8 +5261,7 @@
                 var escapedText = sanitizedText.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
                 try {
                     window.ahkCall('play', audioPythonExe + "\\n" + audioAnkiTtsCli + "\\n" + lang + "\\n" + escapedText);
-                } catch (e) {
-                }
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             } else if (typeof fetch === 'function') {
                 var headers = { 'Content-Type': 'application/json' };
                 if (typeof getApiToken === 'function') {
@@ -5273,7 +5276,9 @@
                     method: 'POST',
                     headers: headers,
                     body: JSON.stringify({ text: clean, language: lang })
-                }).catch(function(e) {});
+                }).catch(function(e) {
+                    console.warn('[Audio] Background audio playback endpoint failed:', e);
+                });
             }
         }
         window.playAudio = playAudio;
@@ -6029,7 +6034,7 @@
                         if (hk === 'deskselected' || hk === 'selected' || hk === 'highlight') return true;
                     }
                 }
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         }
         var sessEl = document.getElementById('session-data');
         if (sessEl && sessEl.textContent) {
@@ -6041,7 +6046,7 @@
                         if (hj === 'deskselected' || hj === 'selected' || hj === 'highlight') return true;
                     }
                 }
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         }
         return false;
     }
@@ -6336,7 +6341,7 @@
         if (!cardsList && (hasCardsElement || isContainerMode)) {
             var cardsScript = document.getElementById('sentence-cards');
             if (cardsScript && cardsScript.textContent) {
-                try { cardsList = JSON.parse(cardsScript.textContent); } catch (e) {}
+                try { cardsList = JSON.parse(cardsScript.textContent); } catch (e) { console.error('[Bootstrap] Failed to parse #sentence-cards JSON:', e); throw e; }
             }
         }
         if (cardsList && Array.isArray(cardsList)) {
@@ -6675,7 +6680,7 @@
                     } else if (document.selection && document.selection.empty) {
                         document.selection.empty();
                     }
-                } catch(e) {}
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                 if (window.clearMVPBookmarks) {
                     var bCleared = window.clearMVPBookmarks();
                     if (bCleared) {
@@ -7124,7 +7129,7 @@
         window.applyOccurrenceView = applyOccurrenceView;
 
         function updateBidirectionalHighlights() {
-            try { applyOccurrenceView(); } catch (e) {}
+            try { applyOccurrenceView(); } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             var tokByVidx = {}, spanByVidx = {}, sentByRowId = {};
             for (var m = 0; m < tokenMap.length; m++) {
                 var t = tokenMap[m];
@@ -7145,7 +7150,7 @@
                     span.classList.remove('highlight-purple-active');
                     span.classList.remove('active-subtoken');
                     span.classList.remove('lemma-peer-highlight');
-                } catch(e) {}
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
             
             var isLegacyOverview = isLegacyOverviewContext();
@@ -7521,7 +7526,7 @@
                             } else if (isSameLemmaOn) {
                                 span.classList.add('lemma-peer-highlight');
                             }
-                        } catch(e) {}
+                        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                     }
                 }
             }
@@ -7537,7 +7542,7 @@
                             } else if (s.classList.contains('highlight-orange')) {
                                 s.classList.add('highlight-orange-active');
                             }
-                        } catch(e) {}
+                        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                     }
                 }
             }
@@ -7574,7 +7579,7 @@
                     if (sMatchesLemma) {
                         try {
                             s.classList.add('lemma-peer-highlight');
-                        } catch(e) {}
+                        } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                     }
                 }
             }
@@ -7586,7 +7591,7 @@
                     if (isCompoundSubtoken) {
                         mousedownTargetSpan.classList.add('active-subtoken');
                     }
-                } catch(e) {}
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
         }
         window.updateBidirectionalHighlights = updateBidirectionalHighlights;
@@ -7656,8 +7661,7 @@
                 try {
                     window.ahkCall('selection', getSelectedRowsArray().join(','));
                     window.ahkCall('dirty', window.isDirty() ? 'true' : 'false');
-                } catch (e) {
-                }
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
         }
         window.notifyAHKSelection = notifyAHKSelection;
@@ -7695,7 +7699,7 @@
             input.focus();
             try {
                 input.select();
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             
             window.cancelActiveEdit = function() {
                 window.cancelActiveEdit = null;
@@ -7876,7 +7880,7 @@
                 updateRowStyles();
                 updateBidirectionalHighlights();
                 if (window.forceRepaint) window.forceRepaint();
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         };
         
         window.deleteSelectedRows = function() {
@@ -8045,8 +8049,7 @@
             if (window.ahkCall) {
                 try {
                     window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
-                } catch (e) {
-                }
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
             
             if (typeof updateToolbarState === 'function') updateToolbarState();
@@ -8171,8 +8174,7 @@
             if (window.ahkCall) {
                 try {
                     window.ahkCall('dirty', 'false');
-                } catch (e) {
-                }
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
             if (typeof updateToolbarState === 'function') updateToolbarState();
         };
@@ -8292,7 +8294,7 @@
         window.copySelection = function() {
             try {
                 document.execCommand('copy');
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         };
         
         function updateToolbarState() {
@@ -8451,7 +8453,7 @@
                 try {
                     var urlParams = new URLSearchParams(window.location.search);
                     zidVal = urlParams.get('zid') || urlParams.get('session_zid') || "";
-                } catch(e) {}
+                } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
             if (!zidVal && SESSION_ZID) {
                 zidVal = SESSION_ZID;
@@ -8497,7 +8499,7 @@
                     try {
                         sessionStorage.setItem('kw_api_token', tok);
                         localStorage.setItem('kw_api_token', tok);
-                    } catch(e) {}
+                    } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                     return tok;
                 }
                 var stored = sessionStorage.getItem('kw_api_token') || localStorage.getItem('kw_api_token');
@@ -8576,7 +8578,7 @@
                             if (statusData && statusData.rows && window.receiveUpdate) {
                                 window.receiveUpdate(statusData);
                             }
-                        }).catch(function() {});
+                        }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
                 }
             })
             .catch(function(err) {
@@ -8656,7 +8658,10 @@
             var deltasJson = [];
             try {
                 deltasJson = JSON.parse(window.getDeltas());
-            } catch(e) {}
+            } catch(e) {
+                console.error('[Save] Failed to parse deltas JSON:', e);
+                return;
+            }
             
             var saveBtn = document.getElementById('kw-btn-save');
             setButtonLoading(saveBtn, true, "Saving...", "Save (Ctrl+S)");
@@ -8715,7 +8720,7 @@
             var uiCfg = window.__CONFIG__ || {};
             if (!uiCfg.auto_save_on_close) return;
             if (typeof window.commitActiveEdit === 'function') {
-                try { window.commitActiveEdit(); } catch(e) {}
+                try { window.commitActiveEdit(); } catch(e) { console.error('[AutoSave] commitActiveEdit failed:', e); }
             }
             if (!window.isDirty || !window.isDirty()) return;
             if (typeof fetch === 'undefined') return;
@@ -8724,7 +8729,10 @@
             var deltasJson = [];
             try {
                 deltasJson = JSON.parse(window.getDeltas());
-            } catch(e) {}
+            } catch(e) {
+                console.error('[AutoSave] Failed to parse deltas JSON:', e);
+                return;
+            }
             if (!deltasJson || deltasJson.length === 0) return;
 
             var tok = (typeof getApiToken === 'function') ? getApiToken() : '';
@@ -8750,7 +8758,7 @@
                     try {
                         var blob = new Blob([bodyStr], { type: 'application/json' });
                         navigator.sendBeacon('/session/save', blob);
-                    } catch(e2) {}
+                    } catch(e2) { console.debug("[Diagnostic] Handled exception:", e2); }
                 }
             }
         }
@@ -9410,7 +9418,7 @@
             var results = [];
             if (!children) return results;
             if (typeof children === 'string') {
-                try { children = JSON.parse(children); } catch(e) {}
+                try { children = JSON.parse(children); } catch(e) { console.error('[extractChildSessions] Failed to parse children JSON:', e); return results; }
             }
             if (!children || !Array.isArray(children)) return results;
             var curSeq = null;
@@ -9702,7 +9710,7 @@
             }
             try {
                 localStorage.setItem('kw_highlight_same_lemma', String(!!active));
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             var btn = document.getElementById('kw-btn-same-lemma');
             if (btn) {
                 if (active) {
@@ -9719,8 +9727,8 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(!!active) })
-                }).catch(function() {});
-            } catch(e) {}
+                }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         }
         window.setHighlightSameLemma = setHighlightSameLemma;
 
@@ -9758,7 +9766,7 @@
             }
             try {
                 localStorage.setItem('kw_filter_selected_only', String(!!active));
-            } catch(e) {}
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             var lemmaTable = document.getElementById('lemma-table');
             if (lemmaTable) {
                 if (active) {
@@ -9783,8 +9791,8 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(!!active) })
-                }).catch(function() {});
-            } catch(e) {}
+                }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
+            } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         }
         window.setFilterSelectedOnly = setFilterSelectedOnly;
 
@@ -10002,7 +10010,9 @@
                 if (mData && (mData.is_mismatch || mData.detected_language)) {
                     window.showLanguageVerificationModal(mData);
                 }
-            } catch(e) {}
+            } catch(e) {
+                console.error('[Bootstrap] Failed to parse #mismatch-info JSON:', e);
+            }
         }
 
         var bootstrapScript = document.getElementById('kardenwort-bootstrap');
@@ -10019,7 +10029,10 @@
                         window.AppState.sentence_cards = bData.sentence_cards;
                     }
                 }
-            } catch(e) {}
+            } catch(e) {
+                console.error('[Bootstrap] Failed to parse #kardenwort-bootstrap JSON:', e);
+                throw e;
+            }
         }
 
         updateToolbarState();
@@ -10027,7 +10040,10 @@
         if (window.WorkspaceTabs) {
             try {
                 window.WorkspaceTabs.init();
-            } catch(e) {}
+            } catch(e) {
+                console.error('[Init] WorkspaceTabs initialization failed:', e);
+                throw e;
+            }
         }
 
         if (window.rebindMVPBookmarks) {

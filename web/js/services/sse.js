@@ -152,7 +152,7 @@
      */
     function disconnect() {
         if (activeEventSource) {
-            try { activeEventSource.close(); } catch (e) {}
+            try { activeEventSource.close(); } catch (e) { console.warn('[SSEBridge] Error closing active EventSource:', e); }
             activeEventSource = null;
             activeSessionZid = null;
             var w = /** @type {any} */ (window);
