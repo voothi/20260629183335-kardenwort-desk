@@ -94,7 +94,7 @@
                 }
             }
             this.container.innerHTML = html;
-            var w = typeof window !== 'undefined' ? window : null;
+            var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
             if (w) {
                 if (typeof w.rebindTokenSpans === 'function') w.rebindTokenSpans();
                 if (typeof w.buildLcIndex === 'function') w.buildLcIndex();
