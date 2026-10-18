@@ -1108,5 +1108,95 @@ def test_unslop_code_hygiene_and_contract_hardening(page, test_server):
     assert error_thrown is True
 
 
+def test_typed_vanilla_component_architecture(page, test_server):
+    """
+    Task 1.1 - 3.4 (Stage 2: 20261013001500-typed-vanilla-component-architecture):
+    Verify typed vanilla component architecture:
+    - AppStore with getState(), dispatch(action), subscribe(listener), and applyDeltas(payload)
+    - SourceViewer, TranslationView, and LemmaTable components mounted
+    - Atomic unidirectional state updates through store
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    res = page.evaluate("""() => {
+        // 1. Verify AppStore API
+        const hasStore = Boolean(window.AppStore);
+        const hasGetState = typeof window.AppStore.getState === 'function';
+        const hasDispatch = typeof window.AppStore.dispatch === 'function';
+        const hasSubscribe = typeof window.AppStore.subscribe === 'function';
+        const hasApplyDeltas = typeof window.AppStore.applyDeltas === 'function';
+
+        // 2. Test Store subscription and dispatch
+        let actionReceived = null;
+        const unsubscribe = window.AppStore.subscribe((state, action) => {
+            actionReceived = action ? action.type : null;
+        });
+
+        window.AppStore.dispatch({
+            type: 'SET_CONFIG',
+            payload: { highlight_same_lemma: true }
+        });
+        const stateAfterDispatch = window.AppStore.getState();
+        const configUpdated = stateAfterDispatch.highlightSameLemma === true;
+
+        unsubscribe();
+
+        // 3. Test applyDeltas atomic update
+        window.AppStore.applyDeltas({
+            stage: 'translated_text',
+            translated_text: 'Быстрая рыжая лиса'
+        });
+        const stateAfterDeltas = window.AppStore.getState();
+        const deltaUpdated = stateAfterDeltas.translated_text === 'Быстрая рыжая лиса';
+
+        // 4. Verify Components existence and contracts
+        const hasSourceViewer = Boolean(window.SourceViewer && typeof window.SourceViewer.mount === 'function' && typeof window.SourceViewer.render === 'function');
+        const hasTranslationView = Boolean(window.TranslationView && typeof window.TranslationView.mount === 'function' && typeof window.TranslationView.render === 'function');
+        const hasLemmaTable = Boolean(window.LemmaTable && typeof window.LemmaTable.mount === 'function' && typeof window.LemmaTable.render === 'function');
+
+        // 5. Test SourceViewer render
+        window.SourceViewer.render({ source_text: 'Der Hund bellt' });
+        const sourceSpans = document.querySelectorAll('#source-container span.word');
+        const sourceRendered = sourceSpans.length >= 2;
+
+        // 6. Test TranslationView render
+        window.TranslationView.render({ translated_text: 'Собака лает' });
+        const transSpans = document.querySelectorAll('#translation-container span.word');
+        const transRendered = transSpans.length >= 2;
+
+        return {
+            hasStore,
+            hasGetState,
+            hasDispatch,
+            hasSubscribe,
+            hasApplyDeltas,
+            actionReceived,
+            configUpdated,
+            deltaUpdated,
+            hasSourceViewer,
+            hasTranslationView,
+            hasLemmaTable,
+            sourceRendered,
+            transRendered
+        };
+    }""")
+
+    assert res["hasStore"] is True
+    assert res["hasGetState"] is True
+    assert res["hasDispatch"] is True
+    assert res["hasSubscribe"] is True
+    assert res["hasApplyDeltas"] is True
+    assert res["actionReceived"] == "SET_CONFIG"
+    assert res["configUpdated"] is True
+    assert res["deltaUpdated"] is True
+    assert res["hasSourceViewer"] is True
+    assert res["hasTranslationView"] is True
+    assert res["hasLemmaTable"] is True
+    assert res["sourceRendered"] is True
+    assert res["transRendered"] is True
+
+
+
 
 

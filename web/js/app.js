@@ -1,3 +1,5 @@
+// @ts-check
+
 /**
  * web/js/app.js - Kardenwort Desk client-side application logic
  * Handles state hydration from #session-data, SSE stream connection,
@@ -335,6 +337,10 @@
                 if (window.__CONFIG__.highlight_same_lemma !== undefined) {
                     window.AppState.highlightSameLemma = Boolean(window.__CONFIG__.highlight_same_lemma);
                 }
+            }
+
+            if (window.AppStore && typeof window.AppStore.dispatch === 'function') {
+                window.AppStore.dispatch({ type: 'INIT_SESSION', payload: bootstrapPayload || session });
             }
 
             SESSION_ZID = session.session_zid || session.zid || '';
@@ -2344,6 +2350,9 @@
     // Task 7.11 (R40): window.receiveUpdate(payload)
     window.receiveUpdate = function (payload) {
         if (!payload) return;
+        if (window.AppStore && typeof window.AppStore.applyDeltas === 'function') {
+            window.AppStore.applyDeltas(payload);
+        }
         var data = (payload.data && typeof payload.data === 'object' && !payload.stage) ? payload.data : payload;
 
         // 1. Process sentence translation update
@@ -3846,6 +3855,15 @@
     };
 
     function init() {
+        if (window.SourceViewer && typeof window.SourceViewer.mount === 'function') {
+            window.SourceViewer.mount('#source-container');
+        }
+        if (window.TranslationView && typeof window.TranslationView.mount === 'function') {
+            window.TranslationView.mount('#translation-container');
+        }
+        if (window.LemmaTable && typeof window.LemmaTable.mount === 'function') {
+            window.LemmaTable.mount('#lemma-table');
+        }
         hydrateSession();
         tokenizeSource();
         tokenizeTranslation();
