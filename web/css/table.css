@@ -415,6 +415,38 @@ body:not(.maximized) .kw-section {
     box-sizing: border-box;
 }
 
+#lemma-table th.col-inflected, #lemma-table td.col-inflected,
+#lemma-table td[data-col="WordSourceInflectedForm"] {
+    width: 10%;
+    text-align: left;
+    color: var(--text-muted, #8b949e) !important;
+}
+#lemma-table th.col-lemma, #lemma-table td.col-lemma {
+    width: 10%;
+    text-align: left;
+}
+#lemma-table th.col-translation, #lemma-table td.col-translation {
+    width: 10%;
+    text-align: left;
+}
+#lemma-table th.col-ipa, #lemma-table td.col-ipa {
+    width: 6%;
+    text-align: left;
+    color: var(--text-muted, #8b949e) !important;
+}
+#lemma-table th.col-morphology, #lemma-table td.col-morphology {
+    width: 46%;
+    text-align: left;
+    color: var(--text-muted, #8b949e) !important;
+}
+#lemma-table th.col-pos, #lemma-table td.col-pos {
+    width: 6%;
+    text-align: center !important;
+    padding-left: 6px !important;
+    padding-right: 6px !important;
+    white-space: nowrap;
+}
+
 body:not(.maximized) #lemma-table,
 body:not(.maximized) .kw-lemmas-table {
     table-layout: fixed;
@@ -841,7 +873,8 @@ body.theme-compact .kw-action-toolbar:hover,
 }
 
 .kw-action-toolbar button:hover:not(:disabled) {
-    background: var(--toolbar-btn-hover, #21262d);
+    background: #30363d;
+    background: var(--toolbar-btn-hover, #30363d);
     border-color: var(--text-muted, #8b949e);
 }
 

@@ -226,6 +226,7 @@
     if (w) {
         w.AppStore = Store;
         w.AppState = w.AppState || {};
+        w.AppState.rows = w.AppState.rows || {};
         // Link store.applyDeltas to window.AppState.applyDeltas
         w.AppState.applyDeltas = applyDeltas;
     }

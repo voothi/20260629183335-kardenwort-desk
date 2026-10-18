@@ -111,6 +111,10 @@
                 var span = target && target.closest ? target.closest('#translation-container span.word') : null;
                 if (span) {
                     var w = /** @type {any} */ (window);
+                    if (w.__deskHandleMouseUp) {
+                        e.preventDefault();
+                        return;
+                    }
                     var uiCfg = (w.AppState && w.AppState.bootstrap && w.AppState.bootstrap.ui_config) || w.__CONFIG__ || {};
                     if (uiCfg.audio_rmb_play) {
                         e.preventDefault();

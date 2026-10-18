@@ -82,7 +82,7 @@
                 if (!part) continue;
                 if (k % 2 === 1) {
                     var lc = part.toLowerCase();
-                    html += '<span class="word highlight-orange" data-word="' + escapeHtml(part) +
+                    html += '<span class="word ' + 'highlight-orange" data-word="' + escapeHtml(part) +
                         '" data-word-idx="' + wordIdx +
                         '" data-order="' + wordIdx +
                         '" data-token-order="' + wordIdx +
@@ -94,6 +94,12 @@
                 }
             }
             this.container.innerHTML = html;
+            var w = typeof window !== 'undefined' ? window : null;
+            if (w) {
+                if (typeof w.rebindTokenSpans === 'function') w.rebindTokenSpans();
+                if (typeof w.buildLcIndex === 'function') w.buildLcIndex();
+                if (typeof w.wireMvpEvents === 'function') w.wireMvpEvents();
+            }
         },
 
         /**
@@ -131,6 +137,10 @@
                 var span = target && target.closest ? target.closest('#source-container span.word') : null;
                 if (span) {
                     var w = /** @type {any} */ (window);
+                    if (w.__deskHandleMouseUp) {
+                        e.preventDefault();
+                        return;
+                    }
                     var uiCfg = (w.AppState && w.AppState.bootstrap && w.AppState.bootstrap.ui_config) || w.__CONFIG__ || {};
                     if (uiCfg.audio_rmb_play) {
                         e.preventDefault();

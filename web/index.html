@@ -11,7 +11,7 @@
     <link rel="stylesheet" href="/css/main.css">
 </head>
 <body>
-    <div class="kw-lookup-container">
+    <div class="kw-lookup-container container">
         <!-- Session Header: Title, Language Badge, SSE Status -->
         <header id="session-header" class="session-header">
             <h1 id="session-title" class="session-title">Kardenwort Desk</h1>
@@ -28,7 +28,7 @@
         <!-- SECTION_SOURCE_START -->
         <section id="source-section" class="kw-section source-section">
             <h3>Source Text</h3>
-            <div class="kw-source-text source-text" id="source-container"><!-- SOURCE_TEXT --></div>
+            <div class="source-text" id="source-container"><!-- SOURCE_TEXT --></div>
         </section>
         <!-- SECTION_SOURCE_END -->
 
@@ -36,7 +36,7 @@
         <!-- SECTION_TRANSLATION_START -->
         <section id="translation-section" class="kw-section translation-section">
             <h3>Translation</h3>
-            <div class="kw-translation translation-text" id="translation-container"><!-- TRANSLATION_TEXT --></div>
+            <div class="translation-text" id="translation-container"><!-- TRANSLATION_TEXT --></div>
         </section>
         <!-- SECTION_TRANSLATION_END -->
 
@@ -45,7 +45,7 @@
         <section id="lemmas-section" class="kw-section lemmas-section">
             <h3>Lemmas</h3>
             <div class="kw-table-container">
-                <table id="lemma-table" class="kw-lemmas-table lemma-table">
+                <table id="lemma-table">
                     <thead>
                         <tr>
                             <th class="col-inflected">Inflected</th>
@@ -96,8 +96,33 @@
     <!-- State Hydration JSON Data Islands -->
     <script id="hl-mvp-script" type="text/plain" data-bookmarks="3" data-rainbow="1" data-enabled="1"></script>
     <script id="session-data" type="application/json">{}</script>
+    <script id="token-map" type="application/json">[]</script>
     <!-- KARDENWORT_BOOTSTRAP -->
     <script id="kardenwort-bootstrap" type="application/json">{}</script>
+    <script id="ui-config" type="application/json">{}</script>
+    <script id="config-script">
+    window.__CONFIG__ = {};
+    </script>
+    <script id="sentence-cards" type="application/json">
+[]
+</script>
+    <script id="delivery-mode" type="text/plain">container</script>
+    <script id="web-tab-mode" type="text/plain">tabs</script>
+    <script id="tab-bar-position" type="text/plain">top</script>
+    <script id="mismatch-info" type="application/json">{}</script>
+    <script id="text-mode" type="text/plain">single</script>
+    <script id="tsv-path" type="text/plain"></script>
+    <script id="llm-filled" type="text/plain">false</script>
+    <script id="session-zid" type="text/plain"></script>
+    <script id="session-lang" type="text/plain">de</script>
+    <script id="session-target-lang" type="text/plain">ru</script>
+    <script id="display-mode" type="text/plain">monolithic</script>
+    <script id="auto-inject-updates" type="text/plain">true</script>
+    <script id="run-enrichment" type="text/plain">manual</script>
+    <script id="worker-launched" type="text/plain">false</script>
+    <script id="text-base-provider" type="text/plain">google</script>
+    <script id="lemma-base-provider" type="text/plain">google</script>
+    <script id="sentence-provenance" type="text/plain"></script>
     <script src="/js/types.js"></script>
     <script src="/js/state/store.js"></script>
     <script src="/js/components/SourceViewer.js"></script>

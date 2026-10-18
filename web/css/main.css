@@ -3,9 +3,47 @@
 @import url("tokens.css");
 @import url("table.css");
 
+.container,
 .kw-lookup-container {
+    padding: 16px;
+    padding-bottom: 70px;
     zoom: var(--zoom-level, 100%);
     width: var(--inverse-zoom-width, 100%);
     max-width: var(--inverse-zoom-width, 100%);
+    box-sizing: border-box;
+    display: block;
+}
+
+body.has-dock-top .container {
+    padding-top: 58px;
+}
+
+body.has-dock-bottom .container {
+    padding-bottom: 95px;
+}
+
+.source-text,
+#source-container {
+    font-size: 16px;
+    color: var(--text-color, #e3e6eb);
+    line-height: 1.6;
+    word-break: break-word;
+    -moz-user-select: text;
+    -webkit-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
+}
+
+.translation-text,
+#translation-container {
+    font-size: 16px;
+    color: var(--text-color, #e3e6eb);
+    line-height: 1.6;
+    min-height: 1.6em;
+    word-break: break-word;
+    -moz-user-select: text;
+    -webkit-user-select: text;
+    -ms-user-select: text;
+    user-select: text;
 }
 

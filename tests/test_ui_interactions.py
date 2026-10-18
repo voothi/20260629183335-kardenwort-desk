@@ -70,6 +70,23 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
             js_lines.append(line)
             
     js = "\n".join(js_lines)
+    if not js.strip():
+        modular_scripts = [
+            "types.js",
+            "state/store.js",
+            "components/SourceViewer.js",
+            "components/TranslationView.js",
+            "components/LemmaTable.js",
+            "components/WorkspaceTabs.js",
+            "services/sse.js",
+            "app.js",
+        ]
+        bundle = []
+        for s_rel in modular_scripts:
+            p_s = desk_path.parent / "web" / "js" / s_rel
+            if p_s.is_file():
+                bundle.append(p_s.read_text(encoding="utf-8"))
+        js = "\n".join(bundle)
     # Ensure init() runs immediately since page load already fired
     js = re.sub(r"window\.addEventListener\('load',\s*init,\s*false\);", "init();", js)
     
@@ -97,7 +114,20 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     js = js.replace("{ui_config_json}", "{}")
     js = js.replace("{workspace_tabs_component_js}", kardenwort_desk.get_workspace_tabs_js())
     
-    return js
+    cfg_inject = (
+        "window.__CONFIG__ = window.__CONFIG__ || {};\n"
+        f"window.__CONFIG__.audio_lmb_play = {'true' if lmb_play else 'false'};\n"
+        f"window.__CONFIG__.audio_lmb_source = \"{lmb_source}\";\n"
+        f"window.__CONFIG__.audio_lmb_chain_mode = \"{lmb_chain_mode}\";\n"
+        f"window.__CONFIG__.audio_source_range_mode = \"{source_range_mode}\";\n"
+        f"window.__CONFIG__.audio_table_range_mode = \"{table_range_mode}\";\n"
+        f"window.__CONFIG__.audio_rmb_play = {'true' if rmb_play else 'false'};\n"
+        f"window.__CONFIG__.audio_rmb_chain_mode = \"{rmb_chain_mode}\";\n"
+        f"window.__CONFIG__.audio_rmb_source = \"{rmb_source}\";\n"
+        f"window.__CONFIG__.audio_anki_tts_cli = \"{anki_tts_cli.replace('\\', '\\\\')}\";\n"
+        f"window.__CONFIG__.audio_python_exe = \"{python_exe.replace('\\', '\\\\')}\";\n"
+    )
+    return cfg_inject + js
 
 def extract_mvp_js():
     ahk_path = Path(__file__).parents[2] / "20240411110510-autohotkey" / "kardenwort-window" / "kardenwort-window.ahk"
