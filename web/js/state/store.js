@@ -15,7 +15,7 @@
  * @property {string} type - Action type discriminator
  * @property {any} [payload] - Action payload
  *
- * @typedef {function(SessionState, Action?): void} StateListener
+ * @typedef {function(SessionState, (Action|null)=): void} StateListener
  */
 
 (function () {
@@ -118,12 +118,13 @@
                 state.headers = Array.isArray(p.headers) ? p.headers : state.headers;
                 state.data_rows = Array.isArray(p.data_rows) ? p.data_rows : state.data_rows;
                 state.sentence_cards = Array.isArray(p.sentence_cards) ? p.sentence_cards : state.sentence_cards;
-                state.config = Object.assign({}, state.config, p.ui_config || p.config || {});
-                if (state.config.highlight_same_lemma !== undefined) {
-                    state.highlightSameLemma = Boolean(state.config.highlight_same_lemma);
+                var cfg = Object.assign({}, state.config, p.ui_config || p.config || {});
+                state.config = cfg;
+                if (cfg.highlight_same_lemma !== undefined) {
+                    state.highlightSameLemma = Boolean(cfg.highlight_same_lemma);
                 }
-                if (state.config.filter_selected_only !== undefined) {
-                    state.filterSelectedOnly = Boolean(state.config.filter_selected_only);
+                if (cfg.filter_selected_only !== undefined) {
+                    state.filterSelectedOnly = Boolean(cfg.filter_selected_only);
                 }
                 break;
             }
