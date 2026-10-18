@@ -58,10 +58,7 @@ def test_static_routes_http_delivery(test_server):
             content_type = resp.headers.get('Content-Type')
             assert 'text/html' in content_type
             body = resp.read().decode('utf-8')
-            assert '<header id="session-header"' in body
-            assert '<section id="source-section"' in body
             assert 'id="source-container"' in body
-            assert '<section id="translation-section"' in body
             assert 'id="translation-container"' in body
             assert '<table id="lemma-table"' in body
             assert 'id="kw-action-toolbar"' in body
@@ -120,7 +117,6 @@ def test_playwright_standalone_index_loads_containers(page, test_server):
     port = test_server
     page.goto(f"http://127.0.0.1:{port}/index.html")
 
-    assert page.locator("#session-header").is_visible()
     assert page.locator("#source-container").is_visible()
     assert page.locator("#translation-container").is_visible()
     assert page.locator("#lemma-table").is_visible()
@@ -708,8 +704,7 @@ def test_render_lookup_html_preserves_shell_containers_and_offline_stripping():
         sentence_translation="Лиса прыгает.",
     )
 
-    # 1. Shell container preservation (R3)
-    assert '<header id="session-header"' in html or 'id="session-header"' in html
+    assert 'id="source-container"' in html
     assert 'id="workspace-tab-bar"' in html
     assert 'id="kw-action-toolbar"' in html
     assert 'id="kw-lang-modal"' in html

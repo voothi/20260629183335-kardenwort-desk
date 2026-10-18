@@ -89,26 +89,11 @@
 }
 
 /* Sections */
-.kw-section,
-.section {
-    background: var(--bg-card);
-    border: 1px solid var(--border-color);
-    border-radius: var(--radius-md, 4px);
-    padding: 14px 16px;
-    margin-bottom: 14px;
-    box-sizing: border-box;
+.section,
+.kw-section {
     width: 100%;
-}
-
-.kw-section h3,
-.section-title,
-.kw-heading {
-    font-size: var(--font-size-xs, 12px);
-    font-weight: 600;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
-    color: var(--text-muted);
-    margin: 0 0 8px 0;
+    max-width: 100%;
+    box-sizing: border-box;
 }
 
 /* Source & Translation Containers */
@@ -417,33 +402,25 @@ body:not(.maximized) .kw-section {
 
 #lemma-table th.col-inflected, #lemma-table td.col-inflected,
 #lemma-table td[data-col="WordSourceInflectedForm"] {
-    width: 10%;
     text-align: left;
     color: var(--text-muted, #8b949e) !important;
 }
 #lemma-table th.col-lemma, #lemma-table td.col-lemma {
-    width: 10%;
     text-align: left;
 }
 #lemma-table th.col-translation, #lemma-table td.col-translation {
-    width: 10%;
     text-align: left;
 }
 #lemma-table th.col-ipa, #lemma-table td.col-ipa {
-    width: 6%;
     text-align: left;
     color: var(--text-muted, #8b949e) !important;
 }
 #lemma-table th.col-morphology, #lemma-table td.col-morphology {
-    width: 46%;
     text-align: left;
     color: var(--text-muted, #8b949e) !important;
 }
 #lemma-table th.col-pos, #lemma-table td.col-pos {
-    width: 6%;
-    text-align: center !important;
-    padding-left: 6px !important;
-    padding-right: 6px !important;
+    text-align: center;
     white-space: nowrap;
 }
 

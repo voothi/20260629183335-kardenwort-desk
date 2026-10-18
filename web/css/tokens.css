@@ -44,7 +44,7 @@ span.word {
 #translation-container span.word {
     cursor: pointer;
     transition: background-color 0.15s ease, color 0.15s ease;
-    border-radius: var(--radius-sm, 2px);
+    border-radius: var(--radius-sm, 3px);
     padding: 0;
     margin: 0;
     border: none;

@@ -26,11 +26,12 @@
         var header = document.getElementById('session-header');
         var indicator = document.getElementById('sse-status-indicator');
 
-        if (!indicator && header) {
+        if (!indicator) {
             indicator = document.createElement('span');
             indicator.id = 'sse-status-indicator';
             indicator.className = 'kw-sse-status';
-            header.appendChild(indicator);
+            if (!header) indicator.style.display = 'none';
+            (header || document.body).appendChild(indicator);
         }
 
         if (indicator) {

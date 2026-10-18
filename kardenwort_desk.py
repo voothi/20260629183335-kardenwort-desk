@@ -13745,7 +13745,10 @@ def render_declarative_web_shell(
 
     if ui_cfg.get("filter_selected_only"):
         base_html = base_html.replace('id="kw-btn-filter-selected"', 'id="kw-btn-filter-selected" class="btn-filter-active"')
-        base_html = base_html.replace('<table id="lemma-table">', '<table id="lemma-table" class="kw-filter-selected-only">')
+        if '<table id="lemma-table" class="' in base_html:
+            base_html = base_html.replace('<table id="lemma-table" class="', '<table id="lemma-table" class="kw-filter-selected-only ')
+        else:
+            base_html = base_html.replace('<table id="lemma-table">', '<table id="lemma-table" class="kw-filter-selected-only">')
     else:
         base_html = base_html.replace('id="kw-btn-filter-selected"', 'id="kw-btn-filter-selected" class=""')
 
@@ -14011,7 +14014,13 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
                 if h_source == '__default__':
                     h_source = "Source Text"
                 if h_source:
-                    base_html = re.sub(r'<h3>Source Text</h3>', f'<h3>{html.escape(h_source)}</h3>', base_html)
+                    if '<h3>Source Text</h3>' in base_html:
+                        base_html = re.sub(r'<h3>Source Text</h3>', f'<h3>{html.escape(h_source)}</h3>', base_html)
+                    else:
+                        base_html = base_html.replace(
+                            '<div class="source-text"',
+                            f'<h3>{html.escape(h_source)}</h3>\n            <div class="source-text"'
+                        )
                 else:
                     base_html = re.sub(r'<h3>Source Text</h3>\s*', '', base_html)
                 normalized_text = normalize_blank_lines(ctx["text"])
@@ -14026,7 +14035,13 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
                 if h_trans == '__default__':
                     h_trans = "Translation"
                 if h_trans:
-                    base_html = re.sub(r'<h3>Translation</h3>', f'<h3>{html.escape(h_trans)}</h3>', base_html)
+                    if '<h3>Translation</h3>' in base_html:
+                        base_html = re.sub(r'<h3>Translation</h3>', f'<h3>{html.escape(h_trans)}</h3>', base_html)
+                    else:
+                        base_html = base_html.replace(
+                            '<div class="translation-text"',
+                            f'<h3>{html.escape(h_trans)}</h3>\n            <div class="translation-text"'
+                        )
                 else:
                     base_html = re.sub(r'<h3>Translation</h3>\s*', '', base_html)
                 normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
@@ -14041,7 +14056,13 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
                 if h_lemmas == '__default__':
                     h_lemmas = "Lemmas"
                 if h_lemmas:
-                    base_html = re.sub(r'<h3>Lemmas</h3>', f'<h3>{html.escape(h_lemmas)}</h3>', base_html)
+                    if '<h3>Lemmas</h3>' in base_html:
+                        base_html = re.sub(r'<h3>Lemmas</h3>', f'<h3>{html.escape(h_lemmas)}</h3>', base_html)
+                    else:
+                        base_html = base_html.replace(
+                            '<table id="lemma-table"',
+                            f'<h3>{html.escape(h_lemmas)}</h3>\n            <table id="lemma-table"'
+                        )
                 else:
                     base_html = re.sub(r'<h3>Lemmas</h3>\s*', '', base_html)
 

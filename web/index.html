@@ -12,69 +12,55 @@
 </head>
 <body>
     <div class="kw-lookup-container container">
-        <!-- Session Header: Title, Language Badge, SSE Status -->
-        <header id="session-header" class="session-header">
-            <h1 id="session-title" class="session-title">Kardenwort Desk</h1>
-            <div class="session-meta">
-                <span id="lang-badge" class="session-badge">de &rarr; ru</span>
-                <span id="sse-status" class="sse-status" title="SSE Disconnected"></span>
-            </div>
-        </header>
-
         <!-- Workspace Tab Navigation -->
         <nav id="workspace-tab-bar" class="kw-tab-bar"><!-- WORKSPACE_TAB_BAR --></nav>
 
         <!-- Source Text Container -->
         <!-- SECTION_SOURCE_START -->
-        <section id="source-section" class="kw-section source-section">
-            <h3>Source Text</h3>
+        <div class="section source-section" id="source-section">
             <div class="source-text" id="source-container"><!-- SOURCE_TEXT --></div>
-        </section>
+        </div>
         <!-- SECTION_SOURCE_END -->
 
         <!-- Translation Container -->
         <!-- SECTION_TRANSLATION_START -->
-        <section id="translation-section" class="kw-section translation-section">
-            <h3>Translation</h3>
+        <div class="section translation-section" id="translation-section">
             <div class="translation-text" id="translation-container"><!-- TRANSLATION_TEXT --></div>
-        </section>
+        </div>
         <!-- SECTION_TRANSLATION_END -->
 
         <!-- Lemma Extraction Table -->
         <!-- SECTION_LEMMAS_START -->
-        <section id="lemmas-section" class="kw-section lemmas-section">
-            <h3>Lemmas</h3>
-            <div class="kw-table-container">
-                <table id="lemma-table">
-                    <thead>
-                        <tr>
-                            <th class="col-inflected">Inflected</th>
-                            <th class="col-lemma">Lemma</th>
-                            <th class="col-translation">Translation</th>
-                            <th class="col-ipa">IPA</th>
-                            <th class="col-morphology">Morphology</th>
-                            <th class="col-pos">POS</th>
-                            <th class="col-gender">Gender</th>
-                        </tr>
-                    </thead>
-                    <tbody><!-- TABLE_ROWS --></tbody>
-                </table>
-            </div>
-
-            <!-- Action Toolbar Controls -->
-            <div class="kw-action-toolbar" id="kw-action-toolbar">
-                <button type="button" id="kw-btn-same-lemma" class="btn-toggle" title="Toggle Lemma-wide highlighting">Lemma</button>
-                <button type="button" id="kw-btn-filter-selected" title="Toggle view: show only selected words">Selected</button>
-                <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
-                <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
-                <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
-                <button type="button" id="kw-btn-reword" title="Re-process selected words">Re-word</button>
-                <button type="button" id="kw-btn-export" title="Send selected rows to Anki">Send to Anki</button>
-                <button type="button" id="kw-btn-hand-tool" title="Toggle Text Selection / Hand Tool (Ctrl+Shift+A)">Hand Tool</button>
-                <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">Delete</button>
-            </div>
-        </section>
+        <div class="section lemmas-section" id="lemmas-section">
+            <table id="lemma-table">
+                <thead>
+                    <tr>
+                        <th class="col-inflected">Inflected</th>
+                        <th class="col-lemma">Lemma</th>
+                        <th class="col-translation">Translation</th>
+                        <th class="col-ipa">IPA</th>
+                        <th class="col-morphology">Morphology</th>
+                        <th class="col-pos">POS</th>
+                        <th class="col-gender">Gender</th>
+                    </tr>
+                </thead>
+                <tbody><!-- TABLE_ROWS --></tbody>
+            </table>
+        </div>
         <!-- SECTION_LEMMAS_END -->
+
+        <!-- Action Toolbar Controls -->
+        <div class="kw-action-toolbar" id="kw-action-toolbar">
+            <button type="button" id="kw-btn-same-lemma" class="btn-toggle" title="Toggle Lemma-wide highlighting">Lemma</button>
+            <button type="button" id="kw-btn-filter-selected" title="Toggle view: show only selected words">Selected</button>
+            <button type="button" id="kw-btn-save" class="btn-primary" disabled title="Save changes (Ctrl+S)">Save (Ctrl+S)</button>
+            <button type="button" id="kw-btn-update" title="Update / Re-render view (F5)">Update</button>
+            <button type="button" id="kw-btn-retext" title="Re-translate text">Re-text</button>
+            <button type="button" id="kw-btn-reword" title="Re-process selected words">Re-word</button>
+            <button type="button" id="kw-btn-export" title="Send selected rows to Anki">Send to Anki</button>
+            <button type="button" id="kw-btn-hand-tool" title="Toggle Text Selection / Hand Tool (Ctrl+Shift+A)">Hand Tool</button>
+            <button type="button" id="kw-btn-delete" class="btn-danger" title="Delete selected rows (Delete)">Delete</button>
+        </div>
 
         <!-- Language Verification Modal -->
         <div class="kw-modal-backdrop" id="kw-lang-modal" style="display: none;">

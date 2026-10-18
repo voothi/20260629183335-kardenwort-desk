@@ -24,9 +24,9 @@ body.has-dock-bottom .container {
 
 .source-text,
 #source-container {
-    font-size: 16px;
+    font-size: 14px;
     color: var(--text-color, #e3e6eb);
-    line-height: 1.6;
+    line-height: 1.5;
     word-break: break-word;
     -moz-user-select: text;
     -webkit-user-select: text;
@@ -36,10 +36,10 @@ body.has-dock-bottom .container {
 
 .translation-text,
 #translation-container {
-    font-size: 16px;
+    font-size: 14px;
     color: var(--text-color, #e3e6eb);
-    line-height: 1.6;
-    min-height: 1.6em;
+    line-height: 1.5;
+    min-height: 1.5em;
     word-break: break-word;
     -moz-user-select: text;
     -webkit-user-select: text;
