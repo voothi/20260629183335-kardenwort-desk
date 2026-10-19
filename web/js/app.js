@@ -9858,58 +9858,10 @@
             }
         });
 
-        var btnSave = document.getElementById('kw-btn-save');
-        if (btnSave && !btnSave.__kw_bound) {
-            btnSave.__kw_bound = true;
-            addEvent(btnSave, 'click', function(e) {
-                if (typeof window.onSaveClick === 'function') window.onSaveClick(e);
-            });
-        }
-        var btnUpdate = document.getElementById('kw-btn-update');
-        if (btnUpdate && !btnUpdate.__kw_bound) {
-            btnUpdate.__kw_bound = true;
-            addEvent(btnUpdate, 'click', window.onUpdateClick);
-        }
-        var btnRetext = document.getElementById('kw-btn-retext');
-        if (btnRetext && !btnRetext.__kw_bound) {
-            btnRetext.__kw_bound = true;
-            addEvent(btnRetext, 'click', window.onRetextClick);
-        }
-        var btnReword = document.getElementById('kw-btn-reword');
-        if (btnReword && !btnReword.__kw_bound) {
-            btnReword.__kw_bound = true;
-            addEvent(btnReword, 'click', window.onRewordClick);
-        }
-        var btnExport = document.getElementById('kw-btn-export');
-        if (btnExport && !btnExport.__kw_bound) {
-            btnExport.__kw_bound = true;
-            addEvent(btnExport, 'click', window.onSendToAnkiClick);
-        }
-        var btnHand = document.getElementById('kw-btn-hand-tool');
-        if (btnHand && !btnHand.__kw_bound) {
-            btnHand.__kw_bound = true;
-            addEvent(btnHand, 'click', window.onHandToolClick);
-        }
-        var btnDelete = document.getElementById('kw-btn-delete');
-        if (btnDelete && !btnDelete.__kw_bound) {
-            btnDelete.__kw_bound = true;
-            addEvent(btnDelete, 'click', window.onDeleteClick);
-        }
-
-        var btnLangYes = document.getElementById('kw-btn-lang-yes');
-        if (btnLangYes && !btnLangYes.__kw_bound) {
-            btnLangYes.__kw_bound = true;
-            addEvent(btnLangYes, 'click', window.onLangYes);
-        }
-        var btnLangNo = document.getElementById('kw-btn-lang-no');
-        if (btnLangNo && !btnLangNo.__kw_bound) {
-            btnLangNo.__kw_bound = true;
-            addEvent(btnLangNo, 'click', window.onLangNo);
-        }
-        var btnLangCancel = document.getElementById('kw-btn-lang-cancel');
-        if (btnLangCancel && !btnLangCancel.__kw_bound) {
-            btnLangCancel.__kw_bound = true;
-            addEvent(btnLangCancel, 'click', window.onLangCancel);
+        if (typeof wireActionToolbar === 'function') {
+            wireActionToolbar();
+        } else if (typeof window.wireActionToolbar === 'function') {
+            window.wireActionToolbar();
         }
 
         addEvent(document, 'keydown', function(e) {

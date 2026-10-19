@@ -1412,8 +1412,8 @@ def test_word_highlight_styles_and_mechanics_parity(page, test_server):
 
 def test_toolbar_buttons_active_style_and_specificity_under_light_compact_white_themes(page, test_server):
     """
-    Task 4.1: Verify #kw-btn-filter-selected and #kw-btn-same-lemma computed background
-    is golden-yellow rgb(210, 153, 34) and font-weight is 600 under theme-light, theme-white, and theme-compact.
+    Task 4.1: Verify #kw-btn-filter-selected, #kw-btn-same-lemma, #kw-btn-hand-tool, and #kw-btn-delete
+    computed styles under theme-light, theme-white, and theme-compact.
     """
     port = test_server
     page.goto(f"http://127.0.0.1:{port}/index.html")
@@ -1424,25 +1424,37 @@ def test_toolbar_buttons_active_style_and_specificity_under_light_compact_white_
             document.body.className = theme;
             const filterBtn = document.getElementById(\'kw-btn-filter-selected\');
             const lemmaBtn = document.getElementById(\'kw-btn-same-lemma\');
+            const handBtn = document.getElementById(\'kw-btn-hand-tool\');
             filterBtn.style.transition = \'none\';
             lemmaBtn.style.transition = \'none\';
+            handBtn.style.transition = \'none\';
             filterBtn.classList.add(\'btn-filter-active\');
             lemmaBtn.classList.add(\'active\');
+            handBtn.classList.add(\'active\');
 
             const filterStyle = window.getComputedStyle(filterBtn);
             const lemmaStyle = window.getComputedStyle(lemmaBtn);
+            const handStyle = window.getComputedStyle(handBtn);
 
             return {
                 filterBg: filterStyle.backgroundColor,
                 filterFw: filterStyle.fontWeight,
                 lemmaBg: lemmaStyle.backgroundColor,
-                lemmaFw: lemmaStyle.fontWeight
+                lemmaFw: lemmaStyle.fontWeight,
+                handBg: handStyle.backgroundColor
             };
         }""", theme)
         assert res["filterBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for filter button in {theme}, got {res['filterBg']}"
         assert res["lemmaBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for lemma button in {theme}, got {res['lemmaBg']}"
         assert res["filterFw"] in ["600", "bold"], f"Expected font-weight 600 for filter button in {theme}, got {res['filterFw']}"
         assert res["lemmaFw"] in ["600", "bold"], f"Expected font-weight 600 for lemma button in {theme}, got {res['lemmaFw']}"
+        assert "56, 166, 255" in res["handBg"], f"Expected active blue background for hand tool in {theme}, got {res['handBg']}"
+
+        # Verify delete button hover style under theme
+        del_btn = page.locator("#kw-btn-delete")
+        del_btn.hover()
+        del_color = page.evaluate("() => window.getComputedStyle(document.getElementById('kw-btn-delete')).color")
+        assert del_color == "rgb(255, 123, 114)", f"Expected danger red #ff7b72 for delete hover in {theme}, got {del_color}"
 
 
 def test_lemma_peer_highlight_persists_across_mouseout(page, tmp_path):

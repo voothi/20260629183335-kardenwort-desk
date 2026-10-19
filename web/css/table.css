@@ -890,15 +890,24 @@ body.theme-compact .kw-action-toolbar:hover,
     color: var(--text-color, #e3e6eb);
 }
 
+.kw-action-toolbar button#kw-btn-delete.btn-danger:hover:not(:disabled),
 .kw-action-toolbar button.btn-danger:hover:not(:disabled) {
     background: rgba(248, 81, 73, 0.12);
     border-color: rgba(248, 81, 73, 0.4);
     color: #ff7b72;
 }
 
+.kw-action-toolbar button#kw-btn-hand-tool.active,
 .kw-action-toolbar button.active {
     background: var(--flipped-bg, rgba(56, 166, 255, 0.22));
     border-color: var(--flipped-border, rgba(165, 214, 255, 0.6));
+    color: var(--flipped-text, #a5d6ff);
+}
+
+.kw-action-toolbar button#kw-btn-hand-tool.active:hover:not(:disabled),
+.kw-action-toolbar button.active:hover:not(:disabled) {
+    background: var(--flipped-bg, rgba(56, 166, 255, 0.35));
+    border-color: var(--flipped-border, rgba(165, 214, 255, 0.8));
     color: var(--flipped-text, #a5d6ff);
 }
 

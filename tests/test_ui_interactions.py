@@ -2415,7 +2415,8 @@ def test_drag_selection_audio_three_tokens_separate_vs_joined(page):
     assert play_calls[0]["arg"].endswith("en\\nsplit ||| camel ||| case")
 
     # Joined mode
-    page.evaluate("window.__ahkCalls = [];")
+    page.set_content(html)
+    page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     page.evaluate(extract_desk_js(lmb_play=True, lmb_source="lemma", lmb_chain_mode="joined"))
     page.evaluate("""() => {
         const s0 = document.querySelector("span[data-lower-clean='split']");
