@@ -45,18 +45,22 @@
     var TranslationView = {
         /** @type {HTMLElement|null} */
         container: null,
+        /** @type {boolean} */
+        _mounted: false,
 
         /**
          * Mount component to DOM container
          * @param {HTMLElement|string} target
          */
         mount: function (target) {
+            if (this._mounted) return;
             if (typeof target === 'string') {
                 this.container = /** @type {HTMLElement|null} */ (document.querySelector(target));
             } else {
                 this.container = target;
             }
             if (this.container) {
+                this._mounted = true;
                 this.bindEvents();
             }
         },
@@ -86,9 +90,12 @@
                         var part = parts[k];
                         if (!part) continue;
                         if (k % 2 === 1) {
-                            html += '<span class="word" data-word="' + escapeHtml(part) +
+                            var lc = part.toLowerCase();
+                            html += '<span class="word hl-mvp" data-word="' + escapeHtml(part) +
                                 '" data-word-idx="' + wordIdx +
-                                '" style="padding: 0;">' + escapeHtml(part) + '</span>';
+                                '" data-order="' + wordIdx +
+                                '" data-lower-clean="' + escapeHtml(lc) +
+                                '" data-line-idx="0" data-sentence-idx="1" style="padding: 0;">' + escapeHtml(part) + '</span>';
                             wordIdx++;
                         } else {
                             html += escapeHtml(part);
@@ -97,6 +104,10 @@
                     this.container.innerHTML = html;
                 } else {
                     this.container.innerHTML = text;
+                }
+                var w = /** @type {any} */ (typeof window !== 'undefined' ? window : null);
+                if (w && typeof w.wireMvpEvents === 'function') {
+                    w.wireMvpEvents();
                 }
             }
         },

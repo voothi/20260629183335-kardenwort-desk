@@ -46,18 +46,22 @@
     var SourceViewer = {
         /** @type {HTMLElement|null} */
         container: null,
+        /** @type {boolean} */
+        _mounted: false,
 
         /**
          * Mount component to DOM container
          * @param {HTMLElement|string} target
          */
         mount: function (target) {
+            if (this._mounted) return;
             if (typeof target === 'string') {
                 this.container = /** @type {HTMLElement|null} */ (document.querySelector(target));
             } else {
                 this.container = target;
             }
             if (this.container) {
+                this._mounted = true;
                 this.bindEvents();
             }
         },
@@ -108,29 +112,6 @@
         bindEvents: function () {
             if (!this.container) return;
             var self = this;
-
-            this.container.addEventListener('mouseover', function (e) {
-                var target = /** @type {HTMLElement|null} */ (e.target);
-                var span = target && target.closest ? target.closest('#source-container span.word') : null;
-                if (span) {
-                    var w = /** @type {any} */ (window);
-                    if (w.AppState && w.AppState.highlightSameLemma) {
-                        var lem = span.getAttribute('data-lower-clean') || span.textContent || '';
-                        if (typeof w.highlightSameLemmaPeers === 'function') {
-                            w.highlightSameLemmaPeers(lem.trim().toLowerCase());
-                        }
-                    }
-                }
-            });
-
-            this.container.addEventListener('mouseout', function (e) {
-                var w = /** @type {any} */ (window);
-                if (w.AppState && w.AppState.highlightSameLemma) {
-                    if (typeof w.clearSameLemmaHighlights === 'function') {
-                        w.clearSameLemmaHighlights();
-                    }
-                }
-            });
 
             this.container.addEventListener('contextmenu', function (e) {
                 var target = /** @type {HTMLElement|null} */ (e.target);

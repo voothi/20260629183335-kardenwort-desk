@@ -1331,6 +1331,86 @@ def test_desktop_typography_and_subpixel_antialiasing_parity(page, test_server):
     assert "-webkit-font-smoothing: antialiased" not in variables_css, "variables.css must not contain -webkit-font-smoothing: antialiased"
 
 
+def test_word_highlight_styles_and_mechanics_parity(page, test_server):
+    """
+    Verify word highlighting styles and mechanics parity with baseline 56f8696:
+    - Word spans in #source-container and #translation-container compute to display: inline.
+    - Word spans have 0.2s transitions for background-color and color.
+    - Dark theme selected orange row text evaluates to #ffcc00.
+    - Dark theme selected purple row text evaluates to #b39ddb.
+    - Unconnected tokens (.not-connected) have background rgba(139, 148, 158, 0.15).
+    - Component mount idempotency: SourceViewer, TranslationView, LemmaTable have _mounted guard.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    metrics = page.evaluate("""() => {
+        // Create test source word span
+        const sc = document.getElementById('source-container');
+        const srcSpan = document.createElement('span');
+        srcSpan.className = 'word';
+        srcSpan.textContent = 'Testword';
+        sc.appendChild(srcSpan);
+        const srcSpanStyle = window.getComputedStyle(srcSpan);
+        const srcDisplay = srcSpanStyle.display;
+        const srcTransition = srcSpanStyle.transition;
+        srcSpan.remove();
+
+        // Create test translation word span
+        const tc = document.getElementById('translation-container');
+        const transSpan = document.createElement('span');
+        transSpan.className = 'word';
+        transSpan.textContent = 'Translation';
+        tc.appendChild(transSpan);
+        const transSpanStyle = window.getComputedStyle(transSpan);
+        const transDisplay = transSpanStyle.display;
+        transSpan.remove();
+
+        // Check CSS variables for dark theme (default on body)
+        const rootStyle = window.getComputedStyle(document.body);
+        const selectedOrangeText = rootStyle.getPropertyValue('--selected-orange-row-text').trim();
+        const selectedPurpleText = rootStyle.getPropertyValue('--selected-purple-row-text').trim();
+        const notConnectedBg = rootStyle.getPropertyValue('--not-connected-bg').trim();
+
+        // Check component _mounted flags
+        const svMounted = window.SourceViewer ? window.SourceViewer._mounted : false;
+        const tvMounted = window.TranslationView ? window.TranslationView._mounted : false;
+        const ltMounted = window.LemmaTable ? window.LemmaTable._mounted : false;
+
+        return {
+            srcDisplay,
+            srcTransition,
+            transDisplay,
+            selectedOrangeText,
+            selectedPurpleText,
+            notConnectedBg,
+            svMounted,
+            tvMounted,
+            ltMounted
+        };
+    }""")
+
+    # 1. Word spans must use inline display flow
+    assert metrics["srcDisplay"] == "inline", f"Expected display: inline on #source-container span.word, got {metrics['srcDisplay']}"
+    assert metrics["transDisplay"] == "inline", f"Expected display: inline on #translation-container span.word, got {metrics['transDisplay']}"
+
+    # 2. Transition duration parity (0.2s)
+    assert "0.2s" in metrics["srcTransition"], f"Expected 0.2s transition on span.word, got {metrics['srcTransition']}"
+
+    # 3. Selected row text color parity
+    assert metrics["selectedOrangeText"] == "#ffcc00", f"Expected #ffcc00 for --selected-orange-row-text, got {metrics['selectedOrangeText']}"
+    assert metrics["selectedPurpleText"] == "#b39ddb", f"Expected #b39ddb for --selected-purple-row-text, got {metrics['selectedPurpleText']}"
+
+    # 4. Unconnected background variable
+    assert "139, 148, 158" in metrics["notConnectedBg"], f"Expected rgba(139, 148, 158, 0.15) for --not-connected-bg, got {metrics['notConnectedBg']}"
+
+    # 5. Component idempotency guards
+    assert metrics["svMounted"] is True, "SourceViewer._mounted must be true after initial mount"
+    assert metrics["tvMounted"] is True, "TranslationView._mounted must be true after initial mount"
+    assert metrics["ltMounted"] is True, "LemmaTable._mounted must be true after initial mount"
+
+
+
 
 
 

@@ -38,18 +38,22 @@
         table: null,
         /** @type {HTMLTableSectionElement|null} */
         tbody: null,
+        /** @type {boolean} */
+        _mounted: false,
 
         /**
          * Mount component to DOM container
          * @param {HTMLTableElement|string} target
          */
         mount: function (target) {
+            if (this._mounted) return;
             if (typeof target === 'string') {
                 this.table = /** @type {HTMLTableElement|null} */ (document.querySelector(target));
             } else {
                 this.table = target;
             }
             if (this.table) {
+                this._mounted = true;
                 this.tbody = this.table.querySelector('tbody');
                 this.bindEvents();
             }

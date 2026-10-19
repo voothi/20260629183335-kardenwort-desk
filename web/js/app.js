@@ -2008,7 +2008,7 @@
             var transSpans = tc.getElementsByTagName('span');
             for (var j = 0; j < transSpans.length; j++) {
                 var span = transSpans[j];
-                if (span.classList && span.classList.contains('hl-mvp')) {
+                if (span.classList && (span.classList.contains('hl-mvp') || span.classList.contains('word'))) {
                     if (span.getAttribute('data-mvp-wired')) continue;
                     span.setAttribute('data-mvp-wired', '1');
                     addEvent(span, 'mouseover', handleMouseOver);
@@ -10083,14 +10083,8 @@
 
     if (document.addEventListener) {
         document.addEventListener('DOMContentLoaded', function() {
-            if (window.SourceViewer && typeof window.SourceViewer.mount === 'function') {
-                window.SourceViewer.mount('#source-container');
-            }
-            if (window.TranslationView && typeof window.TranslationView.mount === 'function') {
-                window.TranslationView.mount('#translation-container');
-            }
-            if (window.LemmaTable && typeof window.LemmaTable.mount === 'function') {
-                window.LemmaTable.mount('#lemma-table');
+            if (!isInitialized) {
+                init();
             }
             if (typeof hydrateSession === 'function') {
                 hydrateSession();
@@ -10100,9 +10094,6 @@
             }
             if (typeof window.rebindTokenSpans === 'function') {
                 window.rebindTokenSpans();
-            }
-            if (!isInitialized) {
-                init();
             }
         }, false);
     }
