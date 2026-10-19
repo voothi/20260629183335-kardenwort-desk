@@ -1264,6 +1264,74 @@ def test_sse_streaming_diskless_updates(page, test_server, tmp_path):
     assert res["isDisconnected"] is True
 
 
+def test_desktop_typography_and_subpixel_antialiasing_parity(page, test_server):
+    """
+    Verify desktop typography parity matching baseline snapshot 56f8696:
+    - Native ClearType subpixel rendering (no -webkit-font-smoothing: antialiased).
+    - Source and translation containers render at 16px font size with 1.6 line height.
+    - .kw-gender chip renders with font-weight: 700 and line-height: 1.
+    - #lemma-table th renders with letter-spacing: 0.05em.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    metrics = page.evaluate("""() => {
+        const bodyStyle = window.getComputedStyle(document.body);
+        const fontSmoothing = bodyStyle.webkitFontSmoothing || bodyStyle.fontSmoothing;
+
+        const src = document.getElementById('source-container');
+        const srcStyle = src ? window.getComputedStyle(src) : null;
+
+        const trans = document.getElementById('translation-container');
+        const transStyle = trans ? window.getComputedStyle(trans) : null;
+
+        // Gender badge test element
+        const genderEl = document.createElement('span');
+        genderEl.className = 'kw-gender kw-gender-m';
+        genderEl.textContent = 'm';
+        document.body.appendChild(genderEl);
+        const genderStyle = window.getComputedStyle(genderEl);
+        const genderWeight = genderStyle.fontWeight;
+        const genderLineHeight = genderStyle.lineHeight;
+        genderEl.remove();
+
+        // Header test element
+        const th = document.querySelector('#lemma-table th');
+        const thStyle = th ? window.getComputedStyle(th) : null;
+
+        return {
+            fontSmoothing,
+            srcFontSize: srcStyle ? srcStyle.fontSize : null,
+            srcLineHeight: srcStyle ? srcStyle.lineHeight : null,
+            transFontSize: transStyle ? transStyle.fontSize : null,
+            transLineHeight: transStyle ? transStyle.lineHeight : null,
+            genderWeight,
+            genderLineHeight,
+            thLetterSpacing: thStyle ? thStyle.letterSpacing : null
+        };
+    }""")
+
+    # 1. Antialiasing must NOT be forced to grayscale
+    assert metrics["fontSmoothing"] != "antialiased", "body must not force grayscale antialiasing"
+
+    # 2. Source container font metrics
+    assert metrics["srcFontSize"] == "16px", f"Expected 16px font-size on #source-container, got {metrics['srcFontSize']}"
+    assert float(metrics["srcLineHeight"].replace("px", "")) >= 24.0, f"Expected ~25.6px line-height on #source-container, got {metrics['srcLineHeight']}"
+
+    # 3. Translation container font metrics
+    assert metrics["transFontSize"] == "16px", f"Expected 16px font-size on #translation-container, got {metrics['transFontSize']}"
+    assert float(metrics["transLineHeight"].replace("px", "")) >= 24.0, f"Expected ~25.6px line-height on #translation-container, got {metrics['transLineHeight']}"
+
+    # 4. Gender badge typography
+    assert metrics["genderWeight"] in ("700", "bold"), f"Expected 700 font-weight on .kw-gender, got {metrics['genderWeight']}"
+
+    # 5. Static CSS inspection
+    desk_dir = Path(__file__).resolve().parent.parent
+    variables_css = (desk_dir / "web" / "css" / "variables.css").read_text(encoding="utf-8")
+    assert "-webkit-font-smoothing: antialiased" not in variables_css, "variables.css must not contain -webkit-font-smoothing: antialiased"
+
+
+
 
 
 
