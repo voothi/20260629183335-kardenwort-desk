@@ -7460,7 +7460,7 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     if cand != active_provider and cand not in next_visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                         fallback_provider = cand
                         break
-            if not fallback_provider and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in next_visited:
+            if not fallback_provider and (strategy == 'offline_fallback' or 'argos' in provider_order) and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in next_visited:
                 fallback_provider = 'argos'
 
         if fallback_provider:
@@ -7523,11 +7523,12 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
 
             p_idx += 1
 
-        # Zero-drop terminal resolution through offline Argos if available and not yet successfully resolved
-        if strategy != 'strict' and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in provider_order:
+        # Terminal resolution through offline Argos only when explicitly permitted by strategy or configuration
+        allow_terminal_argos = (strategy == 'offline_fallback' or 'argos' in provider_order)
+        if allow_terminal_argos and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in provider_order:
             try:
                 last_prov = provider_order[-1] if provider_order else active_provider
-                logger.warning(f"Terminal zero-drop fallback to offline Argos for lemma '{lemma}'")
+                logger.warning(f"Terminal fallback to offline Argos for lemma '{lemma}'")
                 notify_provider_failover('lemma', last_prov, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                 val = _call_translate_text(lemma, 'argos')
                 val_str = (str(val) if val is not None else "").strip()

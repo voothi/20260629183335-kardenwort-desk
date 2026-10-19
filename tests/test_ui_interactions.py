@@ -6208,10 +6208,11 @@ def test_multi_hop_failover_updates_skeleton_signatures_in_place_without_empty_c
 
     # Verify that WorkspaceTabs preserves skeleton loader upon failover and does not return empty string
     res_html = page.evaluate("window.WorkspaceTabs ? window.WorkspaceTabs.getTranslationHtml('[FAILED]') : ''")
-    assert 'class="skeleton-loader"' in res_html
+    assert 'skeleton-loader' in res_html
+    assert 'kw-skeleton-cell' in res_html
     assert 'Argos...' in res_html
 
-    # Verify that LemmaTable.makeCell mounts skeleton elements as DOM nodes
+    # Verify that LemmaTable.makeCell mounts skeleton elements as DOM nodes with .kw-skeleton-cell
     cell_html = page.evaluate("""() => {
         var dummyDiv = document.createElement('div');
         if (window.LemmaTable && window.LemmaTable.makeCell) {
@@ -6222,7 +6223,20 @@ def test_multi_hop_failover_updates_skeleton_signatures_in_place_without_empty_c
         return '';
     }""")
     if cell_html:
-        assert 'class="skeleton-loader"' in cell_html
+        assert 'skeleton-loader' in cell_html
+        assert 'kw-skeleton-cell' in cell_html
+
+    # Verify WorkspaceTabs cards maintain unbraided clean strings for word translations
+    card_words = page.evaluate("""() => {
+        if (window.WorkspaceTabs && window.WorkspaceTabs.getCards) {
+            var cards = window.WorkspaceTabs.getCards();
+            return (cards && cards[0] && cards[0].words) ? cards[0].words : null;
+        }
+        return null;
+    }""")
+    if card_words:
+        for cw in card_words:
+            assert "<span" not in (cw.get("translation") or "")
 
 
 def test_token_pinning_and_table_row_selection_unification(page):

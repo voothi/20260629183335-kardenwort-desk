@@ -901,7 +901,11 @@
                         if (nodeVal && typeof nodeVal === 'object' && nodeVal.nodeType) {
                             scrollDiv.appendChild(nodeVal);
                         } else if (typeof text === 'string' && text.indexOf('skeleton-loader') !== -1) {
-                            scrollDiv.innerHTML = text;
+                            if (text.indexOf('kw-skeleton-cell') === -1) {
+                                scrollDiv.innerHTML = text.replace('class="skeleton-loader', 'class="skeleton-loader kw-skeleton-cell');
+                            } else {
+                                scrollDiv.innerHTML = text;
+                            }
                         } else {
                             scrollDiv.textContent = text || '';
                         }
@@ -1596,7 +1600,10 @@
                         if (wCards[wc].words) {
                             for (var wi = 0; wi < wCards[wc].words.length; wi++) {
                                 var wordObj = wCards[wc].words[wi];
-                                if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1) {
+                                if (wordObj.is_pending) {
+                                    wordObj.pending_provider = pLower;
+                                    wordObj.row_html = null;
+                                } else if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1) {
                                     wordObj.translation = updateSkeletonHtml(wordObj.translation);
                                     wordObj.row_html = null;
                                 }

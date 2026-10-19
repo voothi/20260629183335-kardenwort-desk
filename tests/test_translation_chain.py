@@ -639,7 +639,7 @@ def test_orthogonal_chains_disparate_configurations(tmp_path):
 def test_cyclic_multi_provider_generic_errors_terminate_without_recursion_error(tmp_path):
     """Task 3.1: Verify cyclic multi-provider generic errors terminate safely without RecursionError."""
     resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
-    config = make_config(lemma_chain="google, deepl", strategy="chain")
+    config = make_config(lemma_chain="google, deepl, argos", strategy="chain")
 
     failover_calls = []
 
@@ -810,6 +810,45 @@ def test_single_lemma_recovery_multi_hop_failover(tmp_path):
         lemma_events = [(e[0], e[1], e[2]) for e in events if e[0] == "lemma"]
         assert ("lemma", "google", "deepl") in lemma_events
         assert ("lemma", "deepl", "argos") in lemma_events
+    finally:
+        kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
+
+
+def test_restricted_chain_fails_cleanly_without_unsolicited_argos_fallback(tmp_path):
+    resolved_paths = {"results_dir": tmp_path, "base_dir": tmp_path}
+    config = make_config(chain="google, deepl", lemma_chain="google, deepl", strategy="chain")
+    test_zid = "20261020000711"
+
+    events = []
+    def failover_collector(task, from_p, to_p, zid=None):
+        events.append((task, from_p, to_p, zid))
+
+    kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
+
+    def mock_translate_text(text, source, target, cfg, paths, provider=None, task_type=None, zid=None, on_failover=None, **kwargs):
+        prov = provider or "google"
+        if prov == "google":
+            raise TimeoutError("Google connection timed out")
+        elif prov == "deepl":
+            raise RuntimeError("DeepL 429 Too Many Requests")
+        elif prov == "argos":
+            return kardenwort_desk.ProvenanceString("Birne", provenance="live:argos")
+        raise RuntimeError(f"Unexpected provider {prov}")
+
+    try:
+        with patch("kardenwort_desk.is_network_online_multi", return_value=True), \
+             patch("kardenwort_desk.translate_text", side_effect=mock_translate_text):
+            res = kardenwort_desk.translate_lemmas_fast_path(
+                ["Pear1"], "en", "de", config, resolved_paths,
+                provider="google", zid=test_zid, on_failover=failover_collector
+            )
+            # Must return empty translation because all configured providers failed and Argos was not configured
+            assert res.get("Pear1") == ""
+
+        lemma_events = [(e[0], e[1], e[2]) for e in events if e[0] == "lemma"]
+        assert ("lemma", "google", "deepl") in lemma_events
+        # Argos must NOT be in lemma_events
+        assert not any(e[2] == "argos" for e in lemma_events)
     finally:
         kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
 

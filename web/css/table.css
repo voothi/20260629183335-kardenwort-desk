@@ -555,6 +555,19 @@ td.dirty {
     max-width: 500px;
 }
 
+.skeleton-loader.kw-skeleton-cell,
+td.col-translation .skeleton-loader,
+td[data-col="WordDestination"] .skeleton-loader {
+    height: 20px;
+    min-height: 20px;
+    font-size: 11px;
+    width: 100%;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    box-sizing: border-box;
+}
+
 @keyframes pulse-skeleton {
     0% { background-position: 0% 50% }
     50% { background-position: 100% 50% }

@@ -456,7 +456,7 @@
                 return '';
             }
             var pLabel = formatProviderSkeletonLabel(getTextBaseProvider());
-            return '<span class="skeleton-loader" data-pending="true" style="width: 100%; min-height: 1.6em; display: inline-flex;" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
+            return '<span class="skeleton-loader kw-skeleton-cell" data-pending="true" title="' + escapeHtml(pLabel) + '">' + escapeHtml(pLabel) + '</span>';
         }
 
         /**
@@ -805,16 +805,20 @@
                         }
                         if (updatedTrans !== undefined && updatedTrans !== "") {
                             if (updatedTrans === '[FAILED]' || (typeof updatedTrans === 'string' && updatedTrans.indexOf('[Error') === 0)) {
-                                if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1) {
+                                if (wordObj.is_pending || (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1)) {
                                     // Preserve existing skeleton loader during intermediate failover
                                 } else if (!w.AppState || !w.AppState.isFinished) {
                                     var lemmaProv = (typeof w.getLemmaBaseProvider === 'function') ? w.getLemmaBaseProvider() : (getTextBaseProvider() || 'google');
-                                    var lLabel = formatProviderSkeletonLabel(lemmaProv);
-                                    wordObj.translation = '<span class="skeleton-loader" data-pending="true" style="height: 20px; min-height: 20px; font-size: 11px;" title="' + escapeHtml(lLabel) + '">' + escapeHtml(lLabel) + '</span>';
+                                    wordObj.is_pending = true;
+                                    wordObj.pending_provider = lemmaProv;
+                                    wordObj.translation = '';
                                 } else {
+                                    wordObj.is_pending = false;
                                     wordObj.translation = '';
                                 }
                             } else {
+                                wordObj.is_pending = false;
+                                wordObj.pending_provider = null;
                                 wordObj.translation = updatedTrans;
                             }
                         }
@@ -833,7 +837,7 @@
                     }
                 }
                 if (wordObj.row_html && (wordObj.row_html.indexOf('skeleton-loader') !== -1 || wordObj.row_html.indexOf('data-pending') !== -1)) {
-                    if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') === -1) {
+                    if (!wordObj.is_pending && wordObj.translation && wordObj.translation.indexOf('skeleton-loader') === -1) {
                         wordObj.row_html = null;
                     }
                 }
@@ -863,14 +867,25 @@
                     if (wordObj.translation === '[FAILED]' || (typeof wordObj.translation === 'string' && wordObj.translation.indexOf('[Error') === 0)) {
                         if (!w.AppState || !w.AppState.isFinished) {
                             var lemmaProv2 = (typeof w.getLemmaBaseProvider === 'function') ? w.getLemmaBaseProvider() : (getTextBaseProvider() || 'google');
-                            var lLabel2 = formatProviderSkeletonLabel(lemmaProv2);
-                            wordObj.translation = '<span class="skeleton-loader" data-pending="true" style="height: 20px; min-height: 20px; font-size: 11px;" title="' + escapeHtml(lLabel2) + '">' + escapeHtml(lLabel2) + '</span>';
+                            wordObj.is_pending = true;
+                            wordObj.pending_provider = lemmaProv2;
+                            wordObj.translation = '';
                         } else {
+                            wordObj.is_pending = false;
                             wordObj.translation = '';
                         }
                     }
-                    var transClean = (wordObj.translation || '').replace(/<[^>]+>/g, '').trim();
-                    var transTooltip = (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') === -1) ? formatTranslationCellTooltip(transClean, effectiveProv) : '';
+                    var isSkel = wordObj.is_pending || (typeof wordObj.translation === 'string' && wordObj.translation.indexOf('skeleton-loader') !== -1);
+                    var transDisplay = '';
+                    if (isSkel) {
+                        var effProv = wordObj.pending_provider || (typeof w.getLemmaBaseProvider === 'function' ? w.getLemmaBaseProvider() : (getTextBaseProvider() || 'google'));
+                        var lLabel2 = formatProviderSkeletonLabel(effProv);
+                        transDisplay = '<span class="skeleton-loader kw-skeleton-cell" data-pending="true" title="' + escapeHtml(lLabel2) + '">' + escapeHtml(lLabel2) + '</span>';
+                    } else {
+                        transDisplay = escapeHtml(wordObj.translation || '');
+                    }
+                    var transClean = isSkel ? '' : (wordObj.translation || '').trim();
+                    var transTooltip = (!isSkel && transClean) ? formatTranslationCellTooltip(transClean, effectiveProv) : '';
                     var provData = effectiveProv ? (' data-provenance="' + escapeHtml(effectiveProv) + '"') : '';
                     var provTitle = transTooltip ? (' title="' + escapeHtml(transTooltip) + '"') : '';
                     var provAttr = provData + provTitle;
@@ -899,7 +914,7 @@
                         '<tr data-row-id="' + escapeHtml(rIdStr) + '"' + allIdsAttr + ' data-token-order="' + escapeHtml(String(wordObj.token_order || rIdStr)) + '"' + occAttr + ' data-sentence-idx="' + escapeHtml(String(wordObj.sentence_idx || '1')) + '" data-selected="' + selAttr + '" class="' + hlClass + '">' +
                         '<td class="editable col-inflected" data-col="WordSourceInflectedForm"' + infTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.inflected || '') + '</div></td>' +
                         '<td class="editable col-lemma" data-col="WordSource"' + lemTitleAttr + '><div class="scrollable-cell">' + escapeHtml(wordObj.lemma || '') + '</div></td>' +
-                        '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + (wordObj.translation || '') + '</div></td>' +
+                        '<td class="editable col-translation" data-col="WordDestination"' + provAttr + '><div class="scrollable-cell"' + provAttr + '>' + transDisplay + '</div></td>' +
                         '<td class="col-ipa" data-col="WordSourceIPA"' + ipaTitleAttr + '><div class="scrollable-cell">' + (wordObj.ipa || '') + '</div></td>' +
                         '<td class="col-morphology" data-col="WordSourceMorphologyAI"' + morphTitleAttr + '><div class="scrollable-cell">' + (wordObj.morphology || '') + '</div></td>' +
                         '<td class="col-pos" data-col="WordSourcePOS"' + posTitleAttr + '><div class="scrollable-cell">' + (wordObj.pos || '') + '</div></td>' +
@@ -1438,7 +1453,7 @@
                 for (var wIdx = 0; wIdx < targetCard.words.length; wIdx++) {
                     var wItem = targetCard.words[wIdx];
                     if (wItem && wItem.row_html && (wItem.row_html.indexOf('skeleton-loader') !== -1 || wItem.row_html.indexOf('data-pending') !== -1)) {
-                        if (wItem.translation && wItem.translation.indexOf('skeleton-loader') === -1) {
+                        if (!wItem.is_pending && wItem.translation && wItem.translation.indexOf('skeleton-loader') === -1) {
                             wItem.row_html = null;
                         }
                     }

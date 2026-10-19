@@ -119,7 +119,11 @@
                         if (nodeVal && typeof nodeVal === 'object' && nodeVal.nodeType) {
                             scrollDiv.appendChild(nodeVal);
                         } else if (typeof text === 'string' && text.indexOf('skeleton-loader') !== -1) {
-                            scrollDiv.innerHTML = text;
+                            if (text.indexOf('kw-skeleton-cell') === -1) {
+                                scrollDiv.innerHTML = text.replace('class="skeleton-loader', 'class="skeleton-loader kw-skeleton-cell');
+                            } else {
+                                scrollDiv.innerHTML = text;
+                            }
                         } else {
                             scrollDiv.textContent = text || '';
                         }
