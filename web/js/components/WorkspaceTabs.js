@@ -13,6 +13,8 @@
  * @property {string} [word]
  * @property {string} [lemma]
  * @property {string} [translation]
+ * @property {boolean} [is_pending]
+ * @property {string|null} [pending_provider]
  * @property {string} [inflected]
  * @property {string} [pos]
  * @property {string} [gender]

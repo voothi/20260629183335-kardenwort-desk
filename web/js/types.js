@@ -33,6 +33,8 @@
  * @property {string} [pos] - Part of speech tag
  * @property {string} [gender] - Grammatical gender
  * @property {string} [translation] - Target language translation
+ * @property {boolean} [is_pending] - Whether translation is currently pending
+ * @property {string|null} [pending_provider] - Provider identifier actively being polled
  * @property {string} [ipa] - International Phonetic Alphabet pronunciation
  * @property {string} [morphology] - Morphological feature analysis
  * @property {string} [provenance] - Origin provider/model identifier
