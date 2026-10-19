@@ -94,8 +94,9 @@
                     var tr = document.createElement('tr');
                     tr.setAttribute('data-row-id', String(idx));
                     tr.setAttribute('data-token-order', String(idx));
-                    var isSel = Boolean((state && state.selected_ids && state.selected_ids.indexOf(idx) !== -1) ||
-                                        (w.AppState && w.AppState.selected_ids && w.AppState.selected_ids.indexOf(idx) !== -1));
+                    var selIds = (state && (state.selectedRowIds || state.selected_ids)) ||
+                                 (w.AppState && (w.AppState.selectedRowIds || w.AppState.selected_ids));
+                    var isSel = Boolean(selIds && (selIds.indexOf(idx) !== -1 || selIds.indexOf(String(idx)) !== -1));
                     tr.setAttribute('data-selected', isSel ? '1' : '0');
                     tr.setAttribute('data-filter-hidden', isSel ? '0' : '1');
                     if (isSel) {

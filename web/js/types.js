@@ -115,6 +115,7 @@
  * @property {boolean} [filterSelectedOnly] - Filter selected rows active
  * @property {boolean} [isFinished] - All processing stages complete
  * @property {Array<number|string>} [selectedRowIds] - Selected row identifiers
+ * @property {Array<number|string>} [selected_ids] - Selected row identifiers legacy alias
  * @property {Array<Token>} [activeTokenSelections] - Active word selections
  * @property {number|null} [activeSentenceIdx] - Active sentence index
  * @property {number|null} [activeTabSeq] - Active workspace tab sequence number
