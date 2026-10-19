@@ -897,7 +897,14 @@
                         if (colName) td.setAttribute('data-col', colName);
                         var scrollDiv = document.createElement('div');
                         scrollDiv.className = 'scrollable-cell';
-                        scrollDiv.textContent = text || '';
+                        var nodeVal = /** @type {any} */ (text);
+                        if (nodeVal && typeof nodeVal === 'object' && nodeVal.nodeType) {
+                            scrollDiv.appendChild(nodeVal);
+                        } else if (typeof text === 'string' && text.indexOf('skeleton-loader') !== -1) {
+                            scrollDiv.innerHTML = text;
+                        } else {
+                            scrollDiv.textContent = text || '';
+                        }
                         td.appendChild(scrollDiv);
                         return td;
                     }

@@ -407,10 +407,10 @@
          */
         function getTranslationHtml(tText) {
             var w = /** @type {any} */ (window);
-            if (tText === '[FAILED]' || (typeof tText === 'string' && tText.indexOf('[Error') === 0)) {
-                return '';
+            if (tText && typeof tText === 'string' && tText.indexOf('skeleton-loader') !== -1) {
+                return tText;
             }
-            if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1) {
+            if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1 && tText !== '[FAILED]' && (typeof tText !== 'string' || tText.indexOf('[Error') !== 0)) {
                 var clean = tText.trim();
                 /** @type {Array<string>} */
                 var lines = [];
@@ -805,9 +805,18 @@
                         }
                         if (updatedTrans !== undefined && updatedTrans !== "") {
                             if (updatedTrans === '[FAILED]' || (typeof updatedTrans === 'string' && updatedTrans.indexOf('[Error') === 0)) {
-                                updatedTrans = '';
+                                if (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') !== -1) {
+                                    // Preserve existing skeleton loader during intermediate failover
+                                } else if (!w.AppState || !w.AppState.isFinished) {
+                                    var lemmaProv = (typeof w.getLemmaBaseProvider === 'function') ? w.getLemmaBaseProvider() : (getTextBaseProvider() || 'google');
+                                    var lLabel = formatProviderSkeletonLabel(lemmaProv);
+                                    wordObj.translation = '<span class="skeleton-loader" data-pending="true" style="height: 20px; min-height: 20px; font-size: 11px;" title="' + escapeHtml(lLabel) + '">' + escapeHtml(lLabel) + '</span>';
+                                } else {
+                                    wordObj.translation = '';
+                                }
+                            } else {
+                                wordObj.translation = updatedTrans;
                             }
-                            wordObj.translation = updatedTrans;
                         }
                         if (appRow.lemma !== undefined && appRow.lemma !== "") wordObj.lemma = appRow.lemma;
                         if (appRow.ipa !== undefined && appRow.ipa !== "") wordObj.ipa = appRow.ipa;
@@ -852,7 +861,13 @@
                         wordObj.provenance = effectiveProv;
                     }
                     if (wordObj.translation === '[FAILED]' || (typeof wordObj.translation === 'string' && wordObj.translation.indexOf('[Error') === 0)) {
-                        wordObj.translation = '';
+                        if (!w.AppState || !w.AppState.isFinished) {
+                            var lemmaProv2 = (typeof w.getLemmaBaseProvider === 'function') ? w.getLemmaBaseProvider() : (getTextBaseProvider() || 'google');
+                            var lLabel2 = formatProviderSkeletonLabel(lemmaProv2);
+                            wordObj.translation = '<span class="skeleton-loader" data-pending="true" style="height: 20px; min-height: 20px; font-size: 11px;" title="' + escapeHtml(lLabel2) + '">' + escapeHtml(lLabel2) + '</span>';
+                        } else {
+                            wordObj.translation = '';
+                        }
                     }
                     var transClean = (wordObj.translation || '').replace(/<[^>]+>/g, '').trim();
                     var transTooltip = (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') === -1) ? formatTranslationCellTooltip(transClean, effectiveProv) : '';

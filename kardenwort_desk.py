@@ -7439,13 +7439,9 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
 
     def _handle_tier_exception(tier_name, exc):
         is_rate = is_rate_limit_exception(exc)
-        is_unavail = is_provider_unavailable_exception(exc)
-        if not (is_rate or is_unavail):
-            return None
-
         if is_rate:
             record_provider_cooldown(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
-        elif is_unavail:
+        else:
             record_provider_failover(active_provider, config=config, resolved_paths=resolved_paths, task_type='lemma')
 
         fallback_provider = None
@@ -7464,6 +7460,8 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                     if cand != active_provider and cand not in next_visited and not is_provider_cooled_down(cand, config=config, resolved_paths=resolved_paths, task_type='lemma'):
                         fallback_provider = cand
                         break
+            if not fallback_provider and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in next_visited:
+                fallback_provider = 'argos'
 
         if fallback_provider:
             logger.warning(f"Fast-path {tier_name} failed for '{active_provider}' ({exc}). Short-circuiting to fallback provider '{fallback_provider}'...")
@@ -7480,19 +7478,27 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                 p_idx += 1
                 continue
             cand_prov_tag = f"live:{candidate}"
+            failed = False
+            last_exc = None
             try:
                 val = _call_translate_text(lemma, candidate)
                 p = getattr(val, 'provenance', cand_prov_tag)
                 val_str = (str(val) if val is not None else "").strip()
                 if val_str:
                     return lemma, val_str, p
+                logger.debug(f"Candidate provider '{candidate}' returned empty translation for lemma '{lemma}'")
+                failed = True
             except Exception as exc:
+                failed = True
+                last_exc = exc
                 if is_rate_limit_exception(exc):
                     record_provider_cooldown(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma')
-                elif is_provider_unavailable_exception(exc):
+                else:
                     record_provider_failover(candidate, config=config, resolved_paths=resolved_paths, task_type='lemma')
                 logger.debug(f"Candidate provider '{candidate}' failed for lemma '{lemma}': {exc}")
-                if is_network_failure_exception(exc) and strategy == 'chain' and check_ips and not is_network_online_multi(hosts=check_ips):
+
+            if failed and strategy != 'strict':
+                if last_exc and is_network_failure_exception(last_exc) and strategy == 'chain' and check_ips and not is_network_online_multi(hosts=check_ips):
                     # Short-circuit to first offline provider in provider_order only on confirmed host network failure
                     off_idx = None
                     for future_idx in range(p_idx + 1, len(provider_order)):
@@ -7500,9 +7506,36 @@ def translate_lemmas_fast_path(lemmas, source, target, config, resolved_paths, p
                             off_idx = future_idx
                             break
                     if off_idx is not None:
+                        next_cand = provider_order[off_idx]
+                        notify_provider_failover('lemma', candidate, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
                         p_idx = off_idx
                         continue
+
+                # Advance to next candidate
+                next_idx = p_idx + 1
+                while next_idx < len(provider_order) and is_provider_cooled_down(provider_order[next_idx], config=config, resolved_paths=resolved_paths, task_type='lemma'):
+                    next_idx += 1
+                if next_idx < len(provider_order):
+                    next_cand = provider_order[next_idx]
+                    notify_provider_failover('lemma', candidate, next_cand, zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                    p_idx = next_idx
+                    continue
+
             p_idx += 1
+
+        # Zero-drop terminal resolution through offline Argos if available and not yet successfully resolved
+        if strategy != 'strict' and 'argos' in OFFLINE_TRANSLATION_PROVIDERS and 'argos' not in provider_order:
+            try:
+                last_prov = provider_order[-1] if provider_order else active_provider
+                logger.warning(f"Terminal zero-drop fallback to offline Argos for lemma '{lemma}'")
+                notify_provider_failover('lemma', last_prov, 'argos', zid=zid, config=config, resolved_paths=resolved_paths, on_failover=on_failover)
+                val = _call_translate_text(lemma, 'argos')
+                val_str = (str(val) if val is not None else "").strip()
+                if val_str:
+                    return lemma, val_str, "live:argos"
+            except Exception as ex_argos:
+                logger.error(f"Argos terminal fallback failed for lemma '{lemma}': {ex_argos}")
+
         logger.warning(f"All candidate providers failed for lemma '{lemma}'")
         return lemma, "", prov_tag
 

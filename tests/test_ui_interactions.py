@@ -6152,6 +6152,79 @@ def test_update_active_provider_synchronizes_workspace_cards_and_preserves_title
     assert word["row_html"] is None
 
 
+def test_multi_hop_failover_updates_skeleton_signatures_in_place_without_empty_cells(page):
+    html = f"""<!DOCTYPE html>
+<html>
+<head><meta charset="utf-8"></head>
+<body>
+<div class="container">
+  <script id="session-zid" type="text/plain">20261019231604</script>
+  <script id="text-base-provider" type="text/plain">google</script>
+  <script id="lemma-base-provider" type="text/plain">google</script>
+  <div class="translation-text" id="translation-container">
+    <span class="skeleton-loader" data-pending="true" title="Google...">Google...</span>
+  </div>
+  <table id="lemma-table">
+    <tbody>
+      <tr data-row-id="0">
+        <td class="col-lemma" data-col="WordSource"><div class="scrollable-cell">Haus</div></td>
+        <td class="col-translation" data-col="WordDestination"><div class="scrollable-cell">Дом</div></td>
+      </tr>
+      <tr data-row-id="1">
+        <td class="col-lemma" data-col="WordSource"><div class="scrollable-cell">Baum</div></td>
+        <td class="col-translation" data-col="WordDestination"><div class="scrollable-cell"><span class="skeleton-loader" data-pending="true" title="Google...">Google...</span></div></td>
+      </tr>
+    </tbody>
+  </table>
+</div>
+</body>
+</html>"""
+    page.set_content(html)
+    page.evaluate(extract_desk_js())
+
+    tc_skel = page.locator("#translation-container .skeleton-loader")
+    row1_skel = page.locator("tr[data-row-id='1'] td.col-translation .skeleton-loader")
+    row0_trans = page.locator("tr[data-row-id='0'] td.col-translation .scrollable-cell")
+
+    assert tc_skel.inner_text().strip() == "Google..."
+    assert row1_skel.inner_text().strip() == "Google..."
+    assert row0_trans.inner_text().strip() == "Дом"
+
+    # Hop 1: Google -> DeepL
+    page.evaluate("window.updateActiveProvider('all', 'deepl');")
+    assert tc_skel.inner_text().strip() == "DeepL..."
+    assert "DeepL" in (tc_skel.get_attribute("title") or "")
+    assert row1_skel.inner_text().strip() == "DeepL..."
+    assert "DeepL" in (row1_skel.get_attribute("title") or "")
+    assert row0_trans.inner_text().strip() == "Дом"
+
+    # Hop 2: DeepL -> Argos
+    page.evaluate("window.updateActiveProvider('all', 'argos');")
+    assert tc_skel.inner_text().strip() == "Argos..."
+    assert "Argos" in (tc_skel.get_attribute("title") or "")
+    assert row1_skel.inner_text().strip() == "Argos..."
+    assert "Argos" in (row1_skel.get_attribute("title") or "")
+    assert row0_trans.inner_text().strip() == "Дом"
+
+    # Verify that WorkspaceTabs preserves skeleton loader upon failover and does not return empty string
+    res_html = page.evaluate("window.WorkspaceTabs ? window.WorkspaceTabs.getTranslationHtml('[FAILED]') : ''")
+    assert 'class="skeleton-loader"' in res_html
+    assert 'Argos...' in res_html
+
+    # Verify that LemmaTable.makeCell mounts skeleton elements as DOM nodes
+    cell_html = page.evaluate("""() => {
+        var dummyDiv = document.createElement('div');
+        if (window.LemmaTable && window.LemmaTable.makeCell) {
+            var td = window.LemmaTable.makeCell('col-translation', 'WordDestination', '<span class="skeleton-loader" data-pending="true" title="Argos...">Argos...</span>', true);
+            dummyDiv.appendChild(td);
+            return dummyDiv.innerHTML;
+        }
+        return '';
+    }""")
+    if cell_html:
+        assert 'class="skeleton-loader"' in cell_html
+
+
 def test_token_pinning_and_table_row_selection_unification(page):
     manifest = [
         {"text": "have", "is_word": True, "visual_idx": 0, "lower_clean": "have", "row_ids": [8], "atomic_row_ids": [8]}
