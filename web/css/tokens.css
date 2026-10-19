@@ -31,26 +31,22 @@
 #source-container span.word,
 span.word {
     cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease;
+    transition: background-color 0.2s, color 0.2s;
     border-radius: var(--radius-sm, 3px);
     padding: 0 2px;
     margin: 0;
     border: none;
     box-sizing: border-box;
-    display: inline-block;
-    vertical-align: baseline;
 }
 
 #translation-container span.word {
     cursor: pointer;
-    transition: background-color 0.15s ease, color 0.15s ease;
-    border-radius: var(--radius-sm, 3px);
+    transition: background-color 0.2s, color 0.2s;
+    border-radius: 2px;
     padding: 0;
     margin: 0;
     border: none;
     box-sizing: border-box;
-    display: inline-block;
-    vertical-align: baseline;
 }
 
 .kw-source-text span.word:hover,
@@ -62,6 +58,7 @@ span.word:hover {
 
 #translation-container span.word:hover {
     background-color: var(--word-hover, rgba(255, 255, 255, 0.1));
+    border-radius: 4px;
 }
 
 body.theme-light #translation-container span.word:hover,

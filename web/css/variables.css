@@ -40,9 +40,11 @@
     --highlight-purple-text: #ffffff;
     --selected-row-bg: rgba(255, 204, 0, 0.15);
     --selected-orange-row-bg: rgba(255, 204, 0, 0.15);
-    --selected-orange-row-text: #e3e6eb;
+    --selected-orange-row-text: #ffcc00;
     --selected-purple-row-bg: rgba(147, 112, 219, 0.2);
-    --selected-purple-row-text: #e3e6eb;
+    --selected-purple-row-text: #b39ddb;
+    --not-connected-bg: rgba(139, 148, 158, 0.15);
+    --not-connected-text: #8b949e;
 
     --input-bg: #161a22;
     --toolbar-btn-hover: #21262d;
@@ -119,6 +121,8 @@
     --selected-orange-row-text: #24292f;
     --selected-purple-row-bg: rgba(220, 208, 255, 0.4);
     --selected-purple-row-text: #24292f;
+    --not-connected-bg: rgba(175, 184, 193, 0.15);
+    --not-connected-text: #57606a;
 
     --input-bg: #f6f8fa;
     --toolbar-btn-hover: #eaeef2;
@@ -180,6 +184,8 @@
     --selected-orange-row-text: #000000;
     --selected-purple-row-bg: rgba(220, 208, 255, 0.4);
     --selected-purple-row-text: #000000;
+    --not-connected-bg: rgba(175, 184, 193, 0.15);
+    --not-connected-text: #666666;
 
     --input-bg: #ffffff;
     --toolbar-btn-hover: #f0f0f0;
