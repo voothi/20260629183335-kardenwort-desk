@@ -1525,3 +1525,78 @@ def test_client_rendered_rows_filter_selected_only(page, test_server):
 
     assert row0.is_visible()
     assert not row1.is_visible()
+
+
+def test_lemma_table_render_sanitizes_sentinels(page, test_server):
+    """
+    Verify that LemmaTable.render sanitizes [FAILED] and [Error...] sentinels
+    to clean empty strings in rendered cells.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    page.evaluate("""() => {
+        if (window.LemmaTable && typeof window.LemmaTable.mount === 'function') {
+            window.LemmaTable.mount('#lemma-table');
+        }
+        window.LemmaTable.render({
+            headers: ['WordSourceInflectedForm', 'WordSource', 'WordDestination'],
+            data_rows: [
+                ['Haus', 'Haus', '[FAILED]'],
+                ['Baum', 'Baum', '[Error: timeout]'],
+                ['Buch', 'Buch', 'книга']
+            ]
+        });
+    }""")
+
+    cell0 = page.locator("#lemma-table tbody tr[data-row-id='0'] td.col-translation .scrollable-cell")
+    cell1 = page.locator("#lemma-table tbody tr[data-row-id='1'] td.col-translation .scrollable-cell")
+    cell2 = page.locator("#lemma-table tbody tr[data-row-id='2'] td.col-translation .scrollable-cell")
+
+    assert cell0.inner_text() == ""
+    assert cell1.inner_text() == ""
+    assert cell2.inner_text() == "книга"
+
+
+def test_standalone_html_bundles_all_components(tmp_path):
+    """
+    Verify that standalone lookup and desktop HTML contains all client components
+    bundled inline as script blocks, achieving complete parity with HTTP server mode.
+    """
+    import kardenwort_desk as desk
+    config, resolved_paths, goldendict, wordfill = desk.load_config()
+    tsv_file = tmp_path / "20261019223000-test.de.tsv"
+    tsv_file.write_text(
+        "# comment\nQuotation\tWordSource\tWordDestination\tSentenceSourceIndex\tSentenceSource\tSentenceDestination\tDeskSelected\nHaus\tHaus\tдом\t1\tDas Haus\tДом\t1\n",
+        encoding="utf-8"
+    )
+
+    html = desk.render_lookup_html(
+        text="Haus",
+        language="de",
+        target_lang="ru",
+        config=config,
+        resolved_paths=resolved_paths,
+        zid="20261019223000",
+        goldendict=goldendict,
+        comments=[],
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceSourceIndex", "SentenceSource", "SentenceDestination", "DeskSelected"],
+        data_rows=[["Haus", "Haus", "дом", "1", "Das Haus", "Дом", "1"]],
+        sentence_translation="Дом.",
+        session_zid="20261019223000",
+    )
+
+    # Verify that external script tags were replaced with inlined scripts
+    assert '<script src="/js/components/SourceViewer.js"></script>' not in html
+    assert '<script src="/js/components/TranslationView.js"></script>' not in html
+    assert '<script src="/js/components/LemmaTable.js"></script>' not in html
+    assert '<script src="/js/components/WorkspaceTabs.js"></script>' not in html
+    assert '<script src="/js/types.js"></script>' not in html
+    assert '<script src="/js/state/store.js"></script>' not in html
+
+    # Verify component definitions are present in the inline script blocks
+    assert "LemmaTable" in html
+    assert "SourceViewer" in html
+    assert "TranslationView" in html
+    assert "WorkspaceTabs" in html
+

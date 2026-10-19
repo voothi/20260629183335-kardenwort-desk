@@ -123,6 +123,9 @@
                     var valInf = (colInf !== -1 && row[colInf]) ? row[colInf] : '';
                     var valLem = (colLemma !== -1 && row[colLemma]) ? row[colLemma] : (row[0] || '');
                     var valDest = (colDest !== -1 && row[colDest]) ? row[colDest] : (row[1] || '');
+                    if (valDest === '[FAILED]' || (typeof valDest === 'string' && valDest.indexOf('[Error') === 0)) {
+                        valDest = '';
+                    }
                     var valIpa = (colIpa !== -1 && row[colIpa]) ? row[colIpa] : '';
                     var valMorph = (colMorph !== -1 && row[colMorph]) ? row[colMorph] : '';
                     var valPos = (colPos !== -1 && row[colPos]) ? row[colPos] : '';

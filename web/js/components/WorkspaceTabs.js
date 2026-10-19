@@ -407,6 +407,9 @@
          */
         function getTranslationHtml(tText) {
             var w = /** @type {any} */ (window);
+            if (tText === '[FAILED]' || (typeof tText === 'string' && tText.indexOf('[Error') === 0)) {
+                return '';
+            }
             if (tText && tText.trim() && tText.indexOf('skeleton-loader') === -1) {
                 var clean = tText.trim();
                 /** @type {Array<string>} */
@@ -791,7 +794,7 @@
                                         continue;
                                     }
                                     var subTr = (subRow.trans !== undefined && subRow.trans !== "") ? subRow.trans : ((subRow.WordDestination !== undefined && subRow.WordDestination !== "") ? subRow.WordDestination : subRow.word_translation);
-                                    if (subTr && subTr !== "[FAILED]" && subTr.indexOf('skeleton-loader') === -1 && subTr !== '-' && subTr !== '--') {
+                                    if (subTr && subTr !== "[FAILED]" && subTr.indexOf('skeleton-loader') === -1 && subTr !== '-' && subTr !== '--' && subTr.indexOf('[Error') !== 0) {
                                         if (rolledTrans.indexOf(subTr) === -1) rolledTrans.push(subTr);
                                     }
                                 }
@@ -801,6 +804,9 @@
                             }
                         }
                         if (updatedTrans !== undefined && updatedTrans !== "") {
+                            if (updatedTrans === '[FAILED]' || (typeof updatedTrans === 'string' && updatedTrans.indexOf('[Error') === 0)) {
+                                updatedTrans = '';
+                            }
                             wordObj.translation = updatedTrans;
                         }
                         if (appRow.lemma !== undefined && appRow.lemma !== "") wordObj.lemma = appRow.lemma;
@@ -844,6 +850,9 @@
                     var effectiveProv = wordObj.provenance || (appRow && appRow.provenance) || (w.AppState && w.AppState.rows && ((tOrdStr && w.AppState.rows[tOrdStr] && w.AppState.rows[tOrdStr].provenance) || (rIdStr && w.AppState.rows[rIdStr] && w.AppState.rows[rIdStr].provenance))) || (w.AppState && w.AppState.rowProvenances && (w.AppState.rowProvenances[tOrdStr] || w.AppState.rowProvenances[rIdStr])) || '';
                     if (effectiveProv && !wordObj.provenance) {
                         wordObj.provenance = effectiveProv;
+                    }
+                    if (wordObj.translation === '[FAILED]' || (typeof wordObj.translation === 'string' && wordObj.translation.indexOf('[Error') === 0)) {
+                        wordObj.translation = '';
                     }
                     var transClean = (wordObj.translation || '').replace(/<[^>]+>/g, '').trim();
                     var transTooltip = (wordObj.translation && wordObj.translation.indexOf('skeleton-loader') === -1) ? formatTranslationCellTooltip(transClean, effectiveProv) : '';

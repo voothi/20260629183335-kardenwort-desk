@@ -3601,6 +3601,10 @@ class SqliteStorageAdapter(StorageAdapter):
                 s_dict = {**dict(s), "session_zid": session_zid}
                 if text_provenance and not s_dict.get("text_provenance"):
                     s_dict["text_provenance"] = text_provenance
+                for k in ("sentence_destination", "sentence_destination2"):
+                    v = s_dict.get(k)
+                    if isinstance(v, str) and (v.strip() == "[FAILED]" or v.strip().startswith("[Error")):
+                        s_dict[k] = ""
                 norm_sentences.append(s_dict)
         norm_words = []
         if words is not None:
@@ -3697,7 +3701,11 @@ class SqliteStorageAdapter(StorageAdapter):
                 existing_sent = existing_sents_by_idx.get(s_idx, {})
                 src_val = row[col_sent_src] if col_sent_src is not None and col_sent_src < len(row) and str(row[col_sent_src]).strip() else existing_sent.get("sentence_source", "")
                 dst_val = row[col_sent_dst] if col_sent_dst is not None and col_sent_dst < len(row) and str(row[col_sent_dst]).strip() else existing_sent.get("sentence_destination")
+                if dst_val and (str(dst_val).strip() == "[FAILED]" or str(dst_val).strip().startswith("[Error")):
+                    dst_val = ""
                 dst2_val = row[col_sent_dst2] if col_sent_dst2 is not None and col_sent_dst2 < len(row) and str(row[col_sent_dst2]).strip() else existing_sent.get("sentence_destination2")
+                if dst2_val and (str(dst2_val).strip() == "[FAILED]" or str(dst2_val).strip().startswith("[Error")):
+                    dst2_val = ""
                 ipa_val = row[col_sent_ipa] if col_sent_ipa is not None and col_sent_ipa < len(row) and str(row[col_sent_ipa]).strip() else existing_sent.get("sentence_source_ipa")
                 aud_val = row[col_sent_aud] if col_sent_aud is not None and col_sent_aud < len(row) and str(row[col_sent_aud]).strip() else existing_sent.get("sentence_source_audio")
 
@@ -3737,7 +3745,11 @@ class SqliteStorageAdapter(StorageAdapter):
                 morph = get_col_val(row, "wordsourcemorphologyai")
                 ipa = get_col_val(row, "wordsourceipa")
                 w_dest = get_col_val(row, "worddestination")
+                if w_dest and (w_dest.strip() == "[FAILED]" or w_dest.strip().startswith("[Error")):
+                    w_dest = ""
                 w_dest_inf = get_col_val(row, "worddestinationinflectedform")
+                if w_dest_inf and (w_dest_inf.strip() == "[FAILED]" or w_dest_inf.strip().startswith("[Error")):
+                    w_dest_inf = ""
                 sel_raw = get_col_val(row, "deskselected")
                 selected = 1 if str(sel_raw).strip() in ("1", "true", "True") else 0
                 box_raw = get_col_val(row, "leitnerbox")
@@ -4057,10 +4069,14 @@ class SqliteStorageAdapter(StorageAdapter):
                 dst_left = " ".join(dst_left_parts)
                 dst_right = " ".join(dst_right_parts)
                 dst_curr = sent_record.get("sentence_destination") or ""
+                if dst_curr.strip() == "[FAILED]" or dst_curr.strip().startswith("[Error"):
+                    dst_curr = ""
 
                 dst2_left = " ".join(dst2_left_parts)
                 dst2_right = " ".join(dst2_right_parts)
                 dst2_curr = sent_record.get("sentence_destination2") or ""
+                if dst2_curr.strip() == "[FAILED]" or dst2_curr.strip().startswith("[Error"):
+                    dst2_curr = ""
 
                 sent_ipa = sent_record.get("sentence_source_ipa") or ""
                 sent_audio = sent_record.get("sentence_source_audio") or ""
@@ -4089,12 +4105,12 @@ class SqliteStorageAdapter(StorageAdapter):
                         row_cells.append(str(val or ""))
                     elif h_lower in ("worddestination", "word_destination", "word_translation"):
                         w_dest = str(word.get("word_destination") or "")
-                        if w_dest.strip() == "[FAILED]":
+                        if w_dest.strip() == "[FAILED]" or w_dest.strip().startswith("[Error"):
                             w_dest = ""
                         row_cells.append(w_dest)
                     elif h_lower in ("worddestinationinflectedform", "word_destination_inflected"):
                         w_dest_inf = str(word.get("word_destination_inflected") or "")
-                        if w_dest_inf.strip() == "[FAILED]":
+                        if w_dest_inf.strip() == "[FAILED]" or w_dest_inf.strip().startswith("[Error"):
                             w_dest_inf = ""
                         row_cells.append(w_dest_inf)
                     elif h_lower == "tokenorder":
@@ -4160,7 +4176,7 @@ class SqliteStorageAdapter(StorageAdapter):
             sentence_trans_parts = []
             for s in db_sentences:
                 st = (s.get("sentence_destination") or s.get("sentence_destination2") or "").strip()
-                if st:
+                if st and st != "[FAILED]" and not st.startswith("[Error"):
                     sentence_trans_parts.append(st)
             text_mode_val = session.get("text_mode", "single") if session else "single"
             is_single_para = (text_mode_val == 'single' and '\n' not in (source_text or '').strip() and '\r' not in (source_text or '').strip())
@@ -6143,7 +6159,7 @@ def _sanitize_rows(data_rows: Optional[List[List[str]]]) -> Optional[List[List[s
         return data_rows
     sanitized = []
     for row in data_rows:
-        sanitized.append([("" if (isinstance(cell, str) and cell.strip() == "[FAILED]") else cell) for cell in row])
+        sanitized.append([("" if (isinstance(cell, str) and (cell.strip() == "[FAILED]" or cell.strip().startswith("[Error"))) else cell) for cell in row])
     return sanitized
 
 
@@ -8168,9 +8184,12 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
     else:
         raw_lines = [str(sentence_translations)]
 
-    raw_lines = [re.sub(r'</?[a-zA-Z][^>]*>', '', str(s)) for s in raw_lines]
+    raw_lines = [
+        re.sub(r'</?[a-zA-Z][^>]*>', '', str(s)) for s in raw_lines
+        if str(s).strip() != "[FAILED]" and not str(s).strip().startswith("[Error")
+    ]
     norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
-    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in raw_lines]
+    lines = [html.escape(normalize_bracket_spacing(line.strip()) if norm_brackets else line.strip()) for line in raw_lines if line.strip()]
 
     eff_mode = _effective_text_mode(text, text_mode) if text else text_mode
     is_single = (eff_mode == 'single')
@@ -11113,8 +11132,10 @@ html, body {{
         cand_dest = ""
         for c_d in dest_cols:
             if len(row) > c_d and row[c_d].strip():
-                cand_dest = row[c_d].strip()
-                break
+                val_c = row[c_d].strip()
+                if val_c != "[FAILED]" and not val_c.startswith("[Error"):
+                    cand_dest = val_c
+                    break
         if cand_dest:
             extracted_translations[content_line_idx] = cand_dest
 
@@ -11129,7 +11150,7 @@ html, body {{
                         for s in db_sents:
                             s_idx = s.get("sentence_index", 1) - 1
                             s_dest = s.get("sentence_destination")
-                            if s_dest and str(s_dest).strip():
+                            if s_dest and str(s_dest).strip() and str(s_dest).strip() != "[FAILED]" and not str(s_dest).strip().startswith("[Error"):
                                 extracted_translations[s_idx] = str(s_dest).strip()
                             elif str(s.get("sentence_source", "")).strip().startswith("#") and (s_idx not in extracted_translations or not extracted_translations[s_idx]):
                                 extracted_translations[s_idx] = str(s.get("sentence_source", "")).strip()
@@ -11188,7 +11209,14 @@ html, body {{
         sentence_provenance = stored_sent_prov
         if eff_mode == 'single':
             if is_sqlite and db_sents:
-                clean_lines = [str(s.get("sentence_destination")).strip() for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1)) if s.get("sentence_destination") and str(s.get("sentence_destination")).strip()]
+                clean_lines = [
+                    str(s.get("sentence_destination")).strip()
+                    for s in sorted(db_sents, key=lambda x: x.get("sentence_index", 1))
+                    if s.get("sentence_destination")
+                    and str(s.get("sentence_destination")).strip()
+                    and str(s.get("sentence_destination")).strip() != "[FAILED]"
+                    and not str(s.get("sentence_destination")).strip().startswith("[Error")
+                ]
                 if clean_lines:
                     sentence_translations[0] = " ".join(clean_lines)
                 else:
@@ -11634,7 +11662,10 @@ html, body {{
     if is_mismatch:
         sentence_html = ""
     else:
-        has_real_text = any(t and str(t).strip() for t in sentence_translations.values())
+        has_real_text = any(
+            t and str(t).strip() and str(t).strip() != "[FAILED]" and not str(t).strip().startswith("[Error")
+            for t in sentence_translations.values()
+        )
         text_provider_label = format_provider_skeleton_label(main_text_provider)
         if is_progressive and run_text == 'auto' and not has_real_text:
             sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; min-height: 1.6em; height: 1.6em;" title="{text_provider_label}">{text_provider_label}</div>'
@@ -11734,7 +11765,7 @@ html, body {{
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         trans_val = row[col_word_dest] if col_word_dest != -1 and len(row) > col_word_dest else ""
-        if trans_val == "[FAILED]":
+        if trans_val.strip() == "[FAILED]" or trans_val.strip().startswith("[Error"):
             trans_val = ""
         morph_val = row[col_morph] if col_morph != -1 and len(row) > col_morph else ""
         ipa_val = row[col_ipa] if col_ipa != -1 and len(row) > col_ipa else ""
@@ -12675,9 +12706,14 @@ html, body {{
     clean_sentence_trans = ""
     if not is_mismatch:
         if isinstance(sentence_translations, dict):
-            clean_sentence_trans = " ".join(t.strip() for t in sentence_translations.values() if t and t.strip())
+            clean_sentence_trans = " ".join(
+                t.strip() for t in sentence_translations.values()
+                if t and t.strip() and t.strip() != "[FAILED]" and not t.strip().startswith("[Error")
+            )
         elif sentence_translations:
-            clean_sentence_trans = str(sentence_translations).strip()
+            st = str(sentence_translations).strip()
+            if st != "[FAILED]" and not st.startswith("[Error"):
+                clean_sentence_trans = st
 
     session_data = {
         "zid": str(zid),
@@ -13426,6 +13462,66 @@ def get_workspace_tabs_js(web_dir=None, reload=False) -> str:
             _WORKSPACE_TABS_JS_CACHE = ""
     return _WORKSPACE_TABS_JS_CACHE
 
+_LEMMA_TABLE_JS_CACHE = None
+
+def get_lemma_table_js(web_dir=None, reload=False) -> str:
+    """
+    Load extracted LemmaTable component JS from web/js/components/LemmaTable.js
+    for bundling into standalone / container HTML.
+    """
+    global _LEMMA_TABLE_JS_CACHE
+    if _LEMMA_TABLE_JS_CACHE is None or reload:
+        if web_dir is None:
+            web_dir = Path(__file__).resolve().parent / "web"
+        elif isinstance(web_dir, str):
+            web_dir = Path(web_dir)
+        p = web_dir / "js" / "components" / "LemmaTable.js"
+        if p.is_file():
+            _LEMMA_TABLE_JS_CACHE = p.read_text(encoding="utf-8")
+        else:
+            _LEMMA_TABLE_JS_CACHE = ""
+    return _LEMMA_TABLE_JS_CACHE
+
+_SOURCE_VIEWER_JS_CACHE = None
+
+def get_source_viewer_js(web_dir=None, reload=False) -> str:
+    """
+    Load extracted SourceViewer component JS from web/js/components/SourceViewer.js
+    for bundling into standalone / container HTML.
+    """
+    global _SOURCE_VIEWER_JS_CACHE
+    if _SOURCE_VIEWER_JS_CACHE is None or reload:
+        if web_dir is None:
+            web_dir = Path(__file__).resolve().parent / "web"
+        elif isinstance(web_dir, str):
+            web_dir = Path(web_dir)
+        p = web_dir / "js" / "components" / "SourceViewer.js"
+        if p.is_file():
+            _SOURCE_VIEWER_JS_CACHE = p.read_text(encoding="utf-8")
+        else:
+            _SOURCE_VIEWER_JS_CACHE = ""
+    return _SOURCE_VIEWER_JS_CACHE
+
+_TRANSLATION_VIEW_JS_CACHE = None
+
+def get_translation_view_js(web_dir=None, reload=False) -> str:
+    """
+    Load extracted TranslationView component JS from web/js/components/TranslationView.js
+    for bundling into standalone / container HTML.
+    """
+    global _TRANSLATION_VIEW_JS_CACHE
+    if _TRANSLATION_VIEW_JS_CACHE is None or reload:
+        if web_dir is None:
+            web_dir = Path(__file__).resolve().parent / "web"
+        elif isinstance(web_dir, str):
+            web_dir = Path(web_dir)
+        p = web_dir / "js" / "components" / "TranslationView.js"
+        if p.is_file():
+            _TRANSLATION_VIEW_JS_CACHE = p.read_text(encoding="utf-8")
+        else:
+            _TRANSLATION_VIEW_JS_CACHE = ""
+    return _TRANSLATION_VIEW_JS_CACHE
+
 _WEB_INDEX_HTML_CACHE = None
 
 def get_web_index_html(reload=False):
@@ -14095,13 +14191,22 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
                 base_html = re.sub(r'<link\s+rel=["\']stylesheet["\']\s+href=["\']/css/[^"\']+["\']\s*/?>\s*', '', base_html)
                 base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
 
-        # If server enabled and session ZID present, ensure client app.js logic is active
-        tabs_js = get_workspace_tabs_js(web_dir)
-        if tabs_js and '<script src="/js/components/WorkspaceTabs.js"></script>' in base_html:
-            base_html = base_html.replace(
-                '<script src="/js/components/WorkspaceTabs.js"></script>',
-                f'<script>\n{tabs_js}\n</script>'
-            )
+        # Inlined modular component scripts for offline/GoldenDict execution
+        for script_rel in (
+            "types.js",
+            "state/store.js",
+            "components/SourceViewer.js",
+            "components/TranslationView.js",
+            "components/LemmaTable.js",
+            "components/WorkspaceTabs.js",
+            "services/sse.js",
+        ):
+            p_script = web_dir / "js" / script_rel
+            if p_script.is_file():
+                s_code = p_script.read_text(encoding="utf-8")
+                tag_to_replace = f'<script src="/js/{script_rel}"></script>'
+                if tag_to_replace in base_html:
+                    base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
 
         if effective_server_enabled and session_zid:
             p_js = web_dir / "js" / "app.js"

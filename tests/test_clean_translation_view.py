@@ -827,6 +827,71 @@ SentenceSourceIndex = sentence_index
     assert db_sents[1]["sentence_destination2"] == "MarginLeft Second sentence. MarginRight"
 
 
+def test_render_flow_sanitizes_failed_and_error_sentinels(mock_clean_context_env, monkeypatch):
+    """
+    Verifies that tabular cells and translation container suppress [FAILED]
+    and [Error...] sentinels completely across render flow.
+    """
+    env = mock_clean_context_env
+    config = env["config"]
+    resolved_paths = env["resolved_paths"]
+    results_dir = env["results_dir"]
+    adapter = desk.get_storage_adapter(config, resolved_paths)
+    zid = "20261019223000"
+    tsv_path = results_dir / f"{zid}-test.de.tsv"
+    text = "Haus Baum"
+
+    adapter.save_session(
+        session_zid=zid,
+        slug="test-sentinel",
+        source_language="de",
+        target_language="en",
+        text_mode="single",
+        source_raw_text=text,
+        headers=["Quotation", "WordSource", "WordDestination", "SentenceSource", "SentenceDestination", "SentenceDestination2", "SentenceSourceIndex", "DeskSelected"],
+        data_rows=[
+            ["", "Haus", "[FAILED]", "Das Haus.", "[FAILED]", "", "1", "1"],
+            ["", "Baum", "[Error: timeout]", "Der Baum.", "[Error: connection refused]", "", "2", "1"],
+        ],
+        sentences=[
+            {"session_zid": zid, "sentence_index": 1, "sentence_source": "Das Haus.", "sentence_destination": "[FAILED]"},
+            {"session_zid": zid, "sentence_index": 2, "sentence_source": "Der Baum.", "sentence_destination": "[Error: connection refused]"},
+        ],
+        zid=zid,
+    )
+
+    monkeypatch.setattr(desk, "run_progressive_worker_async", lambda *args, **kwargs: None)
+
+    html = desk._run_render_flow_impl(
+        text=text,
+        language="de",
+        zid=zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=tsv_path,
+    )
+
+    # Neither [FAILED] nor [Error should appear in rendered translation container, lemma table, or data payload
+    tc_match = re.search(r'<div class="translation-text" id="translation-container">([\s\S]*?)</div>\s*</div>', html)
+    table_match = re.search(r'<table id="lemma-table"[\s\S]*?</table>', html)
+    assert tc_match is not None
+    assert table_match is not None
+    assert "[FAILED]" not in tc_match.group(1)
+    assert "[Error" not in tc_match.group(1)
+    assert "[FAILED]" not in table_match.group(0)
+    assert "[Error" not in table_match.group(0)
+
+    bootstrap_match = re.search(r'<script id="kardenwort-bootstrap" type="application/json">\s*([\s\S]*?)\s*</script>', html)
+    if bootstrap_match:
+        payload = json.loads(bootstrap_match.group(1))
+        assert "[FAILED]" not in json.dumps(payload.get("data_rows", []))
+        assert "[Error" not in json.dumps(payload.get("data_rows", []))
+        assert "[FAILED]" not in str(payload.get("sentence_translation", ""))
+        assert "[Error" not in str(payload.get("sentence_translation", ""))
+
+
+
 
 
 
