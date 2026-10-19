@@ -94,6 +94,13 @@
                     var tr = document.createElement('tr');
                     tr.setAttribute('data-row-id', String(idx));
                     tr.setAttribute('data-token-order', String(idx));
+                    var isSel = Boolean((state && state.selected_ids && state.selected_ids.indexOf(idx) !== -1) ||
+                                        (w.AppState && w.AppState.selected_ids && w.AppState.selected_ids.indexOf(idx) !== -1));
+                    tr.setAttribute('data-selected', isSel ? '1' : '0');
+                    tr.setAttribute('data-filter-hidden', isSel ? '0' : '1');
+                    if (isSel) {
+                        tr.classList.add('selected', 'kw-row-selected');
+                    }
 
                     /**
                      * @param {string} cls
@@ -137,7 +144,19 @@
                 if (typeof w.rebindTableRows === 'function') {
                     w.rebindTableRows();
                 }
+                if (typeof w.updateTableRowsSelectionVisuals === 'function') {
+                    w.updateTableRowsSelectionVisuals();
+                }
             }
+        },
+
+        /**
+         * Backward-compatibility alias for render
+         * @param {SessionState} state
+         * @param {Array<VocabularyRow>} [words]
+         */
+        renderRows: function (state, words) {
+            return this.render(state, words);
         },
 
         /**

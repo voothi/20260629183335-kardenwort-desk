@@ -1074,7 +1074,7 @@ def test_unslop_code_hygiene_and_contract_hardening(page, test_server):
         btn.classList.remove('active');
         return weight;
     }""")
-    assert btn_weight in ('400', 'normal')
+    assert btn_weight in ('600', 'bold')
 
     # 4. Fail-fast error throwing on malformed #kardenwort-bootstrap JSON
     error_thrown = page.evaluate("""() => {
@@ -1410,9 +1410,106 @@ def test_word_highlight_styles_and_mechanics_parity(page, test_server):
     assert metrics["ltMounted"] is True, "LemmaTable._mounted must be true after initial mount"
 
 
+def test_toolbar_buttons_active_style_and_specificity_under_light_compact_white_themes(page, test_server):
+    """
+    Task 4.1: Verify #kw-btn-filter-selected and #kw-btn-same-lemma computed background
+    is golden-yellow rgb(210, 153, 34) and font-weight is 600 under theme-light, theme-white, and theme-compact.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
+
+    themes = ["theme-light", "theme-white", "theme-compact"]
+    for theme in themes:
+        res = page.evaluate("""(theme) => {
+            document.body.className = theme;
+            const filterBtn = document.getElementById(\'kw-btn-filter-selected\');
+            const lemmaBtn = document.getElementById(\'kw-btn-same-lemma\');
+            filterBtn.style.transition = \'none\';
+            lemmaBtn.style.transition = \'none\';
+            filterBtn.classList.add(\'btn-filter-active\');
+            lemmaBtn.classList.add(\'active\');
+
+            const filterStyle = window.getComputedStyle(filterBtn);
+            const lemmaStyle = window.getComputedStyle(lemmaBtn);
+
+            return {
+                filterBg: filterStyle.backgroundColor,
+                filterFw: filterStyle.fontWeight,
+                lemmaBg: lemmaStyle.backgroundColor,
+                lemmaFw: lemmaStyle.fontWeight
+            };
+        }""", theme)
+        assert res["filterBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for filter button in {theme}, got {res['filterBg']}"
+        assert res["lemmaBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for lemma button in {theme}, got {res['lemmaBg']}"
+        assert res["filterFw"] in ["600", "bold"], f"Expected font-weight 600 for filter button in {theme}, got {res['filterFw']}"
+        assert res["lemmaFw"] in ["600", "bold"], f"Expected font-weight 600 for lemma button in {theme}, got {res['lemmaFw']}"
 
 
+def test_lemma_peer_highlight_persists_across_mouseout(page, tmp_path):
+    """
+    Task 4.2: Verify that .lemma-peer-highlight persists on peer tokens across mouseout
+    events when Lemma toggle is ON.
+    """
+    from tests.test_same_lemma_toggle import get_intra_sentence_desk_page_html, inject_mock_fetch
+    raw_html = get_intra_sentence_desk_page_html(tmp_path, highlight_same_lemma=True)
+    html = inject_mock_fetch(raw_html)
+    page.set_content(html)
+    page.wait_for_selector("#source-container span.word")
+
+    den_span = page.locator('#source-container span.word:has-text("den")').first
+    das_span = page.locator('#source-container span.word:has-text("das")').first
+    die_span = page.locator('#source-container span.word:has-text("die")').first
+    hund_span = page.locator('#source-container span.word:has-text("Hund")').first
+
+    # 1. Click "den" in text
+    den_span.click()
+
+    # Verify initial peer highlights
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (das_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (die_span.get_attribute("class") or "")
+
+    # 2. Hover "Hund" and mouse out
+    hund_span.hover()
+    page.mouse.move(0, 0)
+
+    # 3. Verify peer highlights persist after mouseout
+    assert "highlight-orange-active" in (den_span.get_attribute("class") or "")
+    assert "lemma-peer-highlight" in (das_span.get_attribute("class") or ""), "das must retain lemma-peer-highlight after mouseout"
+    assert "lemma-peer-highlight" in (die_span.get_attribute("class") or ""), "die must retain lemma-peer-highlight after mouseout"
 
 
+def test_client_rendered_rows_filter_selected_only(page, test_server):
+    """
+    Task 4.3: Verify that dynamically rendered client rows receive data-selected="0"
+    and are hidden when 'Selected' filter is active.
+    """
+    port = test_server
+    page.goto(f"http://127.0.0.1:{port}/index.html")
 
+    page.evaluate("""() => {
+        if (window.LemmaTable && typeof window.LemmaTable.mount === 'function') {
+            window.LemmaTable.mount('#lemma-table');
+        }
+        window.LemmaTable.renderRows({
+            headers: ['WordSourceInflectedForm', 'WordSource', 'WordDestination'],
+            data_rows: [
+                ['Haus', 'Haus', 'дом'],
+                ['groß', 'groß', 'большой']
+            ],
+            selected_ids: [0]
+        });
+    }""")
 
+    row0 = page.locator("#lemma-table tbody tr[data-row-id='0']")
+    row1 = page.locator("#lemma-table tbody tr[data-row-id='1']")
+
+    assert row0.get_attribute("data-selected") == "1"
+    assert row1.get_attribute("data-selected") == "0"
+
+    # Toggle Selected filter ON
+    filter_btn = page.locator("#kw-btn-filter-selected")
+    filter_btn.click()
+
+    assert row0.is_visible()
+    assert not row1.is_visible()

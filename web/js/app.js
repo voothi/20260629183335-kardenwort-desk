@@ -576,7 +576,11 @@
             btnSame.__kw_bound = true;
             btnSame.addEventListener('click', function (e) {
                 e.preventDefault();
-                toggleHighlightSameLemma();
+                if (typeof window.toggleHighlightSameLemma === 'function') {
+                    window.toggleHighlightSameLemma();
+                } else if (typeof toggleHighlightSameLemma === 'function') {
+                    toggleHighlightSameLemma();
+                }
             });
             if (window.AppState && window.AppState.highlightSameLemma) {
                 btnSame.classList.add('active');
@@ -588,7 +592,11 @@
             btnFilter.__kw_bound = true;
             btnFilter.addEventListener('click', function (e) {
                 e.preventDefault();
-                toggleFilterSelectedOnly();
+                if (typeof window.toggleFilterSelectedOnly === 'function') {
+                    window.toggleFilterSelectedOnly();
+                } else if (typeof toggleFilterSelectedOnly === 'function') {
+                    toggleFilterSelectedOnly();
+                }
             });
             if (window.AppState && window.AppState.filterSelectedOnly) {
                 btnFilter.classList.add('btn-filter-active');
@@ -863,6 +871,12 @@
                     var tr = document.createElement('tr');
                     tr.setAttribute('data-row-id', idx);
                     tr.setAttribute('data-token-order', idx);
+                    var isInitSel = (window.AppState && window.AppState.selected_ids && window.AppState.selected_ids.indexOf(idx) !== -1);
+                    tr.setAttribute('data-selected', isInitSel ? '1' : '0');
+                    tr.setAttribute('data-filter-hidden', isInitSel ? '0' : '1');
+                    if (isInitSel) {
+                        tr.classList.add('selected', 'kw-row-selected');
+                    }
 
                     if (SERVER_ENABLED) {
                         var tdTag = document.createElement('td');
@@ -1884,9 +1898,15 @@
                 var tr = document.querySelector('#lemma-table tbody tr[data-row-id="' + rowId + '"]');
                 if (tr) removeClass(tr, 'hl-mvp-hover');
             }
-            var peers = document.querySelectorAll('#source-container span.word.lemma-peer-highlight');
-            for (var p = 0; p < peers.length; p++) {
-                removeClass(peers[p], 'lemma-peer-highlight');
+            if (window.AppState && window.AppState.highlightSameLemma) {
+                if (typeof updateBidirectionalHighlights === 'function') {
+                    updateBidirectionalHighlights();
+                } else {
+                    var peers = document.querySelectorAll('#source-container span.word.lemma-peer-highlight');
+                    for (var p = 0; p < peers.length; p++) {
+                        removeClass(peers[p], 'lemma-peer-highlight');
+                    }
+                }
             }
         };
         var handleClick = function(e) {
@@ -6376,7 +6396,7 @@
         for (var i = 0; i < tableRows.length; i++) {
             var r = tableRows[i];
             var rIdStr = String(r.getAttribute('data-row-id'));
-            var isHl = (hasHighlightCol && r.getAttribute('data-selected') === '1');
+            var isHl = (r.getAttribute('data-selected') === '1' || r.classList.contains('selected') || r.classList.contains('kw-row-selected') || (window.AppState && Array.isArray(window.AppState.selected_ids) && (window.AppState.selected_ids.indexOf(parseInt(rIdStr, 10)) !== -1 || window.AppState.selected_ids.indexOf(rIdStr) !== -1)));
             if (!initialHighlights.hasOwnProperty(rIdStr)) {
                 initialHighlights[rIdStr] = isHl;
             }

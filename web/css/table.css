@@ -906,7 +906,7 @@ body.theme-compact .kw-action-toolbar:hover,
     background: #d29922;
     border-color: #f0883e;
     color: #0d1117;
-    font-weight: 400;
+    font-weight: 600;
     box-shadow: 0 0 0 1px #f0883e;
 }
 
@@ -916,14 +916,16 @@ body.theme-compact .kw-action-toolbar:hover,
     color: #0d1117;
 }
 
+.kw-action-toolbar button#kw-btn-filter-selected.btn-filter-active,
 .kw-action-toolbar button.btn-filter-active {
     background: #d29922;
     border-color: #f0883e;
     color: #0d1117;
-    font-weight: 400;
+    font-weight: 600;
     box-shadow: 0 0 0 1px #f0883e;
 }
 
+.kw-action-toolbar button#kw-btn-filter-selected.btn-filter-active:hover:not(:disabled),
 .kw-action-toolbar button.btn-filter-active:hover:not(:disabled) {
     background: #bb8019;
     border-color: #f0883e;

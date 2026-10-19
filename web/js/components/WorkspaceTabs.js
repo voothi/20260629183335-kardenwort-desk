@@ -1194,6 +1194,19 @@
                 if (typeof updateEmptySelectionState === 'function') {
                     updateEmptySelectionState();
                 }
+            } else {
+                var lt = document.getElementById('lemma-table');
+                if (lt) removeClass(lt, 'kw-filter-selected-only');
+                var fb = document.getElementById('kw-btn-filter-selected');
+                if (fb) removeClass(fb, 'btn-filter-active');
+            }
+            var sb = document.getElementById('kw-btn-same-lemma');
+            if (sb && w.AppState) {
+                if (w.AppState.highlightSameLemma) {
+                    addClass(sb, 'active');
+                } else {
+                    removeClass(sb, 'active');
+                }
             }
             updateFavicon(activeTabSeq);
             updateTitle(targetCard);
