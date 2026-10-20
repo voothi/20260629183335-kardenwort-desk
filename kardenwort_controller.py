@@ -1952,7 +1952,7 @@ class SessionArbiter:
                             if isinstance(sentence_trans, dict):
                                 trans_val = (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) or
                                              (padded_dict.get(trans_key) or padded_dict.get(str(trans_key))) or
-                                             list(sentence_trans.values())[0])
+                                             (list(sentence_trans.values())[0] if len(sentence_trans) == 1 else ""))
                                 row[col_sentence_dest] = str(trans_val)
                             else:
                                 row[col_sentence_dest] = str(sentence_trans)
@@ -2130,12 +2130,28 @@ class SessionArbiter:
             elif providers and providers[0] != reprocess_p:
                 providers = [reprocess_p] + [p for p in providers if p != reprocess_p]
 
+        # Check if the session has established multiple sentences in SQLite
+        existing_sentences = []
+        if is_sqlite and hasattr(storage_adapter, 'db') and hasattr(storage_adapter.db, 'get_sentences_by_session'):
+            try:
+                existing_sentences = storage_adapter.db.get_sentences_by_session(session_zid)
+            except Exception:
+                existing_sentences = []
+
+        eff_retext_text = text
+        eff_retext_mode = text_mode
+        if existing_sentences and len(existing_sentences) >= 2:
+            sent_sources = [s["sentence_source"].strip() for s in existing_sentences if s.get("sentence_source")]
+            if len(sent_sources) >= 2:
+                eff_retext_text = "\n".join(sent_sources)
+                eff_retext_mode = "multi"
+
         sentence_trans = None
         last_err = None
         active_text_provider = None
         for prov in providers:
             try:
-                sentence_trans = translate_source_text(text, lang, target_lang, text_mode, self.config, self.resolved_paths, prov, zid=req_zid)
+                sentence_trans = translate_source_text(eff_retext_text, lang, target_lang, eff_retext_mode, self.config, self.resolved_paths, prov, zid=req_zid)
                 if sentence_trans:
                     active_text_provider = prov
                     break

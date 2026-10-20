@@ -8986,15 +8986,14 @@
                                 } else if (cardSentIdx > 0) {
                                     var sKey = isZeroBasedSents ? (cardSentIdx - 1) : cardSentIdx;
                                     var sentTrans = pSents[sKey] !== undefined ? pSents[sKey] : pSents[String(sKey)];
-                                    if (!sentTrans && !isZeroBasedSents) {
-                                        sentTrans = pSents[cardSentIdx - 1] !== undefined ? pSents[cardSentIdx - 1] : pSents[String(cardSentIdx - 1)];
-                                    }
                                     if (sentTrans && typeof sentTrans === 'string') {
                                         wCards[c].translated_text = sentTrans;
                                     }
                                 }
                             }
-                            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.updateActiveTabTranslation === 'function') {
+                            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.updateSentences === 'function') {
+                                window.WorkspaceTabs.updateSentences(payload.sentences);
+                            } else if (window.WorkspaceTabs && typeof window.WorkspaceTabs.updateActiveTabTranslation === 'function') {
                                 window.WorkspaceTabs.updateActiveTabTranslation();
                             }
                         } else {

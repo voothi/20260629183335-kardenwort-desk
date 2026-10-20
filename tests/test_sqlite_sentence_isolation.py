@@ -2,7 +2,9 @@ import configparser
 from pathlib import Path
 import pytest
 from kardenwort_db import KardenwortDB
+import kardenwort_desk
 from kardenwort_desk import SqliteStorageAdapter, SEC_LANGUAGES, SEC_STORAGE, render_lookup_html
+from kardenwort_controller import SessionArbiter
 
 def test_sqlite_storage_preserves_multi_sentences_when_saved_without_sentences_arg(tmp_path):
     db_path = tmp_path / "kardenwort.db"
@@ -604,3 +606,80 @@ def test_progressive_translation_filters_full_text_from_overwriting_sentence_1(t
     assert sents_by_idx[1] != trans_full
     assert sents_by_idx[2] == trans_s2
     assert sents_by_idx[3] == trans_s3
+
+
+def test_retext_child_card_translation_isolation(tmp_path, monkeypatch):
+    """
+    Verify that SessionArbiter.retext_session isolates child sentence translations,
+    ensuring that child sentence tabs never receive combined multi-sentence text.
+    """
+    db_file = tmp_path / "kardenwort_test_retext_isolation.db"
+    cfg = configparser.ConfigParser()
+    cfg.add_section("settings")
+    cfg.set("settings", "default_language", "en")
+    cfg.set("settings", "default_target_language", "ru")
+    cfg.add_section("storage")
+    cfg.set("storage", "backend", "sqlite")
+    cfg.add_section("pipeline")
+    cfg.set("pipeline", "text_base_provider", "google")
+    cfg.add_section("translation")
+    cfg.set("translation", "translation_wrap_max_chars", "90")
+
+    resolved_paths = {
+        "sqlite_db_path": str(db_file),
+        "results_dir": str(tmp_path / "results"),
+        "anki_mapping_file": str(tmp_path / "anki-mapping.ini"),
+    }
+    Path(resolved_paths["results_dir"]).mkdir(parents=True, exist_ok=True)
+    Path(resolved_paths["anki_mapping_file"]).write_text(
+        "[FieldIndices]\nSentenceSourceIndex=3\nSentenceDestination=5\nSentenceDestination2=6\n",
+        encoding="utf-8"
+    )
+
+    adapter = SqliteStorageAdapter(config=cfg, resolved_paths=resolved_paths, db_path=str(db_file))
+    session_zid = "20261020092120"
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "SentenceDestination2", "WordDestination"
+    ]
+    data_rows = [
+        ["0", "and", "and", "1", "and mounting child nodes.", "old1", "old1", "и"],
+        ["1", "Applied", "apply", "2", "Applied matching type casting", "old2", "old2", "применять"],
+    ]
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="and-mounting",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="and mounting child nodes. Applied matching type casting",
+        headers=headers,
+        data_rows=data_rows,
+        sentences=[
+            {"session_zid": session_zid, "sentence_index": 1, "sentence_source": "and mounting child nodes.", "sentence_destination": "old1"},
+            {"session_zid": session_zid, "sentence_index": 2, "sentence_source": "Applied matching type casting", "sentence_destination": "old2"},
+        ],
+        zid=session_zid,
+    )
+
+    arbiter = SessionArbiter(config=cfg, resolved_paths=resolved_paths)
+    arbiter.storage_adapter = adapter
+
+    def mock_desk_translate(text, src, tgt, *a, **kw):
+        lines = text.split("\n")
+        return "\n".join([f"NEW:{l.strip()}" for l in lines])
+
+    monkeypatch.setattr(kardenwort_desk, "translate_text", mock_desk_translate)
+
+    res = arbiter.retext_session(session_zid=session_zid, language="en", text_mode="single")
+    assert res["status"] == "success"
+    assert res["sentences"][1] == "NEW:and mounting child nodes."
+    assert res["sentences"][2] == "NEW:Applied matching type casting"
+
+    # Verify SQLite sentences table
+    db_sents = adapter.db.get_sentences_by_session(session_zid)
+    by_idx = {s["sentence_index"]: s["sentence_destination"] for s in db_sents}
+    assert by_idx[1] == "NEW:and mounting child nodes."
+    assert by_idx[2] == "NEW:Applied matching type casting"
+    assert "Applied" not in by_idx[1]
+

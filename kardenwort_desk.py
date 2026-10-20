@@ -8258,7 +8258,9 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
     
     if eff_mode == 'single':
-        if len(text) <= wrap_max_chars and '\n' not in text.strip():
+        sbc = SentenceBoundaryConfig.from_config(config)
+        pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
+        if len(text) <= wrap_max_chars and '\n' not in text.strip() and len(pseudo_lines) <= 1:
             try:
                 res = translate_text(text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                 prov = getattr(res, 'provenance', f"live:{provider}" if provider else None)
@@ -8269,9 +8271,6 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     raise e
                 return ProvenanceDict({0: f"[Translation Error: {e}]"}, provenance=f"live:{provider}" if provider else None)
         else:
-            sbc = SentenceBoundaryConfig.from_config(config)
-            pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
-            
             apply_source_padding = False
             apply_translated_padding = False
             if sbc.words_before > 0 or sbc.words_after > 0:

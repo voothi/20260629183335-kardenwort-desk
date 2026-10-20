@@ -882,5 +882,114 @@ def test_persist_retext_updates_isolated_command_execution(tmp_path):
     assert disk_rows[1][disk_col_dst] == "Übersetzung 2"
 
 
+def test_retext_session_preserves_short_multi_sentence_isolation(tmp_path):
+    """
+    Verify that /session/retext on a multi-sentence session whose raw text is under
+    wrap_max_chars (e.g. 55 chars across 2 sentences) preserves established sentence
+    boundaries, translating each sentence 1-to-1 without collapsing or leaking Sentence 2
+    into Sentence 1.
+    """
+    db_file = tmp_path / "test_short_retext.db"
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    resolved_paths["sqlite_db_path"] = str(db_file)
+    results_dir = tmp_path / "results"
+    results_dir.mkdir(parents=True, exist_ok=True)
+    resolved_paths["results_dir"] = str(results_dir)
+
+    adapter = SqliteStorageAdapter(config=config, resolved_paths=resolved_paths, db_path=str(db_file))
+    arbiter = SessionArbiter(config=config, resolved_paths=resolved_paths)
+    arbiter.storage_adapter = adapter
+
+    session_zid = "20261020092116"
+    headers = [
+        "TokenOrder", "Quotation", "WordSource", "SentenceSourceIndex",
+        "SentenceSource", "SentenceDestination", "SentenceDestination2", "WordDestination"
+    ]
+    initial_rows = [
+        ["0", "and", "and", "1", "and mounting child nodes.", "и монтирование дочерних узлов.", "и монтирование дочерних узлов.", "и"],
+        ["1", "mounting", "mount", "1", "and mounting child nodes.", "и монтирование дочерних узлов.", "и монтирование дочерних узлов.", "монтировать"],
+        ["2", "Applied", "apply", "2", "Applied matching type casting", "Применено литье соответствующего типа", "Применено литье соответствующего типа", "применять"],
+    ]
+
+    source_raw_text = "and mounting child nodes. Applied matching type casting"
+    adapter.save_session(
+        session_zid=session_zid,
+        slug="and-mounting-child-nodes",
+        source_language="en",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text=source_raw_text,
+        tsv_path=str(results_dir / f"{session_zid}.en.tsv"),
+        headers=headers,
+        comments=[],
+        data_rows=initial_rows,
+        sentences=[
+            {
+                "session_zid": session_zid,
+                "sentence_index": 1,
+                "sentence_source": "and mounting child nodes.",
+                "sentence_destination": "и монтирование дочерних узлов.",
+                "sentence_destination2": "и монтирование дочерних узлов.",
+            },
+            {
+                "session_zid": session_zid,
+                "sentence_index": 2,
+                "sentence_source": "Applied matching type casting",
+                "sentence_destination": "Применено литье соответствующего типа",
+                "sentence_destination2": "Применено литье соответствующего типа",
+            }
+        ]
+    )
+
+    arbiter.sessions[session_zid] = {
+        "text": source_raw_text,
+        "language": "en",
+        "data_rows": initial_rows,
+        "headers": headers,
+        "comments": [],
+        "tsv_path": str(results_dir / f"{session_zid}.en.tsv"),
+        "role_fields": {
+            "sentence_index": "SentenceSourceIndex",
+            "sentence_source": "SentenceSource",
+            "sentence_destination": "SentenceDestination",
+            "sentence_destination2": "SentenceDestination2",
+        }
+    }
+
+    # Mock translate_text to simulate live translation
+    def mock_trans(text, src, tgt, *a, **kw):
+        lines = text.split("\n")
+        return "\n".join([f"RU:{l.strip()}" for l in lines])
+
+    with patch("kardenwort_desk.translate_text", side_effect=mock_trans):
+        res = arbiter.retext_session(session_zid=session_zid, language="en", text_mode="single")
+
+    assert res["status"] == "success"
+    assert res["session_zid"] == session_zid
+    assert 1 in res["sentences"]
+    assert 2 in res["sentences"]
+    assert res["sentences"][1] == "RU:and mounting child nodes."
+    assert res["sentences"][2] == "RU:Applied matching type casting"
+    assert "Applied" not in res["sentences"][1]
+    assert "литье" not in res["sentences"][1]
+
+    # Verify SQLite sentences table has clean 1:1 translations
+    db_sents = adapter.db.get_sentences_by_session(session_zid)
+    assert len(db_sents) == 2
+    by_idx = {s["sentence_index"]: s for s in db_sents}
+    assert by_idx[1]["sentence_destination"] == "RU:and mounting child nodes."
+    assert by_idx[2]["sentence_destination"] == "RU:Applied matching type casting"
+
+    # Verify data rows have matching sentence destinations
+    col_sent = headers.index("SentenceSourceIndex")
+    col_dest = headers.index("SentenceDestination")
+    for r in res["data_rows"]:
+        if r[col_sent] == "1":
+            assert r[col_dest] == "RU:and mounting child nodes."
+        elif r[col_sent] == "2":
+            assert r[col_dest] == "RU:Applied matching type casting"
+
+
+
 
 
