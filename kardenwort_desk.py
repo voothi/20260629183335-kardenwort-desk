@@ -10268,6 +10268,8 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         # is_progressive_translation_enabled throughout this function to track effective mode.
     
     translation_fast_failed = False
+    translated_sentences = []
+    translated_paragraph = ""
 
     if will_split:
         text_chain, _ = resolve_provider_chain(config, task_type='text')
@@ -10275,8 +10277,6 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         master_slug = generate_slug(text)
         master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
         
-        translated_sentences = []
-        translated_paragraph = ""
         master_tsv_path = None
         
         parallelize = config.getboolean(SEC_PIPELINE, 'parallelize_core_and_translation', fallback=True)
@@ -11003,7 +11003,6 @@ html, body {{
         elif not source_text_path.exists():
             source_text_path.write_text(text, encoding='utf-8')
             
-    sentence_translated = False
     dest_cols = []
     if col_sentence_dest_orig != -1 and col_sentence_dest_orig not in dest_cols:
         dest_cols.append(col_sentence_dest_orig)
@@ -11013,10 +11012,15 @@ html, body {{
         dest_cols.append(col_sentence_dest2)
     elif col_sentence_dest != -1 and col_sentence_dest not in dest_cols:
         dest_cols.append(col_sentence_dest)
-    for c_d in dest_cols:
-        if any(len(row) > c_d and row[c_d].strip() for row in data_rows):
-            sentence_translated = True
-            break
+
+    sentence_translated = False
+    if will_split and (translated_paragraph or any(translated_sentences)):
+        sentence_translated = True
+    else:
+        for c_d in dest_cols:
+            if any(len(row) > c_d and row[c_d].strip() for row in data_rows):
+                sentence_translated = True
+                break
             
     has_untranslated_lemmas = False
     

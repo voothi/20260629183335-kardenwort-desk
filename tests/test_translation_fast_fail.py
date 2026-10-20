@@ -112,7 +112,9 @@ parent_mode=table
         p.write_text("SentenceSourceIndex\tWordSource\tWordDestination\n1\tapple\tyabloko", encoding='utf-8')
         return p
 
-    def mock_fast_translate_text(*args, **kwargs):
+    def mock_fast_translate_text(text, *args, **kwargs):
+        if "\n" in text:
+            return "Первое предложение.\nВторое предложение."
         return "Первое предложение. Второе предложение."
 
     monkeypatch.setattr(kardenwort_desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
