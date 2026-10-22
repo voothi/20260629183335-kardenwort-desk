@@ -4080,12 +4080,23 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     pass
 
             rows_dict = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fallback_row_provs)
-            translated_html = format_translated_html(
-                sentence_translation,
-                text_mode=text_mode,
-                text=source_text,
-                config=self.server.config
-            ) if sentence_translation else ""
+            if len(sentences_list) >= 2:
+                eff_status_mode = "multi"
+                eff_status_text = "\n".join(s["sentence_source"] for s in sentences_list if s.get("sentence_source"))
+                clean_sents = [s["sentence_destination"] for s in sentences_list if s.get("sentence_destination")]
+                translated_html = format_translated_html(
+                    clean_sents,
+                    text_mode=eff_status_mode,
+                    text=eff_status_text,
+                    config=self.server.config
+                ) if clean_sents else ""
+            else:
+                translated_html = format_translated_html(
+                    sentence_translation,
+                    text_mode=text_mode,
+                    text=source_text,
+                    config=self.server.config
+                ) if sentence_translation else ""
             
             eff_text_prov = None
             if is_sqlite:

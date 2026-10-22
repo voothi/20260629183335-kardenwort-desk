@@ -8964,6 +8964,23 @@
                     }
                     window.showToast("Retext completed", "success");
                     var tText = payload ? (payload.translatedText || payload.translated_text) : null;
+                    var textProv = (payload && (payload.text_provenance || payload.textProvenance || payload.provenance)) || null;
+                    var activeTextProv = (payload && (payload.active_text_provider || payload.active_provider)) || null;
+
+                    if (window.AppState) {
+                        if (textProv) {
+                            window.AppState.textProvenance = textProv;
+                            window.AppState.text_provenance = textProv;
+                        }
+                        if (activeTextProv) {
+                            window.AppState.activeTextProvider = activeTextProv;
+                            window.AppState.active_text_provider = activeTextProv;
+                        }
+                    }
+                    if (typeof window.updateActiveProvider === 'function' && activeTextProv) {
+                        window.updateActiveProvider('text', activeTextProv);
+                    }
+
                     if (tText) {
                         var tc = document.getElementById('translation-container');
                         if (tc) {
@@ -9009,11 +9026,21 @@
                             translatedText: tText,
                             translated_text: tText,
                             sentences: payload.sentences,
-                            rows: (payload && payload.rows) ? payload.rows : null
+                            rows: (payload && payload.rows) ? payload.rows : null,
+                            text_provenance: textProv,
+                            textProvenance: textProv,
+                            active_text_provider: activeTextProv,
+                            active_provider: activeTextProv
                         };
                         window.receiveUpdate(retextUpdate);
                     } else if (window.onUpdateClick) {
                         window.onUpdateClick();
+                    }
+
+                    if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveSentenceIdx === 'function' && window.WorkspaceTabs.getActiveSentenceIdx() > 0) {
+                        if (typeof window.WorkspaceTabs.updateActiveTabTranslation === 'function') {
+                            window.WorkspaceTabs.updateActiveTabTranslation();
+                        }
                     }
                 } else {
                     window.showToast("Retext failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
