@@ -1890,6 +1890,8 @@ class SessionArbiter:
         active_text_prov: Optional[str] = None,
         req_zid: Optional[str] = None,
         tsv_path: Optional[Union[Path, str]] = None,
+        active_text_provider: Optional[str] = None,
+        translated_text: Optional[str] = None,
     ) -> Dict[str, Any]:
         """
         Encapsulates row updates, SQLite sentence translation updates, and TSV synchronization
@@ -2020,10 +2022,34 @@ class SessionArbiter:
                 storage_adapter.save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
 
         new_fp = compute_content_fingerprint(data_rows)
+        eff_active_text_p = active_text_provider
+        if not eff_active_text_p and eff_active_text_prov and str(eff_active_text_prov).startswith("live:"):
+            eff_active_text_p = str(eff_active_text_prov)[5:].strip().lower()
+        elif not eff_active_text_p:
+            eff_active_text_p = eff_active_text_prov
+
+        eff_translated_text = translated_text
+        if eff_translated_text is None:
+            sess_memo = self.sessions.get(session_zid, {}) if hasattr(self, 'sessions') else {}
+            eff_translated_text = format_translated_html(
+                sentence_trans,
+                text_mode=sess_memo.get("text_mode", "single"),
+                text=sess_memo.get("text", ""),
+                config=self.config
+            )
+
         with self._lock:
-            if session_zid in self.sessions:
-                self.sessions[session_zid]["data_rows"] = data_rows
-                self.sessions[session_zid]["fingerprint"] = new_fp
+            if session_zid not in self.sessions:
+                self.sessions[session_zid] = {}
+            self.sessions[session_zid]["data_rows"] = data_rows
+            self.sessions[session_zid]["fingerprint"] = new_fp
+            self.sessions[session_zid]["sentence_translation"] = sentence_trans
+            self.sessions[session_zid]["text_provenance"] = eff_active_text_prov
+            self.sessions[session_zid]["textProvenance"] = eff_active_text_prov
+            self.sessions[session_zid]["active_text_provider"] = eff_active_text_p
+            self.sessions[session_zid]["active_provider"] = eff_active_text_p or self.sessions[session_zid].get("active_provider")
+            self.sessions[session_zid]["translatedText"] = eff_translated_text
+            self.sessions[session_zid]["translated_text"] = eff_translated_text
 
         return {
             "status": "success",
@@ -2034,6 +2060,11 @@ class SessionArbiter:
             "role_fields": role_fields,
             "fingerprint": new_fp,
             "tsv_path": resolved_tsv_path,
+            "translated_text": eff_translated_text,
+            "translatedText": eff_translated_text,
+            "text_provenance": eff_active_text_prov,
+            "textProvenance": eff_active_text_prov,
+            "active_text_provider": eff_active_text_p,
         }
 
     def retext_session(
@@ -2168,12 +2199,17 @@ class SessionArbiter:
 
         active_text_prov = getattr(sentence_trans, "provenance", f"live:{active_text_provider}")
 
+        # Enforce discrete <div> containers per sentence when multiple sentences exist
+        translated_html = format_translated_html(sentence_trans, text_mode=eff_retext_mode, text=eff_retext_text, config=self.config)
+
         persist_res = self._persist_retext_updates(
             session_zid=session_zid,
             sentence_trans=sentence_trans,
             active_text_prov=active_text_prov,
             req_zid=req_zid,
             tsv_path=tsv_path,
+            active_text_provider=active_text_provider,
+            translated_text=translated_html,
         )
 
         data_rows = persist_res["data_rows"]
@@ -2201,7 +2237,6 @@ class SessionArbiter:
         if not normalized_sentences:
             raise StructuredError(ErrorCode.DESK_FAILED, "Retext translation produced no valid sentence mapping.")
 
-        translated_html = format_translated_html(sentence_trans, text_mode=text_mode, text=text, config=self.config)
         sorted_rows = sort_session_data_rows(data_rows, headers, language, self.config, self.resolved_paths, role_fields=role_fields)
         structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
         safe_write_update_js(
@@ -2226,6 +2261,10 @@ class SessionArbiter:
             "translated_text": translated_html,
             "translatedText": translated_html,
             "sentences": normalized_sentences,
+            "active_provider": active_text_provider,
+            "active_text_provider": active_text_provider,
+            "text_provenance": active_text_prov,
+            "textProvenance": active_text_prov,
         })
 
         return {
@@ -2238,7 +2277,9 @@ class SessionArbiter:
             "translatedText": translated_html,
             "sentences": normalized_sentences,
             "active_provider": active_text_provider,
+            "active_text_provider": active_text_provider,
             "text_provenance": active_text_prov,
+            "textProvenance": active_text_prov,
         }
 
     def propagate_enrichment_to_siblings(
@@ -3743,6 +3784,26 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                 safe_sess["rows"] = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=sess_row_provs)
                 safe_sess["row_provenances"] = sess_row_provs
                 safe_sess["rowProvenances"] = sess_row_provs
+                # Cold-cache status fallback: query SQLite sentences table if text_provenance is missing
+                if not safe_sess.get("text_provenance") and not safe_sess.get("textProvenance"):
+                    if hasattr(self.server, 'resolved_paths') and hasattr(self.server, 'config'):
+                        storage_adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+                        if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
+                            try:
+                                db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                                if db_sents:
+                                    eff_prov = next((s.get("text_provenance") for s in db_sents if s.get("text_provenance")), None)
+                                    if eff_prov:
+                                        safe_sess["text_provenance"] = eff_prov
+                                        safe_sess["textProvenance"] = eff_prov
+                                        if hasattr(self.server, 'arbiter') and self.server.arbiter:
+                                            with self.server.arbiter._lock:
+                                                if zid in self.server.arbiter.sessions:
+                                                    self.server.arbiter.sessions[zid]["text_provenance"] = eff_prov
+                                                    self.server.arbiter.sessions[zid]["textProvenance"] = eff_prov
+                            except Exception:
+                                pass
+
                 if safe_sess.get("text_provenance"):
                     safe_sess["textProvenance"] = safe_sess["text_provenance"]
                 elif safe_sess.get("textProvenance"):
@@ -3760,7 +3821,35 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                             config=self.server.config,
                         )
                     else:
-                        safe_sess["translatedText"] = ""
+                        # Extract sentence_destination from SQLite sentences when in-memory cache lacks translatedText
+                        if hasattr(self.server, 'resolved_paths') and hasattr(self.server, 'config'):
+                            storage_adapter = get_storage_adapter(self.server.config, self.server.resolved_paths)
+                            if getattr(storage_adapter, 'backend_name', '') == 'sqlite' and hasattr(storage_adapter, 'db'):
+                                try:
+                                    db_sents = storage_adapter.db.get_sentences_by_session(zid)
+                                    if db_sents:
+                                        sorted_db_sents = sorted(db_sents, key=lambda x: x.get("sentence_index", 1))
+                                        s_dests = [str(s.get("sentence_destination") or "").strip() for s in sorted_db_sents if s.get("sentence_destination")]
+                                        if s_dests:
+                                            s_srcs = [str(s.get("sentence_source") or "").strip() for s in sorted_db_sents if s.get("sentence_source")]
+                                            st_mode = "multi" if len(s_dests) >= 2 else safe_sess.get("text_mode", "single")
+                                            st_text = "\n".join(s_srcs) if len(s_srcs) >= 2 else (safe_sess.get("text", "") or " ".join(s_srcs))
+                                            formatted_tt = format_translated_html(
+                                                s_dests,
+                                                text_mode=st_mode,
+                                                text=st_text,
+                                                config=self.server.config,
+                                            )
+                                            safe_sess["translatedText"] = formatted_tt
+                                            if hasattr(self.server, 'arbiter') and self.server.arbiter:
+                                                with self.server.arbiter._lock:
+                                                    if zid in self.server.arbiter.sessions:
+                                                        self.server.arbiter.sessions[zid]["translatedText"] = formatted_tt
+                                                        self.server.arbiter.sessions[zid]["translated_text"] = formatted_tt
+                                except Exception:
+                                    pass
+                        if not safe_sess.get("translatedText"):
+                            safe_sess["translatedText"] = ""
 
                 is_busy = False
                 if hasattr(self.server, 'arbiter') and self.server.arbiter:
