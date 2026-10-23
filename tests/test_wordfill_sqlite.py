@@ -2,6 +2,7 @@
 tests/test_wordfill_sqlite.py - Unit tests for SQLite Indexed Wordfill and Hybrid Fallback
 """
 
+import re
 import time
 import pytest
 from pathlib import Path
@@ -23,7 +24,7 @@ def sqlite_wordfill_db(tmp_path):
 
 def test_sqlite_wordfill_indexed_lookup_speed_and_accuracy(sqlite_wordfill_db, tmp_path):
     """
-    Verifies that find_wordfill_match queries SQLite with < 1ms query duration
+    Verifies that find_wordfill_match is served by the indexed SQLite lookup
     and correctly returns enriched fields (IPA, morphology, translation).
     """
     db = sqlite_wordfill_db
@@ -85,17 +86,22 @@ def test_sqlite_wordfill_indexed_lookup_speed_and_accuracy(sqlite_wordfill_db, t
     assert match.get("WordRussian") == "яблоко"
     assert match.get("WordEnglish") == "apple"
 
-    # Benchmark indexed SQLite query execution duration (< 1ms per query)
-    timings = []
+    # Deterministic contract: the lookup must be served by the words indexes,
+    # never by a full scan of the words table (no wall-clock dependence).
+    executed_sql = []
     with db.get_connection(read_only=True) as conn:
-        for _ in range(50):
-            t0 = time.perf_counter()
-            candidates = db.find_wordfill_candidates("apfel", "de", limit=10, conn=conn)
-            timings.append((time.perf_counter() - t0) * 1000.0)
-            assert len(candidates) > 0
+        conn.set_trace_callback(executed_sql.append)
+        candidates = db.find_wordfill_candidates("apfel", "de", limit=10, conn=conn)
+        conn.set_trace_callback(None)
+        assert len(candidates) > 0
 
-    avg_query_ms = sum(timings) / len(timings)
-    assert avg_query_ms < 1.0  # Core SQLite indexed lookup executes in < 1ms
+        select_sql = [s for s in executed_sql if s.lstrip().upper().startswith("SELECT")]
+        assert select_sql, "find_wordfill_candidates executed no SELECT statement"
+        plan_rows = conn.execute("EXPLAIN QUERY PLAN " + select_sql[-1]).fetchall()
+        plan = " | ".join(str(r[-1]) for r in plan_rows)
+
+    assert "idx_words_" in plan, plan
+    assert not re.search(r"\bSCAN (words|w)\b", plan), plan
 
 
 def test_sqlite_wordfill_case_insensitivity_and_inflected_lookup(sqlite_wordfill_db):
