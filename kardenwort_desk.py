@@ -13461,6 +13461,19 @@ def render_section(token, ctx):
         
     return html_output
 
+_JSON_ISLAND_ESCAPES = {
+    "<": "\\u003c",
+    ">": "\\u003e",
+    "&": "\\u0026",
+    "\u2028": "\\u2028",
+    "\u2029": "\\u2029",
+}
+
+def serialize_json_island(obj) -> str:
+    """Serialize obj as JSON safe for embedding inside <script type="application/json">."""
+    raw = json.dumps(obj, ensure_ascii=False)
+    return raw.translate(str.maketrans(_JSON_ISLAND_ESCAPES))
+
 def get_bundled_css(web_dir=None) -> str:
     """
     Load and concatenate modular CSS stylesheets from web/css/ (variables.css, tokens.css, table.css, main.css)
@@ -13590,6 +13603,7 @@ def render_declarative_web_shell(
     lemma_col_name="WordSource",
     inflected_col_name="WordSourceInflectedForm",
 ):
+    """All JSON data islands MUST be serialized with serialize_json_island()."""
     base_html = get_web_index_html()
     if not base_html:
         p = Path(__file__).resolve().parent / "web" / "index.html"
@@ -13633,7 +13647,7 @@ def render_declarative_web_shell(
     if session_payload:
         if isinstance(session_payload, dict) and "pos_display_order" not in session_payload:
             session_payload["pos_display_order"] = bootstrap_payload.get("pos_display_order") or POS_DISPLAY_ORDER
-        session_json = json.dumps(session_payload, ensure_ascii=False)
+        session_json = serialize_json_island(session_payload)
         base_html = re.sub(
             r'<script id="session-data" type="application/json">.*?</script>',
             lambda _: f'<script id="session-data" type="application/json">\n{session_json}\n</script>',
@@ -13649,7 +13663,7 @@ def render_declarative_web_shell(
         )
 
     token_manifest = bootstrap_payload.get("token_manifest", [])
-    token_manifest_json = json.dumps(token_manifest, ensure_ascii=False)
+    token_manifest_json = serialize_json_island(token_manifest)
     base_html = re.sub(
         r'<script id="token-map" type="application/json">.*?</script>',
         lambda _: f'<script id="token-map" type="application/json">\n{token_manifest_json}\n</script>',
@@ -13657,7 +13671,7 @@ def render_declarative_web_shell(
         flags=re.DOTALL
     )
 
-    bootstrap_json = json.dumps(bootstrap_payload, ensure_ascii=False)
+    bootstrap_json = serialize_json_island(bootstrap_payload)
     base_html = re.sub(
         r'<script id="kardenwort-bootstrap" type="application/json">.*?</script>',
         lambda _: f'<script id="kardenwort-bootstrap" type="application/json">\n{bootstrap_json}\n</script>',
@@ -13672,7 +13686,7 @@ def render_declarative_web_shell(
 
     # Legacy & contract data islands for backward compatibility
     ui_cfg_val = bootstrap_payload.get("ui_config", {})
-    ui_cfg_json = json.dumps(ui_cfg_val, ensure_ascii=False)
+    ui_cfg_json = serialize_json_island(ui_cfg_val)
     base_html = re.sub(
         r'<script id="ui-config" type="application/json">.*?</script>',
         lambda _: f'<script id="ui-config" type="application/json">\n{ui_cfg_json}\n</script>',
@@ -13687,7 +13701,7 @@ def render_declarative_web_shell(
     )
 
     sentence_cards = bootstrap_payload.get("sentence_cards", [])
-    sentence_cards_json = json.dumps(sentence_cards, ensure_ascii=False)
+    sentence_cards_json = serialize_json_island(sentence_cards)
     base_html = re.sub(
         r'<script id="sentence-cards" type="application/json">.*?</script>',
         lambda _: f'<script id="sentence-cards" type="application/json">\n{sentence_cards_json}\n</script>',
@@ -13720,7 +13734,7 @@ def render_declarative_web_shell(
     )
 
     mism_info = bootstrap_payload.get("mismatch_info") or mismatch_info or {}
-    mism_json = json.dumps(mism_info, ensure_ascii=False)
+    mism_json = serialize_json_island(mism_info)
     base_html = re.sub(
         r'<script id="mismatch-info" type="application/json">.*?</script>',
         lambda _: f'<script id="mismatch-info" type="application/json">\n{mism_json}\n</script>',
@@ -14043,7 +14057,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         "fingerprint": str(fingerprint or ""),
         "server_url": server_url,
     }
-    session_json = json.dumps(session_payload, ensure_ascii=False)
+    session_json = serialize_json_island(session_payload)
 
     web_dir = Path(__file__).resolve().parent / "web"
     index_path = web_dir / "index.html"
@@ -14091,7 +14105,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
             "server_url": session_payload["server_url"],
             "fingerprint": session_payload["fingerprint"],
         }
-        lookup_bootstrap_json = json.dumps(lookup_bootstrap, ensure_ascii=False)
+        lookup_bootstrap_json = serialize_json_island(lookup_bootstrap)
         base_html = re.sub(
             r'<script id="kardenwort-bootstrap" type="application/json">.*?</script>',
             lambda _: f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>',
