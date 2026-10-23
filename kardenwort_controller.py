@@ -2055,35 +2055,15 @@ class SessionArbiter:
                 if is_sqlite:
                     for s_idx, trans in sentence_map.items():
                         if trans and isinstance(trans, str) and trans.strip():
-                            try:
-                                storage_adapter.update_sentence_translation(
-                                    session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=eff_active_text_prov
-                                )
-                            except TypeError:
-                                try:
-                                    storage_adapter.update_sentence_translation(
-                                        session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
-                            except Exception as e:
-                                logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
+                            storage_adapter.update_sentence_translation(
+                                session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=eff_active_text_prov
+                            )
 
                     for s_idx, padded_trans in padded_map.items():
                         if padded_trans and isinstance(padded_trans, str) and padded_trans.strip():
-                            try:
-                                storage_adapter.update_sentence_translation(
-                                    session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=eff_active_text_prov
-                                )
-                            except TypeError:
-                                try:
-                                    storage_adapter.update_sentence_translation(
-                                        session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid
-                                    )
-                                except Exception as e:
-                                    logger.warning(f"Failed to update sentence {s_idx} destination2 in DB: {e}")
-                            except Exception as e:
-                                logger.warning(f"Failed to update sentence {s_idx} destination2 in DB: {e}")
+                            storage_adapter.update_sentence_translation(
+                                session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=eff_active_text_prov
+                            )
 
                 storage_adapter.save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
 
@@ -3822,11 +3802,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                     if eff_prov:
                                         safe_sess["text_provenance"] = eff_prov
                                         safe_sess["textProvenance"] = eff_prov
-                                        if hasattr(self.server, 'arbiter') and self.server.arbiter:
-                                            with self.server.arbiter._lock:
-                                                if zid in self.server.arbiter.sessions:
-                                                    self.server.arbiter.sessions[zid]["text_provenance"] = eff_prov
-                                                    self.server.arbiter.sessions[zid]["textProvenance"] = eff_prov
                             except Exception:
                                 pass
 
@@ -3865,11 +3840,6 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                                 config=self.server.config,
                                             )
                                             safe_sess["translatedText"] = formatted_tt
-                                            if hasattr(self.server, 'arbiter') and self.server.arbiter:
-                                                with self.server.arbiter._lock:
-                                                    if zid in self.server.arbiter.sessions:
-                                                        self.server.arbiter.sessions[zid]["translatedText"] = formatted_tt
-                                                        self.server.arbiter.sessions[zid]["translated_text"] = formatted_tt
                                 except Exception:
                                     pass
                         if not safe_sess.get("translatedText"):
