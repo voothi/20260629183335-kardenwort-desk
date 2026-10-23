@@ -64,7 +64,7 @@ span.word:hover {
 body.theme-light #translation-container span.word:hover,
 body.theme-white #translation-container span.word:hover,
 body.theme-compact #translation-container span.word:hover {
-    background-color: rgba(0, 0, 0, 0.06);
+    background-color: var(--configured-word-hover, rgba(0, 0, 0, 0.06));
     border-radius: 4px;
 }
 
@@ -125,7 +125,7 @@ span.word.highlight-orange-active {
 .source-text span.word.highlight-orange-active:hover,
 #source-container span.word.highlight-orange-active:hover,
 span.word.highlight-orange-active:hover {
-    background-color: var(--highlight-orange-bg, rgba(255, 204, 0, 0.35)) !important;
+    background-color: var(--highlight-orange-hover-bg, var(--highlight-orange-bg, rgba(255, 204, 0, 0.35))) !important;
     color: var(--highlight-orange-text, #ffcc00) !important;
 }
 
@@ -141,7 +141,7 @@ span.word.highlight-purple-active {
 .source-text span.word.highlight-purple-active:hover,
 #source-container span.word.highlight-purple-active:hover,
 span.word.highlight-purple-active:hover {
-    background-color: var(--highlight-purple-bg, #a888e8) !important;
+    background-color: var(--highlight-purple-hover-bg, var(--highlight-purple-bg, #a888e8)) !important;
     color: var(--highlight-purple-text, #ffffff) !important;
 }
 

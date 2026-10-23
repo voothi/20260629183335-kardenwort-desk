@@ -232,4 +232,3 @@ def test_multi_tier_lemma_tier0_rate_limit_short_circuits_to_fallback(tmp_path):
         assert kardenwort_desk.is_provider_cooled_down("google")
 
     kardenwort_desk.clear_provider_cooldowns()
-

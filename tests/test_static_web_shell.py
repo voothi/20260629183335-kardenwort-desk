@@ -1446,7 +1446,7 @@ def test_toolbar_buttons_active_style_and_specificity_under_light_compact_white_
         }""", theme)
         assert res["filterBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for filter button in {theme}, got {res['filterBg']}"
         assert res["lemmaBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for lemma button in {theme}, got {res['lemmaBg']}"
-        assert res["filterFw"] in ["600", "bold"], f"Expected font-weight 600 for filter button in {theme}, got {res['filterFw']}"
+        assert res["filterFw"] == "500", f"Expected invariant font-weight 500 for filter button in {theme}, got {res['filterFw']}"
         assert res["lemmaFw"] in ["500", "normal"], f"Expected invariant font-weight 500 for lemma button in {theme}, got {res['lemmaFw']}"
         assert "56, 166, 255" in res["handBg"], f"Expected active blue background for hand tool in {theme}, got {res['handBg']}"
 
@@ -1454,7 +1454,8 @@ def test_toolbar_buttons_active_style_and_specificity_under_light_compact_white_
         del_btn = page.locator("#kw-btn-delete")
         del_btn.hover()
         del_color = page.evaluate("() => window.getComputedStyle(document.getElementById('kw-btn-delete')).color")
-        assert del_color == "rgb(255, 123, 114)", f"Expected danger red #ff7b72 for delete hover in {theme}, got {del_color}"
+        neutral_color = page.locator("#kw-btn-update").evaluate("el => getComputedStyle(el).color")
+        assert del_color == neutral_color, f"Expected neutral Delete hover in {theme}, got {del_color}"
 
 
 def test_lemma_peer_highlight_persists_across_mouseout(page, tmp_path):
@@ -1599,4 +1600,3 @@ def test_standalone_html_bundles_all_components(tmp_path):
     assert "SourceViewer" in html
     assert "TranslationView" in html
     assert "WorkspaceTabs" in html
-

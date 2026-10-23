@@ -523,4 +523,3 @@ def test_sqlite_storage_adapter_sentinel_file_lock_busy_detection(sqlite_wordfil
         assert check_coordination_busy(sentinel_lock_target) is True
 
     assert check_coordination_busy(dummy_tsv_path) is False
-

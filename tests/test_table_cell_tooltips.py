@@ -711,7 +711,7 @@ def test_grammar_metadata_contract_server_client_parity(page, tmp_path):
     # 4. Verify client functions dynamically consume injected window.__CONFIG__.grammar
     custom_pos = page.evaluate("""
         (() => {
-            window.__CONFIG__.grammar.posMap['custom_tag'] = 'CustomCategory';
+            window.__CONFIG__.grammar.pos_full_name_map['custom_tag'] = 'CustomCategory';
             return window.formatPosTooltip('custom_tag');
         })()
     """)
@@ -765,6 +765,3 @@ def test_detect_german_gender_suffix_moment_exclusion():
     # Valid -ent and -ismus suffixes should still match
     assert detect_german_gender_suffix("Student", "m") == "-ent"
     assert detect_german_gender_suffix("Optimismus", "m") == "-ismus"
-
-
-

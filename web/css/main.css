@@ -47,3 +47,17 @@ body.has-dock-bottom .container {
     user-select: text;
 }
 
+::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); }
+::-webkit-scrollbar-thumb:hover { background: var(--scrollbar-thumb-hover); }
+
+td.editing input { border-color: var(--input-border, var(--accent-color)); }
+
+/* The active layout reserves its measured content boxes. Long responses scroll
+   inside those boxes; card/viewport changes establish a new layout reservation. */
+#source-container,
+#translation-container {
+    height: var(--kw-text-region-size, auto);
+    overflow: auto;
+    box-sizing: border-box;
+}

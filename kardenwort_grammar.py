@@ -326,16 +326,4 @@ def get_grammar_payload() -> Dict[str, Any]:
         "suffixes_neuter": list(GERMAN_GENDER_SUFFIXES_NEUTER),
         "suffix_excluded_in": sorted(list(GERMAN_SUFFIX_EXCLUDED_IN)),
         "suffix_excluded_ent": sorted(list(GERMAN_SUFFIX_EXCLUDED_ENT)),
-        # CamelCase aliases for client JS convenience
-        "posMap": dict(POS_FULL_NAME_MAP),
-        "genderMap": dict(GENDER_FULL_NAME_MAP),
-        "germanArticles": list(GERMAN_ARTICLES),
-        "germanPronouns": list(GERMAN_PRONOUNS),
-        "nounTags": sorted(list(GERMAN_NOUN_TAGS)),
-        "nonNounTags": sorted(list(GERMAN_NON_NOUN_TAGS)),
-        "suffixesMasculine": list(GERMAN_GENDER_SUFFIXES_MASCULINE),
-        "suffixesFeminine": list(GERMAN_GENDER_SUFFIXES_FEMININE),
-        "suffixesNeuter": list(GERMAN_GENDER_SUFFIXES_NEUTER),
-        "suffixExcludedIn": sorted(list(GERMAN_SUFFIX_EXCLUDED_IN)),
-        "suffixExcludedEnt": sorted(list(GERMAN_SUFFIX_EXCLUDED_ENT)),
     }

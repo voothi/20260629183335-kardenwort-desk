@@ -2124,6 +2124,16 @@ class SessionArbiter:
         storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
+        existing_sentences = []
+        if is_sqlite:
+            try:
+                existing_sentences = storage_adapter.db.get_sentences_by_session(session_zid)
+            except Exception as exc:
+                raise StructuredError(
+                    ErrorCode.DESK_FAILED,
+                    f"Re-text sentence read failed for session {session_zid}"
+                ) from exc
+
         tsv_path = None
         session_text = ""
         with self._lock:
@@ -2203,14 +2213,6 @@ class SessionArbiter:
                 providers = [reprocess_p] + providers
             elif providers and providers[0] != reprocess_p:
                 providers = [reprocess_p] + [p for p in providers if p != reprocess_p]
-
-        # Check if the session has established multiple sentences in SQLite
-        existing_sentences = []
-        if is_sqlite and hasattr(storage_adapter, 'db') and hasattr(storage_adapter.db, 'get_sentences_by_session'):
-            try:
-                existing_sentences = storage_adapter.db.get_sentences_by_session(session_zid)
-            except Exception:
-                existing_sentences = []
 
         eff_retext_text = text
         eff_retext_mode = text_mode
@@ -3519,7 +3521,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     services_status = self.server.supervisor.get_service_status()
                 if hasattr(self.server.supervisor, 'get_status_report'):
                     supervisor_report = self.server.supervisor.get_status_report()
-            
+
             db_status = {}
             try:
                 from kardenwort_db import KardenwortDB
@@ -4088,7 +4090,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                     text=source_text,
                     config=self.server.config
                 ) if sentence_translation else ""
-            
+
             eff_text_prov = None
             if is_sqlite:
                 try:
@@ -5657,7 +5659,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             if method != 'GET':
                 raise StructuredError(ErrorCode.METHOD_NOT_ALLOWED, f"Method {method} not allowed for {path}")
             self._authenticate_token(query_params=qs)
-            
+
             query = qs.get('query', [None])[0] or qs.get('q', [None])[0]
             language = qs.get('language', [None])[0] or qs.get('lang', [None])[0]
             assigned_raw = qs.get('assigned', [None])[0]
@@ -5766,7 +5768,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
             sess = db.get_session(str(target_zid)) or {}
             slug = sess.get("slug") or restored.get("slug") or restored.get("session", {}).get("slug", "") or ""
             lang = sess.get("source_language") or sess.get("source_lang") or restored.get("language") or ""
-            
+
             slug_part = f"-{slug}" if slug else ""
             lang_part = f".{lang}" if lang else ""
             filename = f"{target_zid}{slug_part}{lang_part}.tsv"

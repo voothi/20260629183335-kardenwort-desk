@@ -132,12 +132,11 @@
                         return;
                     }
 
-                    // Route payload directly into central AppStore and receiveUpdate
-                    if (w.AppStore && typeof w.AppStore.applyDeltas === 'function') {
-                        w.AppStore.applyDeltas(data);
-                    }
+                    // The canonical update command applies each event once.
                     if (typeof w.receiveUpdate === 'function') {
                         w.receiveUpdate(data);
+                    } else if (w.AppStore) {
+                        w.AppStore.applyDeltas(data);
                     }
                 } catch (err) {
                     // Non-JSON comments or keep-alive ping

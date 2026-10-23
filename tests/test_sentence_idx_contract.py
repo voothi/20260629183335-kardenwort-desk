@@ -384,6 +384,3 @@ def test_find_token_data_sentence_coordinate(page):
     assert res["res1_sentence_idx"] == 1
     assert res["res2_sentence_idx"] == 0
     assert res["res3"] is None
-
-
-

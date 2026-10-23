@@ -379,27 +379,10 @@
         }
 
         function syncSelectionsToCardsAndState() {
-            var appState = /** @type {any} */ (window).AppState;
-            if (!appState) return;
-            var selMap = appState.selectedLemmas || {};
-            if (cards && cards.length > 0) {
-                for (var c = 0; c < cards.length; c++) {
-                    var card = cards[c];
-                    card.selected_ids = [];
-                    if (card.words) {
-                        for (var widx = 0; widx < card.words.length; widx++) {
-                            var wObj = card.words[widx];
-                            var wLem = (wObj.lemma || '').trim().toLowerCase();
-                            if (wLem && selMap[wLem]) {
-                                wObj.selected = "1";
-                                var rId = String(wObj.row_id);
-                                if (card.selected_ids.indexOf(rId) === -1) card.selected_ids.push(rId);
-                            } else {
-                                wObj.selected = "0";
-                            }
-                        }
-                    }
-                }
+            var w = /** @type {any} */ (window);
+            var active = cards.find(function(card) { return card.seq_num === activeTabSeq; });
+            if (active && typeof w.getSelectedRowsArray === 'function') {
+                active.selected_ids = w.getSelectedRowsArray().map(String);
             }
         }
 
@@ -639,26 +622,14 @@
                     initialSeq = parsedSeq;
                 }
             }
+            try {
+                var savedSeq = Number(sessionStorage.getItem('kw_active_card_' + w.AppState.session_zid));
+                if (cards.some(function(card) { return card.seq_num === savedSeq; })) initialSeq = savedSeq;
+            } catch (err) { console.debug('[Tabs] Session storage unavailable'); }
             activeTabSeq = initialSeq;
             w._kwActiveTabSeq = activeTabSeq;
             if (!w.AppState) w.AppState = {};
-            if (!w.AppState.selectedLemmas) w.AppState.selectedLemmas = {};
-            if (cards && cards.length > 0) {
-                for (var c = 0; c < cards.length; c++) {
-                    var card = cards[c];
-                    if (card.words) {
-                        for (var widx = 0; widx < card.words.length; widx++) {
-                            var wObj = card.words[widx];
-                            var isWSelected = (wObj.selected === "1" || wObj.selected === 1 || (card.selected_ids && card.selected_ids.indexOf(String(wObj.row_id)) !== -1));
-                            if (isWSelected) {
-                                var wLem = (wObj.lemma || '').trim().toLowerCase();
-                                if (wLem) w.AppState.selectedLemmas[wLem] = true;
-                            }
-                        }
-                    }
-                }
-            }
-            syncSelectionsToCardsAndState();
+            w.AppState.selectedLemmas = {};
             if (cards && cards.length > 0) {
                 switchToTab(initialSeq, true);
             }
@@ -766,8 +737,8 @@
                 var rIdStr = String(wordObj.row_id);
                 var tOrdStr = String(wordObj.token_order !== undefined && wordObj.token_order !== null ? wordObj.token_order : rIdStr);
                 var wLemNorm = (wordObj.lemma || '').trim().toLowerCase();
-                var isSel = (w.AppState && w.AppState.selectedLemmas && w.AppState.selectedLemmas[wLemNorm]) ||
-                            !!(selectedMap && selectedMap.hasOwnProperty(rIdStr));
+                var active = cards.find(function(card) { return card.seq_num === activeTabSeq; });
+                var isSel = active ? (active.selected_ids || []).map(String).indexOf(rIdStr) !== -1 : !!(selectedMap && selectedMap.hasOwnProperty(rIdStr));
                 if (isSel) {
                     if (selectedMap) selectedMap[rIdStr] = true;
                     if (wordObj.all_row_ids) {
@@ -1088,11 +1059,13 @@
             }
 
             // 1. Ensure selection state is synchronized across all cards and AppState
-            syncSelectionsToCardsAndState();
+            if (!isImmediate) syncSelectionsToCardsAndState();
 
             activeTabSeq = targetCard.seq_num;
             activeSentenceIdx = targetCard.sentence_idx;
             w._kwActiveTabSeq = activeTabSeq;
+            try { sessionStorage.setItem('kw_active_card_' + w.AppState.session_zid, String(activeTabSeq)); }
+            catch (err) { console.debug('[Tabs] Session storage unavailable'); }
 
             if (w.AppState && w.AppState.activeTokenSelections && w.AppState.activeTokenSelections.length > 0) {
                 if (activeSentenceIdx > 0) {
@@ -1190,10 +1163,10 @@
                 }
             }
 
-            // Synchronize target card's selections from global AppState.selectedLemmas
             selectedRowIdsMap = {};
-            if (w.selectedRowIdsMap) w.selectedRowIdsMap = selectedRowIdsMap;
-            syncSelectionsToCardsAndState();
+            (targetCard.selected_ids || []).forEach(function(id) { selectedRowIdsMap[String(id)] = true; });
+            w.AppState.activeTabSeq = activeTabSeq;
+            w.AppState.activeSentenceIdx = activeSentenceIdx;
 
             // Dynamic viewport binding: bind active card's words into #lemma-table tbody
             var tbody = document.querySelector('#lemma-table tbody');
@@ -1251,6 +1224,7 @@
             }
             updateFavicon(activeTabSeq);
             updateTitle(targetCard);
+            if (w.reserveTextRegions) w.reserveTextRegions(true);
             if (typeof w.updateToolbarState === 'function') w.updateToolbarState();
             if (w.forceRepaint) w.forceRepaint();
 

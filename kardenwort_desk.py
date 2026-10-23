@@ -1,4 +1,6 @@
 import sys
+from kardenwort_theme import resolve_theme_colors, theme_style
+
 import argparse
 import json
 import logging
@@ -1503,16 +1505,16 @@ class SentencesModeConfig:
     def web_tab_mode(self) -> str:
         """Backward-compatible property for legacy consumers expecting 'container' or 'tabs'."""
         return "container" if self.delivery_mode == "container" else "tabs"
-    
+
     def should_split_sentences(self, num_sentences: int) -> bool:
         """Returns True if the configuration dictates that this text should be decomposed into multiple sentence windows."""
         return self.enabled and num_sentences >= self.min_sentences
-        
+
     def get_expected_window_count(self, num_sentences: int) -> int:
         """Returns the number of Kardenwort Desk windows that will spawn under this configuration."""
         if not self.should_split_sentences(num_sentences):
             return 1
-            
+
         parent_spawns = 0 if self.parent_mode == 'none' else 1
         return num_sentences + parent_spawns
 
@@ -1705,7 +1707,7 @@ class TraceTimer(contextlib.ContextDecorator):
         self.config = config
         self.resolved_paths = resolved_paths
         self.extra = extra
-        
+
         self.enabled = False
         self.max_mb = 5
         if self.config and hasattr(self.config, 'getboolean'):
@@ -1728,14 +1730,14 @@ class TraceTimer(contextlib.ContextDecorator):
         global _HAS_BOOTED
         if not self.enabled:
             return False
-            
+
         duration = time.perf_counter() - getattr(self, 'start', time.perf_counter())
-        
+
         with _BOOT_LOCK:
             cold_start = not _HAS_BOOTED
             if not _HAS_BOOTED:
                 _HAS_BOOTED = True
-            
+
         try:
             try:
                 _kw_workspace = self.resolved_paths.get('kardenwort_workspace') if isinstance(self.resolved_paths, dict) else None
@@ -1745,9 +1747,9 @@ class TraceTimer(contextlib.ContextDecorator):
             results_dir = resolve_results_dir(self.resolved_paths, _kw_cfg)
             if not results_dir:
                 return False
-                
+
             log_file = Path(results_dir) / 'speed_trace.jsonl'
-            
+
             with file_lock(log_file):
                 if log_file.exists() and log_file.stat().st_size > self.max_mb * 1024 * 1024:
                     try:
@@ -1757,7 +1759,7 @@ class TraceTimer(contextlib.ContextDecorator):
                             f.writelines(lines[len(lines)//2:])
                     except Exception:
                         pass
-                        
+
                 entry = {
                     "timestamp": datetime.now(timezone.utc).isoformat(),
                     "zid": self.zid,
@@ -1941,14 +1943,14 @@ def _migrate_config(config):
             else:
                 mapped_base = 'auto'
                 mapped_enrich = 'auto'
-        
+
         if run_lemma_base is None:
             run_lemma_base = old_run_base if old_run_base is not None else mapped_base
         if run_lemma_enrich is None:
             run_lemma_enrich = old_run_enrich if old_run_enrich is not None else mapped_enrich
         if run_text is None:
             run_text = run_lemma_base
-    
+
     config.set(SEC_TRIGGERS, 'run_lemma_base_translation', run_lemma_base)
     config.set(SEC_TRIGGERS, 'run_lemma_enrichment', run_lemma_enrich)
     config.set(SEC_TRIGGERS, 'run_text_translation', run_text)
@@ -2110,16 +2112,16 @@ def load_config(config_path=None):
         config_path = Path(__file__).resolve().parent / "config.ini"
     else:
         config_path = Path(config_path).resolve()
-        
+
     if not config_path.exists():
         raise ConfigError(f"Config file not found: {config_path}")
-        
+
     config = configparser.ConfigParser(allow_no_value=True, interpolation=None)
     config.read(config_path, encoding='utf-8-sig')
-    
+
     base_dir = config_path.parent
     resolved_paths = {'base_dir': base_dir}
-    
+
     # 1. Resolve environment paths
     if SEC_ENVIRONMENT in config:
         for key, value in config[SEC_ENVIRONMENT].items():
@@ -2128,14 +2130,14 @@ def load_config(config_path=None):
             else:
                 resolved_path = Path(value).resolve()
             resolved_paths[key] = resolved_path
-            
+
     # Check each resolved path exists
     for key, path in resolved_paths.items():
         if key == 'base_dir':
             continue
         if not path.exists():
             raise ConfigError(f"Path configured for '{key}' does not exist: {path}")
-            
+
     # 2. Settings paths
     if SEC_SETTINGS in config:
         # favorites_output_dir is relative to config.ini location
@@ -2144,14 +2146,14 @@ def load_config(config_path=None):
             resolved_paths['favorites_output_dir'] = (base_dir / fav_dir).resolve()
         else:
             resolved_paths['favorites_output_dir'] = Path(fav_dir).resolve()
-            
+
         # anki_mapping_file is relative to config.ini location
         mapping_file = config[SEC_SETTINGS].get('anki_mapping_file', './anki-mapping.ini')
         if mapping_file.startswith('../') or mapping_file.startswith('./'):
             resolved_paths['anki_mapping_file'] = (base_dir / mapping_file).resolve()
         else:
             resolved_paths['anki_mapping_file'] = Path(mapping_file).resolve()
-            
+
         if not resolved_paths['anki_mapping_file'].exists():
             raise ConfigError(f"anki_mapping_file path configured for 'anki_mapping_file' does not exist: {resolved_paths['anki_mapping_file']}")
 
@@ -2163,7 +2165,7 @@ def load_config(config_path=None):
                 resolved_paths['generated_results_dir'] = Path(res_dir).resolve()
             else:
                 resolved_paths['generated_results_dir'] = (base_dir / res_dir).resolve()
-            
+
     goldendict = {}
     if SEC_GOLDENDICT in config:
         gd = config[SEC_GOLDENDICT]
@@ -2176,14 +2178,14 @@ def load_config(config_path=None):
         goldendict['theme'] = gd.get('theme', 'dark')
         goldendict['emit_meta_comment'] = gd.getboolean('emit_meta_comment', fallback=True)
         goldendict['disable_css'] = gd.getboolean('disable_css', fallback=False)
-        
+
         raw_sections = gd.get('sections', 'translation,lemmas')
         goldendict['sections'] = parse_sections_list(raw_sections, ['source', 'translation', 'lemmas'])
-        
+
         goldendict['heading_source'] = gd.get('heading_source', '')
         goldendict['heading_translation'] = gd.get('heading_translation', '')
         goldendict['heading_lemmas'] = gd.get('heading_lemmas', '')
-        
+
         raw_columns = gd.get('lemma_columns', 'inflected,lemma,translation')
         goldendict['lemma_columns'] = parse_columns_list(raw_columns, ['inflected', 'lemma', 'ipa', 'morphology', 'translation'])
     else:
@@ -2436,7 +2438,7 @@ ENGLISH_CONTRACTION_PRONOUNS: Set[str] = {
 
 def resolve_contraction_constituent_pos(lemma: str, raw_target_token: str = "", default_pos: str = "") -> str:
     """Assigns linguistically authentic POS tags to deconstructed contraction sub-lemmas.
-    
+
     Prevents verbal/adverbial constituents in contractions (e.g. 're -> be, n't -> not)
     from inheriting parent pronoun POS tags.
     """
@@ -2854,7 +2856,7 @@ def get_role_fields(mapping, headers):
             field_lower = field.lower()
             if field_lower in headers_lower:
                 role_fields[role] = headers_lower[field_lower]
-                
+
     if 'lemma' not in role_fields:
         if 'wordsource' in headers_lower:
             role_fields['lemma'] = headers_lower['wordsource']
@@ -2881,7 +2883,7 @@ def get_role_fields(mapping, headers):
             role_fields['gender'] = headers_lower['gender']
     if 'selected' not in role_fields and 'deskselected' in headers_lower:
         role_fields['selected'] = headers_lower['deskselected']
-        
+
     sentence_index_col = headers_lower.get("sentencesourceindex", "SentenceSourceIndex")
     if mapping and 'fields_mapping.word' in mapping:
         for col, role in mapping['fields_mapping.word'].items():
@@ -2889,19 +2891,19 @@ def get_role_fields(mapping, headers):
                 sentence_index_col = col
                 break
     role_fields['sentence_index'] = sentence_index_col
-    
+
     if mapping and 'fields_mapping.sentence' in mapping:
         for col, role in mapping['fields_mapping.sentence'].items():
             if role == 'destination_sentence':
                 role_fields['sentence_destination'] = col
             elif role == 'source_sentence':
                 role_fields['sentence_source'] = col
-                
+
     if 'sentence_source' not in role_fields and 'sentencesource' in headers_lower:
         role_fields['sentence_source'] = headers_lower['sentencesource']
     if 'sentence_destination' not in role_fields and 'sentencedestination' in headers_lower:
         role_fields['sentence_destination'] = headers_lower['sentencedestination']
-        
+
     return role_fields
 
 # Setup structured logging
@@ -3063,12 +3065,12 @@ def get_deepl_key(config, base_dir):
     deepl_settings_file_val = config.get(SEC_ENVIRONMENT, 'deepl_settings_file', fallback=None)
     if not deepl_settings_file_val:
         return None
-        
+
     settings_path = (base_dir / deepl_settings_file_val).resolve()
     if not settings_path.exists():
         logger.warning(f"DeepL settings file not found: {settings_path}")
         return None
-        
+
     settings = configparser.ConfigParser()
     read_success = False
     for enc in ('utf-8', 'utf-8-sig', 'utf-16', 'utf-16le', 'cp1252'):
@@ -3081,17 +3083,17 @@ def get_deepl_key(config, base_dir):
     if not read_success:
         logger.error(f"Failed to decode DeepL settings file {settings_path}")
         return None
-    
+
     salt = settings.get('Security', 'Salt', fallback='')
     secrets_path_val = settings.get('Security', 'SecretsPath', fallback='')
     if not secrets_path_val:
         return None
-        
+
     secrets_path = (settings_path.parent / secrets_path_val).resolve()
     if not secrets_path.exists():
         logger.warning(f"DeepL secrets file not found: {secrets_path}")
         return None
-        
+
     secrets = configparser.ConfigParser()
     read_success = False
     for enc in ('utf-8', 'utf-8-sig', 'utf-16', 'utf-16le', 'cp1252'):
@@ -3104,22 +3106,22 @@ def get_deepl_key(config, base_dir):
     if not read_success:
         logger.error(f"Failed to decode DeepL secrets file {secrets_path}")
         return None
-    
+
     obfuscated_key = secrets.get('DeepL', 'Key', fallback='')
     if not obfuscated_key:
         return None
-        
+
     import base64
     try:
         decoded_bytes = base64.b64decode(obfuscated_key)
         if not salt:
             return obfuscated_key
-            
+
         salt_bytes = salt.encode('utf-8')
         deobfuscated_bytes = bytearray()
         for i, b in enumerate(decoded_bytes):
             deobfuscated_bytes.append(b ^ salt_bytes[i % len(salt_bytes)])
-            
+
         key_str = deobfuscated_bytes.decode('utf-8', errors='replace')
         if key_str.startswith('%%SEC%%'):
             return key_str[7:]
@@ -6234,7 +6236,7 @@ def is_tsv_llm_filled(headers, data_rows, mapping):
     role_fields = get_role_fields(mapping, headers)
     col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
     col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
-    
+
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
@@ -6251,7 +6253,7 @@ def is_tsv_llm_filled(headers, data_rows, mapping):
                 if len(lemma) > 3:
                     if len(row) <= col_idx or not row[col_idx].strip():
                         return False
-                        
+
     return True
 
 
@@ -6262,7 +6264,7 @@ def is_base_translation_finished(headers, data_rows, role_fields, lemma_base_pro
     col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
     col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields and role_fields.get('ipa', 'WordSourceIPA') in headers else -1
     col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields and role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
-    
+
     if col_lemma != -1 and col_word_dest != -1:
         for row in data_rows:
             if len(row) > col_lemma and row[col_lemma].strip():
@@ -6368,7 +6370,7 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
 
     python_exe = resolved_paths['deep_translator_python']
     script_path = resolved_paths['translate_google_script']
-    
+
     cmd = [
         str(python_exe),
         str(script_path),
@@ -6382,7 +6384,7 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
         cmd.extend(["--trace-id", str(trace_id)])
     if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
-        
+
     chain, strategy = resolve_provider_chain(config, task_type='text')
     is_chained = len(chain) > 1 and strategy != 'strict'
     default_call_timeout = 5.0 if is_chained else 15.0
@@ -6394,7 +6396,7 @@ def run_google_translation(text, source, target, config, resolved_paths, zid=Non
         subproc_timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
 
     logger.info(f"Running Google translation command: {' '.join(cmd)}")
-    
+
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=subproc_timeout)
     except subprocess.TimeoutExpired:
@@ -6493,7 +6495,7 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
 
     python_exe = resolved_paths['deep_translator_python']
     script_path = resolved_paths['translate_deepl_script']
-        
+
     cmd = [
         str(python_exe),
         str(script_path),
@@ -6508,7 +6510,7 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
         cmd.extend(["--trace-id", str(trace_id)])
     if config.getboolean(SEC_PIPELINE, 'use_local_fork', fallback=True):
         cmd.append("--use-local-fork")
-        
+
     chain, strategy = resolve_provider_chain(config, task_type='text')
     is_chained = len(chain) > 1 and strategy != 'strict'
     default_call_timeout = 5.0 if is_chained else 15.0
@@ -6518,14 +6520,14 @@ def run_deepl_translation(text, source, target, config, resolved_paths, zid=None
         subproc_timeout = call_timeout + 2.0
     else:
         subproc_timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) if config else 60
-    
+
     logged_cmd = cmd[:]
     if "--deepl-api-key" in logged_cmd:
         idx = logged_cmd.index("--deepl-api-key")
         if idx + 1 < len(logged_cmd):
             logged_cmd[idx + 1] = "********"
     logger.info(f"Running DeepL translation command: {' '.join(logged_cmd)}")
-    
+
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', timeout=subproc_timeout)
     except subprocess.TimeoutExpired:
@@ -6597,7 +6599,7 @@ def run_argos_translation(text, source, target, config, resolved_paths, zid=None
 
     python_exe = resolved_paths.get('argotranslate_python')
     script_path = resolved_paths.get('argotranslate_script')
-    
+
     if not python_exe or not script_path:
         err_envelope = {
             "status": "error",
@@ -6613,18 +6615,18 @@ def run_argos_translation(text, source, target, config, resolved_paths, zid=None
             sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id)
             sess_logger.error(f"[{err_envelope['code']}] {err_envelope['message']}")
         raise TranslationException(err_envelope["message"], envelope=err_envelope)
-        
+
     cmd = [
         str(python_exe),
         str(script_path),
         "-f", source,
         "-t", target
     ]
-        
+
     # Double the timeout for local offline translation to handle model loading overhead and concurrent requests
     timeout = config.getint(SEC_TIMEOUTS, 'translation_timeout', fallback=60) * 2
     logger.info(f"Running Argos translation command: {' '.join(cmd)}")
-    
+
     try:
         # Pass text via stdin to avoid command-line length limits and escaping issues on Windows
         res = subprocess.run(cmd, input=text, capture_output=True, text=True, encoding='utf-8', timeout=timeout)
@@ -6665,7 +6667,7 @@ def is_network_online_multi(hosts, port=53, timeout=0.3):
     if not hosts:
         return True
     effective_timeout = timeout if (timeout is not None and timeout > 0) else 0.3
-        
+
     def check_host(host):
         try:
             s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -6686,17 +6688,17 @@ def is_network_online_multi(hosts, port=53, timeout=0.3):
 def resolve_provider_chain(config, task_type: str = 'text') -> Tuple[List[str], str]:
     """
     Resolves the ordered list of translation providers and the failover strategy.
-    
+
     Args:
         config: ConfigParser instance.
         task_type: 'text' or 'lemma'.
-        
+
     Returns:
         Tuple[List[str], str]: (providers_list, failover_strategy)
     """
     if config is None:
         return (['google'], 'chain')
-    
+
     strategy = config.get(SEC_PIPELINE, 'failover_strategy', fallback=None) if config.has_section(SEC_PIPELINE) else None
     if not strategy:
         auto_fallback = config.getboolean(SEC_PIPELINE, 'auto_offline_fallback', fallback=False) if config.has_section(SEC_PIPELINE) else False
@@ -7108,7 +7110,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
     eff_source = 'auto' if source == 'und' else source
     eff_task = 'lemma' if task_type == 'lemma' else 'text'
     configured_chain, configured_strategy = resolve_provider_chain(config, task_type=eff_task)
-    
+
     if provider and provider != 'default' and (not configured_chain or provider.strip().lower() != configured_chain[0]):
         if ',' in provider:
             providers_to_try = [p.strip().lower() for p in provider.split(',') if p.strip()]
@@ -7195,7 +7197,7 @@ def _translate_text_impl(text, source, target, config, resolved_paths, provider=
             if strategy == 'strict':
                 logger.warning(f"Provider '{current_provider}' failed under strict strategy: {e}. Aborting failover.")
                 raise e
-            
+
             if strategy == 'offline_fallback':
                 if current_provider != 'argos' and 'argos' in providers_to_try:
                     if is_rate_limit_exception(e) or is_unavail or (check_ips and not is_network_online_multi(hosts=check_ips)):
@@ -7733,16 +7735,16 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
             "e.g", "i.e", "approx", "vs", "cf", "ltd", "co", "inc", "prof", "dr",
             "mr", "mrs", "ms"
         }
-    
+
     escaped_terms = "".join(re.escape(c) for c in terminators)
     candidates = list(re.finditer(rf'(?<=[{escaped_terms}])\s+|[\r\n]+', text))
-    
+
     splits = []
     last_idx = 0
     for m in candidates:
         split_pos = m.start()
         punc = text[split_pos - 1] if split_pos > 0 else ''
-        
+
         if punc == '.':
             preceding_part = text[last_idx:split_pos]
             match = re.search(r'([a-zA-Z0-9.-]+)$', preceding_part.strip())
@@ -7756,7 +7758,7 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
                         prev_word = prev_match.group(1).lower()
                         if prev_word.endswith('.'):
                             full_word = f"{prev_word} {word}"
-                
+
                 clean_word = full_word.replace(' ', '')
                 if clean_word in abbrevs or clean_word.replace('.', '') in abbrevs:
                     continue
@@ -7768,21 +7770,21 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
                     if len(tokens_before) < 2:
                         continue
                     prev_token = tokens_before[-2].lower().rstrip('.,;:!?')
-                    
+
                     following_text = text[m.end():].lstrip()
                     next_match = re.match(r'^([^\s]+)', following_text)
                     next_token = next_match.group(1) if next_match else ''
                     next_word_clean = re.sub(r'^[^\w]+|[^\w]+$', '', next_token).lower()
-                    
+
                     is_ordinal_date = (prev_token in GERMAN_ORDINAL_INDICATORS) or (next_word_clean in GERMAN_CALENDAR_MONTHS)
                     is_capitalized_start = bool(next_token and next_token[0].isupper())
                     is_ordinal_noun = is_capitalized_start and (next_word_clean not in GERMAN_SENTENCE_STARTER_WORDS)
                     if is_ordinal_date or is_ordinal_noun or not is_capitalized_start:
                         continue
-        
+
         splits.append(split_pos)
         last_idx = m.end()
-        
+
     sentences = []
     start = 0
     for pos in splits:
@@ -7791,10 +7793,10 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
         start = pos + (spaces_match.end() if spaces_match else 0)
     sentences.append(text[start:].strip())
     sentences = [s for s in sentences if s]
-    
+
     if not sentences:
         return []
-        
+
     has_punctuation = any(char in punctuation_marks for char in text)
     if len(sentences) <= 1 and max_chars > 0 and len(text) > max_chars and not has_punctuation:
         return _split_long_line(text, max_chars)
@@ -7803,7 +7805,7 @@ def split_single_mode_text(text, max_chars=90, abbrevs=None, terminators=".!?:",
 def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_words=0):
     if not (words_before or words_after):
         return sentences
-        
+
     import re
     spans = []
     current_pos = 0
@@ -7814,10 +7816,10 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
         end = start + len(s)
         spans.append((start, end))
         current_pos = end
-        
+
     # Get all top-level orthographic tokens
     tokens = tok.build_orthographic_token_spans(original_text)
-    
+
     # Pre-calculate the character span of each token in original_text
     token_spans = []
     curr_idx = 0
@@ -7830,12 +7832,12 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
             "text": t["text"]
         })
         curr_idx += t_len
-        
+
     padded = []
     for i, (s_i, e_i) in enumerate(spans):
         pad_s = s_i
         pad_e = e_i
-        
+
         # Word-based padding using the orthographic token spans
         if words_before > 0:
             words_before_tokens = [ts for ts in token_spans if ts["end"] <= s_i and ts["is_word"]]
@@ -7843,17 +7845,17 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
                 pad_s = words_before_tokens[-words_before]["start"]
             else:
                 pad_s = 0
-                
+
         if words_after > 0:
             words_after_tokens = [ts for ts in token_spans if ts["start"] >= e_i and ts["is_word"]]
             if len(words_after_tokens) >= words_after:
                 pad_e = words_after_tokens[words_after - 1]["end"]
             else:
                 pad_e = len(original_text)
-                
+
         padded_sentence = original_text[pad_s:pad_e].replace('\n', ' ').replace('\r', ' ').strip()
         padded_sentence = re.sub(r'\s+', ' ', padded_sentence)
-        
+
         # Truncate context if it exceeds max_words
         if max_words > 0:
             padded_words = tok.build_orthographic_word_list(padded_sentence)
@@ -7863,18 +7865,18 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
                 if target_words:
                     n_p = len(padded_words)
                     n_t = len(target_words)
-                    
+
                     target_start_idx = -1
                     for j in range(n_p - n_t + 1):
                         if padded_words[j:j+n_t] == target_words:
                             target_start_idx = j
                             break
-                            
+
                     if target_start_idx == -1:
                         target_start_idx = (n_p - n_t) // 2
-                        
+
                     target_end_idx = target_start_idx + n_t - 1
-                    
+
                     span = n_t
                     if span >= max_words:
                         crop_start = target_start_idx
@@ -7882,21 +7884,21 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
                     else:
                         left_cap = (max_words - span) // 2
                         right_cap = max_words - span - left_cap
-                        
+
                         actual_left_cap = min(left_cap, target_start_idx)
                         actual_right_cap = min(right_cap, n_p - 1 - target_end_idx)
-                        
+
                         leftover_right = left_cap - actual_left_cap
                         leftover_left = right_cap - actual_right_cap
-                        
+
                         if leftover_right > 0:
                             actual_right_cap = min(actual_right_cap + leftover_right, n_p - 1 - target_end_idx)
                         if leftover_left > 0:
                             actual_left_cap = min(actual_left_cap + leftover_left, target_start_idx)
-                            
+
                         crop_start = target_start_idx - actual_left_cap
                         crop_end = target_end_idx + actual_right_cap
-                        
+
                     p_tokens = tok.build_orthographic_token_spans(padded_sentence)
                     p_token_spans = []
                     p_curr_idx = 0
@@ -7908,15 +7910,15 @@ def pad_sentences(sentences, original_text, words_before=0, words_after=0, max_w
                             "is_word": t["is_word"]
                         })
                         p_curr_idx += t_len
-                        
+
                     word_token_spans = [ts for ts in p_token_spans if ts["is_word"]]
                     if word_token_spans:
                         f_char = 0 if crop_start == 0 else word_token_spans[crop_start]["start"]
                         l_char = len(padded_sentence) if crop_end == len(word_token_spans) - 1 else word_token_spans[crop_end]["end"]
                         padded_sentence = padded_sentence[f_char:l_char].strip()
-                        
+
         padded.append(padded_sentence)
-        
+
     return padded
 
 
@@ -7999,7 +8001,7 @@ def _effective_text_mode(text, configured_text_mode=None):
 def _validate_translated_line(orig_line, trans_line, idx, config):
     if not trans_line.strip():
         raise ValueError(f"Empty line returned for non-empty source at line index {idx}")
-        
+
     word_count_check = config.getboolean(SEC_TRANSLATION, 'translation_word_count_check', fallback=False)
     if word_count_check:
         orig_words = len(orig_line.split())
@@ -8020,7 +8022,7 @@ def _build_chunks(lines, chunk_size, config):
     chunks = []
     adaptive_max_lines = config.getint(SEC_TRANSLATION, 'translation_adaptive_max_lines', fallback=30)
     adaptive_max_chars = config.getint(SEC_TRANSLATION, 'translation_adaptive_max_chars', fallback=1000)
-    
+
     if chunk_size > 0:
         chunk = []
         chunk_indices = []
@@ -8042,14 +8044,14 @@ def _build_chunks(lines, chunk_size, config):
         for idx, line in enumerate(lines):
             if not line.strip():
                 continue
-            
+
             line_len = len(line)
             if len(chunk) >= adaptive_max_lines or (chunk_char_count + line_len) > adaptive_max_chars:
                 chunks.append((chunk, chunk_indices))
                 chunk = []
                 chunk_indices = []
                 chunk_char_count = 0
-            
+
             chunk.append(line)
             chunk_indices.append(idx)
             chunk_char_count += line_len
@@ -8131,9 +8133,9 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         return
     if not overwrite and out_path.exists() and out_path.stat().st_size > 0:
         return
-        
+
     out_path.parent.mkdir(parents=True, exist_ok=True)
-        
+
     if effective_text_mode == 'single':
         if 'FULL_TEXT' in sentence_translations_raw:
             translation_text_out = sentence_translations_raw['FULL_TEXT']
@@ -8144,7 +8146,7 @@ def _write_translation_txt(text, effective_text_mode, sentence_translations_raw,
         num_lines = len(text.splitlines())
         translation_lines = [sentence_translations_raw.get(i, "").strip() for i in range(num_lines)]
         translation_text_out = "\n".join(translation_lines)
-        
+
     out_path.write_text(translation_text_out, encoding='utf-8')
 
 def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_dest,
@@ -8153,7 +8155,7 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
                          adapter: Optional[StorageAdapter] = None, config=None, resolved_paths=None):
     eff_mode = _effective_text_mode(text, text_mode)
     act_adapter = adapter or (get_storage_adapter(config, resolved_paths) if (config or resolved_paths) else None) or _DEFAULT_TSV_ADAPTER
-    
+
     content_to_absolute = {}
     if eff_mode != 'single':
         c_idx = 0
@@ -8161,7 +8163,7 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
             if ln.strip():
                 content_to_absolute[c_idx] = a_idx
                 c_idx += 1
-    
+
     padded_raw = sentence_translations_raw.get('PADDED') if isinstance(sentence_translations_raw, dict) else None
     for row in data_rows:
         content_line_idx = 0
@@ -8170,9 +8172,9 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
                 content_line_idx = int(row[col_index]) - 1
             except ValueError:
                 pass
-        
+
         abs_idx = content_line_idx if eff_mode == 'single' else content_to_absolute.get(content_line_idx, 0)
-        
+
         if col_sentence_dest != -1:
             while len(row) <= col_sentence_dest:
                 row.append("")
@@ -8183,16 +8185,16 @@ def resolve_translations(text, text_mode, data_rows, col_index, col_sentence_des
                 row.append("")
             if padded_raw and isinstance(padded_raw, dict):
                 row[col_sentence_dest2] = padded_raw.get(abs_idx, "")
-            
+
         if eff_mode == 'single' and col_text_dest != -1:
             while len(row) <= col_text_dest:
                 row.append("")
             row[col_text_dest] = sentence_translations_raw.get('FULL_TEXT', sentence_translations_raw.get(0, ""))
-            
+
     if persist and tsv_path:
         with act_adapter.file_lock(tsv_path):
             act_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-            
+
     if return_single:
         if text_mode == 'single':
             if 'FULL_TEXT' in sentence_translations_raw:
@@ -8246,16 +8248,16 @@ def format_translated_html(sentence_translations, text_mode="single", text="", c
 
 def translate_source_text(text, source_lang, target_lang, text_mode, config, resolved_paths, provider, chunk_callback=None, zid=None, trace_id=None):
     import time
-    
+
     eff_mode = _effective_text_mode(text, text_mode)
-    
+
     split_mode = config.get(SEC_TRANSLATION, 'translation_split_mode', fallback='newline_join')
     chunk_size = config.getint(SEC_TRANSLATION, 'translation_chunk_size', fallback=0)
     max_retries = config.getint(SEC_TRANSLATION, 'translation_max_retries', fallback=3)
     retry_backoff = config.getfloat(SEC_TRANSLATION, 'translation_retry_backoff', fallback=1.0)
     fix_sentence_splits = config.getboolean(SEC_TRANSLATION, 'translation_fix_sentence_splits', fallback=False)
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
-    
+
     if eff_mode == 'single':
         sbc = SentenceBoundaryConfig.from_config(config)
         pseudo_lines = split_single_mode_text(text, wrap_max_chars, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
@@ -8275,7 +8277,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
             if sbc.words_before > 0 or sbc.words_after > 0:
                 if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
                     apply_source_padding = True
-            
+
             if sbc.translated_words_before > 0 or sbc.translated_words_after > 0:
                 if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
                     apply_translated_padding = True
@@ -8319,11 +8321,11 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     if full_text_trans:
                         unpadded_translations['FULL_TEXT'] = full_text_trans
                     return unpadded_translations
-                    
+
                 elif apply_source_padding:
                     # Legacy fallback: source-based padding requires a second API call
                     padded_lines = pad_sentences(pseudo_lines, text, sbc.words_before, sbc.words_after, max_words=sbc.max_words)
-                    
+
                     # 1. Translate the padded sentences for the TSV (SentenceDestination)
                     # Pass chunk_callback=None so padded sentences do not leak into intermediate UI streaming callbacks
                     padded_trans = translate_source_text(
@@ -8333,7 +8335,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     unpadded_translations['PADDED'] = padded_trans
                     if full_text_trans:
                         unpadded_translations['FULL_TEXT'] = full_text_trans
-                        
+
                     return unpadded_translations
                 else:
                     if full_text_trans:
@@ -8344,16 +8346,16 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     tae.args[0],
                     partial_dict=tae.partial_dict
                 )
-                
+
     raw_lines = text.splitlines()
     if fix_sentence_splits:
         lines = clean_sentence_splits(raw_lines)
     else:
         lines = raw_lines
-        
+
     initial_prov = f"live:{provider}" if provider else None
     translations = ProvenanceDict({idx: "" for idx in range(len(lines))}, provenance=initial_prov)
-    
+
     if split_mode == 'line_by_line':
         first_failure = None
         for idx, line in enumerate(lines):
@@ -8380,10 +8382,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 translations[idx] = ""
                 if first_failure is None:
                     first_failure = (idx, last_err)
-                    
+
             if chunk_callback:
                 chunk_callback(translations)
-                
+
         if first_failure is not None:
             failed_idx, failed_err = first_failure
             raise TranslationAlignmentError(
@@ -8391,9 +8393,9 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 partial_dict=translations
             )
         return translations
-        
+
     chunks = _build_chunks(lines, chunk_size, config)
-    
+
     for chunk_text_list, indices in chunks:
         success = False
         last_err = None
@@ -8404,12 +8406,12 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     normalized = translated_joined.replace('\r\n', '\n').replace('\r', '\n')
                     translated_chunk_lines = normalized.split('\n')
-                    
+
                     if len(translated_chunk_lines) > 1 and translated_chunk_lines[-1] == "":
                         translated_chunk_lines.pop()
                     if len(translated_chunk_lines) > 1 and translated_chunk_lines[0] == "":
                         translated_chunk_lines.pop(0)
-                        
+
                 elif split_mode == 'marker':
                     escaped_chunk_text_list = [line.replace("[[KWSPLIT", "__KWSPLITESC__") for line in chunk_text_list]
                     parts = []
@@ -8421,11 +8423,11 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                             parts.append(marker)
                         parts.append(line)
                     joined_text = " ".join(parts)
-                    
+
                     translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
                     parts_split = split_merged_text_by_markers(translated_joined, markers)
                     translated_chunk_lines = [part.replace("__KWSPLITESC__", "[[KWSPLIT") for part in parts_split]
-                    
+
                 elif split_mode == 'proportional':
                     joined_text = " ".join(chunk_text_list)
                     translated_joined = translate_text(joined_text, source_lang, target_lang, config, resolved_paths, provider, zid=zid, trace_id=trace_id)
@@ -8433,13 +8435,13 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     translated_chunk_lines = split_by_proportion(translated_joined, lengths)
                 else:
                     raise ValueError(f"Unknown translation_split_mode: {split_mode}")
-                    
+
                 if len(translated_chunk_lines) != len(chunk_text_list):
                     raise ValueError(f"Line count mismatch (expected {len(chunk_text_list)}, got {len(translated_chunk_lines)})")
-                    
+
                 for i, orig_line in enumerate(chunk_text_list):
                     _validate_translated_line(orig_line, translated_chunk_lines[i], indices[i], config)
-                    
+
                 for list_idx, target_idx in enumerate(indices):
                     translations[target_idx] = translated_chunk_lines[list_idx].strip()
                 p = getattr(translated_joined, 'provenance', None)
@@ -8452,7 +8454,7 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                 last_err = e
                 if attempt < max_retries:
                     time.sleep(retry_backoff)
-                    
+
         if not success:
             first_rescue_failure = None
             for list_idx, target_idx in enumerate(indices):
@@ -8475,10 +8477,10 @@ def translate_source_text(text, source_lang, target_lang, text_mode, config, res
                     f"Rescue translation failed for line {failed_idx}: {failed_err}",
                     partial_dict=translations
                 )
-                
+
         if chunk_callback:
             chunk_callback(translations)
-            
+
     return translations
 
 class IntelliFillerError(Exception):
@@ -8490,14 +8492,14 @@ def run_headless_intellifiller(tsv_path, prompt_name, config, resolved_paths, se
     if zid is None:
         m = re.match(r"^(\d{14})", tsv_path.name)
         zid = m.group(1) if m else (tsv_path.name.split('-')[0] if '-' in tsv_path.name else "unknown")
-    
+
     # Determine provider and model for performance tracing
     model_name = "qwen2.5:3b"
     base_url = None
     if config and config.has_section("intellifiller"):
         model_name = config.get("intellifiller", "model", fallback="qwen2.5:3b")
         base_url = config.get("intellifiller", "base_url", fallback=None)
-    
+
     provider_id = "local_ollama" if (base_url and ("127.0.0.1" in base_url or "localhost" in base_url)) else ("cloud_openai" if not base_url or "api.openai.com" in base_url else "custom_endpoint")
     extra_trace = {
         "provider": provider_id,
@@ -8726,19 +8728,19 @@ def _run_headless_intellifiller_impl(tsv_path, prompt_name, config, resolved_pat
 def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_paths, selected_rows=None, zid=None, trace_id=None):
     python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
     desk_script = Path(__file__).resolve()
-    
+
     if selected_rows is None:
         try:
             _, _, data_rows = load_tsv_rows(tsv_path)
             selected_rows = list(range(len(data_rows)))
         except Exception:
             selected_rows = []
-            
+
     if not selected_rows:
         return
-        
+
     rows_str = ",".join(str(r) for r in selected_rows)
-    
+
     cmd = [
         str(python_exe),
         str(desk_script),
@@ -8751,7 +8753,7 @@ def run_headless_intellifiller_async(tsv_path, prompt_name, config, resolved_pat
         cmd.extend(["--zid", str(zid)])
     if trace_id:
         cmd.extend(["--trace-id", str(trace_id)])
-        
+
     logger.info(f"Kicking off background batch-worker: {' '.join(cmd)}")
     if sys.platform == 'win32':
         creationflags = 0x08000000 | 0x00000200
@@ -8874,10 +8876,10 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_i
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     runner_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort_runner.py"
-    
+
     if not trace_id:
         trace_id = f"{zid}:export:anki"
-    
+
     cmd = [
         str(python_exe),
         str(runner_script),
@@ -8887,10 +8889,10 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_i
         "--trace-id", str(trace_id),
         "--play-sound-on-completion"
     ]
-    
+
     log_file_path = favorites_tsv_path.parent / f"{zid}-import.log"
     logger.info(f"Launching detached import: {' '.join(cmd)}")
-    
+
     # Detached background import always runs without showing a console window
     show_window = False
     creationflags = 0
@@ -8922,14 +8924,14 @@ def run_detached_import(favorites_tsv_path, config, resolved_paths, zid, trace_i
                 start_new_session=True,
                 close_fds=True
             )
-        
+
     return p.pid, str(log_file_path)
 
 def run_synchronous_import(favorites_tsv_path, config, resolved_paths, zid=None, trace_id=None):
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     runner_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort_runner.py"
-    
+
     cmd = [
         str(python_exe),
         str(runner_script),
@@ -8942,7 +8944,7 @@ def run_synchronous_import(favorites_tsv_path, config, resolved_paths, zid=None,
         cmd.extend(["--trace-id", str(trace_id)])
     elif zid:
         cmd.extend(["--trace-id", f"{zid}:export:anki"])
-    
+
     logger.info(f"Running synchronous import: {' '.join(cmd)}")
     try:
         res = subprocess.run(cmd, capture_output=True, text=True, encoding='utf-8', check=True)
@@ -9008,16 +9010,16 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
     eff_mode = _effective_text_mode(text, text_mode)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
-    
+
     results_dir = resolve_results_dir(resolved_paths, kw_config)
     working_tsv_path = results_dir / cache_key
-    
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
-    
+
     import time
     import re
-    
+
     # Universal cleanup of stale .updates, zero-byte logs, and done markers (> 5 minutes old) across all backends
     prune_stale_results_artifacts(results_dir, max_age_seconds=300)
 
@@ -9026,7 +9028,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         if working_tsv_path.exists():
             if ttl_seconds <= 0 or (time.time() - working_tsv_path.stat().st_mtime) <= ttl_seconds:
                 return working_tsv_path
-                
+
         if ttl_seconds > 0:
             m = re.match(r'^\d{14}-(.+)', cache_key)
             if m:
@@ -9035,7 +9037,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                     if cached_file.is_file():
                         if (time.time() - cached_file.stat().st_mtime) <= ttl_seconds:
                             return cached_file
-                
+
         # Clean up any leftover .updates from previous sessions to avoid polling stale data
         updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
         if updates_dir.exists():
@@ -9059,25 +9061,25 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
             if cached_bundle and cached_bundle.get("session"):
                 cached_zid = cached_bundle["session"].get("zid")
                 return results_dir / f"{cached_zid}-{slug_part}.{language}.tsv"
-            
+
     stem = cache_key
     if stem.endswith('.tsv'):
         stem = stem[:-4]
     source_text_path = results_dir / f"{stem}.txt"
-    
+
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
-    
+
     save_source_text = config.getboolean(SEC_SETTINGS, 'save_source_text', fallback=True)
     if not is_sqlite and save_source_text:
         if eff_mode == 'single':
             source_text_path.write_text(text, encoding='utf-8')
         elif not source_text_path.exists():
             source_text_path.write_text(text, encoding='utf-8')
-        
+
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     fields = list(mapping['fields'].keys())
     field_mapping = build_field_mapping(mapping, 'word')
-    
+
     if language == "und":
         lemma_index_file = None
         lemma_override_file = None
@@ -9086,13 +9088,13 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
         lemma_override_rel = config.get(SEC_LANGUAGES, f'{language}_lemma_override')
         lemma_index_file = kardenwort_workspace / lemma_index_rel
         lemma_override_file = kardenwort_workspace / lemma_override_rel
-    
+
     python_exe = resolved_paths['kardenwort_python']
     kardenwort_script = kardenwort_workspace / "src" / "kardenwort" / "core" / "kardenwort.py"
-    
+
     temp_file_path = None
     temp_dir_obj = None
-    
+
     try:
         sbc = SentenceBoundaryConfig.from_config(config)
         token_cfg = RuntimeTokenConfig.from_config(config)
@@ -9154,7 +9156,7 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                 "--text1-file", str(text_file_to_pass),
                 "--tts-destination-lang", target_lang
             ]
-            
+
             if use_simplemma_correction:
                 cmd.append("--use-simplemma-correction")
             if simplemma_after_spacy:
@@ -9163,40 +9165,40 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                 cmd.append("--simplemma-pos-aware")
             if simplemma_smart_fallback:
                 cmd.append("--simplemma-smart-fallback")
-                
+
             force_proper_noun_capitalization = config.getboolean(SEC_SETTINGS, 'force_proper_noun_capitalization', fallback=False)
             if force_proper_noun_capitalization:
                 cmd.append("--force-proper-noun-capitalization")
-                
+
             prefer_shortest_form = config.getboolean(SEC_SETTINGS, 'prefer_shortest_form', fallback=False)
             if prefer_shortest_form:
                 cmd.append("--prefer-shortest-form")
-                
+
             de_force_noun_capitalization = config.getboolean(SEC_SETTINGS, 'de_force_noun_capitalization', fallback=False)
             if de_force_noun_capitalization:
                 cmd.append("--de-force-noun-capitalization")
-                
+
             preserve_composite_tokens = config.getboolean(SEC_SETTINGS, 'preserve_composite_tokens', fallback=False)
             if preserve_composite_tokens:
                 cmd.append("--preserve-composite-tokens")
-                
+
             strip_garbage_characters = config.get(SEC_SETTINGS, 'strip_garbage_characters', fallback=None)
             if strip_garbage_characters is not None:
                 cmd.extend(["--strip-garbage-characters", strip_garbage_characters])
-            
+
             if language == "de":
                 de_dictionary_file = kw_config.get(SEC_LANGUAGE_RESOURCES, 'dictionary_file_de', fallback='german.dic')
                 de_dict_path = kardenwort_workspace / "data" / de_dictionary_file
                 cmd.extend([
                     "--de-dictionary-file", str(de_dict_path),
                 ])
-                
+
                 de_fix_genitive = config.getboolean(SEC_SETTINGS, 'de_fix_genitive', fallback=True)
                 if de_fix_genitive:
                     cmd.append("--de-fix-genitive")
-                    
+
                 cmd.extend(DeGCSConfig.from_config(config).to_cli_args())
-                    
+
             # token_cfg, exec_ctx, and combine_source_words are resolved via ModeDispatcher above
 
             if combine_source_words:
@@ -9204,13 +9206,13 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
                 cmd.extend(["--combine-source-words-order", token_cfg.combine_order])
                 cmd.extend(["--apostrophe-chars", token_cfg.apostrophe_chars])
 
-                
+
             if token_cfg.token_mappings_enabled:
                 cmd.append("--token-mappings-enabled")
             else:
                 cmd.append("--disable-token-mappings")
 
-                
+
             if token_cfg.lemmatize_mapped_tokens:
                 cmd.append("--lemmatize-mapped-tokens")
             desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
@@ -9226,11 +9228,11 @@ def _prepare_lookup_tsv_impl(text, language, target_lang, config, resolved_paths
 
             if spacy_server_url:
                 cmd.extend(["--spacy-server-url", spacy_server_url])
-                
+
             kardenwort_timeout = config.getint(SEC_TIMEOUTS, 'kardenwort_timeout', fallback=120)
             env = os.environ.copy()
             env["PYTHONIOENCODING"] = "utf-8"
-            
+
             logger.info(f"Running kardenwort.py: {' '.join(cmd)}")
             try:
                 subprocess.run(cmd, check=True, timeout=kardenwort_timeout, env=env, capture_output=True, text=True, encoding='utf-8')
@@ -9316,7 +9318,7 @@ def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first', pr
         f_clean = f.strip()
         if not f_clean:
             continue
-            
+
         if prefer_lowercase:
             f_lower = f_clean.lower()
             if f_lower not in unique_forms_dict:
@@ -9329,7 +9331,7 @@ def sort_inflected_forms(forms, apostrophe_chars, order='contractions_first', pr
                 unique_forms_dict[f_clean] = f_clean
 
     unique_forms = list(unique_forms_dict.values())
-    
+
     if order == 'contractions_first':
         unique_forms.sort(key=lambda f: (not is_complex_inflected_form(f, apostrophe_chars), -len(f), f.lower()))
     elif order == 'alphabetical':
@@ -9649,7 +9651,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, s
         if step == k:
             valid_tuples.append(tuple(current_tuple))
             return
-        
+
         prev_pos = current_tuple[-1] if current_tuple else None
         for pos in occs[step]:
             if prev_pos is not None:
@@ -9692,7 +9694,7 @@ def resolve_anchored_positions(inflected_words, source_word_cleans, gap_limit, s
 
     used_positions = set()
     selected_positions = set()
-    
+
     for t in valid_tuples:
         if any(p in used_positions for p in t):
             continue
@@ -9706,7 +9708,7 @@ def parse_source_sentences(text, text_mode, config):
     smc = SentencesModeConfig.from_config(config)
     sbc = SentenceBoundaryConfig.from_config(config)
     eff_mode = _effective_text_mode(text, text_mode)
-    
+
     if eff_mode == 'single':
         source_sentences = split_single_mode_text(text, 0, abbrevs=sbc.abbrev_set, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
     else:
@@ -10031,15 +10033,15 @@ function submitChoice(action) {{
         return res.json();
     }})
     .then(function(data) {{
-        const msg = action === 'cancel' 
-            ? 'Verification cancelled. You may close this tab.' 
+        const msg = action === 'cancel'
+            ? 'Verification cancelled. You may close this tab.'
             : 'Configuration updated. You may close this tab.';
         closeTabSafely(msg);
     }})
     .catch(function(err) {{
         console.error('Language confirmation failed:', err);
-        const msg = action === 'cancel' 
-            ? 'Verification cancelled. You may close this tab.' 
+        const msg = action === 'cancel'
+            ? 'Verification cancelled. You may close this tab.'
             : 'Configuration updated. You may close this tab.';
         closeTabSafely(msg);
     }});
@@ -10104,8 +10106,8 @@ def tag_server_compound_tokens(source_tokens: List[Dict[str, Any]]) -> None:
             while j + 2 < n_tokens:
                 delim_tok = source_tokens[j + 1]
                 next_word_tok = source_tokens[j + 2]
-                if (not delim_tok.get("is_word") and 
-                    delim_tok.get("text") and 
+                if (not delim_tok.get("is_word") and
+                    delim_tok.get("text") and
                     all(c in compound_delimiters for c in delim_tok.get("text")) and
                     next_word_tok.get("is_word")):
                     chain.append(j + 2)
@@ -10144,18 +10146,18 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         if normalize_brackets:
             text = normalize_bracket_spacing(text)
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
-    
+
     display_mode_val = config.get(SEC_RENDERING, 'display_mode', fallback='progressive')
     is_progressive_translation_enabled = config.getboolean(SEC_PIPELINE, 'progressive_text_translation', fallback=False)
     if display_mode_val != 'progressive':
         if is_progressive_translation_enabled:
             logger.info(f"[{zid}] progressive_text_translation=true has no effect: display_mode is '{display_mode_val}' (must be 'progressive').")
         is_progressive_translation_enabled = False
-        
+
     progressive_timeout_seconds = config.getint(SEC_PIPELINE, 'progressive_timeout_seconds', fallback=15)
     children_tsv_paths = []
     ahk_args = []
-    
+
     if tsv_path:
         try:
             p_tsv = Path(tsv_path)
@@ -10192,7 +10194,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                                     continue
                             if has_older_sibling:
                                 break
-                                
+
                         if not has_older_sibling:
                             # Children are spawned 1..N seconds after the master ZID.
                             # Glob two or three minute-prefixes to survive minute-boundary rollovers
@@ -10221,11 +10223,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                         pass
         except Exception:
             pass
-            
+
     sbc = SentenceBoundaryConfig.from_config(config)
-        
+
     wrap_max_chars = config.getint(SEC_TRANSLATION, 'translation_wrap_max_chars', fallback=90)
-    
+
     # parse_source_sentences builds SentencesModeConfig internally and returns it as the third value.
     # Reuse it here to avoid constructing SentencesModeConfig twice from the same config.
     source_sentences, text, smc = parse_source_sentences(text, text_mode, config)
@@ -10245,12 +10247,12 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             session_exists_in_storage = False
 
     will_split = not is_mismatch and not tsv_path and not session_exists_in_storage and (
-        smc.should_split_sentences(len(source_sentences)) or 
+        smc.should_split_sentences(len(source_sentences)) or
         # legacy_spawn_children only fires when sentences_mode is enabled to avoid
         # unexpected splits from old config files migrated with enabled=false.
         (text_mode == 'multi' and smc.enabled and smc.legacy_spawn_children and len(source_sentences) >= 2)
     )
-    
+
     # Progressive mode is incompatible with Sentences Mode multi-window architecture ONLY when:
     #   a) We are about to split a fresh text into child windows (will_split), OR
     #   b) A TSV is provided AND it is a parent window with actual child TSVs already on disk.
@@ -10265,7 +10267,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         # ConfigParser across subsequent renders (e.g. cmd_restore calling run_render_flow
         # in a loop). Use the local variables display_mode_val and
         # is_progressive_translation_enabled throughout this function to track effective mode.
-    
+
     translation_fast_failed = False
     translated_sentences = []
     translated_paragraph = ""
@@ -10275,19 +10277,19 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         main_text_provider = text_chain[0] if text_chain else config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
         master_slug = generate_slug(text)
         master_cache_key = f"{zid}-{master_slug}.{language}.tsv"
-        
+
         master_tsv_path = None
-        
+
         parallelize = config.getboolean(SEC_PIPELINE, 'parallelize_core_and_translation', fallback=True)
         fast_fail_timeout = config.getfloat(SEC_PIPELINE, 'translation_fast_fail_timeout', fallback=3.0)
-        
+
         def do_translation():
             if is_progressive_translation_enabled:
                 logger.info(f"[{zid}] [Translation Worker] Bypassed background translation due to progressive_text_translation=true")
                 return ""
             logger.info(f"[{zid}] [Translation Worker] Starting background translation via {main_text_provider}")
             return translate_text(text, language, target_lang, config, resolved_paths, main_text_provider, zid=zid)
-            
+
         def do_core():
             logger.info(f"[{zid}] [Core Worker] Starting background TSV generation")
             return prepare_lookup_tsv(
@@ -10295,19 +10297,19 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 ttl_seconds=0, cache_key=master_cache_key, text_mode=text_mode,
                 will_split=will_split
             )
-            
+
         if parallelize:
             executor = ThreadPoolExecutor(max_workers=2)
             try:
                 future_trans = executor.submit(do_translation)
                 future_core = executor.submit(do_core)
-                
+
                 try:
                     master_tsv_path = future_core.result()
                 except Exception as core_exc:
                     logger.error(f"[{zid}] Core TSV generation failed in parallel executor: {core_exc}")
                     raise core_exc
-                    
+
                 try:
                     translated_paragraph = future_trans.result(timeout=max(0.0, fast_fail_timeout))
                     translated_sentences = split_single_mode_text(
@@ -10332,9 +10334,9 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 translated_sentences = split_single_mode_text(translated_paragraph, wrap_max_chars, abbrevs=None, terminators=sbc.terminators, punctuation_marks=sbc.punctuation_marks)
             except Exception as e:
                 logger.warning(f"[{zid}] Holistic translation failed: {e}")
-                
+
             master_tsv_path = do_core()
-                
+
         # Fallback to newline_join block translation when sentence-count alignment fails
         attempt_newline_join = not is_progressive_translation_enabled and not translation_fast_failed and ((len(translated_sentences) != len(source_sentences)) or (alignment_method == 'newline_join'))
         if attempt_newline_join and alignment_method != 'proportion':
@@ -10346,7 +10348,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 translated_sentences = [translations_dict.get(i, "").strip() for i in range(len(source_sentences))]
             except Exception as e:
                 logger.error(f"[{zid}] Newline-join alignment fallback failed: {e}")
-                
+
         # Final proportional safety net fallback
         if not is_progressive_translation_enabled and not translation_fast_failed and len(translated_sentences) != len(source_sentences):
             if not translated_paragraph:
@@ -10356,7 +10358,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     translated_paragraph = "[Translation Error]"
             lengths = [len(s) for s in source_sentences]
             translated_sentences = split_by_proportion(translated_paragraph, lengths)
-            
+
         while len(translated_sentences) < len(source_sentences):
             translated_sentences.append("")
         translated_sentences = translated_sentences[:len(source_sentences)]
@@ -10367,7 +10369,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         if sbc.words_before > 0 or sbc.words_after > 0:
             if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
                 apply_source_padding = True
-        
+
         if sbc.translated_words_before > 0 or sbc.translated_words_after > 0:
             if sbc.context_mode == 'both' or sbc.context_mode == eff_mode:
                 apply_translated_padding = True
@@ -10375,22 +10377,22 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
         padded_source_sentences = source_sentences
         if apply_source_padding:
             padded_source_sentences = pad_sentences(source_sentences, text, sbc.words_before, sbc.words_after, max_words=sbc.max_words)
-            
+
         padded_translated_sentences = translated_sentences
         if apply_translated_padding:
             padded_translated_sentences = pad_translated_sentences(translated_sentences, sbc.translated_words_before, sbc.translated_words_after, max_words=sbc.translated_max_words)
-        
+
         storage_adapter = get_storage_adapter(config, resolved_paths)
         comments, headers, data_rows = storage_adapter.load_tsv_rows(master_tsv_path)
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
-        
+
         col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
         col_sentence_source = headers.index(role_fields['sentence_source']) if 'sentence_source' in role_fields and role_fields['sentence_source'] in headers else -1
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
         col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
         col_sentence_dest_orig = headers.index('SentenceDestination') if 'SentenceDestination' in headers else -1
-        
+
         # Populate translations back into master TSV using the clean and padded sentences
         for row in data_rows:
             row_sent_idx = -1
@@ -10416,14 +10418,14 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                     while len(row) <= col_sentence_dest2:
                         row.append("")
                     row[col_sentence_dest2] = padded_translated_sentences[row_sent_idx]
-                    
+
         col_word_source = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1
         col_pos = headers.index(role_fields.get('pos', 'WordSourcePOS')) if role_fields.get('pos', 'WordSourcePOS') in headers else -1
         col_inflected = headers.index(role_fields.get('inflected', 'WordSourceInflectedForm')) if role_fields.get('inflected', 'WordSourceInflectedForm') in headers else -1
         col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
         col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
         col_word_dest = headers.index(role_fields.get('word_translation', 'WordDestination')) if role_fields and role_fields.get('word_translation', 'WordDestination') in headers else -1
-        
+
         dedup_scope_cfg = smc.deduplication_scope
         token_config = RuntimeTokenConfig.from_config(config)
         if col_word_source != -1 and dedup_scope_cfg != 'none':
@@ -10504,7 +10506,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
             # Write master translation file
             master_trans_path = results_dir / f"{zid}-{master_slug}.{target_lang}.txt"
             master_trans_path.write_text(translated_paragraph, encoding='utf-8')
-        
+
         with TraceTimer("the_cut", zid, config, resolved_paths):
             sub_tsv_paths = []
             token_cfg = RuntimeTokenConfig.from_config(config)
@@ -10514,28 +10516,28 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 master_time = datetime.strptime(zid[:14], '%Y%m%d%H%M%S')
             except Exception:
                 master_time = datetime.now()
-                
+
             for i in range(len(source_sentences)):
                 sub_text = source_sentences[i]
                 sub_trans = translated_sentences[i] if i < len(translated_sentences) else ""
                 sub_trans_padded = padded_translated_sentences[i] if i < len(padded_translated_sentences) else sub_trans
-                
+
                 sub_dt = master_time + timedelta(seconds=i+1)
                 sub_zid = sub_dt.strftime('%Y%m%d%H%M%S')
-                
+
                 sub_slug = generate_slug(sub_text)
-                
+
                 if not is_sqlite:
                     sub_txt_path = results_dir / f"{sub_zid}-{sub_slug}.{language}.txt"
                     sub_txt_path.write_text(sub_text, encoding='utf-8')
-                    
+
                     sub_trans_path = results_dir / f"{sub_zid}-{sub_slug}.{target_lang}.txt"
                     sub_trans_path.write_text(sub_trans, encoding='utf-8')
-                
+
                 sub_rows = []
                 sub_tokens = tok.build_word_list_internal(sub_text, keep_spaces=True)
                 sub_words = {t["lower_clean"] for t in sub_tokens if t.get("is_word") and "lower_clean" in t}
-                
+
                 for row in data_rows:
                     row_sent_idx = -1
                     if col_index != -1 and len(row) > col_index:
@@ -10543,7 +10545,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                             row_sent_idx = int(row[col_index]) - 1
                         except ValueError:
                             pass
-                    
+
                     if row_sent_idx != -1:
                         matches_sentence = (row_sent_idx == i)
                     else:
@@ -10574,7 +10576,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                             if any("".join(ch for ch in p if ch.isalnum() or ch in apo_set) in sub_words for p in parts if len(p) > 1 and p in sub_words):
                                 matches_sentence = True
                                 break
-                                
+
                     if matches_sentence:
                         sub_row = list(row)
                         if col_index != -1:
@@ -10591,7 +10593,7 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                             sub_trans_padded = padded_translated_sentences[i] if i < len(padded_translated_sentences) else sub_trans
                             sub_row[col_sentence_dest] = sub_trans_padded
                         sub_rows.append(sub_row)
-                        
+
                 if col_word_source != -1 and dedup_scope_cfg == 'sentence':
                     sub_rows = deduplicate_rows(sub_rows, col_word_source, col_pos, col_inflected, config, window_text=sub_text, language=language, resolved_paths=resolved_paths, col_quotation=col_quotation, col_word_dest=col_word_dest, deduplicate_pos_aware=token_config.sentence_deduplicate_pos_aware)
 
@@ -10631,28 +10633,28 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
                 else:
                     save_tsv_rows_safely(sub_tsv_path, comments, headers, sub_rows)
                 sub_tsv_paths.append(sub_tsv_path)
-            
+
 
         master_seq = seq_num if seq_num is not None else 1
         ahk_args = []
-        
+
         paths_to_spawn = [(master_seq + i + 1, path) for i, path in enumerate(sub_tsv_paths)]
         if spawn_order == 'reverse':
             paths_to_spawn.reverse()
-            
+
         for seq, path in paths_to_spawn:
             ahk_args.extend(["--seq-num", str(seq), "--restore", str(path)])
 
         base_dir = resolved_paths.get('base_dir') if resolved_paths else Path('.')
         if ahk_args and spawn_children:
             spawn_ahk(ahk_args, base_dir)
-        
+
         if not is_sqlite:
             try:
                 master_tsv_path.with_suffix('.the_cut_done').touch(exist_ok=True)
             except Exception:
                 pass
-        
+
         if parent_mode == 'stub':
             if not is_sqlite:
                 try:
@@ -10690,11 +10692,11 @@ def _run_render_flow_impl(text, language, zid, text_mode, config, resolved_paths
 
             bg_color = "#f6f8fa" if theme in ("light", "white") else "#0d0f12"
             text_color = "#24292f" if theme in ("light", "white") else "#c9d1d9"
-            
+
             paths_str = ",".join(str(path) for path in sub_tsv_paths)
             children_div = f'<div id="kardenwort-children" style="display:none;">{paths_str}</div>'
             stub_div = '<div id="kardenwort-is-stub" style="display:none;">1</div>'
-            
+
             stub_html = f"""<!DOCTYPE html>
 <html>
 <head>
@@ -10726,7 +10728,7 @@ html, body {{
         tsv_path = master_tsv_path
         children_tsv_paths = sub_tsv_paths
 
-    
+
     # Resolve audio playback configuration
     lmb_play_val = "false"
     lmb_source_val = "lemma"
@@ -10755,16 +10757,16 @@ html, body {{
     if 'kardenwort_python' in resolved_paths:
         python_exe_path = str(resolved_paths['kardenwort_python']).replace('\\', '/')
 
-    
+
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     results_dir = resolve_results_dir(resolved_paths, kw_config)
-    
+
     slug = generate_slug(text)
     cache_key = f"{zid}-{slug}.{language}.tsv"
-    
+
     eff_mode = _effective_text_mode(text, text_mode)
-    
+
     cached_session_bundle = None
     if is_sqlite and not tsv_path:
         ttl_val = config.getint(SEC_STORAGE, 'cache_ttl_seconds', fallback=config.getint(SEC_SETTINGS, 'lookup_ttl_seconds', fallback=86400))
@@ -10819,7 +10821,7 @@ html, body {{
                     pass
 
     llm_filled = is_tsv_llm_filled(headers, data_rows, mapping)
-    
+
     text_chain, text_strat = resolve_provider_chain(config, task_type='text')
     main_text_provider = text_chain[0] if text_chain else config.get(SEC_PIPELINE, 'text_base_provider', fallback='google')
     lemma_chain, lemma_strat = resolve_provider_chain(config, task_type='lemma')
@@ -10867,7 +10869,7 @@ html, body {{
         role_fields=role_fields, source_sentences=source_sentences,
         delivery_mode=smc.delivery_mode if (smc.enabled and smc.deduplication_scope == 'sentence') else None
     )
-        
+
     col_highlighted = headers.index(role_fields['selected']) if 'selected' in role_fields and role_fields['selected'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
@@ -10877,7 +10879,7 @@ html, body {{
     col_inflected = headers.index(role_fields['inflected']) if 'inflected' in role_fields and role_fields['inflected'] in headers else -1
     col_inflected2 = headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in headers else -1
     col_quotation = headers.index('Quotation') if 'Quotation' in headers else -1
-    
+
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     row_provenances = {}
     row_occurrences = {}
@@ -10921,7 +10923,7 @@ html, body {{
                             row_provenances[int(t_ord_str)] = "cached:sqlite"
 
 
-    
+
     # --- Word-fill early pre-fill step ---
     if not is_mismatch and wordfill_cfg and wordfill_cfg.get('enabled', False):
         try:
@@ -10970,7 +10972,7 @@ html, body {{
             logger.warning(f"wordfill (desk): early pre-fill step failed, continuing: {wf_err}")
 
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-    
+
     is_progressive = display_mode_val == 'progressive'
     updates_dir = working_tsv_path.parent / f"{working_tsv_path.stem}.updates"
     if is_progressive and updates_dir.exists():
@@ -10991,7 +10993,7 @@ html, body {{
     run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
     base_provider = lemma_base_provider
     enrich_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
-    
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
@@ -11001,7 +11003,7 @@ html, body {{
             source_text_path.write_text(text, encoding='utf-8')
         elif not source_text_path.exists():
             source_text_path.write_text(text, encoding='utf-8')
-            
+
     dest_cols = []
     if col_sentence_dest_orig != -1 and col_sentence_dest_orig not in dest_cols:
         dest_cols.append(col_sentence_dest_orig)
@@ -11020,9 +11022,9 @@ html, body {{
             if any(len(row) > c_d and row[c_d].strip() for row in data_rows):
                 sentence_translated = True
                 break
-            
+
     has_untranslated_lemmas = False
-    
+
     # Get column indices for IPA and Morphology to check if they are missing
     col_ipa = headers.index(role_fields.get('ipa', 'WordSourceIPA')) if role_fields.get('ipa', 'WordSourceIPA') in headers else -1
     col_morph = headers.index(role_fields.get('morphology', 'WordSourceMorphologyAI')) if role_fields.get('morphology', 'WordSourceMorphologyAI') in headers else -1
@@ -11040,7 +11042,7 @@ html, body {{
         # Fallback if col_lemma is not defined but we have word_dest
         if not all(len(row) > col_word_dest and row[col_word_dest].strip() for row in data_rows if any(row)):
             has_untranslated_lemmas = True
-            
+
     # If monolithic mode and run_base is auto, run base translation synchronously
     if not is_mismatch and not is_progressive and run_base == 'auto':
         try:
@@ -11074,8 +11076,8 @@ html, body {{
                     translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
                     save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
                     _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
-                
- 
+
+
         except TranslationAlignmentError as tae:
             logger.error(f"Monolithic translation alignment error: {tae}")
             sentence_translations_raw = tae.partial_dict
@@ -11105,7 +11107,7 @@ html, body {{
                 save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
                 _write_translation_txt(text, eff_mode, sentence_translations_raw, translation_text_path, save_flag=save_translation_text, overwrite=True)
             run_enrich = 'manual'
-                
+
         if has_untranslated_lemmas and not children_tsv_paths:
             if base_provider == 'intellifiller':
                 selected_rows_to_enrich = []
@@ -11116,7 +11118,7 @@ html, body {{
                         need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
                         if need_dest or need_ipa or need_morph:
                             selected_rows_to_enrich.append(i)
-                            
+
                 if selected_rows_to_enrich and language != 'und':
                     prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
                     if prompt_name:
@@ -11137,10 +11139,10 @@ html, body {{
                         if col_word_dest == -1 or len(row) <= col_word_dest or not row[col_word_dest].strip():
                             lemmas_to_translate.append(row[col_lemma].strip())
                 lemmas_to_translate = list(set(lemmas_to_translate))
-                
+
                 lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, base_provider)
                 fast_prov = getattr(lemma_translations, 'provenance', f"live:{base_provider}")
-                
+
                 for row_id, row in enumerate(data_rows):
                     if col_lemma != -1 and len(row) > col_lemma:
                         lemma_val = row[col_lemma]
@@ -11154,9 +11156,9 @@ html, body {{
                                     row_provenances[row_id] = fast_prov
                 with file_lock(working_tsv_path):
                     save_tsv_rows_safely(working_tsv_path, comments, headers, data_rows)
-                
+
     translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
-    
+
     extracted_translations = {}
     for row in data_rows:
         content_line_idx = 0
@@ -11194,7 +11196,7 @@ html, body {{
                 except Exception:
                     pass
 
-            
+
     sentence_translations = {}
     sentence_provenance = None
     if not sentence_translated and 'sentence_translations_raw' in locals():
@@ -11270,19 +11272,19 @@ html, body {{
                     c_idx += 1
                 else:
                     sentence_translations[a_idx] = ""
-            
+
     if not is_sqlite and not is_mismatch:
         save_translation_text = config.getboolean(SEC_SETTINGS, 'save_translation_text', fallback=False)
         translation_text_path = results_dir / f"{zid}-{tsv_slug}.{target_lang}.txt"
         eff_mode = _effective_text_mode(text, text_mode)
         _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=False)
-            
+
     worker_launched = False
     if not is_mismatch and not llm_filled:
         prompt_name = config.get(SEC_LANGUAGES, f'{language}_prompt', fallback='')
-        
+
         is_master_window = bool(children_tsv_paths)
-        
+
         if is_progressive or is_master_window:
             needs_worker = False
             if run_text == 'auto' and not sentence_translated:
@@ -11294,7 +11296,7 @@ html, body {{
             # Master window: launch worker to receive cross-pollinated data from children.
             if is_master_window:
                 needs_worker = True
-                
+
             if needs_worker:
                 skip_intellifiller = (run_enrich == 'manual') or (enrich_provider == 'none') or is_master_window or (language == 'und') or not prompt_name
                 try:
@@ -11321,7 +11323,7 @@ html, body {{
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and language != 'und' and prompt_name:
                 run_headless_intellifiller(working_tsv_path, prompt_name, config, resolved_paths)
                 comments, headers, data_rows = load_tsv_rows(working_tsv_path)
-                
+
     if is_progressive and not worker_launched:
         write_update_js(working_tsv_path, data_rows, headers, role_fields, stage="finished", empty_payload=True, row_provenances=row_provenances)
         # Only flag WordDestination as [FAILED] if the base provider was expected to fill it but didn't.
@@ -11370,7 +11372,7 @@ html, body {{
     token_cfg = RuntimeTokenConfig.from_config(config)
     apo_set = set(c.strip() for c in token_cfg.apostrophe_chars.split(',') if c.strip())
     apo_regex = r"[\w" + "".join(re.escape(c) for c in sorted(apo_set)) + r"]+"
-                    
+
     def _has_comp_marker(s):
         if not s:
             return False
@@ -11390,7 +11392,7 @@ html, body {{
             data_rows[row_id] = row
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
-        
+
         candidates = []
         candidates_seen = set()
 
@@ -11403,7 +11405,7 @@ html, body {{
         clean_lemma = lemma_val.strip() if lemma_val else ""
         clean_lemma_lower = tok.utf8_to_lower("".join(ch for ch in clean_lemma if ch.isalnum() or ch in apo_set)) if clean_lemma else ""
         row_primary_lemmas[row_id] = clean_lemma
-        
+
         direct_cands = set()
         if clean_lemma_lower:
             direct_cands.add(clean_lemma_lower)
@@ -11425,7 +11427,7 @@ html, body {{
             vals_to_check = list(dict.fromkeys(forms + ([clean_lemma] if clean_lemma else [])))
         else:
             vals_to_check = forms
-        
+
         for val in vals_to_check:
             if val:
                 path_nodes = [n.strip() for n in re.split(r'[/\\]+', val) if n.strip()]
@@ -11494,7 +11496,7 @@ html, body {{
             if row_id not in token_to_rows[cand]:
                 token_to_rows[cand].append(row_id)
 
-            
+
     source_tokens = tok.build_word_list_internal(text, keep_spaces=True)
     sentence_ranges = []
     curr_search_offset = 0
@@ -11541,7 +11543,7 @@ html, body {{
     for row_id, row in enumerate(data_rows):
         inflected_val = resolve_row_inflected_form(row, col_inflected, col_inflected2, col_quotation, col_lemma)
         forms = [f.strip() for f in inflected_val.split(',')] if inflected_val else []
-        
+
         has_single_word_form = False
         row_anchored_pos = set()
 
@@ -11555,28 +11557,28 @@ html, body {{
                         row_anchored_pos.update(parsed_indices)
                 except Exception:
                     pass
-        
+
         if not row_anchored_pos:
             for form in forms:
                 if not form: continue
                 inf_words = [tok.utf8_to_lower("".join(ch for ch in p if ch.isalnum() or ch in apo_set))
                              for p in re.findall(apo_regex, form)]
                 inf_words = [w for w in inf_words if w]
-                
+
                 if len(inf_words) >= 2 and not any(ch in form for ch in SINGLE_WORD_DELIMITERS):
                     pos_set, ok = resolve_anchored_positions(inf_words, source_word_cleans, split_gap_limit, sentence_boundaries=source_word_sentences)
                     if ok:
                         row_anchored_pos.update(pos_set)
                 elif len(inf_words) == 1 or any(ch in form for ch in SINGLE_WORD_DELIMITERS):
                     has_single_word_form = True
-                    
+
             if has_single_word_form or not forms:
                 single_word_rows.add(row_id)
-            
+
         anchored_positions[row_id] = row_anchored_pos
 
     paired_rows = {row_id for row_id, pos_set in anchored_positions.items() if pos_set}
-    
+
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     row_to_c_idx = {}
     if col_index != -1:
@@ -11586,7 +11588,7 @@ html, body {{
                     row_to_c_idx[row_id] = int(row[col_index]) - 1
                 except ValueError:
                     row_to_c_idx[row_id] = -1
-                    
+
     absolute_to_c_idx = {}
     if eff_mode not in ('single', 'multi'):
         c_idx = 0
@@ -11615,7 +11617,7 @@ html, body {{
                 sentence_chunks.append((current_chunk_idx, current_chunk_elements))
                 current_chunk_idx = tok_sent_idx
                 current_chunk_elements = []
-        
+
         if token["is_word"]:
             lower_clean = token.get("lower_clean", "")
             mapped_rows = token_to_rows.get(lower_clean, [])
@@ -11623,7 +11625,7 @@ html, body {{
                 stem = re.sub(r"(?:n[" + "".join(re.escape(c) for c in apo_set) + r"]t|[" + "".join(re.escape(c) for c in apo_set) + r"](?:s|ve|ll|d|re|m)?)$", "", lower_clean, flags=re.IGNORECASE)
                 if stem and stem in token_to_rows:
                     mapped_rows = token_to_rows[stem]
-            
+
             if eff_mode not in ('single', 'multi') and col_index != -1:
                 curr_c_idx = absolute_to_c_idx.get(current_a_idx, -1)
                 mapped_rows = [r_idx for r_idx in mapped_rows if row_to_c_idx.get(r_idx, -1) == curr_c_idx]
@@ -11641,9 +11643,9 @@ html, body {{
                 else:
                     filtered_cand_rows.append(r_idx)
             mapped_rows = filtered_cand_rows
-                
+
             token["filtered_mapped_rows"] = mapped_rows
-            
+
             classes = ["word"]
             if mapped_rows:
                 is_paired = any(word_counter in anchored_positions.get(r_idx, set()) for r_idx in mapped_rows)
@@ -11680,7 +11682,7 @@ html, body {{
                 delim_span = f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">' + "<br>".join(parts) + '</span>'
             else:
                 delim_span = f'<span class="sentence-delimiter" data-sentence-idx="{tok_sent_idx}">{text_escaped}</span>' if is_multi_sentence else text_escaped
-            
+
             if is_multi_sentence:
                 current_chunk_elements.append(delim_span)
             else:
@@ -11692,9 +11694,9 @@ html, body {{
             f'<span class="kw-sentence-chunk" data-sentence-idx="{c_idx}">{"".join(c_els)}</span>'
             for c_idx, c_els in sentence_chunks
         ]
-                
+
     source_html = "" if is_mismatch else "".join(span_htmls)
-    
+
     if is_mismatch:
         sentence_html = ""
     else:
@@ -11704,7 +11706,7 @@ html, body {{
         )
         text_provider_label = format_provider_skeleton_label(main_text_provider)
         if is_progressive and run_text == 'auto' and not has_real_text:
-            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; min-height: 1.6em; height: 1.6em; line-height: 1.6;" title="{text_provider_label}">{text_provider_label}</div>'
+            sentence_html = f'<div class="skeleton-loader" data-pending="true" title="{text_provider_label}">{text_provider_label}</div>'
         else:
             sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
 
@@ -11716,7 +11718,7 @@ html, body {{
         if p_title:
             container_prov_attr += f' title="{p_title}"'
             sentence_html = sentence_html.replace("<div", f'<div data-provenance="{sentence_provenance}" title="{p_title}"', 1)
-    
+
     col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
     col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
     col_pos = headers.index(role_fields['pos']) if 'pos' in role_fields and role_fields['pos'] in headers else (headers.index('WordSourcePOS') if 'WordSourcePOS' in headers else (headers.index('pos') if 'pos' in headers else -1))
@@ -11725,10 +11727,10 @@ html, body {{
     col_provenance = headers.index(role_fields['provenance']) if 'provenance' in role_fields and role_fields['provenance'] in headers else (headers.index('Provenance') if 'Provenance' in headers else (headers.index('provenance') if 'provenance' in headers else -1))
 
     header_cols = ["Inflected", "Lemma", "Translation", "IPA", "Morphology", "POS", "G"]
-    
+
     dynamic_roles = []
     desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
-    
+
     if desk_classification_enabled and kw_config is not None and hasattr(kw_config, 'has_section') and kw_config.has_section(SEC_CLASSIFICATION) and kw_config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=False):
         if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{language}'):
             dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{language}', fallback='')
@@ -11809,7 +11811,7 @@ html, body {{
         gender_raw = row[col_gender] if col_gender != -1 and len(row) > col_gender else ""
         pos_val = format_pos_cell(pos_raw)
         gender_badge = format_gender_badge(gender_raw)
-        
+
         # Skeleton loaders for cells pending when a configured provider is expected to fill them:
         if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
             trans_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{lemma_provider_label}">{lemma_provider_label}</span>'
@@ -11817,9 +11819,9 @@ html, body {{
             ipa_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
         if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
             morph_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
-        
+
         row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
-        
+
         is_selected = "0"
         if col_highlighted != -1:
             highlighted_val = row[col_highlighted] if len(row) > col_highlighted else ""
@@ -11873,12 +11875,12 @@ html, body {{
                 if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
                     display_val = parts[1].strip()
                     span_class = f"level-{possible_prefix.lower()}"
-            
+
             if span_class:
                 inner_html = f'<span class="{span_class}">{display_val}</span>'
             else:
                 inner_html = display_val
-            
+
             cls_tooltip = format_classification_tooltip(val, role=role)
             cls_title_attr = f' title="{html.escape(cls_tooltip)}"' if cls_tooltip else ''
             dynamic_tds += f'<td class="col-classification" data-col="{role}"{cls_title_attr}><div class="scrollable-cell">{inner_html}</div></td>'
@@ -11966,7 +11968,7 @@ html, body {{
             "row_html": row_html_line,
         })
     table_rows_html = "" if is_mismatch else "\n".join(table_rows)
-    
+
     token_manifest = []
     word_counter = 0
     token_mappings = get_desk_token_mappings(resolved_paths, language, config) if token_cfg.token_mappings_enabled else {}
@@ -11993,7 +11995,7 @@ html, body {{
                 else:
                     filtered_cand_rows.append(r_idx)
             mapped_rows = filtered_cand_rows
-            
+
             paired_anchored = [r_idx for r_idx in mapped_rows if word_counter in anchored_positions.get(r_idx, set())]
             if paired_anchored:
                 filtered_rows = paired_anchored
@@ -12024,7 +12026,7 @@ html, body {{
                                 return len(targets)
                             filtered_rows = sorted(filtered_rows, key=_row_rank)
                 tok_data["row_ids"] = filtered_rows
-                
+
                 atomic_rows = []
                 compound_cand_rows = []
                 for r_idx in filtered_rows:
@@ -12082,7 +12084,7 @@ html, body {{
                         tok_data["pos"] = str(r_f[col_pos]).strip()
             word_counter += 1
         token_manifest.append(tok_data)
-        
+
     sentence_cards = []
     if smc.enabled and len(source_sentences) >= 2:
         is_single_para = (eff_mode == 'single' and '\n' not in (text or '').strip() and '\r' not in (text or '').strip())
@@ -12141,7 +12143,7 @@ html, body {{
             assembled_multi = "\n".join(child_sentence_translations[i] for i in range(len(source_sentences)) if i in child_sentence_translations and child_sentence_translations[i] and str(child_sentence_translations[i]).strip().lower() != 'none')
             if assembled_multi.strip():
                 master_trans_full = assembled_multi
-        
+
         if not working_tsv_path:
             master_slug = tsv_slug or (generate_slug(text) if text else "")
             master_tsv_name = f"{zid}-{master_slug}.{language}.tsv" if master_slug else f"{zid}.{language}.tsv"
@@ -12166,7 +12168,7 @@ html, body {{
 
         master_trans_full = _strip_html(master_trans_full)
         master_card_slug = master_slug if 'master_slug' in locals() else (tsv_slug or (generate_slug(text) if text else ""))
-        
+
         # Build Master Overview [1] (sentence_idx = 0) with globally deduplicated vocabulary and combined inflected forms
         overview_word_objs = []
         col_ws_dedup = col_lemma if col_lemma != -1 else (headers.index(role_fields.get('lemma', 'WordSource')) if role_fields.get('lemma', 'WordSource') in headers else -1)
@@ -12187,7 +12189,7 @@ html, body {{
             overview_rows = sort_rows_by_frequency(
                 [list(r) for r in data_rows], headers, language, config, resolved_paths, role_fields=role_fields
             )
-        
+
         lemma_pos_to_row_ids = {}
         for r_id, r in enumerate(data_rows):
             lem = r[col_lemma].strip().lower() if col_lemma != -1 and len(r) > col_lemma else ""
@@ -12246,7 +12248,7 @@ html, body {{
                     ov_is_sel = "1"
             elif col_highlighted != -1 and len(ov_r) > col_highlighted and str(ov_r[col_highlighted]).strip().lower() in ["1", "true"]:
                 ov_is_sel = "1"
-            
+
             ov_lem_clean = ov_lemma.strip().lower()
             ov_pos_clean = ov_r[col_pos_dedup].strip().lower() if col_pos_dedup != -1 and len(ov_r) > col_pos_dedup else ""
 
@@ -12426,7 +12428,7 @@ html, body {{
                         t_ord = str(r_mid[col_token_order]) if col_token_order != -1 and len(r_mid) > col_token_order else str(mid)
                         if t_ord in row_occurrences and isinstance(row_occurrences[t_ord], dict):
                             ov_row_occ.update(row_occurrences[t_ord])
-            
+
             if is_ov_unified_der:
                 der_forms = DE_UNIFIED_ARTICLE_FORMS
                 for tok_item in source_tokens:
@@ -12441,7 +12443,7 @@ html, body {{
                         trans_inferred = "который" if pos_inferred == "pron." else "тот"
                         if raw_w == "die" and pos_inferred == "pron.":
                             trans_inferred = "которая"
-                        
+
                         if col_word_dest != -1:
                             for mid in matched_ids:
                                 if 0 <= mid < len(data_rows):
@@ -12452,7 +12454,7 @@ html, body {{
                                         if cand_tr and cand_tr != "[FAILED]" and "skeleton-loader" not in cand_tr and cand_tr not in ("-", "--"):
                                             trans_inferred = cand_tr
                                             break
-                        
+
                         tok_sent_idx = tok_item.get("sentence_idx")
                         tok_sent_text = ""
                         if tok_sent_idx is not None and 1 <= tok_sent_idx <= len(source_sentences):
@@ -12562,7 +12564,7 @@ html, body {{
             "selected_ids": [w["row_id"] for w in overview_word_objs if w.get("selected") == "1"],
             "words": overview_word_objs,
         }
-        
+
         child_cards = []
         for idx, s_src in enumerate(source_sentences):
             seq = idx + 2
@@ -12773,6 +12775,7 @@ html, body {{
     eff_prov = sentence_provenance if (has_real_text and not is_mismatch and sentence_provenance) else ""
     bootstrap_payload = {
         "ui_config": ui_cfg,
+        "theme_colors": resolve_theme_colors(config, theme),
         "sentence_cards": sentence_cards,
         "delivery_mode": smc.delivery_mode,
         "web_tab_mode": smc.web_tab_mode,
@@ -12855,16 +12858,16 @@ def run_lookup_flow(
     if text: text = text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
     import hashlib
     import time
-    
+
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     results_dir = resolve_results_dir(resolved_paths, kw_config)
-    
+
     slug = generate_slug(text)
     cache_key = f"{zid}-{slug}.{language}.tsv"
-    
+
     working_tsv_path = results_dir / cache_key
-    
+
     ttl_seconds = goldendict.get('lookup_ttl_seconds', 300) if isinstance(goldendict, dict) else 300
     run_intellifiller = goldendict.get('run_intellifiller', False) if isinstance(goldendict, dict) else False
 
@@ -12879,7 +12882,7 @@ def run_lookup_flow(
         effective_allow_fallback = goldendict.get('allow_checksum_fallback', config.getboolean(SEC_LOOKUP, 'allow_checksum_fallback', fallback=True) if hasattr(config, 'getboolean') and config.has_section(SEC_LOOKUP) else True)
     else:
         effective_allow_fallback = bool(allow_checksum_fallback)
-    
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
 
     sentence_translations = None
@@ -12953,7 +12956,7 @@ def run_lookup_flow(
     role_fields = get_role_fields(mapping, headers)
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
-    
+
     # --- Word-fill early pre-fill step ---
     # Runs at the start so that existing translations are filled before slow translations run.
     filled_lemmas = set()
@@ -12982,16 +12985,16 @@ def run_lookup_flow(
                 # In-memory wordfill pre-fill complete; deferred to final save_session
         except Exception as wf_err:
             logger.warning(f"wordfill: early pre-fill step failed, continuing: {wf_err}")
-    
+
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
-    
+
     sentence_translation = resolve_translations(
         text, text_mode, data_rows, col_index, col_sentence_dest,
         sentence_translations, working_tsv_path, comments, headers,
         persist=False, return_single=True
     )
-    
+
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
     if is_sqlite and isinstance(sentence_translations, dict):
         for s_idx_raw, trans in sentence_translations.items():
@@ -13009,7 +13012,7 @@ def run_lookup_flow(
         translation_text_path = results_dir / f"{zid}-{slug}.{target_lang}.txt"
         eff_mode = _effective_text_mode(text, text_mode)
         _write_translation_txt(text, eff_mode, sentence_translations, translation_text_path, save_flag=save_translation_text, overwrite=True)
-    
+
     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     if col_lemma != -1 and col_word_dest != -1:
@@ -13019,11 +13022,11 @@ def run_lookup_flow(
             if len(row) > col_lemma and row[col_lemma].strip():
                 if len(row) <= col_word_dest or not row[col_word_dest].strip():
                     lemmas_to_translate.append(row[col_lemma].strip())
-        
+
         if lemmas_to_translate:
             unique_lemmas = list(dict.fromkeys(lemmas_to_translate))
             translations = translate_lemmas_fast_path(unique_lemmas, language, target_lang, config, resolved_paths, lemmas_provider)
-            
+
             for row in data_rows:
                 if len(row) > col_lemma and row[col_lemma].strip():
                     lemma = row[col_lemma].strip()
@@ -13065,18 +13068,18 @@ def run_lookup_flow(
     else:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = {role: field for field, role in mapping['desk_columns'].items() if field in headers}
-        
+
         cols_to_remove = []
         if 'morphology' in role_fields:
             cols_to_remove.append(role_fields['morphology'])
         elif 'WordSourceMorphologyAI' in headers:
             cols_to_remove.append('WordSourceMorphologyAI')
-            
+
         if 'ipa' in role_fields:
             cols_to_remove.append(role_fields['ipa'])
         elif 'WordSourceIPA' in headers:
             cols_to_remove.append('WordSourceIPA')
-            
+
         for col_name in cols_to_remove:
             if col_name in headers:
                 col_idx = headers.index(col_name)
@@ -13282,7 +13285,7 @@ INJECTED_JS_TEMPLATE = """
 def render_section(token, ctx):
     import re
     html_output = ""
-    
+
     def make_heading(heading_key, default_text):
         h_text = ctx.get('headings', {}).get(heading_key, "")
         if h_text == '__default__':
@@ -13290,24 +13293,24 @@ def render_section(token, ctx):
         if h_text:
             return f"<h3>{h_text}</h3>\n"
         return ""
-        
+
     if token == "source":
         heading = make_heading("source", "Source Text")
         normalized_text = normalize_blank_lines(ctx["text"])
         safe_text = normalized_text.replace('\r', '')
         html_output += f'<section class="kw-section source-section" id="source-section">{heading}<div class="kw-source-text source-text" id="source-container">{safe_text}</div></section>\n'
-        
+
     elif token == "translation":
         heading = make_heading("translation", "Translation")
         normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
         safe_trans = html.escape(normalized_trans.replace('\r', ''))
         html_output += f'<section class="kw-section translation-section" id="translation-section">{heading}<div class="kw-translation translation-text" id="translation-container">{safe_trans}</div></section>\n'
-        
+
     elif token == "lemmas":
         heading = make_heading("lemmas", "Lemmas")
         html_output += f'<div class="kw-section">{heading}'
         html_output += '<div class="kw-table-container"><table class="kw-lemmas-table lemma-table" id="lemma-table">\n'
-        
+
         role_fields = ctx.get('role_fields', {})
         COLUMN_TOKEN_MAP = {
             'inflected': role_fields.get('inflected') or ('WordSourceInflectedForm' if 'WordSourceInflectedForm' in ctx.get('headers', []) else None),
@@ -13457,7 +13460,7 @@ def render_section(token, ctx):
         if server_enabled:
             html_output += '<div class="kw-actions-bar"><button id="kw-export-btn" class="kw-export-btn" onclick="kwExportSelected()">Export to Anki</button><span id="kw-interactive-status" class="kw-interactive-status"></span></div>\n'
         html_output += '</div>\n'
-        
+
     return html_output
 
 _JSON_ISLAND_ESCAPES = {
@@ -13492,93 +13495,36 @@ def get_bundled_css(web_dir=None) -> str:
         css_parts.append(css_text)
     return "\n".join(css_parts)
 
-_WORKSPACE_TABS_JS_CACHE = None
-
 def get_workspace_tabs_js(web_dir=None, reload=False) -> str:
-    """
-    Load extracted WorkspaceTabs component JS from web/js/components/WorkspaceTabs.js
-    for bundling into standalone / container HTML.
-    """
-    global _WORKSPACE_TABS_JS_CACHE
-    if _WORKSPACE_TABS_JS_CACHE is None or reload:
-        if web_dir is None:
-            web_dir = Path(__file__).resolve().parent / "web"
-        elif isinstance(web_dir, str):
-            web_dir = Path(web_dir)
-        p = web_dir / "js" / "components" / "WorkspaceTabs.js"
-        if not p.is_file():
-            raise FileNotFoundError(f"Required component JS not found: {p}")
-        _WORKSPACE_TABS_JS_CACHE = p.read_text(encoding="utf-8")
-    return _WORKSPACE_TABS_JS_CACHE
+    web_dir = Path(web_dir) if web_dir is not None else Path(__file__).resolve().parent / "web"
+    return read_required_asset(web_dir / "js" / "components" / "WorkspaceTabs.js")
 
-_LEMMA_TABLE_JS_CACHE = None
 
 def get_lemma_table_js(web_dir=None, reload=False) -> str:
-    """
-    Load extracted LemmaTable component JS from web/js/components/LemmaTable.js
-    for bundling into standalone / container HTML.
-    """
-    global _LEMMA_TABLE_JS_CACHE
-    if _LEMMA_TABLE_JS_CACHE is None or reload:
-        if web_dir is None:
-            web_dir = Path(__file__).resolve().parent / "web"
-        elif isinstance(web_dir, str):
-            web_dir = Path(web_dir)
-        p = web_dir / "js" / "components" / "LemmaTable.js"
-        if not p.is_file():
-            raise FileNotFoundError(f"Required component JS not found: {p}")
-        _LEMMA_TABLE_JS_CACHE = p.read_text(encoding="utf-8")
-    return _LEMMA_TABLE_JS_CACHE
+    web_dir = Path(web_dir) if web_dir is not None else Path(__file__).resolve().parent / "web"
+    return read_required_asset(web_dir / "js" / "components" / "LemmaTable.js")
 
-_SOURCE_VIEWER_JS_CACHE = None
 
 def get_source_viewer_js(web_dir=None, reload=False) -> str:
-    """
-    Load extracted SourceViewer component JS from web/js/components/SourceViewer.js
-    for bundling into standalone / container HTML.
-    """
-    global _SOURCE_VIEWER_JS_CACHE
-    if _SOURCE_VIEWER_JS_CACHE is None or reload:
-        if web_dir is None:
-            web_dir = Path(__file__).resolve().parent / "web"
-        elif isinstance(web_dir, str):
-            web_dir = Path(web_dir)
-        p = web_dir / "js" / "components" / "SourceViewer.js"
-        if not p.is_file():
-            raise FileNotFoundError(f"Required component JS not found: {p}")
-        _SOURCE_VIEWER_JS_CACHE = p.read_text(encoding="utf-8")
-    return _SOURCE_VIEWER_JS_CACHE
+    web_dir = Path(web_dir) if web_dir is not None else Path(__file__).resolve().parent / "web"
+    return read_required_asset(web_dir / "js" / "components" / "SourceViewer.js")
 
-_TRANSLATION_VIEW_JS_CACHE = None
 
 def get_translation_view_js(web_dir=None, reload=False) -> str:
-    """
-    Load extracted TranslationView component JS from web/js/components/TranslationView.js
-    for bundling into standalone / container HTML.
-    """
-    global _TRANSLATION_VIEW_JS_CACHE
-    if _TRANSLATION_VIEW_JS_CACHE is None or reload:
-        if web_dir is None:
-            web_dir = Path(__file__).resolve().parent / "web"
-        elif isinstance(web_dir, str):
-            web_dir = Path(web_dir)
-        p = web_dir / "js" / "components" / "TranslationView.js"
-        if not p.is_file():
-            raise FileNotFoundError(f"Required component JS not found: {p}")
-        _TRANSLATION_VIEW_JS_CACHE = p.read_text(encoding="utf-8")
-    return _TRANSLATION_VIEW_JS_CACHE
+    web_dir = Path(web_dir) if web_dir is not None else Path(__file__).resolve().parent / "web"
+    return read_required_asset(web_dir / "js" / "components" / "TranslationView.js")
 
-_WEB_INDEX_HTML_CACHE = None
+
+def read_required_asset(path):
+    path = Path(path)
+    if not path.is_file():
+        raise FileNotFoundError(f"Required web asset not found: {path}")
+    return path.read_text(encoding="utf-8")
+
 
 def get_web_index_html(reload=False):
-    global _WEB_INDEX_HTML_CACHE
-    if _WEB_INDEX_HTML_CACHE is None or reload:
-        p = Path(__file__).resolve().parent / "web" / "index.html"
-        if p.is_file():
-            _WEB_INDEX_HTML_CACHE = p.read_text(encoding="utf-8")
-        else:
-            _WEB_INDEX_HTML_CACHE = ""
-    return _WEB_INDEX_HTML_CACHE
+    return read_required_asset(Path(__file__).resolve().parent / "web" / "index.html")
+
 
 def render_declarative_web_shell(
     bootstrap_payload,
@@ -13601,12 +13547,6 @@ def render_declarative_web_shell(
 ):
     """All JSON data islands MUST be serialized with serialize_json_island()."""
     base_html = get_web_index_html()
-    if not base_html:
-        p = Path(__file__).resolve().parent / "web" / "index.html"
-        if p.is_file():
-            base_html = p.read_text(encoding="utf-8")
-        else:
-            return ""
 
     if page_title:
         base_html = re.sub(r'<title>.*?</title>', f'<title>{html.escape(page_title)}</title>', base_html)
@@ -13938,31 +13878,30 @@ def render_declarative_web_shell(
         "app.js",
     ):
         p_script = web_dir / "js" / script_rel
-        if p_script.is_file():
-            s_code = p_script.read_text(encoding="utf-8")
-            if script_rel == "app.js":
-                s_code = s_code.replace("{audio_lmb_play}", "true" if ui_cfg.get("audio_lmb_play") else "false")
-                s_code = s_code.replace("{audio_lmb_source}", json.dumps(ui_cfg.get("audio_lmb_source", "lemma")))
-                s_code = s_code.replace("{audio_lmb_chain_mode}", json.dumps(ui_cfg.get("audio_lmb_chain_mode", "auto")))
-                s_code = s_code.replace("{audio_source_range_mode}", json.dumps(ui_cfg.get("audio_source_range_mode", "word")))
-                s_code = s_code.replace("{audio_table_range_mode}", json.dumps(ui_cfg.get("audio_table_range_mode", "cell")))
-                s_code = s_code.replace("{audio_rmb_play}", "true" if ui_cfg.get("audio_rmb_play") else "false")
-                s_code = s_code.replace("{audio_rmb_chain_mode}", json.dumps(ui_cfg.get("audio_rmb_chain_mode", "auto")))
-                s_code = s_code.replace("{audio_rmb_source}", json.dumps(ui_cfg.get("audio_rmb_source", "word_translation")))
-                s_code = s_code.replace("{audio_anki_tts_cli}", str(ui_cfg.get("audio_anki_tts_cli", "")).replace("\\", "\\\\"))
-                s_code = s_code.replace("{audio_python_exe}", str(ui_cfg.get("audio_python_exe", "")).replace("\\", "\\\\"))
-                s_code = s_code.replace("{workspace_tabs_component_js}", get_workspace_tabs_js(web_dir))
-                s_code = s_code.replace('audioPythonExe + "\\\\n"', 'audioPythonExe + "\\n"')
-                s_code = s_code.replace('audioAnkiTtsCli + "\\\\n"', 'audioAnkiTtsCli + "\\n"')
-                s_code = s_code.replace('lang + "\\\\n"', 'lang + "\\n"')
-                s_code = s_code.replace("{lemma_col_name}", lemma_col_name)
-                s_code = s_code.replace("{inflected_col_name}", inflected_col_name)
-                s_code = s_code.replace("{has_highlight_col}", "true" if ui_cfg.get("has_highlight_col") else "false")
-            tag_to_replace = f'<script src="/js/{script_rel}"></script>'
-            if tag_to_replace in base_html:
-                base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
-            elif script_rel == "app.js":
-                base_html = base_html.replace('</body>', f'<script>\n{s_code}\n</script>\n</body>')
+        s_code = read_required_asset(p_script)
+        if script_rel == "app.js":
+            s_code = s_code.replace("{audio_lmb_play}", "true" if ui_cfg.get("audio_lmb_play") else "false")
+            s_code = s_code.replace("{audio_lmb_source}", json.dumps(ui_cfg.get("audio_lmb_source", "lemma")))
+            s_code = s_code.replace("{audio_lmb_chain_mode}", json.dumps(ui_cfg.get("audio_lmb_chain_mode", "auto")))
+            s_code = s_code.replace("{audio_source_range_mode}", json.dumps(ui_cfg.get("audio_source_range_mode", "word")))
+            s_code = s_code.replace("{audio_table_range_mode}", json.dumps(ui_cfg.get("audio_table_range_mode", "cell")))
+            s_code = s_code.replace("{audio_rmb_play}", "true" if ui_cfg.get("audio_rmb_play") else "false")
+            s_code = s_code.replace("{audio_rmb_chain_mode}", json.dumps(ui_cfg.get("audio_rmb_chain_mode", "auto")))
+            s_code = s_code.replace("{audio_rmb_source}", json.dumps(ui_cfg.get("audio_rmb_source", "word_translation")))
+            s_code = s_code.replace("{audio_anki_tts_cli}", str(ui_cfg.get("audio_anki_tts_cli", "")).replace("\\", "\\\\"))
+            s_code = s_code.replace("{audio_python_exe}", str(ui_cfg.get("audio_python_exe", "")).replace("\\", "\\\\"))
+            s_code = s_code.replace("{workspace_tabs_component_js}", get_workspace_tabs_js(web_dir))
+            s_code = s_code.replace('audioPythonExe + "\\\\n"', 'audioPythonExe + "\\n"')
+            s_code = s_code.replace('audioAnkiTtsCli + "\\\\n"', 'audioAnkiTtsCli + "\\n"')
+            s_code = s_code.replace('lang + "\\\\n"', 'lang + "\\n"')
+            s_code = s_code.replace("{lemma_col_name}", lemma_col_name)
+            s_code = s_code.replace("{inflected_col_name}", inflected_col_name)
+            s_code = s_code.replace("{has_highlight_col}", "true" if ui_cfg.get("has_highlight_col") else "false")
+        tag_to_replace = f'<script src="/js/{script_rel}"></script>'
+        if tag_to_replace in base_html:
+            base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
+        elif script_rel == "app.js":
+            base_html = base_html.replace('</body>', f'<script>\n{s_code}\n</script>\n</body>')
 
     if children_tsv_paths:
         paths_str = ",".join(str(path) for path in children_tsv_paths)
@@ -13980,6 +13919,7 @@ setTimeout(function() {{
 </script>"""
         base_html = base_html.replace("</body>", f"{watchdog_js}\n</body>")
 
+    base_html = base_html.replace('</head>', theme_style(bootstrap_payload.get("theme_colors", {}), theme) + '</head>')
     return base_html
 
 def render_lookup_html(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
@@ -13989,13 +13929,13 @@ def render_lookup_html(text, language, target_lang, config, resolved_paths, zid,
 def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation, session_zid=None, api_token="", server_enabled=False, fingerprint=""):
     sections = goldendict.get('sections', ['translation', 'lemmas']) if isinstance(goldendict, dict) else ['translation', 'lemmas']
     column_tokens = goldendict.get('lemma_columns', ['inflected', 'lemma', 'translation']) if isinstance(goldendict, dict) else ['inflected', 'lemma', 'translation']
-    
+
     headings = {
         'source': goldendict.get('heading_source', ''),
         'translation': goldendict.get('heading_translation', ''),
         'lemmas': goldendict.get('heading_lemmas', '')
     }
-    
+
     role_fields = {}
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
@@ -14012,7 +13952,7 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
 
     effective_server_enabled = server_enabled or goldendict.get('server_enabled', False)
     effective_api_token = api_token or goldendict.get('server_api_key', '')
-    
+
     ctx = {
         'text': text,
         'sentence_translation': sentence_translation,
@@ -14029,12 +13969,12 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
         'api_token': effective_api_token,
         'fingerprint': fingerprint,
     }
-    
+
     html_output = '<div class="kw-lookup-container">\n'
     for sec in sections:
         html_output += render_section(sec, ctx)
     html_output += '</div>\n'
-    
+
     server_host = goldendict.get('server_host', '127.0.0.1') if isinstance(goldendict, dict) else '127.0.0.1'
     server_port = goldendict.get('server_port', 18335) if isinstance(goldendict, dict) else 18335
     server_url = f"http://{server_host}:{server_port}"
@@ -14056,264 +13996,242 @@ def _render_lookup_html_impl(text, language, target_lang, config, resolved_paths
     session_json = serialize_json_island(session_payload)
 
     web_dir = Path(__file__).resolve().parent / "web"
-    index_path = web_dir / "index.html"
     theme = goldendict.get('theme', 'compact') if isinstance(goldendict, dict) else 'compact'
 
+    read_required_asset(web_dir / "js" / "app.js")
     raw_template = get_web_index_html()
-    if raw_template or index_path.is_file():
-        base_html = raw_template if raw_template else index_path.read_text(encoding="utf-8")
+    base_html = raw_template
 
-        # Inject theme class into <body>
-        base_html = base_html.replace('<body>', f'<body class="theme-{theme}">')
+    # Inject theme class into <body>
+    base_html = base_html.replace('<body>', f'<body class="theme-{theme}">')
 
-        # Replace title
-        base_html = re.sub(r'<title>.*?</title>', '<title>Kardenwort Lookup</title>', base_html)
+    # Replace title
+    base_html = re.sub(r'<title>.*?</title>', '<title>Kardenwort Lookup</title>', base_html)
 
-        # Inject session JSON into #session-data
-        base_html = re.sub(
-            r'<script id="session-data" type="application/json">.*?</script>',
-            lambda _: f'<script id="session-data" type="application/json">\n{session_json}\n</script>',
-            base_html,
-            flags=re.DOTALL
+    # Inject session JSON into #session-data
+    base_html = re.sub(
+        r'<script id="session-data" type="application/json">.*?</script>',
+        lambda _: f'<script id="session-data" type="application/json">\n{session_json}\n</script>',
+        base_html,
+        flags=re.DOTALL
+    )
+
+    # Inject bootstrap payload into #kardenwort-bootstrap
+    lookup_ui_config = dict(goldendict) if isinstance(goldendict, dict) else {}
+    lookup_ui_config["grammar"] = get_grammar_payload()
+    lookup_ui_config["has_highlight_col"] = bool(
+        headers and any(str(h).lower() in ('deskselected', 'selected', 'highlight') for h in headers)
+    )
+    lookup_bootstrap = {
+        "ui_config": lookup_ui_config,
+        "session_data": session_payload,
+        "sentence_cards": [],
+        "delivery_mode": "container",
+        "zid": session_payload["zid"],
+        "session_zid": session_payload["session_zid"],
+        "language": session_payload["language"],
+        "target_language": session_payload["target_lang"],
+        "data_rows": session_payload["data_rows"],
+        "headers": session_payload["headers"],
+        "source_text": session_payload["source_text"],
+        "sentence_translation": session_payload["sentence_translation"],
+        "server_enabled": session_payload["server_enabled"],
+        "api_token": session_payload["api_token"],
+        "server_url": session_payload["server_url"],
+        "fingerprint": session_payload["fingerprint"],
+    }
+    lookup_bootstrap_json = serialize_json_island(lookup_bootstrap)
+    base_html = re.sub(
+        r'<script id="kardenwort-bootstrap" type="application/json">.*?</script>',
+        lambda _: f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>',
+        base_html,
+        flags=re.DOTALL
+    )
+    if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
+        base_html = base_html.replace(
+            '<!-- KARDENWORT_BOOTSTRAP -->',
+            f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>'
         )
 
-        # Inject bootstrap payload into #kardenwort-bootstrap
-        lookup_ui_config = dict(goldendict) if isinstance(goldendict, dict) else {}
-        lookup_ui_config["grammar"] = get_grammar_payload()
-        lookup_ui_config["has_highlight_col"] = bool(
-            headers and any(str(h).lower() in ('deskselected', 'selected', 'highlight') for h in headers)
+    # Check if slot markers exist in base_html (modular shell)
+    if '<!-- SECTION_SOURCE_START -->' in base_html:
+        # 1. Configurable Zoom (Task 2.9, R50)
+        zoom_val = None
+        if isinstance(goldendict, dict):
+            zoom_val = goldendict.get('defaultzoom') or goldendict.get('default_zoom') or goldendict.get('zoom')
+        if not zoom_val and config:
+            if config.has_section('settings'):
+                zoom_val = config.get('settings', 'defaultzoom', fallback=None) or config.get('settings', 'default_zoom', fallback=None)
+            if not zoom_val and config.has_section('rendering'):
+                zoom_val = config.get('rendering', 'default_zoom', fallback=None)
+        if not zoom_val:
+            zoom_val = "100"
+        zoom_str = str(zoom_val).strip()
+        zoom_num = re.sub(r'[^\d.]', '', zoom_str)
+        try:
+            zoom_float = float(zoom_num) if zoom_num else 100.0
+        except ValueError:
+            zoom_float = 100.0
+        if zoom_float <= 0:
+            zoom_float = 100.0
+        factor = zoom_float / 100.0
+        zoom_style = f"zoom: {zoom_float:g}%; max-width: calc(100% / {factor:.4g}); width: calc(100% / {factor:.4g});"
+        base_html = base_html.replace(
+            '<div class="kw-lookup-container">',
+            f'<div class="kw-lookup-container" style="{zoom_style}">'
         )
-        lookup_bootstrap = {
-            "ui_config": lookup_ui_config,
-            "session_data": session_payload,
-            "sentence_cards": [],
-            "delivery_mode": "container",
-            "zid": session_payload["zid"],
-            "session_zid": session_payload["session_zid"],
-            "language": session_payload["language"],
-            "target_language": session_payload["target_lang"],
-            "data_rows": session_payload["data_rows"],
-            "headers": session_payload["headers"],
-            "source_text": session_payload["source_text"],
-            "sentence_translation": session_payload["sentence_translation"],
-            "server_enabled": session_payload["server_enabled"],
-            "api_token": session_payload["api_token"],
-            "server_url": session_payload["server_url"],
-            "fingerprint": session_payload["fingerprint"],
-        }
-        lookup_bootstrap_json = serialize_json_island(lookup_bootstrap)
-        base_html = re.sub(
-            r'<script id="kardenwort-bootstrap" type="application/json">.*?</script>',
-            lambda _: f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>',
-            base_html,
-            flags=re.DOTALL
-        )
-        if '<!-- KARDENWORT_BOOTSTRAP -->' in base_html:
+
+        # 2. Language Badge
+        if language and target_lang:
             base_html = base_html.replace(
-                '<!-- KARDENWORT_BOOTSTRAP -->',
-                f'<script id="kardenwort-bootstrap" type="application/json">\n{lookup_bootstrap_json}\n</script>'
+                '<span id="lang-badge" class="session-badge">de &rarr; ru</span>',
+                f'<span id="lang-badge" class="session-badge">{html.escape(language)} &rarr; {html.escape(target_lang)}</span>'
             )
 
-        # Check if slot markers exist in base_html (modular shell)
-        if '<!-- SECTION_SOURCE_START -->' in base_html:
-            # 1. Configurable Zoom (Task 2.9, R50)
-            zoom_val = None
-            if isinstance(goldendict, dict):
-                zoom_val = goldendict.get('defaultzoom') or goldendict.get('default_zoom') or goldendict.get('zoom')
-            if not zoom_val and config:
-                if config.has_section('settings'):
-                    zoom_val = config.get('settings', 'defaultzoom', fallback=None) or config.get('settings', 'default_zoom', fallback=None)
-                if not zoom_val and config.has_section('rendering'):
-                    zoom_val = config.get('rendering', 'default_zoom', fallback=None)
-            if not zoom_val:
-                zoom_val = "100"
-            zoom_str = str(zoom_val).strip()
-            zoom_num = re.sub(r'[^\d.]', '', zoom_str)
-            try:
-                zoom_float = float(zoom_num) if zoom_num else 100.0
-            except ValueError:
-                zoom_float = 100.0
-            if zoom_float <= 0:
-                zoom_float = 100.0
-            factor = zoom_float / 100.0
-            zoom_style = f"zoom: {zoom_float:g}%; max-width: calc(100% / {factor:.4g}); width: calc(100% / {factor:.4g});"
-            base_html = base_html.replace(
-                '<div class="kw-lookup-container">',
-                f'<div class="kw-lookup-container" style="{zoom_style}">'
-            )
-
-            # 2. Language Badge
-            if language and target_lang:
-                base_html = base_html.replace(
-                    '<span id="lang-badge" class="session-badge">de &rarr; ru</span>',
-                    f'<span id="lang-badge" class="session-badge">{html.escape(language)} &rarr; {html.escape(target_lang)}</span>'
-                )
-
-            # 3. Source Section Slot (Task 2.7, 2.8, R33, R44)
-            if 'source' not in sections:
-                base_html = re.sub(r'<!-- SECTION_SOURCE_START -->.*?<!-- SECTION_SOURCE_END -->\s*', '', base_html, flags=re.DOTALL)
-            else:
-                h_source = headings.get('source', '')
-                if h_source == '__default__':
-                    h_source = "Source Text"
-                if h_source:
-                    if '<h3>Source Text</h3>' in base_html:
-                        base_html = re.sub(r'<h3>Source Text</h3>', f'<h3>{html.escape(h_source)}</h3>', base_html)
-                    else:
-                        base_html = base_html.replace(
-                            '<div class="source-text"',
-                            f'<h3>{html.escape(h_source)}</h3>\n            <div class="source-text"'
-                        )
-                else:
-                    base_html = re.sub(r'<h3>Source Text</h3>\s*', '', base_html)
-                normalized_text = normalize_blank_lines(ctx["text"])
-                safe_text = normalized_text.replace('\r', '')
-                base_html = base_html.replace('<!-- SOURCE_TEXT -->', safe_text)
-
-            # 4. Translation Section Slot (Task 2.7, 2.8, R33, R44)
-            if 'translation' not in sections:
-                base_html = re.sub(r'<!-- SECTION_TRANSLATION_START -->.*?<!-- SECTION_TRANSLATION_END -->\s*', '', base_html, flags=re.DOTALL)
-            else:
-                h_trans = headings.get('translation', '')
-                if h_trans == '__default__':
-                    h_trans = "Translation"
-                if h_trans:
-                    if '<h3>Translation</h3>' in base_html:
-                        base_html = re.sub(r'<h3>Translation</h3>', f'<h3>{html.escape(h_trans)}</h3>', base_html)
-                    else:
-                        base_html = base_html.replace(
-                            '<div class="translation-text"',
-                            f'<h3>{html.escape(h_trans)}</h3>\n            <div class="translation-text"'
-                        )
-                else:
-                    base_html = re.sub(r'<h3>Translation</h3>\s*', '', base_html)
-                normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
-                safe_trans = html.escape(normalized_trans.replace('\r', ''))
-                base_html = base_html.replace('<!-- TRANSLATION_TEXT -->', safe_trans)
-
-            # 5. Lemmas Section Slot (Task 2.7, 3.8, R33, R24)
-            if 'lemmas' not in sections:
-                base_html = re.sub(r'<!-- SECTION_LEMMAS_START -->.*?<!-- SECTION_LEMMAS_END -->\s*', '', base_html, flags=re.DOTALL)
-            else:
-                h_lemmas = headings.get('lemmas', '')
-                if h_lemmas == '__default__':
-                    h_lemmas = "Lemmas"
-                if h_lemmas:
-                    if '<h3>Lemmas</h3>' in base_html:
-                        base_html = re.sub(r'<h3>Lemmas</h3>', f'<h3>{html.escape(h_lemmas)}</h3>', base_html)
-                    else:
-                        base_html = base_html.replace(
-                            '<table id="lemma-table"',
-                            f'<h3>{html.escape(h_lemmas)}</h3>\n            <table id="lemma-table"'
-                        )
-                else:
-                    base_html = re.sub(r'<h3>Lemmas</h3>\s*', '', base_html)
-
-                ctx_scroll = dict(ctx)
-                ctx_scroll['scrollable_cells'] = True
-                lemmas_sec_html = render_section('lemmas', ctx_scroll)
-                thead_m = re.search(r'<thead>(.*?)</thead>', lemmas_sec_html, re.DOTALL)
-                tbody_m = re.search(r'<tbody>(.*?)</tbody>', lemmas_sec_html, re.DOTALL)
-                if thead_m:
-                    base_html = re.sub(r'<thead>.*?</thead>', f'<thead>{thead_m.group(1)}</thead>', base_html, flags=re.DOTALL)
-                if tbody_m:
-                    base_html = base_html.replace('<!-- TABLE_ROWS -->', tbody_m.group(1).strip())
-                else:
-                    base_html = base_html.replace('<!-- TABLE_ROWS -->', '')
-            base_html = base_html.replace('<!-- WORKSPACE_TAB_BAR -->', '')
+        # 3. Source Section Slot (Task 2.7, 2.8, R33, R44)
+        if 'source' not in sections:
+            base_html = re.sub(r'<!-- SECTION_SOURCE_START -->.*?<!-- SECTION_SOURCE_END -->\s*', '', base_html, flags=re.DOTALL)
         else:
-            # Inject rendered container
-            start_marker = '<div class="kw-lookup-container">'
-            end_marker = '<script id="session-data"'
-            start_idx = base_html.find(start_marker)
-            end_idx = base_html.find(end_marker)
-            if start_idx != -1 and end_idx != -1:
-                base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
-
-        # Offline CSS embedding if not disabled (Task 3.9, R27)
-        if not (isinstance(goldendict, dict) and goldendict.get('disable_css', False)):
-            combined_css = get_bundled_css(web_dir)
-            if combined_css:
-                # Strip external /css/ link tags to prevent 404 errors in offline/GoldenDict mode
-                base_html = re.sub(r'<link\s+rel=["\']stylesheet["\']\s+href=["\']/css/[^"\']+["\']\s*/?>\s*', '', base_html)
-                base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
-
-        # Inlined modular component scripts for offline/GoldenDict execution
-        for script_rel in (
-            "types.js",
-            "state/store.js",
-            "components/SourceViewer.js",
-            "components/TranslationView.js",
-            "components/LemmaTable.js",
-            "components/WorkspaceTabs.js",
-            "services/sse.js",
-        ):
-            p_script = web_dir / "js" / script_rel
-            if p_script.is_file():
-                s_code = p_script.read_text(encoding="utf-8")
-                tag_to_replace = f'<script src="/js/{script_rel}"></script>'
-                if tag_to_replace in base_html:
-                    base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
-
-        if effective_server_enabled and session_zid:
-            p_js = web_dir / "js" / "app.js"
-            if p_js.is_file():
-                app_js = p_js.read_text(encoding="utf-8")
-                if '<script src="/js/app.js"></script>' in base_html:
-                    base_html = base_html.replace(
-                        '<script src="/js/app.js"></script>',
-                        f'<script>\n{app_js}\n</script>'
-                    )
+            h_source = headings.get('source', '')
+            if h_source == '__default__':
+                h_source = "Source Text"
+            if h_source:
+                if '<h3>Source Text</h3>' in base_html:
+                    base_html = re.sub(r'<h3>Source Text</h3>', f'<h3>{html.escape(h_source)}</h3>', base_html)
                 else:
-                    base_html = base_html.replace('</body>', f'<script>\n{app_js}\n</script>\n</body>')
-    else:
-        # Fallback if web/index.html is absent
-        disable_css = goldendict.get('disable_css', False) if isinstance(goldendict, dict) else False
-        style_block = ""
-        if not disable_css:
-            style_block = "<style>.kw-lookup-container { padding: 2px; }</style>\n"
-        base_html = f"""<!DOCTYPE html>
-<html>
-<head>
-    <meta charset="utf-8">
-    <title>Kardenwort Lookup</title>
-    {style_block}
-</head>
-<body>
-{html_output}
-<script id="session-data" type="application/json">
-{session_json}
-</script>
-</body>
-</html>"""
+                    base_html = base_html.replace(
+                        '<div class="source-text"',
+                        f'<h3>{html.escape(h_source)}</h3>\n            <div class="source-text"'
+                    )
+            else:
+                base_html = re.sub(r'<h3>Source Text</h3>\s*', '', base_html)
+            normalized_text = normalize_blank_lines(ctx["text"])
+            safe_text = normalized_text.replace('\r', '')
+            base_html = base_html.replace('<!-- SOURCE_TEXT -->', safe_text)
 
+        # 4. Translation Section Slot (Task 2.7, 2.8, R33, R44)
+        if 'translation' not in sections:
+            base_html = re.sub(r'<!-- SECTION_TRANSLATION_START -->.*?<!-- SECTION_TRANSLATION_END -->\s*', '', base_html, flags=re.DOTALL)
+        else:
+            h_trans = headings.get('translation', '')
+            if h_trans == '__default__':
+                h_trans = "Translation"
+            if h_trans:
+                if '<h3>Translation</h3>' in base_html:
+                    base_html = re.sub(r'<h3>Translation</h3>', f'<h3>{html.escape(h_trans)}</h3>', base_html)
+                else:
+                    base_html = base_html.replace(
+                        '<div class="translation-text"',
+                        f'<h3>{html.escape(h_trans)}</h3>\n            <div class="translation-text"'
+                    )
+            else:
+                base_html = re.sub(r'<h3>Translation</h3>\s*', '', base_html)
+            normalized_trans = normalize_blank_lines(ctx.get("sentence_translation", ""))
+            safe_trans = html.escape(normalized_trans.replace('\r', ''))
+            base_html = base_html.replace('<!-- TRANSLATION_TEXT -->', safe_trans)
+
+        # 5. Lemmas Section Slot (Task 2.7, 3.8, R33, R24)
+        if 'lemmas' not in sections:
+            base_html = re.sub(r'<!-- SECTION_LEMMAS_START -->.*?<!-- SECTION_LEMMAS_END -->\s*', '', base_html, flags=re.DOTALL)
+        else:
+            h_lemmas = headings.get('lemmas', '')
+            if h_lemmas == '__default__':
+                h_lemmas = "Lemmas"
+            if h_lemmas:
+                if '<h3>Lemmas</h3>' in base_html:
+                    base_html = re.sub(r'<h3>Lemmas</h3>', f'<h3>{html.escape(h_lemmas)}</h3>', base_html)
+                else:
+                    base_html = base_html.replace(
+                        '<table id="lemma-table"',
+                        f'<h3>{html.escape(h_lemmas)}</h3>\n            <table id="lemma-table"'
+                    )
+            else:
+                base_html = re.sub(r'<h3>Lemmas</h3>\s*', '', base_html)
+
+            ctx_scroll = dict(ctx)
+            ctx_scroll['scrollable_cells'] = True
+            lemmas_sec_html = render_section('lemmas', ctx_scroll)
+            thead_m = re.search(r'<thead>(.*?)</thead>', lemmas_sec_html, re.DOTALL)
+            tbody_m = re.search(r'<tbody>(.*?)</tbody>', lemmas_sec_html, re.DOTALL)
+            if thead_m:
+                base_html = re.sub(r'<thead>.*?</thead>', f'<thead>{thead_m.group(1)}</thead>', base_html, flags=re.DOTALL)
+            if tbody_m:
+                base_html = base_html.replace('<!-- TABLE_ROWS -->', tbody_m.group(1).strip())
+            else:
+                base_html = base_html.replace('<!-- TABLE_ROWS -->', '')
+        base_html = base_html.replace('<!-- WORKSPACE_TAB_BAR -->', '')
+    else:
+        # Inject rendered container
+        start_marker = '<div class="kw-lookup-container">'
+        end_marker = '<script id="session-data"'
+        start_idx = base_html.find(start_marker)
+        end_idx = base_html.find(end_marker)
+        if start_idx != -1 and end_idx != -1:
+            base_html = base_html[:start_idx] + html_output + "\n\n    " + base_html[end_idx:]
+
+    # Offline CSS embedding if not disabled (Task 3.9, R27)
+    if not (isinstance(goldendict, dict) and goldendict.get('disable_css', False)):
+        combined_css = get_bundled_css(web_dir)
+        if combined_css:
+            # Strip external /css/ link tags to prevent 404 errors in offline/GoldenDict mode
+            base_html = re.sub(r'<link\s+rel=["\']stylesheet["\']\s+href=["\']/css/[^"\']+["\']\s*/?>\s*', '', base_html)
+            base_html = base_html.replace('</head>', f'<style id="modular-css">\n{combined_css}\n</style>\n</head>')
+
+    # Inlined modular component scripts for offline/GoldenDict execution
+    for script_rel in (
+        "types.js",
+        "state/store.js",
+        "components/SourceViewer.js",
+        "components/TranslationView.js",
+        "components/LemmaTable.js",
+        "components/WorkspaceTabs.js",
+        "services/sse.js",
+    ):
+        p_script = web_dir / "js" / script_rel
+        s_code = read_required_asset(p_script)
+        tag_to_replace = f'<script src="/js/{script_rel}"></script>'
+        if tag_to_replace in base_html:
+            base_html = base_html.replace(tag_to_replace, f'<script>\n{s_code}\n</script>')
+
+    if effective_server_enabled and session_zid:
+        p_js = web_dir / "js" / "app.js"
+        app_js = read_required_asset(p_js)
+        if '<script src="/js/app.js"></script>' in base_html:
+            base_html = base_html.replace(
+                '<script src="/js/app.js"></script>',
+                f'<script>\n{app_js}\n</script>'
+            )
+        else:
+            base_html = base_html.replace('</body>', f'<script>\n{app_js}\n</script>\n</body>')
+
+    base_html = base_html.replace('</head>', theme_style(resolve_theme_colors(config, theme), theme) + '</head>')
     return base_html
 
 def render_lookup_text(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
     import re
     sections = goldendict['sections']
     column_tokens = goldendict['lemma_columns']
-    
+
     headings = {
         'source': goldendict.get('heading_source', ''),
         'translation': goldendict.get('heading_translation', ''),
         'lemmas': goldendict.get('heading_lemmas', '')
     }
-    
+
     role_fields = {}
     if resolved_paths and 'anki_mapping_file' in resolved_paths:
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
-    
+
     out = []
-    
+
     def add_heading(key, default):
         h = headings.get(key, "")
         if h == '__default__':
             h = default
         if h:
             out.append(f"=== {h} ===")
-            
+
     for sec in sections:
         if sec == 'source':
             add_heading("source", "Source Text")
@@ -14325,7 +14243,7 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
             out.append("")
         elif sec == 'lemmas':
             add_heading("lemmas", "Lemmas")
-            
+
             COLUMN_TOKEN_MAP = {
                 'inflected': role_fields.get('inflected') or ('WordSourceInflectedForm' if 'WordSourceInflectedForm' in headers else None),
                 'lemma': role_fields.get('lemma') or ('WordSource' if 'WordSource' in headers else None),
@@ -14335,19 +14253,19 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
             }
             # Exclude tokens with no resolvable column
             COLUMN_TOKEN_MAP = {k: v for k, v in COLUMN_TOKEN_MAP.items() if v}
-            
+
             valid_tokens = []
             for t in column_tokens:
                 if t in COLUMN_TOKEN_MAP:
                     valid_tokens.append(t)
                 else:
                     logger.warning(f"Unknown lemma_columns token: {t}")
-            
+
             col_indices = {}
             for t in valid_tokens:
                 field = COLUMN_TOKEN_MAP[t]
                 col_indices[t] = headers.index(field) if field in headers else -1
-                
+
             for row in data_rows:
                 row_vals = []
                 for t in valid_tokens:
@@ -14358,7 +14276,7 @@ def render_lookup_text(text, language, target_lang, config, resolved_paths, zid,
                     row_vals.append(val.strip())
                 out.append("\t".join(row_vals))
             out.append("")
-            
+
     return "\n".join(out).strip()
 
 def render_lookup_combined(text, language, target_lang, config, resolved_paths, zid, goldendict, comments, headers, data_rows, sentence_translation):
@@ -14864,7 +14782,7 @@ def cmd_lookup(args):
 def cmd_render(args):
     logger.info("Render subcommand invoked", extra={"zid": args.zid})
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
-    
+
     if not args.text:
         if not sys.stdin.isatty():
             text = sys.stdin.read()
@@ -14873,11 +14791,11 @@ def cmd_render(args):
             sys.exit(1)
     else:
         text = args.text
-        
+
     text_mode = getattr(args, 'text_mode', 'single')
     if text_mode == 'single' and '\n' in text.strip():
         text_mode = 'multi'
-        
+
     if text_mode == 'multi':
         remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
         clean_spaces = config.getboolean(SEC_SETTINGS, 'multi_mode_clean_spaces', fallback=True)
@@ -14891,7 +14809,7 @@ def cmd_render(args):
                     continue
                 new_lines.append(line)
             text = "\n".join(new_lines)
-        
+
     bypass_lang = getattr(args, 'bypass_lang_check', False)
     if not bypass_lang:
         lang_res = verify_language(text, args.language, config, bypass=False)
@@ -15092,7 +15010,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
         if is_from_ui:
             emit_payload(skipped_payload)
         return skipped_payload
-        
+
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     target_indices = []
     seen = set()
@@ -15176,7 +15094,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
             save_tsv_rows_safely(import_path, comments, headers, exported_rows)
         if save_to_favorites:
             logger.info(f"Exported favorites to {import_path}")
-            
+
             copy_txt = config.getboolean(SEC_SETTINGS, 'copy_source_txt_to_favorites_on_export', fallback=False)
             if copy_txt:
                 txt_files = list(tsv_path.parent.glob(f"{zid}-*.txt"))
@@ -15189,7 +15107,7 @@ def execute_export(tsv_path, actual_export_rows, config, resolved_paths, results
                         logger.error(f"Failed to copy source text {txt_file.name} to favorites: {e}")
         else:
             logger.info(f"Exported temporary file for Anki import to {import_path}")
-        
+
         send_to_anki = config.getboolean(SEC_SETTINGS, 'send_to_anki_after_export', fallback=False) if send_to_anki_override is None else send_to_anki_override
         if send_to_anki:
             detach = config.getboolean(SEC_SETTINGS, 'detach_import_on_send', fallback=True)
@@ -15266,9 +15184,9 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
     results_dir = resolve_results_dir(resolved_paths, kw_config)
-    
+
     lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
-    
+
     if not hasattr(args, 'files') or not args.files:
         logger.warning("No files provided for selected pipeline.")
         return
@@ -15313,37 +15231,37 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
         if not tsv_path.exists():
             logger.error(f"File not found: {tsv_path}")
             continue
-            
+
         zid = extract_zid(tsv_path)
         if not zid:
             logger.warning(f"Could not extract ZID from {tsv_path.name}. Using default.")
             zid = "00000000000000"
-            
+
         try:
             comments, headers, data_rows = load_tsv_rows(tsv_path)
         except Exception as e:
             logger.error(f"Failed to read TSV {tsv_path}: {e}")
             continue
-            
+
         selected_col_name = 'DeskSelected'
         if mapping:
             _rf = get_role_fields(mapping, headers)
             selected_col_name = _rf.get('selected', selected_col_name)
-            
+
         selected_col_idx = headers.index(selected_col_name) if selected_col_name in headers else -1
         if selected_col_idx == -1:
             logger.warning(f"No {selected_col_name} column found in {tsv_path}. Skipping.")
             continue
-            
+
         actual_export_rows = []
         for i, row in enumerate(data_rows):
             if row and len(row) > selected_col_idx and row[selected_col_idx] == '1':
                 actual_export_rows.append(i)
-                
+
         if not actual_export_rows:
             logger.info(f"No selected rows found in {tsv_path.name}. Skipping.")
             continue
-            
+
         trace_id = getattr(args, 'trace_id', None) or (f"{zid}:export:selected" if zid else None)
         execute_export(
             tsv_path=tsv_path,
@@ -15361,7 +15279,7 @@ def execute_selected_pipeline(args, force_send_to_anki: bool):
             send_to_anki_override=force_send_to_anki,
             trace_id=trace_id
         )
-        
+
     print("Selected pipeline execution complete.")
     if getattr(args, 'pause', False):
         input("\nPress Enter to exit...")
@@ -15377,40 +15295,40 @@ def cmd_reprocess(args):
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
-    
+
     results_dir = resolve_results_dir(resolved_paths, kw_config)
-    
+
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
         print_structured_error("INVALID_STATE", f"Selection manifest not found: {manifest_path}")
         sys.exit(1)
-        
+
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as f:
             manifest = json.load(f)
     except Exception as e:
         print_structured_error("INVALID_STATE", f"Failed to parse selection manifest: {e}")
         sys.exit(1)
-        
+
     selected_rows = manifest.get("selected_row_ids", [])
     zid = manifest.get("zid")
     if not zid:
         print_structured_error("INVALID_STATE", "Selection manifest must contain 'zid'")
         sys.exit(1)
-        
+
     if not selected_rows:
         logger.warning("No rows selected for reprocess.")
         emit_payload({"status": "skipped", "message": "Warning: No rows selected. Reprocess skipped."})
         sys.exit(0)
-        
+
     lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
-    
+
     tsv_path_str = manifest.get("tsv_path")
     if tsv_path_str:
         tsv_path = Path(tsv_path_str)
     else:
         tsv_path = find_working_tsv(results_dir, zid, lang)
-        
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
@@ -15429,12 +15347,12 @@ def cmd_reprocess(args):
         except Exception as e:
             print_structured_error("DESK_FAILED", f"Failed to read working TSV: {e}")
             sys.exit(1)
-        
+
     mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
     role_fields = get_role_fields(mapping, headers)
-    
+
     editable_cols = [c.strip() for c in mapping.get('desk_editable', 'editable_columns', fallback='').split(',') if c.strip()]
-    
+
     exclude_roles = {'lemma', 'inflected', 'word_translation', 'selected', 'source_word', 'source_sentence', 'sentence_index', 'quotation'}
     exclude_from_clear = set()
     for role, col in role_fields.items():
@@ -15449,13 +15367,13 @@ def cmd_reprocess(args):
     for col in headers:
         if col.lower() in ('wordsource', 'wordsourceinflectedform', 'quotation', 'sentencesource', 'sentencesourceindex'):
             exclude_from_clear.add(col)
-                    
+
     fields_to_clear = [c for c in editable_cols if c not in exclude_from_clear]
     for col in headers:
         if col.startswith('Word') and col not in exclude_from_clear:
             if col not in fields_to_clear:
                 fields_to_clear.append(col)
-            
+
     cleared_count = 0
     valid_selected = []
     source_col = role_fields.get('lemma', 'WordSource')
@@ -15468,7 +15386,7 @@ def cmd_reprocess(args):
                 continue
             if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
                 continue
-                
+
             valid_selected.append(row_id)
             for col in fields_to_clear:
                 if col in headers:
@@ -15476,13 +15394,13 @@ def cmd_reprocess(args):
                     if len(data_rows[row_id]) > col_idx:
                         data_rows[row_id][col_idx] = ""
             cleared_count += 1
-            
+
     selected_rows = valid_selected
-            
+
     if cleared_count == 0:
         emit_payload({"status": "skipped", "message": "Warning: None of the selected row indices were valid."})
         sys.exit(0)
-        
+
     trace_id = getattr(args, 'trace_id', None) or (f"{zid}:reprocess:worker" if zid else None)
     try:
         if is_sqlite:
@@ -15497,7 +15415,7 @@ def cmd_reprocess(args):
         else:
             with file_lock(tsv_path):
                 save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-            
+
         role_fields = get_role_fields(mapping, headers)
         run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
         if run_enrich == 'auto':
@@ -15505,13 +15423,13 @@ def cmd_reprocess(args):
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to save working TSV after clearing fields: {e}")
         sys.exit(1)
-        
+
     prompt_name = config.get(SEC_LANGUAGES, f'{lang}_prompt')
     logger.info(f"Triggering IntelliFiller async to reprocess {cleared_count} rows in batches.")
-    
+
     python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
     desk_script = Path(__file__).resolve()
-    
+
     cmd = [
         str(python_exe),
         str(desk_script),
@@ -15526,13 +15444,13 @@ def cmd_reprocess(args):
         cmd.extend(["--trace-id", str(trace_id)])
     if args.config:
         cmd.extend(["--config", args.config])
-        
+
     log_path = tsv_path.with_suffix('.log')
     try:
         log_file = open(log_path, 'a', encoding='utf-8')
     except Exception:
         log_file = subprocess.DEVNULL
-        
+
     try:
         if sys.platform == 'win32':
             creationflags = 0x08000000 | 0x00000200
@@ -15563,10 +15481,10 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
     col_lemma_name = role_fields.get('lemma', 'WordSource')
     col_word_dest_name = role_fields.get('word_translation', 'WordDestination')
     storage_adapter = get_storage_adapter(config, resolved_paths)
-    
+
     col_lemma = headers.index(col_lemma_name) if col_lemma_name in headers else -1
     col_word_dest = headers.index(col_word_dest_name) if col_word_dest_name in headers else -1
-    
+
     if col_lemma != -1 and col_word_dest != -1:
         lemmas_to_translate = []
         for row_id in selected_rows:
@@ -15574,12 +15492,12 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                 row = data_rows[row_id]
                 if len(row) > col_lemma and row[col_lemma].strip():
                     lemmas_to_translate.append(row[col_lemma].strip())
-        
+
         if lemmas_to_translate:
             lemmas_to_translate = list(set(lemmas_to_translate))
             provider_to_use = 'combined' if lemmas_provider == 'combined' else lemmas_provider
             lemma_translations = translate_lemmas_fast_path(lemmas_to_translate, language, target_lang, config, resolved_paths, provider_to_use)
-            
+
             with storage_adapter.file_lock(tsv_path):
                 comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
                 data_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
@@ -15596,7 +15514,7 @@ def _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_row
                                 if lemma_val in lemma_translations:
                                     row[col_word_dest] = lemma_translations[lemma_val]
                     storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
-                
+
             run_enrich = config.get(SEC_TRIGGERS, 'run_lemma_enrichment', fallback='auto')
             if run_enrich == 'auto':
                 sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
@@ -15635,7 +15553,7 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
         logger.info(f"Running IntelliFiller for batch {i // batch_size + 1}: {len(batch)} rows.")
         batch_trace_id = f"{trace_id}:batch_{i // batch_size + 1}" if trace_id else None
         run_headless_intellifiller(tsv_path, args.prompt, config, resolved_paths, selected_rows=batch, reprocess=True, zid=zid, trace_id=batch_trace_id)
-        
+
         try:
             with file_lock(tsv_path):
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
@@ -15651,16 +15569,16 @@ def _reprocess_worker_stage_intellifiller(tsv_path, args, config, resolved_paths
 def cmd_reprocess_worker(args):
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     tsv_path = Path(args.tsv)
-    
+
     rows_str = args.rows
     if not rows_str:
         return
-        
+
     selected_rows = [int(r.strip()) for r in rows_str.split(',') if r.strip()]
     lemmas_provider = config.get(SEC_PIPELINE, 'lemma_reprocess_provider', fallback='intellifiller')
     language = config.get(SEC_SETTINGS, 'default_language', fallback='en')
     target_lang = config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
-    
+
     m = re.match(r"^(\d{14})", tsv_path.name)
     zid = getattr(args, 'zid', None) or (m.group(1) if m else "session")
     trace_id = getattr(args, 'trace_id', None) or f"{zid}:reprocess:worker"
@@ -15669,23 +15587,23 @@ def cmd_reprocess_worker(args):
     worker_error = None
     if sess_logger:
         sess_logger.info("Reprocess worker started")
-        
+
     data_rows, headers, role_fields = [], [], {}
     class_cols = []
-    
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
     try:
         with storage_adapter.file_lock(tsv_path):
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-            
+
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
 
         # Enforce frequency sort parity so selected_rows match displayed UI table rows
         data_rows = sort_rows_by_frequency(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
-        
+
         run_lemmatizer = config.getboolean(SEC_PIPELINE, 'run_lemmatizer', fallback=True)
         col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
         original_lemmas = {}
@@ -15747,7 +15665,7 @@ def cmd_reprocess_worker(args):
                 sorted_rows = sort_session_data_rows(data_rows, headers, language, config, resolved_paths, role_fields=role_fields)
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, zid=zid, trace_id=trace_id)
                 selected_rows = remaining_selected
-        
+
         if selected_rows and lemmas_provider in ('combined', 'google', 'deepl'):
             try:
                 data_rows = _reprocess_worker_stage_fast_path(tsv_path, config, resolved_paths, data_rows, headers, role_fields, selected_rows, lemmas_provider, language, target_lang, zid=zid, trace_id=trace_id)
@@ -15768,7 +15686,7 @@ def cmd_reprocess_worker(args):
                 }
                 if sess_logger:
                     sess_logger.error(f"IntelliFiller stage failed: [{worker_error.get('code')}] {worker_error.get('message')}")
-                
+
         if not worker_error:
             if not run_lemmatizer and col_lemma != -1 and original_lemmas:
                 with storage_adapter.file_lock(tsv_path):
@@ -15779,7 +15697,7 @@ def cmd_reprocess_worker(args):
                             data_rows_latest[row_id][col_lemma] = orig_val
                     storage_adapter.save_tsv_rows_safely(tsv_path, comments_latest, headers_latest, data_rows_latest)
                     data_rows = data_rows_latest
-                    
+
             try:
                 desk_classification_enabled = config.getboolean(SEC_CLASSIFICATION, 'enabled', fallback=True) if config.has_section(SEC_CLASSIFICATION) else True
                 kardenwort_workspace = resolved_paths['kardenwort_workspace']
@@ -15790,7 +15708,7 @@ def cmd_reprocess_worker(args):
                     if str(kardenwort_workspace / "src") not in sys.path:
                         sys.path.append(str(kardenwort_workspace / "src"))
                     from kardenwort.core.kardenwort import load_classification_dictionaries
-                    
+
                     if kw_config.has_option(SEC_CLASSIFICATION, f'dictionaries_{language}'):
                         dicts = kw_config.get(SEC_CLASSIFICATION, f'dictionaries_{language}', fallback='')
                     else:
@@ -15803,7 +15721,7 @@ def cmd_reprocess_worker(args):
                                 name, path_str = d.split('=', 1)
                                 name = name.strip()
                                 path_str = path_str.strip()
-                                
+
                                 # Support prefix path e.g. 3k:data/en/oxford.tsv
                                 prefix = ""
                                 if ":" in path_str:
@@ -15812,10 +15730,10 @@ def cmd_reprocess_worker(args):
                                     if len(possible_prefix) <= 5 and "/" not in possible_prefix and "\\" not in possible_prefix:
                                         prefix = possible_prefix + ":"
                                         path_str = parts[1].strip()
-                                        
+
                                 resolved_path = (kardenwort_workspace / path_str).resolve()
                                 classify_args.append(f"{name}={prefix}{resolved_path}")
-                                
+
                     classifications = load_classification_dictionaries(classify_args)
                     col_lemma = headers.index(role_fields['lemma']) if 'lemma' in role_fields and role_fields['lemma'] in headers else -1
                     if col_lemma != -1:
@@ -15833,13 +15751,13 @@ def cmd_reprocess_worker(args):
                                             while len(data_rows[row_id]) <= col_idx:
                                                 data_rows[row_id].append("")
                                             data_rows[row_id][col_idx] = val
-                                            
+
                             storage_adapter.save_tsv_rows_safely(tsv_path, comments, headers, data_rows)
             except Exception as e_class:
                 logger.error(f"Failed to update classification fields during reprocess: {e_class}")
                 if sess_logger:
                     sess_logger.error(f"Failed to update classification fields: {e_class}")
-                
+
     except Exception as e:
         logger.error(f"Unhandled exception in cmd_reprocess_worker: {e}")
         worker_error = {
@@ -15888,7 +15806,7 @@ def format_update_rows_dict(data_rows, headers, role_fields, class_cols=None, ro
     col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
     col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
     col_sentence_source = headers.index(role_fields.get('sentence', 'SentenceSource')) if role_fields.get('sentence', 'SentenceSource') in headers else (headers.index('SentenceSource') if 'SentenceSource' in headers else -1)
-    
+
     rows_data = {}
     for row_id, row in enumerate(data_rows):
         lemma_val = row[col_lemma] if col_lemma != -1 and len(row) > col_lemma else ""
@@ -15947,7 +15865,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     import time
     global _update_seq_counter
     _update_seq_counter += 1
-    
+
     if config is None:
         try:
             config = load_config()[0]
@@ -15967,7 +15885,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     updates_dir.mkdir(parents=True, exist_ok=True)
     update_js_path = updates_dir / f"{_update_seq_counter:06d}.js"
-    
+
     if empty_payload:
         update_data = {
             "stage": stage,
@@ -16089,11 +16007,11 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                                         pass
                                 if idx_val not in idx_to_sentence:
                                     idx_to_sentence[idx_val] = s
-                    
+
                     sorted_keys = sorted(idx_to_sentence.keys())
                     norm_brackets = config.getboolean(SEC_SETTINGS, 'normalize_bracket_spacing', fallback=True) if config else True
                     sentences = [re.sub(r'</?[a-zA-Z][^>]*>', '', (normalize_bracket_spacing(idx_to_sentence[k]) if norm_brackets else idx_to_sentence[k])).strip() for k in sorted_keys]
-                    
+
                     is_single = True
                     if source_text:
                         stripped_src = source_text.strip()
@@ -16117,7 +16035,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
                         translated_text = ' '.join(sentences)
                     else:
                         translated_text = '\n'.join(sentences)
-                    
+
             update_data = {
                 "stage": stage,
                 "status": status,
@@ -16197,7 +16115,7 @@ def write_update_js(tsv_path, data_rows, headers, role_fields, stage=None, statu
         return update_js_path
 
     js_content = f"if (typeof window.receiveUpdate === 'function') {{ window.receiveUpdate({json.dumps(update_data)}); }}"
-    
+
     temp_path = update_js_path.with_name(update_js_path.name + '.tmp')
     with open(temp_path, 'w', encoding='utf-8') as f:
         f.write(js_content)
@@ -16233,7 +16151,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
     col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
     col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else (headers.index(role_fields['sentence_destination2']) if 'sentence_destination2' in role_fields and role_fields['sentence_destination2'] in headers else -1)
-    
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
@@ -16241,14 +16159,14 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
     run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
     run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
     active_text_prov = None
-    
+
     try:
         # check if sentence needs translation
         sentence_translated = False
         if col_sentence_dest != -1:
             if any(len(row) > col_sentence_dest and row[col_sentence_dest].strip() for row in data_rows):
                 sentence_translated = True
-                
+
         active_text_prov = None
         if sentence_translated and is_sqlite:
             try:
@@ -16288,7 +16206,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     sentence_translations_raw = translate_source_text(
                         text, getattr(args, 'language', 'en'), args.target_lang, getattr(args, 'text_mode', 'single'), config, resolved_paths, main_text_provider, zid=zid, trace_id=trace_id, chunk_callback=on_chunk_done)
                     active_text_prov = getattr(sentence_translations_raw, 'provenance', f"live:{main_text_provider}")
-                    
+
                     # Update sentences table directly in SQLite mode
                     if is_sqlite and isinstance(sentence_translations_raw, dict):
                         padded_dict = sentence_translations_raw.get('PADDED') or {}
@@ -16332,7 +16250,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             working_tsv_path=tsv_path,
                             zid=zid,
                         )
-                    
+
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     active_text_prov = getattr(sentence_translations_raw, 'provenance', active_text_prov or f"live:{main_text_provider}")
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", zid=zid, trace_id=trace_id, text_translation_status="success", text_translation_failed=False, text_provenance=active_text_prov)
@@ -16340,7 +16258,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     logger.warning(f"[{zid}] Sentence text translation failed (non-fatal, proceeding to lemma translation): {e}")
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated_text", translated_text="", zid=zid, trace_id=trace_id, text_translation_status="failed", text_translation_failed=True)
-                    
+
         if run_base == 'auto' and col_lemma != -1:
             lang = getattr(args, 'language', 'en')
             if row_provenances is None:
@@ -16423,7 +16341,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                     if not is_translated and val not in seen:
                         seen.add(val)
                         lemmas_to_translate.append(val)
-            
+
             translation_order = config.get(SEC_TRANSLATION, 'translation_order', fallback='top_to_bottom').strip().lower()
             if translation_order == 'bottom_to_top':
                 lemmas_to_translate = list(reversed(lemmas_to_translate))
@@ -16442,7 +16360,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             need_morph = col_morph != -1 and (len(row) <= col_morph or not row[col_morph].strip())
                             if need_dest or need_ipa or need_morph:
                                 selected_rows_to_enrich.append(i)
-                            
+
                     if selected_rows_to_enrich:
                         data_rows = _progressive_worker_stage_enrichment(
                             tsv_path, args, config, resolved_paths, data_rows, headers, role_fields, stage_name="translated", selected_rows=selected_rows_to_enrich
@@ -16458,7 +16376,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                         chunks = [lemmas_to_translate[i:i + chunk_size] for i in range(0, len(lemmas_to_translate), chunk_size)]
                     else:
                         chunks = [lemmas_to_translate]
-                        
+
                     target_l = getattr(args, 'target_lang', None) or config.get(SEC_SETTINGS, 'default_target_language', fallback='ru')
                     hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
                     for chunk in chunks:
@@ -16469,7 +16387,7 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                             p_from_prov = str(fast_prov)[5:].strip().lower()
                             if p_from_prov and p_from_prov != provider:
                                 provider = p_from_prov
-                        
+
                         if is_sqlite:
                             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
                             updates = []
@@ -16510,10 +16428,10 @@ def _progressive_worker_stage_translation_impl(tsv_path, args, config, resolved_
                                                 row_provenances[t_ord] = fast_prov
                                 save_tsv_rows_safely(tsv_path, comments, headers, current_rows)
                                 data_rows = current_rows
-                        
+
                         sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                         safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=None, zid=zid, trace_id=trace_id, row_provenances=row_provenances, provider=provider)
-                        
+
                     sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                     safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="translated", zid=zid, trace_id=trace_id, row_provenances=row_provenances, text_provenance=active_text_prov, provider=provider)
             else:
@@ -16552,7 +16470,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
         batch_size = config.getint(SEC_SETTINGS, 'intellifiller_batch_size', fallback=30)
         if selected_rows is None:
             selected_rows = list(range(len(data_rows)))
-            
+
         col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
         col_ipa = headers.index(role_fields['ipa']) if 'ipa' in role_fields and role_fields['ipa'] in headers else -1
         col_morph = headers.index(role_fields['morphology']) if 'morphology' in role_fields and role_fields['morphology'] in headers else -1
@@ -16569,19 +16487,19 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                     continue
                 if source_idx != -1 and len(row) > source_idx and not str(row[source_idx]).strip():
                     continue
-                
+
                 has_dest = col_word_dest != -1 and len(row) > col_word_dest and str(row[col_word_dest]).strip()
                 has_ipa = col_ipa != -1 and len(row) > col_ipa and str(row[col_ipa]).strip()
                 has_morph = col_morph != -1 and len(row) > col_morph and str(row[col_morph]).strip()
-                
+
                 need_dest = col_word_dest != -1 and not has_dest
                 need_ipa = col_ipa != -1 and not has_ipa
                 need_morph = col_morph != -1 and not has_morph
-                
+
                 if not (need_dest or need_ipa or need_morph):
                     continue
                 valid_selected.append(r)
-                
+
         selected_rows = valid_selected
 
         if not selected_rows:
@@ -16589,7 +16507,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
             return data_rows
-        
+
         prompt_val = getattr(args, 'prompt', None) or config.get(SEC_LANGUAGES, f"{getattr(args, 'language', 'en')}_prompt", fallback="")
         lang = getattr(args, 'language', None) or config.get(SEC_SETTINGS, 'default_language', fallback='en')
         hb_interval = config.getfloat(SEC_PROGRESSIVE, 'worker_heartbeat_interval_seconds', fallback=3.0) if hasattr(config, 'getfloat') else 3.0
@@ -16612,7 +16530,7 @@ def _progressive_worker_stage_enrichment(tsv_path, args, config, resolved_paths,
                 batch = selected_rows[i:i + batch_size]
                 logger.info(f"Running IntelliFiller for progressive batch {i // batch_size + 1}: {len(batch)} rows.")
                 run_headless_intellifiller(tsv_path, prompt_val, config, resolved_paths, selected_rows=batch, reprocess=True)
-                
+
                 comments, headers, data_rows = load_tsv_rows(tsv_path)
                 sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
                 safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage=stage_name, zid=zid, trace_id=trace_id)
@@ -16636,34 +16554,34 @@ def cmd_retext(args):
     config, resolved_paths, goldendict, _wordfill = load_config(args.config)
     kardenwort_workspace = resolved_paths['kardenwort_workspace']
     kw_config = load_kardenwort_config(kardenwort_workspace)
-    
+
     results_dir = resolve_results_dir(resolved_paths, kw_config)
-    
+
     manifest_path = Path(args.selection_manifest).resolve()
     if not manifest_path.exists():
         print_structured_error("INVALID_STATE", f"Selection manifest not found: {manifest_path}")
         sys.exit(1)
-        
+
     try:
         with open(manifest_path, 'r', encoding='utf-8-sig') as f:
             manifest = json.load(f)
     except Exception as e:
         print_structured_error("INVALID_STATE", f"Failed to parse selection manifest: {e}")
         sys.exit(1)
-        
+
     zid = manifest.get("zid")
     if not zid:
         print_structured_error("INVALID_STATE", "Selection manifest must contain 'zid'")
         sys.exit(1)
-        
+
     lang = args.language or config.get(SEC_SETTINGS, 'default_language', fallback='en')
-    
+
     tsv_path_str = manifest.get("tsv_path")
     if tsv_path_str:
         tsv_path = Path(tsv_path_str)
     else:
         tsv_path = find_working_tsv(results_dir, zid, lang)
-        
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
@@ -16673,12 +16591,12 @@ def cmd_retext(args):
         if not tsv_path or not tsv_path.exists():
             print_structured_error("DESK_FAILED", f"Working TSV file not found for session ZID {zid}")
             sys.exit(1)
-        
+
     logger.info("Triggering async retext worker.")
-    
+
     python_exe = (resolved_paths.get('kardenwort_python') if resolved_paths else None) or sys.executable
     desk_script = Path(__file__).resolve()
-    
+
     trace_id = getattr(args, 'trace_id', None) or (f"{zid}:retext:worker" if zid else None)
     cmd = [
         str(python_exe),
@@ -16694,13 +16612,13 @@ def cmd_retext(args):
         cmd.extend(["--trace-id", str(trace_id)])
     if args.config:
         cmd.extend(["--config", args.config])
-        
+
     log_path = tsv_path.with_suffix('.log')
     try:
         log_file = open(log_path, 'a', encoding='utf-8')
     except Exception:
         log_file = subprocess.DEVNULL
-        
+
     try:
         if sys.platform == 'win32':
             creationflags = 0x08000000 | 0x00000200
@@ -16738,23 +16656,23 @@ def cmd_retext_worker(args):
     trace_id = getattr(args, 'trace_id', None) or f"{zid}:retext:worker"
     results_dir = resolve_results_dir(resolved_paths, config)
     sess_logger = SessionLogger(zid, results_dir, trace_id=trace_id) if results_dir else None
-    
+
     worker_error = None
     sentence_translations = None
     translated_html = None
     if sess_logger:
         sess_logger.info("Retext worker started")
-    
+
     storage_adapter = get_storage_adapter(config, resolved_paths)
     is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
     try:
         with storage_adapter.file_lock(tsv_path):
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
-            
+
         mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
         role_fields = get_role_fields(mapping, headers)
-        
+
         if is_sqlite:
             restored = storage_adapter.restore_session(zid)
             text = restored.get("source_text", "")
@@ -16777,9 +16695,9 @@ def cmd_retext_worker(args):
         logger.info(f"Retext worker translating using provider {text_reprocess_provider}")
         if sess_logger:
             sess_logger.info(f"Translating source text via provider '{text_reprocess_provider}'")
-        
+
         slug = generate_slug(text)
-        
+
         try:
             sentence_translations = translate_source_text(text, language, target_lang, text_mode, config, resolved_paths, text_reprocess_provider, zid=zid, trace_id=trace_id)
         except TranslationAlignmentError as tae:
@@ -16802,20 +16720,20 @@ def cmd_retext_worker(args):
             if sess_logger:
                 sess_logger.error(f"Retext translation failed: {te_other}")
             raise te_other
-            
+
         translated_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
 
         if not is_sqlite:
             target_text_path = tsv_path.parent / f"{zid}-{slug}.{target_lang}.txt"
             eff_mode = _effective_text_mode(text, text_mode)
             _write_translation_txt(text, eff_mode, sentence_translations, target_text_path, save_flag=True, overwrite=True)
-        
+
         with storage_adapter.file_lock(tsv_path):
             comments, headers, data_rows = storage_adapter.load_tsv_rows(tsv_path)
         col_sentence_dest = headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1
         col_text_dest = headers.index(role_fields['text_destination']) if 'text_destination' in role_fields and role_fields['text_destination'] in headers else -1
         col_index = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
-        
+
         resolve_translations(
             text, text_mode, data_rows, col_index, col_sentence_dest,
             sentence_translations, tsv_path, comments, headers,
@@ -16885,7 +16803,7 @@ def get_batch_sibling_tsvs(working_tsv_path, max_delta_seconds=120):
                 siblings.append((sib_zid, sibling))
         except Exception:
             continue
-            
+
     siblings.sort(key=lambda x: x[0])
     return [p for _, p in siblings]
 
@@ -16905,18 +16823,18 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
     zid_match = re.match(r'^(\d{14})', working_tsv_path.name)
     if not zid_match: return
     my_zid = zid_match.group(1)
-    
+
     max_wait = float(timeout)
-    
+
     def check_siblings():
         sibling_tsvs = get_batch_sibling_tsvs(working_tsv_path)
         if not sibling_tsvs:
             return True
-            
+
         zids = [re.match(r'^(\d{14})', s.name).group(1) for s in sibling_tsvs if re.match(r'^(\d{14})', s.name)]
         zids.append(my_zid)
         master_zid = min(zids)
-        
+
         if my_zid == master_zid:
             has_younger = any(z > my_zid for z in zids)
             if has_younger:
@@ -16929,18 +16847,18 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
             sib_match = re.match(r'^(\d{14})', sibling.name)
             if not sib_match: continue
             sib_zid = sib_match.group(1)
-            
+
             try:
                 dt_my = datetime.strptime(my_zid, '%Y%m%d%H%M%S')
                 dt_sib = datetime.strptime(sib_zid, '%Y%m%d%H%M%S')
                 diff_sec = (dt_my - dt_sib).total_seconds()
-                
+
                 # Check if it's an OLDER sibling from the SAME batch
                 if 0 < diff_sec <= 120:
                     marker_file = sibling.with_suffix('.base_translation_done')
                     if marker_file.exists():
                         continue
-                        
+
                     with file_lock(sibling):
                         _, headers, data_rows = load_tsv_rows(sibling)
                     role_fields = get_role_fields(mapping, headers)
@@ -16971,12 +16889,12 @@ def wait_for_older_siblings_in_batch(working_tsv_path, mapping, lemma_base_provi
             if event.src_path.endswith('.tsv') or event.src_path.endswith('.base_translation_done') or event.src_path.endswith('.the_cut_done'):
                 with event_cond:
                     event_cond.notify_all()
-                    
+
     observer = Observer()
     handler = SiblingChangeHandler()
     observer.schedule(handler, path=str(working_tsv_path.parent), recursive=False)
     observer.start()
-    
+
     try:
         start_wait = time.time()
         with event_cond:
@@ -16999,9 +16917,9 @@ def wait_for_older_siblings_enrichment_in_batch(working_tsv_path, data_rows_coun
 def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fields, storage_adapter=None, is_sqlite=False):
     if not data_rows:
         return data_rows
-        
+
     col_lemma = headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in headers else -1
-    
+
     if col_lemma == -1:
         return data_rows
 
@@ -17023,7 +16941,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
         return data_rows
 
     modified = False
-    
+
     if is_sqlite:
         db = getattr(storage_adapter, 'db', None)
         if not db:
@@ -17058,7 +16976,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                     sib_lemma = str(w.get("lemma") or "").strip()
                     if not sib_lemma or sib_lemma not in missing_lemmas:
                         continue
-                    
+
                     # Prepare list of eligible word-level attributes to transfer
                     field_val_pairs = []
                     if w.get("word_destination"):
@@ -17067,20 +16985,20 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                         field_val_pairs.append(("WordSourceMorphologyAI", w["morphology"]))
                     if w.get("ipa"):
                         field_val_pairs.append(("WordSourceIPA", w["ipa"]))
-                    
+
                     extra = w.get("extra_fields") or {}
                     if isinstance(extra, dict):
                         for k, v in extra.items():
                             if is_wordfill_eligible(k) and v:
                                 field_val_pairs.append((k, v))
-                    
+
                     for col_name, sib_val in field_val_pairs:
                         if not is_wordfill_eligible(col_name):
                             continue
                         if col_name not in headers:
                             continue
                         target_c = headers.index(col_name)
-                        
+
                         sib_val_str = str(sib_val).strip()
                         if sib_val_str and 'skeleton-loader' not in sib_val_str and sib_val_str != '[FAILED]' and not sib_val_str.startswith('[Error'):
                             for target_row_idx in missing_lemmas[sib_lemma]:
@@ -17107,7 +17025,7 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                     sib_comments, sib_headers, sib_rows = load_tsv_rows(sibling)
             except Exception:
                 continue
-                
+
             sib_col_lemma = sib_headers.index(role_fields.get('lemma', 'WordSource')) if role_fields and role_fields.get('lemma', 'WordSource') in sib_headers else -1
             if sib_col_lemma == -1: continue
 
@@ -17122,11 +17040,11 @@ def cross_pollinate_from_siblings(working_tsv_path, data_rows, headers, role_fie
                     if sib_lemma in missing_lemmas:
                         for target_row_idx in missing_lemmas[sib_lemma]:
                             target_row = data_rows[target_row_idx]
-                            
+
                             max_target_col = max(col_map.values()) if col_map else -1
                             if len(target_row) <= max_target_col:
                                 target_row.extend([''] * (max_target_col - len(target_row) + 1))
-                                
+
                             for sib_c, target_c in col_map.items():
                                 if len(sib_row) > sib_c:
                                     sib_val = sib_row[sib_c].strip()
@@ -17160,7 +17078,7 @@ def cmd_progressive_worker(args):
                 logger.addHandler(file_handler)
             except Exception as log_err:
                 sys.stderr.write(f"Warning: Failed to setup progressive-worker log file: {log_err}\n")
-                
+
             logger.info("Progressive-worker subcommand invoked")
             config, resolved_paths, goldendict, _wordfill = load_config(args.config)
             storage_adapter = get_storage_adapter(config, resolved_paths)
@@ -17180,10 +17098,10 @@ def cmd_progressive_worker(args):
                     logger.warning(f"[{zid}] Failed to initialize worker status in SQLite: {db_err}")
             import os
             os.environ["KARDEN_ACTIVE_TEXT_MODE"] = getattr(args, 'text_mode', 'single')
-            
+
             if not is_sqlite and not tsv_path.exists():
                 return
-                
+
             comments, headers, data_rows = [], [], []
             role_fields = {}
             with storage_adapter.file_lock(tsv_path):
@@ -17192,7 +17110,7 @@ def cmd_progressive_worker(args):
                     return
                 mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
                 role_fields = get_role_fields(mapping, headers)
-                
+
             col_word_dest = headers.index(role_fields['word_translation']) if 'word_translation' in role_fields and role_fields['word_translation'] in headers else -1
             col_token_order = headers.index("TokenOrder") if "TokenOrder" in headers else -1
             worker_row_provenances = {}
@@ -17213,7 +17131,7 @@ def cmd_progressive_worker(args):
             sorted_rows = sort_rows_by_frequency(data_rows, headers, lang, config, resolved_paths, role_fields=role_fields)
             # Write initial source stage immediately so UI renders without delay
             safe_write_update_js(tsv_path, sorted_rows, headers, role_fields, stage="source", zid=zid, trace_id=trace_id, row_provenances=worker_row_provenances)
-                
+
             lemma_chain, _ = resolve_provider_chain(config, task_type='lemma')
             base_provider = getattr(args, 'provider', None) or (lemma_chain[0] if lemma_chain else config.get(SEC_PIPELINE, 'lemma_base_provider', fallback='google'))
             sibling_timeout = config.getfloat(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) if hasattr(config, 'getfloat') else float(config.get(SEC_PIPELINE, 'sibling_coordination_timeout', fallback=0.0) or 0.0)
@@ -17221,7 +17139,7 @@ def cmd_progressive_worker(args):
             if has_siblings:
                 wait_for_older_siblings_in_batch(tsv_path, mapping, lemma_base_provider=base_provider, data_rows_count=len(data_rows), is_sqlite=is_sqlite, timeout=sibling_timeout)
                 data_rows = cross_pollinate_from_siblings(tsv_path, data_rows, headers, role_fields, storage_adapter=storage_adapter, is_sqlite=is_sqlite)
-                
+
             try:
                 run_base = config.get(SEC_TRIGGERS, 'run_lemma_base_translation', fallback='auto')
                 run_text = config.get(SEC_TRIGGERS, 'run_text_translation', fallback='auto')
@@ -17242,13 +17160,13 @@ def cmd_progressive_worker(args):
                         active_text_prov = res.active_text_prov
                     else:
                         data_rows = res
-                    
+
                 if not is_sqlite:
                     try:
                         tsv_path.with_suffix('.base_translation_done').touch()
                     except Exception:
                         pass
-                        
+
                 # 2. Enrichment Stage
                 skip_intellifiller = getattr(args, 'skip_intellifiller', False) or run_enrich == 'manual' or enrich_provider == 'none'
                 if has_siblings:
@@ -17580,11 +17498,11 @@ def make_progress_bar(current: int, total: int, label: str = "files", status: st
     filled = int(round(bar_width * percent / 100.0))
     bar = _c("32", "━" * filled) + _c("90", "━" * (bar_width - filled))
     text = f"{current}/{total} {label} ({percent:.1f}%)"
-    
+
     max_status_width = max(20, term_width - 6)
     if len(status) > max_status_width:
         status = status[:max_status_width - 3] + "..."
-        
+
     out = f"\r\033[K    {bar} {_c('36', text)}\n\033[K"
     if status:
         out += f"    {_c('90', status)}"
@@ -17604,24 +17522,24 @@ def cmd_merge(args):
     deduplicate = merge_config.deduplicate
     sort_frequency = merge_config.sort_frequency
     deduplicate_by_lemma = merge_config.deduplicate_by_lemma
-    
+
     try:
         input_paths = [Path(f).resolve() for f in args.files]
         if not input_paths:
             print_structured_error("INVALID_STATE", "No inputs provided.")
             sys.exit(1)
-            
+
         base_dest_dir = input_paths[0].parent
-        
+
         if len(input_paths) == 2 and input_paths[0].parent == input_paths[1].parent:
             parent_dir = input_paths[0].parent
             start_zid = extract_zid(input_paths[0])
             end_zid = extract_zid(input_paths[1])
-            
+
             if start_zid and end_zid:
                 if start_zid > end_zid:
                     start_zid, end_zid = end_zid, start_zid
-                    
+
                 all_items = []
                 for child in parent_dir.iterdir():
                     child_zid = extract_zid(child)
@@ -17629,14 +17547,14 @@ def cmd_merge(args):
                         all_items.append(child)
                 if all_items:
                     input_paths = all_items
-                    
+
         expanded_files = []
         for path in input_paths:
             if path.is_dir():
                 expanded_files.extend(list(path.rglob("*.tsv")))
             else:
                 expanded_files.append(path)
-                
+
         def map_to_tsv(path):
             if path.suffix.lower() == '.tsv':
                 return path
@@ -17666,7 +17584,7 @@ def cmd_merge(args):
         if not files:
             print_structured_error("INVALID_STATE", "No TSV files found in the selection to merge.")
             sys.exit(1)
-            
+
         files.sort(key=extract_zid)
 
         default_lang = config.get(SEC_SETTINGS, 'default_language', fallback='en')
@@ -17701,7 +17619,7 @@ def cmd_merge(args):
                 prefix = name[:lang_match.start()]
             else:
                 prefix = dest_tsv_path.stem
-                
+
             if lang_key:
                 return dest_tsv_path.parent / f"{prefix}.{lang_key}.txt"
             else:
@@ -17718,7 +17636,7 @@ def cmd_merge(args):
         import time
         all_written_tsvs = []
         all_written_txts = []
-        
+
         total_files = len(files)
         processed_files = 0
         sys.stdout.write(make_progress_bar(processed_files, total_files, status="Preparing files..."))
@@ -17742,7 +17660,7 @@ def cmd_merge(args):
                         if h not in union_headers_set:
                             union_headers.append(h)
                             union_headers_set.add(h)
-                            
+
                     processed_files += 1
                     sys.stdout.write(make_progress_bar(processed_files, total_files, status=f"Merged {f.name}"))
                     sys.stdout.flush()
@@ -17756,7 +17674,7 @@ def cmd_merge(args):
             all_comments = []
             all_data_rows = []
             texts_by_lang = {}
-            
+
             try:
                 mapping = load_anki_mapping(resolved_paths['anki_mapping_file'])
                 role_fields = get_role_fields(mapping, first_headers)
@@ -17766,12 +17684,12 @@ def cmd_merge(args):
                 logger.warning(f"Failed to load sentence_index mapping: {e}")
                 col_index = first_headers.index('SentenceSourceIndex') if 'SentenceSourceIndex' in first_headers else -1
                 role_fields = {}
-            
+
             current_line_offset = 0
             for f, comments, headers, rows in loaded_files:
                 if not all_comments:
                     all_comments = comments
-                    
+
                 zid = extract_zid(f)
                 parent_dir = f.parent
                 txt_files = list(parent_dir.glob(f"{zid}-*.txt"))
@@ -17779,7 +17697,7 @@ def cmd_merge(args):
                     base_txt = f.with_suffix('.txt')
                     if base_txt.exists():
                         txt_files = [base_txt]
-                        
+
                 non_empty_lines = 0
                 if txt_files:
                     try:
@@ -17787,7 +17705,7 @@ def cmd_merge(args):
                         non_empty_lines = sum(1 for line in txt_content.splitlines() if line.strip())
                     except Exception as e:
                         logger.warning(f"Failed to read/count lines in sibling text {txt_files[0]}: {e}")
-                        
+
                 for t in txt_files:
                     lang_key = extract_lang_from_txt(t) or lang
                     try:
@@ -17797,7 +17715,7 @@ def cmd_merge(args):
                         texts_by_lang[lang_key].append(content)
                     except Exception as e:
                         logger.warning(f"Failed to read sibling text {t}: {e}")
-                
+
                 # Align rows to the union header schema
                 aligned_rows = []
                 for row in rows:
@@ -17823,10 +17741,10 @@ def cmd_merge(args):
                                     row[col_index] = str(orig_idx + current_line_offset)
                             except ValueError:
                                 pass
-                                
+
                 all_data_rows.extend(aligned_rows)
                 current_line_offset += non_empty_lines
-                
+
             dest_dir = base_dest_dir
             dest_tsv_path = get_dest_tsv_path(args.target, lang, lang_files, dest_dir, timestamp_id)
 
@@ -17836,11 +17754,11 @@ def cmd_merge(args):
                 inflected_col = role_fields.get('inflected', 'WordSourceInflectedForm') if isinstance(role_fields, dict) else 'WordSourceInflectedForm'
                 col_lemma = first_headers.index(lemma_col) if lemma_col in first_headers else -1
                 col_inflected = first_headers.index(inflected_col) if inflected_col in first_headers else -1
-                    
+
                 if col_lemma != -1 and col_inflected != -1:
                     order_cfg = merge_config.combine_order
                     apo_cfg = tuple(c.strip() for c in merge_config.apostrophe_chars.split(',') if c.strip())
-                    
+
                     prefer_lowercase_cfg = merge_config.prefer_lowercase
 
                     col_inflected2 = first_headers.index('WordSourceInflectedForm2') if 'WordSourceInflectedForm2' in first_headers else -1
@@ -17855,13 +17773,13 @@ def cmd_merge(args):
                             inflected_key = tuple(sorted(inf_parts))
                         else:
                             inflected_key = ()
-                        
+
                         pair = lemma_val if deduplicate_by_lemma else (inflected_key, lemma_val)
                         if pair not in grouped_rows:
                             grouped_rows[pair] = []
                             seen_pairs.append(pair)
                         grouped_rows[pair].append(row)
-                    
+
                     unique_data_rows = []
                     for pair in seen_pairs:
                         rows_list = grouped_rows[pair]
@@ -17899,11 +17817,11 @@ def cmd_merge(args):
                 with file_lock(dest_tsv_path):
                     save_tsv_rows_safely(dest_tsv_path, all_comments, first_headers, all_data_rows)
                 all_written_tsvs.append(dest_tsv_path)
-                
+
                 for lang_key, sibling_texts in texts_by_lang.items():
                     dest_txt_path = get_dest_txt_path(dest_tsv_path, lang_key)
                     merged_text = "\n\n".join(sibling_texts)
-                    
+
                     with file_lock(dest_txt_path):
                         temp_txt = dest_txt_path.with_suffix('.txt.tmp')
                         bak_txt = dest_txt_path.with_suffix('.txt.bak')
@@ -17933,11 +17851,11 @@ def cmd_merge(args):
                                 except OSError:
                                     pass
                             raise e
-                            
+
                 delete_sources = getattr(args, 'delete_sources', False)
                 if not delete_sources and config:
                     delete_sources = config.getboolean(SEC_MERGE, 'delete_sources', fallback=config.getboolean(SEC_SETTINGS, 'merge_delete_sources', fallback=False))
-                        
+
                 if delete_sources:
                     for f in lang_files:
                         if f == dest_tsv_path:
@@ -17973,14 +17891,14 @@ def cmd_merge(args):
                 sys.exit(1)
 
         clear_progress_bar()
-        
+
         success_msg = _c("1;32", "SUCCESS: Merged Files") + "\n"
-        
+
         if all_written_tsvs:
             success_msg += _c("36", "\nTSVs:\n")
             for p in sorted(all_written_tsvs):
                 success_msg += f"  - {_c('90', str(p.parent) + os.sep)}{_c('1', p.name)}\n"
-                
+
         if all_written_txts:
             success_msg += _c("36", "\nTXTs:\n")
             for p in sorted(all_written_txts):
@@ -17999,13 +17917,13 @@ def cmd_merge(args):
 def get_ahk_executable():
     import shutil
     ahk_exes = ["AutoHotkey.exe", "AutoHotkey64.exe", "AutoHotkey32.exe"]
-    
+
     # 1. Try to find any in PATH
     for name in ahk_exes:
         path_match = shutil.which(name)
         if path_match:
             return path_match
-            
+
     # 2. Check common installation directories
     possible_dirs = [
         Path(r"C:\Program Files\AutoHotkey\v2"),
@@ -18022,12 +17940,12 @@ def get_ahk_executable():
                     possible_dirs.append(sub)
     except Exception:
         pass
-        
+
     for p_dir in possible_dirs:
         for name in ahk_exes:
             if (p_dir / name).exists():
                 return str(p_dir / name)
-                
+
 def persist_default_language(language: str, base_dir=None) -> bool:
     """
     Persists the default language to config.ini in kardenwort-desk.
@@ -18035,13 +17953,13 @@ def persist_default_language(language: str, base_dir=None) -> bool:
     """
     if not language:
         return False
-    
+
     if not base_dir:
         base_dir = Path(__file__).resolve().parent
     base_dir = Path(base_dir)
 
     success = False
-    
+
     # Update desk config.ini
     desk_config = base_dir / "config.ini"
     if desk_config.exists():
@@ -18135,9 +18053,9 @@ def spawn_ahk(args_list, base_dir=None):
     if not ahk_script.exists():
         logger.error(f"AHK script not found at {ahk_script}")
         return False
-    
+
     found_exe = get_ahk_executable()
-    
+
     def chunk_args(args_list, base_cmd, max_len=8000, chunk_size=4):
         base_len = sum(len(c) + 1 for c in base_cmd)
         current_chunk = []
@@ -18358,7 +18276,7 @@ def cmd_desk(args):
             if not file_path.exists():
                 print_structured_error("INVALID_STATE", f"File to analyze not found: {file_path}")
                 continue
-                
+
             match = re.match(r"^(\d{14})", file_path.name)
             if match:
                 zid = match.group(1)
@@ -18367,7 +18285,7 @@ def cmd_desk(args):
                 zid_groups[zid].append(file_path)
             else:
                 non_zid_files.append(file_path)
-                
+
         def priority(p):
             ext = p.suffix.lower()
             if ext == '.tsv': return 0
@@ -18378,7 +18296,7 @@ def cmd_desk(args):
             best_file = sorted(files, key=priority)[0]
             logger.info(f"File '{best_file.name}' is recognized as an existing session. Delegating to restore...")
             ahk_args.extend(["--restore", str(best_file)])
-            
+
         for file_path in non_zid_files:
             is_tsv = file_path.suffix == '.tsv'
             if is_tsv:
@@ -18386,16 +18304,16 @@ def cmd_desk(args):
                 ahk_args.extend(["--restore", str(file_path)])
             else:
                 ahk_args.extend(["--desk", str(file_path), "--text-mode", args.text_mode])
-                
+
         if ahk_args:
             spawn_ahk(ahk_args, resolved_paths['base_dir'])
         return
-        
+
     file_path = Path(file_list[0]).resolve()
     if not file_path.exists():
         print_structured_error("INVALID_STATE", f"File to analyze not found: {file_path}")
         sys.exit(1)
-        
+
     # Auto-detection: if it's a .tsv or starts with a 14-digit ZID, it's a restore session
     is_tsv = file_path.suffix == '.tsv'
     has_zid = bool(re.match(r"^\d{14}-", file_path.name))
@@ -18404,17 +18322,17 @@ def cmd_desk(args):
         args.file = [str(file_path)]
         cmd_restore(args)
         return
-        
+
     try:
         text = file_path.read_text(encoding='utf-8')
     except Exception as e:
         print_structured_error("DESK_FAILED", f"Failed to read file: {e}")
         sys.exit(1)
-        
+
     text_mode = getattr(args, 'text_mode', 'single')
     if text_mode == 'single' and '\n' in text.strip():
         text_mode = 'multi'
-        
+
     if text_mode == 'multi':
         remove_empty = config.getboolean(SEC_SETTINGS, 'multi_mode_remove_empty_lines', fallback=True)
         clean_spaces = config.getboolean(SEC_SETTINGS, 'multi_mode_clean_spaces', fallback=True)
@@ -18427,7 +18345,7 @@ def cmd_desk(args):
                     continue
                 new_lines.append(line)
             text = "\n".join(new_lines)
-        
+
     lang = args.language
     if not lang:
         lang_match = re.search(r'\.([a-z]{2})\.(txt|srt)$', file_path.name)
@@ -18435,9 +18353,9 @@ def cmd_desk(args):
             lang = lang_match.group(1)
         else:
             lang = config.get(SEC_SETTINGS, 'default_language', fallback='en')
-            
+
     timestamp_id = generate_unique_zid()
-    
+
     bypass_lang = getattr(args, 'bypass_lang_check', False)
     if not bypass_lang:
         lang_res = verify_language(text, lang, config, bypass=False)
@@ -19670,10 +19588,10 @@ def main():
 
     try:
         args = parser.parse_args()
-        
+
         if hasattr(args, 'text') and args.text:
             args.text = args.text.replace('\u200b', '').replace('\u200c', '').replace('\u200d', '').replace('\ufeff', '')
-            
+
     except SystemExit as e:
         if e.code != 0:
             print_structured_error("INVALID_STATE", "Failed to parse command line arguments")
@@ -19778,11 +19696,11 @@ def main():
 
 if __name__ == "__main__":
     sys.stdout = sys.stderr
-    
+
     if sys.__stdout__ is not None and hasattr(sys.__stdout__, 'reconfigure'):
         sys.__stdout__.reconfigure(encoding='utf-8')
-    
+
     if sys.stderr is not None and hasattr(sys.stderr, 'reconfigure'):
         sys.stderr.reconfigure(encoding='utf-8')
-        
+
     main()

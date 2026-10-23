@@ -154,7 +154,7 @@
 .kw-lemmas-table td {
     padding: 8px 8px;
     border-bottom: 1px solid var(--table-border, rgba(255, 255, 255, 0.05));
-    color: var(--text-main, #e3e6eb);
+    color: var(--table-text, var(--text-main, #e3e6eb));
     box-sizing: border-box;
     vertical-align: middle;
 }
@@ -548,27 +548,18 @@ td.dirty {
     text-overflow: ellipsis;
 }
 
-#source-container .skeleton-loader {
-    font-family: var(--font-sans);
-    font-size: var(--font-size-md, 16px);
-    height: 1.6em;
-    min-height: 1.6em;
-    line-height: 1.6;
-    vertical-align: top;
-    width: 100%;
-    max-width: 500px;
-    border-radius: var(--radius-md, 4px);
-}
-
+#source-container .skeleton-loader,
 #translation-container .skeleton-loader {
     font-family: var(--font-sans);
-    font-size: var(--font-size-md, 16px);
-    height: 1.6em;
-    min-height: 1.6em;
-    line-height: 1.6;
+    font-size: 11px;
+    height: 21px;
+    min-height: 21px;
+    line-height: 21px;
     vertical-align: top;
-    width: 100%;
-    max-width: 500px;
+    width: auto;
+    min-width: 7em;
+    max-width: 100%;
+    padding: 0 8px;
     border-radius: var(--radius-md, 4px);
 }
 
@@ -606,7 +597,7 @@ td[data-col="WordSourceMorphologyAI"] .skeleton-loader {
 }
 
 td[data-col="goethe"] {
-    color: var(--text-muted);
+    color: var(--level-goethe-color, var(--text-muted));
 }
 
 /* Workspace Tab Bar (R2) */
@@ -628,7 +619,7 @@ td[data-col="goethe"] {
     right: 0;
     z-index: 1000;
     padding: 8px 16px;
-    background: rgba(22, 27, 34, 0.8);
+    background: var(--toolbar-bg, rgba(22, 27, 34, 0.8));
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     border-bottom: 1px solid rgba(255, 255, 255, 0.08);
@@ -648,7 +639,7 @@ td[data-col="goethe"] {
     right: 0;
     z-index: 1000;
     padding: 8px 16px;
-    background: rgba(22, 27, 34, 0.8);
+    background: var(--toolbar-bg, rgba(22, 27, 34, 0.8));
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -657,7 +648,7 @@ td[data-col="goethe"] {
 }
 
 .kw-workspace-tab-bar.kw-tab-dock-bottom:hover {
-    background: #161b22;
+    background: var(--toolbar-bg, #161b22);
     border-top-color: rgba(255, 255, 255, 0.15);
 }
 
@@ -825,7 +816,7 @@ body.theme-white .kw-workspace-tab-bar.kw-tab-dock-bottom,
 body.theme-light .kw-workspace-tab-bar.kw-tab-dock-bottom:hover,
 body.theme-white .kw-workspace-tab-bar.kw-tab-dock-bottom:hover,
 .theme-light .kw-workspace-tab-bar.kw-tab-dock-bottom:hover {
-    background: #ffffff;
+    background: var(--toolbar-bg, #ffffff);
     border-top-color: #afb8c1;
 }
 
@@ -835,7 +826,7 @@ body.theme-white .kw-workspace-tab-bar.kw-tab-dock-bottom:hover,
     bottom: 0;
     left: 0;
     right: 0;
-    background: rgba(22, 27, 34, 0.8);
+    background: var(--toolbar-bg, rgba(22, 27, 34, 0.8));
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     border-top: 1px solid rgba(255, 255, 255, 0.08);
@@ -850,7 +841,7 @@ body.theme-white .kw-workspace-tab-bar.kw-tab-dock-bottom:hover,
 }
 
 .kw-action-toolbar:hover {
-    background: #161b22;
+    background: var(--toolbar-bg, #161b22);
     border-top-color: rgba(255, 255, 255, 0.15);
 }
 
@@ -859,7 +850,7 @@ body.theme-white .kw-action-toolbar,
 body.theme-compact .kw-action-toolbar,
 .theme-light .kw-action-toolbar,
 .theme-compact .kw-action-toolbar {
-    background: rgba(255, 255, 255, 0.85);
+    background: var(--toolbar-bg, rgba(255, 255, 255, 0.85));
     backdrop-filter: blur(8px);
     -webkit-backdrop-filter: blur(8px);
     border-top: 1px solid #d0d7de;
@@ -871,7 +862,7 @@ body.theme-white .kw-action-toolbar:hover,
 body.theme-compact .kw-action-toolbar:hover,
 .theme-light .kw-action-toolbar:hover,
 .theme-compact .kw-action-toolbar:hover {
-    background: #ffffff;
+    background: var(--toolbar-bg, #ffffff);
     border-top-color: #afb8c1;
 }
 
@@ -919,19 +910,6 @@ body.theme-compact .kw-action-toolbar:hover,
     border-color: var(--text-muted, #8b949e);
 }
 
-.kw-action-toolbar button.btn-danger {
-    background: var(--input-bg, #161a22);
-    border-color: var(--section-border, rgba(255, 255, 255, 0.1));
-    color: var(--text-color, #e3e6eb);
-}
-
-.kw-action-toolbar button#kw-btn-delete.btn-danger:hover:not(:disabled),
-.kw-action-toolbar button.btn-danger:hover:not(:disabled) {
-    background: rgba(248, 81, 73, 0.12);
-    border-color: rgba(248, 81, 73, 0.4);
-    color: #ff7b72;
-}
-
 .kw-action-toolbar button#kw-btn-hand-tool.active,
 .kw-action-toolbar button.active {
     background: var(--flipped-bg, rgba(56, 166, 255, 0.22));
@@ -964,7 +942,7 @@ body.theme-compact .kw-action-toolbar:hover,
     background: #d29922;
     border-color: #f0883e;
     color: #0d1117;
-    font-weight: 600;
+    font-weight: 500;
     box-shadow: 0 0 0 1px #f0883e;
 }
 

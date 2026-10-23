@@ -851,10 +851,3 @@ def test_restricted_chain_fails_cleanly_without_unsolicited_argos_fallback(tmp_p
         assert not any(e[2] == "argos" for e in lemma_events)
     finally:
         kardenwort_desk.clear_provider_cooldowns(config=config, resolved_paths=resolved_paths)
-
-
-
-
-
-
-

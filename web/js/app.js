@@ -1,4 +1,15 @@
 (function() {
+    window.reserveTextRegions = function(reset) {
+        ['source-container', 'translation-container'].forEach(function(id) {
+            var element = document.getElementById(id);
+            if (!element) return;
+            if (reset) element.style.removeProperty('--kw-text-region-size');
+            if (!element.style.getPropertyValue('--kw-text-region-size')) {
+                element.style.setProperty('--kw-text-region-size', element.getBoundingClientRect().height + 'px');
+            }
+        });
+    };
+    window.addEventListener('resize', function() { window.reserveTextRegions(true); });
     window.AppState = window.AppState || {};
     window.AppState.rows = window.AppState.rows || {};
 
@@ -100,6 +111,11 @@
 
     window.kwToggleTag = function (checkboxEl, rowId) {
         var newStatus = checkboxEl.checked;
+        if (window.toggleRowSelection && window.notifyAHKSelection) {
+            window.toggleRowSelection(rowId, newStatus);
+            window.notifyAHKSelection();
+            return;
+        }
         var rowEl = checkboxEl.closest ? checkboxEl.closest('tr') : checkboxEl.parentElement.parentElement;
         if (rowEl) {
             if (newStatus) {
@@ -765,9 +781,6 @@
                 window.AppState = window.AppState || {};
                 window.AppState.config = window.__CONFIG__;
                 window.AppState.bootstrap = bootstrapPayload;
-                if (window.__CONFIG__.highlight_same_lemma !== undefined) {
-                    window.AppState.highlightSameLemma = Boolean(window.__CONFIG__.highlight_same_lemma);
-                }
                 if (bootstrapPayload.sentence_cards) {
                     window.AppState.sentenceCards = bootstrapPayload.sentence_cards;
                     window.AppState.sentence_cards = bootstrapPayload.sentence_cards;
@@ -780,13 +793,11 @@
                 window.__CONFIG__ = window.__CONFIG__ || {};
                 window.AppState = window.AppState || {};
                 window.AppState.config = window.__CONFIG__;
-                if (window.__CONFIG__.highlight_same_lemma !== undefined) {
-                    window.AppState.highlightSameLemma = Boolean(window.__CONFIG__.highlight_same_lemma);
-                }
             }
 
             if (window.AppStore && typeof window.AppStore.dispatch === 'function') {
                 window.AppStore.dispatch({ type: 'INIT_SESSION', payload: bootstrapPayload || session });
+                window.__CONFIG__ = window.AppStore.getState().config;
             }
 
             SESSION_ZID = session.session_zid || session.zid || '';
@@ -1038,7 +1049,7 @@
             el['on' + type] = fn;
         }
     }
-    
+
     window.forceRepaint = function() {
         if (document.body) {
             return document.body.offsetHeight;
@@ -1263,7 +1274,7 @@
         if (currentLang === 'de') {
             var lowerLemma = cleanLemma.toLowerCase();
             var grammar = getGrammarConfig();
-            var articles = (grammar && (grammar.german_articles || grammar.germanArticles)) || [
+            var articles = (grammar && (grammar.german_articles)) || [
                 "der", "die", "das", "ein", "eine", "einer", "eines", "einem", "einen",
                 "des", "dem", "den", "kein", "keine", "keiner", "keines", "keinem", "keinen"
             ];
@@ -1279,8 +1290,8 @@
                 var posParts = posStr.split(',').map(function(p) {
                     return p.trim().replace(/\.+$/, '');
                 }).filter(Boolean);
-                var nounTagsList = (grammar && (grammar.noun_tags || grammar.nounTags)) || ["n", "noun", "propn", "subst"];
-                var nonNounTagsList = (grammar && (grammar.non_noun_tags || grammar.nonNounTags)) || [
+                var nounTagsList = (grammar && (grammar.noun_tags)) || ["n", "noun", "propn", "subst"];
+                var nonNounTagsList = (grammar && (grammar.non_noun_tags)) || [
                     "art", "det", "pron", "v", "verb", "aux",
                     "adv", "prep", "adp", "conj", "cconj", "sconj",
                     "intj", "num", "part", "adj"
@@ -1298,7 +1309,7 @@
                 if (/^[a-zäöüß]/.test(cleanLemma)) {
                     return cleanLemma;
                 }
-                var pronouns = (grammar && (grammar.german_pronouns || grammar.germanPronouns)) || [
+                var pronouns = (grammar && (grammar.german_pronouns)) || [
                     "er", "sie", "es", "wir", "ihr", "du", "ich",
                     "mich", "dich", "ihn", "ihm", "ihnen", "uns", "euch",
                     "mir", "dir", "sich", "mein", "dein", "sein", "unser", "euer"
@@ -1326,9 +1337,8 @@
         }
         var grammar = getGrammarConfig();
         if (grammar) {
-            if (grammar.posMap && grammar.posMap[pClean]) return grammar.posMap[pClean];
             if (grammar.pos_full_name_map && grammar.pos_full_name_map[pClean]) return grammar.pos_full_name_map[pClean];
-            var posMap = grammar.posMap || grammar.pos_full_name_map;
+            var posMap = grammar.pos_full_name_map;
             if (posMap) {
                 if (posMap[pClean.toUpperCase()]) return posMap[pClean.toUpperCase()];
                 if (posMap[pClean.toLowerCase()]) return posMap[pClean.toLowerCase()];
@@ -1345,14 +1355,16 @@
         if (!w) return null;
 
         var grammar = getGrammarConfig() || {};
-        var mascSuffixes = grammar.suffixes_masculine || grammar.suffixesMasculine || ["partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"];
-        var femSuffixes = grammar.suffixes_feminine || grammar.suffixesFeminine || ["schaft", "heit", "keit", "ung", "ion", "tät", "enz", "anz", "ik", "ei", "in"];
-        var neutSuffixes = grammar.suffixes_neuter || grammar.suffixesNeuter || ["chen", "lein", "ment", "tum", "um"];
-        var excludedIn = grammar.suffix_excluded_in || grammar.suffixExcludedIn || ["kinn", "sinn", "benzin", "ruin", "urin", "rubin", "cousin", "magazin", "berlin", "dublin"];
+        var mascSuffixes = grammar.suffixes_masculine || ["partner", "ismus", "ling", "mann", "ant", "ent", "ist", "or"];
+        var femSuffixes = grammar.suffixes_feminine || ["schaft", "heit", "keit", "ung", "ion", "tät", "enz", "anz", "ik", "ei", "in"];
+        var neutSuffixes = grammar.suffixes_neuter || ["chen", "lein", "ment", "tum", "um"];
+        var excludedEnt = grammar.suffix_excluded_ent || ['moment', 'element', 'talent', 'patent', 'experiment', 'instrument', 'dokument', 'parlament', 'prozent'];
+        var excludedIn = grammar.suffix_excluded_in || ["kinn", "sinn", "benzin", "ruin", "urin", "rubin", "cousin", "magazin", "berlin", "dublin"];
 
         if (genderCode === 'm') {
             for (var i = 0; i < mascSuffixes.length; i++) {
                 var suf = mascSuffixes[i];
+                if (suf === 'ent' && excludedEnt.some(function(ex) { return w.endsWith(ex); })) continue;
                 var minLen = (suf === 'mann' || suf === 'or') ? 4 : (suf === 'partner' ? 7 : (suf === 'ismus' ? 6 : 5));
                 if (w.length >= minLen && w.endsWith(suf)) {
                     return '-' + suf;
@@ -1394,7 +1406,7 @@
         if (!genderVal) return "";
         var gClean = String(genderVal).trim().replace(/\.+$/, '').toLowerCase();
         var grammar = getGrammarConfig() || {};
-        var genderMap = grammar.gender_full_name_map || grammar.genderMap || {
+        var genderMap = grammar.gender_full_name_map || {
             "m": "Masculine", "masc": "Masculine", "masculine": "Masculine", "der": "Masculine",
             "f": "Feminine", "fem": "Feminine", "feminine": "Feminine", "die": "Feminine",
             "n": "Neuter", "neut": "Neuter", "neuter": "Neuter", "das": "Neuter"
@@ -2347,7 +2359,7 @@
         var isRmbDragFlipping = false;
         var rmbFlipMode = true;
         var initialFlippedMap = null;
-        
+
         var pos_display_order_json;
         var POS_DISPLAY_ORDER_MAP = ((window.__CONFIG__ && window.__CONFIG__.pos_display_order) || {"art.": 0, "pron.": 1, "det.": 2, "prep.": 3});
         if (!POS_DISPLAY_ORDER_MAP || POS_DISPLAY_ORDER_MAP['art.'] === undefined) {
@@ -2360,7 +2372,7 @@
             var jsonStr = tokenMapEl.text || tokenMapEl.textContent || tokenMapEl.innerHTML || "[]";
             tokenMap = JSON.parse(jsonStr);
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-        
+
         var isProgressive = false;
         try {
             var progEl = document.getElementById('display-mode');
@@ -2368,7 +2380,7 @@
                 isProgressive = true;
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-        
+
         var initialSameLemma = (window.__CONFIG__ && window.__CONFIG__.highlight_same_lemma) ? true : false;
         try {
             var lsVal = localStorage.getItem('kw_highlight_same_lemma');
@@ -2397,7 +2409,7 @@
         existingState.filterSelectedOnly = initialFilterSelectedOnly;
         existingState.applyDeltas = function(data) {
                 if (!data) return;
-                
+
                 var isTerminal = (data.stage === 'finished' || data.status === 'failed' || data.status === 'partial_persisted');
                 if (isTerminal) {
                     window.AppState.isFinished = true;
@@ -2407,7 +2419,7 @@
                         }
                     } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
                 }
-                
+
                 if (data.stage) {
                     window.AppState.stage = data.stage;
                 }
@@ -2461,7 +2473,7 @@
                 } else if (window.AppState.textTranslationStatus === 'failed') {
                     window.AppState.textTranslationFailed = true;
                 }
-                
+
                 var incomingTextProv = data.textProvenance !== undefined ? data.textProvenance : (data.text_provenance !== undefined ? data.text_provenance : (data.provenance !== undefined ? data.provenance : undefined));
                 if (incomingTextProv !== undefined && incomingTextProv !== null) {
                     var currentTextProv = window.AppState.textProvenance;
@@ -2470,9 +2482,9 @@
                         window.AppState.textProvenance = incomingTextProv;
                     }
                 }
-                
+
                 var updated = false;
-                
+
                 var src = (data.sourceText !== undefined && data.sourceText !== "") ? data.sourceText : ((data.source_text !== undefined && data.source_text !== "") ? data.source_text : null);
                 if (src !== null) {
                     window.AppState.sourceText = src;
@@ -2480,7 +2492,7 @@
                 } else if (document.getElementById('source-container') && document.getElementById('source-container').querySelector('[data-pending="true"]')) {
                     if (window.AppView.renderSourceText(data.stage)) updated = true;
                 }
-                
+
                 var trans = (data.translatedText !== undefined && data.translatedText !== "") ? data.translatedText : ((data.translated_text !== undefined && data.translated_text !== "") ? data.translated_text : ((data.Translation !== undefined && data.Translation !== "") ? data.Translation : null));
                 if (trans === null && data.rows && data.rows["0"]) {
                     var r0 = data.rows["0"];
@@ -2498,7 +2510,7 @@
                 if (data.sentences && window.WorkspaceTabs && window.WorkspaceTabs.updateSentences) {
                     window.WorkspaceTabs.updateSentences(data.sentences);
                 }
-                
+
                 var incomingRowProv = data.row_provenances || data.rowProvenances;
                 if (incomingRowProv) {
                     for (var rKey in incomingRowProv) {
@@ -2515,7 +2527,7 @@
                         }
                     }
                 }
-                
+
                 var rowsData = null;
                 if (data.rows) {
                     rowsData = data.rows;
@@ -2524,7 +2536,7 @@
                 } else {
                     rowsData = data;
                 }
-                
+
                 if (rowsData) {
                     for (var rowId in rowsData) {
                         if (rowsData.hasOwnProperty(rowId)) {
@@ -2810,10 +2822,10 @@
                         }
                     }
                 }
-                
+
                 if (updated) {
                     if (window.rebindMVPBookmarks) window.rebindMVPBookmarks();
-                    
+
                     if (typeof applyOccurrenceView === 'function') {
                         applyOccurrenceView();
                     } else if (typeof window.applyOccurrenceView === 'function') {
@@ -2853,12 +2865,12 @@
                 var tempDiv = document.createElement('div');
                 tempDiv.innerHTML = window.AppState.sourceText || "";
                 var newText = (tempDiv.textContent || tempDiv.innerText || "").trim().replace(/\s+/g, ' ');
-                
+
                 // Do not destroy perfectly good span.word tags if the text hasn't changed
                 if (hasSpans && !pendingNode && currentText === newText) {
                     return false;
                 }
-                
+
                 var forceUpdate = (globalStage === 'finished' || globalStage === 'translated' || globalStage === 'translated_lemmas' || window.AppState.isFinished);
                 if (pendingNode || currentText !== newText || (forceUpdate && !hasSpans)) {
                     container.innerHTML = window.AppState.sourceText || "";
@@ -3432,7 +3444,9 @@
         };
 
         window.receiveUpdate = function(data) {
-            window.AppState.applyDeltas(data);
+            window.reserveTextRegions(false);
+            if (window.AppStore) window.AppStore.applyDeltas(data);
+            else window.AppState.applyDeltas(data);
         };
 
         try {
@@ -4264,7 +4278,7 @@
                 workerLaunched = true;
             }
         } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-        
+
         var sourceContainer = document.getElementById('source-container');
         var spans = sourceContainer ? sourceContainer.getElementsByTagName('span') : [];
         var tokenSpans = [];
@@ -4368,36 +4382,12 @@
                 }
             }
 
-            // 2. Update all cards in WorkspaceTabs
-            if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function') {
-                var allC = window.WorkspaceTabs.getCards();
-                if (allC && allC.length > 0) {
-                    for (var c = 0; c < allC.length; c++) {
-                        var card = allC[c];
-                        card.selected_ids = [];
-                        if (card.words) {
-                            for (var w = 0; w < card.words.length; w++) {
-                                var wObj = card.words[w];
-                                var wLem = (wObj.lemma || '').trim().toLowerCase();
-                                if (wLem && selMap[wLem]) {
-                                    wObj.selected = "1";
-                                    var rId = String(wObj.row_id);
-                                    if (card.selected_ids.indexOf(rId) === -1) card.selected_ids.push(rId);
-                                    if (wObj.all_row_ids) {
-                                        for (var a = 0; a < wObj.all_row_ids.length; a++) {
-                                            var aId = String(wObj.all_row_ids[a]);
-                                            if (card.selected_ids.indexOf(aId) === -1) card.selected_ids.push(aId);
-                                        }
-                                    }
-                                } else {
-                                    wObj.selected = "0";
-                                }
-                            }
-                        }
-                    }
-                }
-            }
+            // Only the active card owns this selection command. Other contexts
+            // retain their independent intent and persisted baselines.
+            var card = window.WorkspaceTabs && window.WorkspaceTabs.getActiveCard();
+            if (card) card.selected_ids = Object.keys(selectedRowIdsMap);
         }
+
         function setLemmaSelected(lemma, isSelected) {
             if (!lemma) return;
             var norm = String(lemma).trim().toLowerCase();
@@ -4442,7 +4432,7 @@
 
         function findCompoundSiblingSpans(span) {
             if (!span || !span.classList || !span.classList.contains('word')) return span ? [span] : [];
-            
+
             var compoundId = span.getAttribute('data-compound-id');
             var startSpan = span;
             var curr = span;
@@ -4465,7 +4455,7 @@
                 }
                 break;
             }
-            
+
             var group = [startSpan];
             curr = startSpan;
             while (curr) {
@@ -4488,7 +4478,7 @@
                 }
                 break;
             }
-            
+
             return group;
         }
         window.isCompoundDelimiterNode = isCompoundDelimiterNode;
@@ -4786,7 +4776,7 @@
         function isRowStillNeededByOtherActiveTokens(rowIdStr, excludedVisualIdxsMap) {
             if (!window.AppState || !window.AppState.activeTokenSelections) return false;
             var targetRowIdInt = parseInt(rowIdStr, 10);
-            
+
             var relevantRowIds = {};
             relevantRowIds[String(rowIdStr)] = true;
             if (!isNaN(targetRowIdInt)) relevantRowIds[String(targetRowIdInt)] = true;
@@ -5077,9 +5067,9 @@
                 var raw = getRawRowTranslations(span);
                 return raw.join(' ');
             }
-            
+
             var spanClean = (span.getAttribute('data-lower-clean') || span.getAttribute('data-original-text') || span.textContent || "").trim().toLowerCase();
-            
+
             var otherSpansClean = [];
             if (group && group.length > 1) {
                 for (var i = 0; i < group.length; i++) {
@@ -5161,13 +5151,13 @@
                         break;
                     }
                 }
-                
+
                 var rowTranslations = getRawRowTranslations(span);
-                
+
                 if (rowTranslations.length === group.length && spanIdx >= 0 && spanIdx < rowTranslations.length) {
                     return rowTranslations[spanIdx];
                 }
-                
+
                 if (rowTranslations.length === 1) {
                     var singleTrans = rowTranslations[0];
                     var parts = singleTrans.indexOf(',') !== -1 ? singleTrans.split(',') : (singleTrans.indexOf('_') !== -1 ? singleTrans.split('_') : []);
@@ -5182,7 +5172,7 @@
                     }
                 }
             }
-            
+
             var raw = getRawRowTranslations(span);
             return raw.join(' ');
         }
@@ -5193,7 +5183,7 @@
                 var t = getSpanSpecificTranslation(span, group);
                 if (t) return t;
             }
-            
+
             var raw = getRawRowTranslations(span);
             return raw.join(' ');
         }
@@ -5459,7 +5449,7 @@
             var spanClean = (s.getAttribute('data-lower-clean') || s.getAttribute('data-original-text') || s.textContent || "").trim().toLowerCase();
             var spanText = (s.getAttribute('data-original-text') || s.textContent || s.innerText || "").trim();
             var isPurpleConstruct = s.classList && s.classList.contains('highlight-purple');
-            
+
             if (!tokenData || !tokenData.row_ids || tokenData.row_ids.length === 0) {
                 var sanitized = sanitizeSpokenText(spanText);
                 if (sanitized) words.push(sanitized);
@@ -5493,7 +5483,7 @@
                     var rowId = tokenData.row_ids[j];
                     var tr = findTableRowById(rowId);
                     if (!tr) continue;
-                    
+
                     var tds = tr.getElementsByTagName('td');
                     var lemma = "";
                     var inflected = "";
@@ -5505,16 +5495,16 @@
                             inflected = (tds[m].textContent || tds[m].innerText || "").trim();
                         }
                     }
-                    
+
                     var lemmaClean = lemma.toLowerCase();
                     var inflectedClean = inflected.toLowerCase();
                     var inflectedParts = inflectedClean.split(',').map(function(f) { return f.trim(); });
-                    
+
                     if (lemmaClean === spanClean || inflectedClean === spanClean || inflectedParts.indexOf(spanClean) !== -1) {
                         directMatchRows.push({ rowId: rowId, lemma: lemma, inflected: inflected });
                     }
                 }
-                
+
                 if (directMatchRows.length > 0) {
                     for (var d = 0; d < directMatchRows.length; d++) {
                         var rowObj = directMatchRows[d];
@@ -5567,7 +5557,7 @@
                     }
                 }
             }
-            
+
             var delim = (chainMode === 'separate' || chainMode === 'per_word') ? ' ||| ' : ' ';
             return words.join(delim);
         }
@@ -5576,7 +5566,7 @@
             if (!targetSpan) return "";
             var group = findCompoundSiblingSpans(targetSpan);
             if (!group || group.length === 0) group = [targetSpan];
-            
+
             var words = [];
             for (var i = 0; i < group.length; i++) {
                 var s = group[i];
@@ -5611,7 +5601,7 @@
                     if (window.__selectableTextMode) return;
                     if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
                     e = e || window.event;
-                    
+
                     if (e.button === 0) { // LMB
                         var lt = document.getElementById('lemma-table');
                         if (lt) {
@@ -5623,11 +5613,11 @@
                         var targetRowIds = (clickedTokenData.atomic_row_ids !== undefined && clickedTokenData.atomic_row_ids !== null)
                             ? clickedTokenData.atomic_row_ids.slice()
                             : ((clickedTokenData.row_ids && clickedTokenData.row_ids.slice) ? clickedTokenData.row_ids.slice() : []);
-                        
+
                         isTokenDragSelecting = true;
                         dragOccurred = false;
                         mousedownTargetSpan = span;
-                        
+
                         tokenDragStartIdx = -1;
                         tokenDragLastIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
@@ -5637,7 +5627,7 @@
                                 break;
                             }
                         }
-                        
+
                         var isVisuallyActive = (span.classList && (
                             span.classList.contains('highlight-orange-active') ||
                             span.classList.contains('highlight-purple-active') ||
@@ -5660,10 +5650,10 @@
                                 }
                             }
                         }
-                        
+
                         var isInActiveSelections = (clickedTokenData && isTokenInActiveSelections(clickedTokenData.visual_idx));
                         var hasActiveTokens = (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
-                        
+
                         var isRowSelected = false;
                         if (targetRowIds && targetRowIds.length > 0) {
                             for (var t = 0; t < targetRowIds.length; t++) {
@@ -5688,7 +5678,7 @@
                                 if (isRowSelected) break;
                             }
                         }
-                        
+
                         var isRowBackedByActiveToken = false;
                         if (hasActiveTokens && targetRowIds && targetRowIds.length > 0) {
                             var clickedLemma = (clickedTokenData && clickedTokenData.lemma) ? String(clickedTokenData.lemma).trim().toLowerCase() : '';
@@ -5696,7 +5686,7 @@
                                 var wl = getWordLemma(span);
                                 if (wl) clickedLemma = String(wl).trim().toLowerCase();
                             }
-                            
+
                             var targetMergedRowIds = {};
                             for (var t = 0; t < targetRowIds.length; t++) {
                                 targetMergedRowIds[String(targetRowIds[t])] = true;
@@ -5717,7 +5707,7 @@
                                     }
                                 }
                             }
-                            
+
                             for (var a = 0; a < window.AppState.activeTokenSelections.length; a++) {
                                 var activeItem = window.AppState.activeTokenSelections[a];
                                 if (clickedLemma && activeItem.lemma && String(activeItem.lemma).trim().toLowerCase() === clickedLemma) {
@@ -5744,7 +5734,7 @@
                                 if (isRowBackedByActiveToken) break;
                             }
                         }
-                        
+
                         var isLegacyOverview = isLegacyOverviewContext();
                         var isLemmaSelected = false;
                         if (!hasActiveTokens && isLegacyOverview) {
@@ -5753,13 +5743,13 @@
                                 isLemmaSelected = true;
                             }
                         }
-                        
+
                         var isOrphanSelected = false;
                         var wIdx = clickedTokenData ? clickedTokenData.visual_idx : null;
                         if (wIdx !== undefined && wIdx !== null && selectedOrphanWordIdxsMap.hasOwnProperty(String(wIdx))) {
                             isOrphanSelected = true;
                         }
-                        
+
                         var clickDecision = decideTokenClickAction({
                             hasActiveTokens: hasActiveTokens,
                             isVisuallyActive: isVisuallyActive,
@@ -5772,7 +5762,7 @@
                         });
                         var isTableSelectedToken = clickDecision.isTableSelectedToken;
                         var shouldDeselect = clickDecision.shouldDeselect;
-                        
+
                         if (shouldDeselect) {
                             tokenDragMode = false;
                             if (typeof unpinTokenFromMVP === 'function') {
@@ -5784,7 +5774,7 @@
                                 pinTokenToMVP(span);
                             }
                         }
-                        
+
                         if (targetRowIds.length === 0) {
                             if (wIdx !== undefined && wIdx !== null) {
                                 if (shouldDeselect) {
@@ -5794,7 +5784,7 @@
                                 }
                             }
                         }
-                        
+
                         initialSelectedMap = {};
                         for (var key in selectedRowIdsMap) {
                             if (selectedRowIdsMap.hasOwnProperty(key)) {
@@ -5810,7 +5800,7 @@
                             var rvIdx = rTd ? rTd.visual_idx : parseInt(rSpan.getAttribute('data-word-idx'), 10);
                             if (!isNaN(rvIdx)) vIdxsToRemove[rvIdx] = true;
                         }
-                        
+
                         var currentTableRows = (tableRows && tableRows.length > 0)
                             ? tableRows
                             : document.querySelectorAll('#lemma-table tbody tr[data-row-id], #lemma-table tr[data-row-id]');
@@ -5858,7 +5848,7 @@
                         if (typeof refreshBookmarkClasses === 'function') {
                             refreshBookmarkClasses();
                         }
-                        
+
                         if (e.preventDefault) {
                             e.preventDefault();
                         } else {
@@ -5868,7 +5858,7 @@
                         isRmbDragFlipping = true;
                         dragOccurred = false;
                         mousedownTargetSpan = span;
-                        
+
                         tokenDragStartIdx = -1;
                         tokenDragLastIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
@@ -5878,15 +5868,15 @@
                                 break;
                             }
                         }
-                        
+
                         rmbFlipMode = !span.classList.contains('flipped');
                         flipWord(span, rmbFlipMode);
-                        
+
                         initialFlippedMap = [];
                         for (var k = 0; k < tokenSpans.length; k++) {
                             initialFlippedMap.push(tokenSpans[k].classList.contains('flipped'));
                         }
-                        
+
                         if (e.preventDefault) {
                             e.preventDefault();
                         } else {
@@ -5894,7 +5884,7 @@
                         }
                     }
                 });
-                
+
                 addEvent(span, 'mouseover', function(e) {
                     if (window.__selectableTextMode) return;
                     if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
@@ -5911,7 +5901,7 @@
                                 unpinTokenFromMVP(mousedownTargetSpan);
                             }
                         }
-                        
+
                         var currIdx = -1;
                         for (var k = 0; k < tokenSpans.length; k++) {
                             if (tokenSpans[k] === span) {
@@ -5920,17 +5910,17 @@
                             }
                         }
                         if (currIdx === -1 || tokenDragStartIdx === -1) return;
-                        
+
                         selectedRowIdsMap = {};
                         for (var key in initialSelectedMap) {
                             if (initialSelectedMap.hasOwnProperty(key)) {
                                 selectedRowIdsMap[key] = initialSelectedMap[key];
                             }
                         }
-                        
+
                         var minIdx = Math.min(tokenDragStartIdx, currIdx);
                         var maxIdx = Math.max(tokenDragStartIdx, currIdx);
-                        
+
                         tokenDragLastIdx = currIdx;
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
@@ -5955,7 +5945,7 @@
                                 removeTokenFromActiveSelections(s);
                             }
                         }
-                        
+
                         var evaluatedGroups = [];
                         for (var k = minIdx; k <= maxIdx; k++) {
                             var s = tokenSpans[k];
@@ -5964,7 +5954,7 @@
                             for (var g = 0; g < grp.length; g++) {
                                 evaluatedGroups.push(grp[g]);
                             }
-                            
+
                             var allInDragRange = true;
                             for (var g = 0; g < grp.length; g++) {
                                 var grpSpan = grp[g];
@@ -5980,7 +5970,7 @@
                                     break;
                                 }
                             }
-                            
+
                             if (allInDragRange) {
                                 for (var g = 0; g < grp.length; g++) {
                                     var gTd = findTokenData(grp[g]);
@@ -6018,10 +6008,10 @@
                         if (currIdx === tokenDragStartIdx && !dragOccurred) return;
                         dragOccurred = true;
                         tokenDragLastIdx = currIdx;
-                        
+
                         var minIdx = Math.min(tokenDragStartIdx, currIdx);
                         var maxIdx = Math.max(tokenDragStartIdx, currIdx);
-                        
+
                         for (var k = 0; k < tokenSpans.length; k++) {
                             var s = tokenSpans[k];
                             var inRange = (k >= minIdx && k <= maxIdx);
@@ -6046,7 +6036,7 @@
         }
         window.rebindTokenSpans = rebindTokenSpans;
         rebindTokenSpans();
-        
+
         var sourceContainer = document.getElementById('source-container');
         if (sourceContainer) {
             addEvent(sourceContainer, 'contextmenu', function(e) {
@@ -6056,7 +6046,7 @@
                 return false;
             });
         }
-        
+
         var lemmaTable = document.getElementById('lemma-table');
     var tableRows = [];
     function detectHasHighlightCol() {
@@ -6127,7 +6117,7 @@
             var rowIdStr = String(row.getAttribute('data-row-id'));
             var rowId = parseInt(rowIdStr, 10);
             var constituentIds = getRowGroupIds(row);
-            
+
             var rowVisualIdx = -1;
             for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
                 if (tableRows[rIdx] === row) {
@@ -6135,7 +6125,7 @@
                     break;
                 }
             }
-            
+
             var lt = document.getElementById('lemma-table');
             var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
 
@@ -6150,7 +6140,7 @@
                 mousedownTargetRow = row;
                 isShiftClick = !!(e.shiftKey && (lastClickedVisualIdx !== -1 || lastClickedRowId !== null));
                 isCtrlKey = !!(e.ctrlKey || e.metaKey);
-                
+
                 if (isShiftClick) {
                     var sVisualIdx = (lastClickedVisualIdx !== -1) ? lastClickedVisualIdx : rowVisualIdx;
                     dragStartVisualIdx = sVisualIdx;
@@ -6158,14 +6148,14 @@
                     dragStartRowId = lastClickedRowId;
                     dragLastRowId = rowId;
                     dragSelectMode = true;
-                    
+
                     initialSelectedMap = {};
                     for (var key in selectedRowIdsMap) {
                         if (selectedRowIdsMap.hasOwnProperty(key)) {
                             initialSelectedMap[key] = selectedRowIdsMap[key];
                         }
                     }
-                    
+
                     var start = Math.min(sVisualIdx, rowVisualIdx);
                     var end = Math.max(sVisualIdx, rowVisualIdx);
                     for (var rIdx = start; rIdx <= end; rIdx++) {
@@ -6185,17 +6175,17 @@
                     dragLastVisualIdx = rowVisualIdx;
                     dragStartRowId = rowId;
                     dragLastRowId = rowId;
-                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) || 
+                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) ||
                         constituentIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
                     dragSelectMode = !isCurrentlySelected;
-                    
+
                     initialSelectedMap = {};
                     for (var key in selectedRowIdsMap) {
                         if (selectedRowIdsMap.hasOwnProperty(key)) {
                             initialSelectedMap[key] = selectedRowIdsMap[key];
                         }
                     }
-                    
+
                     for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
                         var cId = constituentIds[cIdx];
                         if (dragSelectMode) {
@@ -6218,17 +6208,17 @@
                     dragLastVisualIdx = rowVisualIdx;
                     dragStartRowId = rowId;
                     dragLastRowId = rowId;
-                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) || 
+                    var isCurrentlySelected = selectedRowIdsMap.hasOwnProperty(rowIdStr) ||
                         constituentIds.some(function(cid) { return selectedRowIdsMap.hasOwnProperty(cid); });
                     dragSelectMode = !isCurrentlySelected;
-                    
+
                     initialSelectedMap = {};
                     for (var key in selectedRowIdsMap) {
                         if (selectedRowIdsMap.hasOwnProperty(key)) {
                             initialSelectedMap[key] = selectedRowIdsMap[key];
                         }
                     }
-                    
+
                     for (var cIdx = 0; cIdx < constituentIds.length; cIdx++) {
                         var cId = constituentIds[cIdx];
                         if (dragSelectMode) {
@@ -6247,7 +6237,7 @@
                     }
                     syncSelectionsToCardsAndState();
                 }
-                
+
                 lastClickedVisualIdx = rowVisualIdx;
                 lastClickedRowId = dragSelectMode ? rowId : null;
                 focusedRowId = dragSelectMode ? rowId : null;
@@ -6263,12 +6253,12 @@
                     }
                 }
             }
-            
+
             e = e || window.event;
             if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
             return false;
         });
-        
+
         addEvent(row, 'mouseover', function(e) {
             if (window.__selectableTextMode) return;
             e = e || window.event;
@@ -6304,7 +6294,7 @@
                 }
                 var rowId = parseInt(row.getAttribute('data-row-id'), 10);
                 dragLastRowId = rowId;
-                
+
                 var currentVisualIdx = -1;
                 for (var rIdx = 0; rIdx < tableRows.length; rIdx++) {
                     if (tableRows[rIdx] === row) {
@@ -6315,7 +6305,7 @@
                 if (currentVisualIdx !== -1) {
                     dragLastVisualIdx = currentVisualIdx;
                 }
-                
+
                 // Reset to the state before the current drag gesture started
                 selectedRowIdsMap = {};
                 for (var key in initialSelectedMap) {
@@ -6323,7 +6313,7 @@
                         selectedRowIdsMap[key] = initialSelectedMap[key];
                     }
                 }
-                
+
                 // Apply the visual drag selection range from dragStartVisualIdx to currentVisualIdx
                 var sIdx = (dragStartVisualIdx !== -1) ? dragStartVisualIdx : currentVisualIdx;
                 var eIdx = (currentVisualIdx !== -1) ? currentVisualIdx : sIdx;
@@ -6356,7 +6346,7 @@
                 updateBidirectionalHighlights();
             }
         });
-        
+
         var tds = row.getElementsByTagName('td');
         for (var j = 0; j < tds.length; j++) {
             if (tds[j].classList.contains('editable')) {
@@ -6385,9 +6375,6 @@
     }
 
     function rebindTableRows() {
-        if (typeof restoreActiveTokensFromStorage === 'function') {
-            restoreActiveTokensFromStorage();
-        }
         var hasCardsElement = !!document.getElementById('sentence-cards');
         var isContainerMode = !!(document.getElementById('delivery-mode') && (document.getElementById('delivery-mode').textContent || '').trim() === 'container');
         var cardsList = (hasCardsElement || isContainerMode) && (window.WorkspaceTabs && typeof window.WorkspaceTabs.getCards === 'function')
@@ -6399,23 +6386,9 @@
                 try { cardsList = JSON.parse(cardsScript.textContent); } catch (e) { console.error('[Bootstrap] Failed to parse #sentence-cards JSON:', e); throw e; }
             }
         }
-        if (cardsList && Array.isArray(cardsList)) {
-            if (!window.AppState) window.AppState = {};
-            if (!window.AppState.selectedLemmas) window.AppState.selectedLemmas = {};
-            for (var c = 0; c < cardsList.length; c++) {
-                var cardObj = cardsList[c];
-                if (cardObj && cardObj.words) {
-                    for (var widx = 0; widx < cardObj.words.length; widx++) {
-                        var wObj = cardObj.words[widx];
-                        var isCardSel = (wObj.selected === "1" || wObj.selected === 1 || (cardObj.selected_ids && cardObj.selected_ids.indexOf(String(wObj.row_id)) !== -1));
-                        if (isCardSel) {
-                            var wLem = (wObj.lemma || '').trim().toLowerCase();
-                            if (wLem) window.AppState.selectedLemmas[wLem] = true;
-                        }
-                    }
-                }
-            }
-        }
+        selectedRowIdsMap = {};
+        window.AppState.selectedLemmas = {};
+        if (typeof restoreActiveTokensFromStorage === 'function') restoreActiveTokensFromStorage();
         var lt = document.getElementById('lemma-table');
         tableRows = [];
         if (lt) {
@@ -6431,7 +6404,7 @@
         for (var i = 0; i < tableRows.length; i++) {
             var r = tableRows[i];
             var rIdStr = String(r.getAttribute('data-row-id'));
-            var isHl = (r.getAttribute('data-selected') === '1' || r.classList.contains('selected') || r.classList.contains('kw-row-selected') || (window.AppState && Array.isArray(window.AppState.selected_ids) && (window.AppState.selected_ids.indexOf(parseInt(rIdStr, 10)) !== -1 || window.AppState.selected_ids.indexOf(rIdStr) !== -1)));
+            var isHl = (r.getAttribute('data-selected') === '1' || r.classList.contains('selected') || r.classList.contains('kw-row-selected'));
             if (!initialHighlights.hasOwnProperty(rIdStr)) {
                 initialHighlights[rIdStr] = isHl;
             }
@@ -6462,7 +6435,7 @@
     }
     window.rebindTableRows = rebindTableRows;
     rebindTableRows();
-    
+
     function handleMouseUp(e) {
             if (window.__deskInstanceId && myDeskInstanceId !== window.__deskInstanceId) return;
             e = e || window.event;
@@ -6480,7 +6453,7 @@
                         justFinishedDrag = false;
                     }, 50);
                 }
-                
+
                 if (isDragSelecting && audioLmbPlay) {
                     if (dragSelectMode) {
                         var sourceLang = (document.getElementById('session-lang').textContent || document.getElementById('session-lang').innerText || 'en').trim();
@@ -6623,7 +6596,7 @@
                         }
                     }
                 }
-                
+
                 isDragSelecting = false;
                 isTokenDragSelecting = false;
                 isRmbDragFlipping = false;
@@ -6656,7 +6629,7 @@
         window.__deskHandleMouseUp = handleMouseUp;
         addEvent(document, 'mouseup', handleMouseUp);
         addEvent(window, 'mouseup', handleMouseUp);
-        
+
         addEvent(document, 'contextmenu', function(e) {
             if (window.__selectableTextMode) return;
             if (justFinishedDrag) {
@@ -6665,7 +6638,7 @@
                 return false;
             }
         });
-        
+
         addEvent(document, 'keydown', function(e) {
             e = e || window.event;
             var keyCode = e.keyCode || e.which;
@@ -6698,7 +6671,7 @@
             if (e.ctrlKey && (keyCode === 65 || e.key === 'a' || e.key === 'A')) { // Ctrl+A or Ctrl+Shift+A
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (e.shiftKey) {
-                    if (typeof clearAllSelections === 'function') clearAllSelections();
+                    if (typeof window.clearAllSelectionsAndNotify === 'function') window.clearAllSelectionsAndNotify();
                     else if (typeof window.clearAllSelections === 'function') window.clearAllSelections();
                     return;
                 }
@@ -6752,7 +6725,7 @@
             if (keyCode === 40 || keyCode === 38) { // ArrowDown or ArrowUp
                 if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                 if (tableRows.length === 0) return;
-                
+
                 var visibleRows = [];
                 var lt = document.getElementById('lemma-table');
                 var isFilterActive = lt && lt.classList.contains('kw-filter-selected-only');
@@ -6864,14 +6837,14 @@
                 }
             }
         });
-        
+
         addEvent(document, 'click', function(e) {
             if (justFinishedDrag) {
                 justFinishedDrag = false;
                 return;
             }
         });
-        
+
         function clearAllSelections() {
             selectedRowIdsMap = {};
             selectedOrphanWordIdxsMap = {};
@@ -6889,13 +6862,13 @@
             updateBidirectionalHighlights();
         }
         window.clearAllSelections = clearAllSelections;
-        
+
         window.clearAllSelectionsAndNotify = function() {
             clearAllSelections();
             notifyAHKSelection();
             if (window.forceRepaint) window.forceRepaint();
         };
-        
+
         function toggleRowSelection(rowId, forceState) {
             var rIdStr = String(rowId);
             var lem = getLemmaByRowId(rowId);
@@ -6975,7 +6948,7 @@
             }
         }
         window.updateEmptySelectionState = updateEmptySelectionState;
-        
+
         function updateRowStyles() {
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
                 var activeC = window.WorkspaceTabs.getActiveCard();
@@ -7040,7 +7013,7 @@
             }
             updateRowFocus();
         }
-        
+
         function updateRowFocus() {
             for (var i = 0; i < tableRows.length; i++) {
                 var row = tableRows[i];
@@ -7057,7 +7030,7 @@
                 }
             }
         }
-        
+
         function applyOccurrenceRow(tr) {
             if (!tr || !tr.hasAttribute('data-occ')) return;
             var sels = (window.AppState && window.AppState.activeTokenSelections) ? window.AppState.activeTokenSelections : [];
@@ -7207,11 +7180,11 @@
                     span.classList.remove('lemma-peer-highlight');
                 } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
-            
+
             var isLegacyOverview = isLegacyOverviewContext();
             var hasActiveTokens = !isLegacyOverview && (window.AppState && window.AppState.activeTokenSelections && window.AppState.activeTokenSelections.length > 0);
             var isSameLemmaOn = !!(window.AppState && window.AppState.highlightSameLemma);
-            
+
             var selLemmas = (window.AppState && window.AppState.selectedLemmas) ? window.AppState.selectedLemmas : {};
             var activeTargetRowIds = {};
             var primaryTargetRowIds = {};
@@ -7256,7 +7229,7 @@
                     primaryTargetRowIds[lcInt] = true;
                 }
             }
-            
+
             var activeVisualIdxs = {};
             var activeLemmas = {};
             var activeTokenRowIds = {};
@@ -7387,7 +7360,7 @@
                     }
                 }
                 if (tokRowIds.length === 0 && !isOrphanSelected) continue;
-                
+
                 var hasMatchingRow = false;
                 var isDirectRowMatch = false;
                 var isTargetedActiveTokenMatch = false;
@@ -7536,7 +7509,7 @@
                         }
                     }
                 }
-                
+
                 if (!hasMatchingRow && selLemmas) {
                     var tokRowIds = (token.atomic_row_ids && token.atomic_row_ids.length > 0)
                         ? token.atomic_row_ids
@@ -7553,7 +7526,7 @@
                         hasMatchingRow = true;
                     }
                 }
-                
+
                 if (hasMatchingRow) {
                     var span = spanByVidx[String(token.visual_idx)] || null;
                     if (span) {
@@ -7639,7 +7612,7 @@
                 }
             }
 
-            if (mousedownTargetSpan && mousedownTargetSpan.classList && 
+            if (mousedownTargetSpan && mousedownTargetSpan.classList &&
                 (mousedownTargetSpan.classList.contains('highlight-orange-active') || mousedownTargetSpan.classList.contains('highlight-purple-active'))) {
                 try {
                     var isCompoundSubtoken = typeof findCompoundSiblingSpans === 'function' && findCompoundSiblingSpans(mousedownTargetSpan).length > 1;
@@ -7698,8 +7671,9 @@
         }
         window.getSelectedRowsArray = getSelectedRowsArray;
         window.getSelectedTokenOrdersArray = getSelectedTokenOrdersArray;
-        
+
         function notifyAHKSelection() {
+            scheduleSelectionSave();
             if (window.WorkspaceTabs && typeof window.WorkspaceTabs.getActiveCard === 'function') {
                 var curCard = window.WorkspaceTabs.getActiveCard();
                 if (curCard) {
@@ -7720,10 +7694,10 @@
             }
         }
         window.notifyAHKSelection = notifyAHKSelection;
-        
+
         function makeEditable(cell) {
             if (cell.getElementsByTagName('input').length > 0) return;
-            
+
             var scrollDiv = cell.querySelector('.scrollable-cell');
             var originalValue = scrollDiv ? (scrollDiv.textContent || scrollDiv.innerText) : (cell.textContent || cell.innerText || "");
             var colName = cell.getAttribute('data-col');
@@ -7733,7 +7707,7 @@
             var tokenOrderVal = (tokenOrder !== null && tokenOrder !== '') ? parseInt(tokenOrder, 10) : parseInt(rowId, 10);
             var sentenceIdx = trParent.getAttribute('data-sentence-idx');
             var sentIdxVal = (sentenceIdx !== null && sentenceIdx !== '') ? parseInt(sentenceIdx, 10) : 1;
-            
+
             var input = document.createElement('input');
             input.type = 'text';
             input.className = 'edit-input cell-editor';
@@ -7745,7 +7719,7 @@
             input.style.border = '1px solid rgba(255, 255, 255, 0.1)';
             input.style.borderRadius = '4px';
             input.style.padding = '4px';
-            
+
             cell.innerHTML = '';
             if (!cell.classList.contains('editing')) {
                 cell.classList.add('editing');
@@ -7755,7 +7729,7 @@
             try {
                 input.select();
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
-            
+
             window.cancelActiveEdit = function() {
                 window.cancelActiveEdit = null;
                 cell.innerHTML = '';
@@ -7803,7 +7777,7 @@
                 cell.classList.remove('editing');
                 if (window.forceRepaint) window.forceRepaint();
             };
-            
+
             function commit() {
                 if (!window.cancelActiveEdit) return;
                 window.cancelActiveEdit = null;
@@ -7870,7 +7844,7 @@
                 if (window.forceRepaint) window.forceRepaint();
             }
             window.commitActiveEdit = commit;
-            
+
             addEvent(input, 'keydown', function(e) {
                 e = e || window.event;
                 var keyCode = e.keyCode;
@@ -7886,7 +7860,7 @@
                 } else if (keyCode === 9) { // Tab
                     if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
                     commit();
-                    
+
                     var tds = document.getElementsByTagName('td');
                     var editables = [];
                     for (var k = 0; k < tds.length; k++) {
@@ -7894,7 +7868,7 @@
                             editables.push(tds[k]);
                         }
                     }
-                    
+
                     var idx = -1;
                     for (var k = 0; k < editables.length; k++) {
                         if (editables[k] === cell) {
@@ -7908,17 +7882,17 @@
                     }
                 }
             });
-            
+
             addEvent(input, 'blur', function() {
                 commit();
             });
         }
         window.makeEditable = makeEditable;
-        
+
         window.getSelectedRows = function() {
             return JSON.stringify(getSelectedRowsArray());
         };
-        
+
         window.setSelectedRows = function(rowsJsonStr) {
             try {
                 var arr = JSON.parse(rowsJsonStr);
@@ -7937,7 +7911,7 @@
                 if (window.forceRepaint) window.forceRepaint();
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         };
-        
+
         window.deleteSelectedRows = function() {
             var selected = getSelectedRowsArray();
             if (selected.length === 0) return;
@@ -7970,13 +7944,13 @@
             rebuildDeltas();
             if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
-        
+
         function pushHistory(action) {
             historyStack.splice(historyIndex + 1);
             historyStack.push(action);
             historyIndex++;
         }
-        
+
         function applyAction(action) {
             if (action.type === 'edit') {
                 action.cell.innerHTML = '';
@@ -7997,7 +7971,7 @@
                 clearAllSelections();
             }
         }
-        
+
         function revertAction(action) {
             if (action.type === 'edit') {
                 action.cell.innerHTML = '';
@@ -8017,7 +7991,7 @@
                 }
             }
         }
-        
+
         window.undo = function() {
             if (historyIndex < 0) return;
             var action = historyStack[historyIndex];
@@ -8026,7 +8000,7 @@
             rebuildDeltas();
             if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
-        
+
         window.redo = function() {
             if (historyIndex >= historyStack.length - 1) return;
             historyIndex++;
@@ -8035,14 +8009,14 @@
             rebuildDeltas();
             if (window.triggerAutoSaveOnEdit) window.triggerAutoSaveOnEdit();
         };
-        
+
         function rebuildDeltas() {
             deltas = [];
             var tds = document.getElementsByTagName('td');
             for (var k = 0; k < tds.length; k++) {
                 tds[k].classList.remove('dirty');
             }
-            
+
             for (var i = 0; i <= historyIndex; i++) {
                 var action = historyStack[i];
                 if (action.type === 'edit') {
@@ -8080,7 +8054,7 @@
                     }
                 }
             }
-            
+
             for (var k = 0; k < deltas.length; k++) {
                 var d = deltas[k];
                 if (d.column !== '_delete') {
@@ -8100,19 +8074,19 @@
                     }
                 }
             }
-            
+
             if (window.ahkCall) {
                 try {
                     window.ahkCall('dirty', deltas.length > 0 ? 'true' : 'false');
                 } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
             }
-            
+
             if (typeof updateToolbarState === 'function') updateToolbarState();
 
             // Force MSHTML repaint/reflow after undo/redo
             if (window.forceRepaint) window.forceRepaint();
         }
-        
+
         window.getDeltas = function() {
             var mergedDeltas = [];
             for (var i = 0; i < deltas.length; i++) {
@@ -8183,7 +8157,7 @@
             }
             return JSON.stringify(mergedDeltas);
         };
-        
+
         window.clearDirty = function() {
             historyStack = [];
             historyIndex = -1;
@@ -8233,7 +8207,7 @@
             }
             if (typeof updateToolbarState === 'function') updateToolbarState();
         };
-        
+
         window.isDirty = function() {
             if (deltas.length > 0) return true;
             if (hasHighlightCol) {
@@ -8278,7 +8252,7 @@
             }
             return false;
         };
-        
+
         window.editFocusedCell = function() {
             var cellToEdit = null;
             if (lastHoveredCell) {
@@ -8312,14 +8286,14 @@
             }
             if (window.forceRepaint) window.forceRepaint();
         };
-        
+
         window.selectAllInActiveEdit = function() {
             var el = document.activeElement;
             if (el && el.tagName === 'INPUT') {
                 el.select();
             }
         };
-        
+
         window.selectAllRows = function() {
             if (typeof tableRows === 'undefined' || !tableRows || tableRows.length === 0) {
                 var lt = document.getElementById('lemma-table');
@@ -8345,13 +8319,13 @@
                 }
             }
         };
-        
+
         window.copySelection = function() {
             try {
                 document.execCommand('copy');
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
         };
-        
+
         function updateToolbarState() {
             var saveBtn = document.getElementById('kw-btn-save');
             if (saveBtn) {
@@ -8410,18 +8384,18 @@
             if (!resObj) return fallback;
             if (typeof resObj === 'string') return resObj;
             if (resObj instanceof Error) return resObj.message || String(resObj);
-            
+
             var data = (resObj && resObj.data) ? resObj.data : resObj;
             if (typeof data === 'string') return data;
-            
+
             var msg = data.message || data.error || (data.data && (data.data.message || data.data.error)) || "";
             var trace = data.error_trace || (data.data && data.data.error_trace) || "";
             var traceId = data.trace_id || (data.data && data.data.trace_id) || "";
-            
+
             var parts = [];
             if (msg) parts.push(msg);
             else if (!trace && !traceId) parts.push(fallback);
-            
+
             if (traceId) {
                 parts.push("[Trace: " + traceId + "]");
             }
@@ -8439,14 +8413,14 @@
             if (!container) return;
             var toast = document.createElement('div');
             toast.className = 'kw-toast kw-toast-' + type;
-            
+
             var icon = 'i';
             if (type === 'success') icon = '✓';
             else if (type === 'warning') icon = '!';
             else if (type === 'error') icon = '✕';
-            
+
             toast.innerHTML = '<span class="kw-toast-icon">' + icon + '</span><span class="kw-toast-msg">' + escapeHtml(msg) + '</span>';
-            
+
             function dismiss() {
                 if (toast.classList.contains('kw-toast-hiding')) return;
                 toast.classList.add('kw-toast-hiding');
@@ -8454,7 +8428,7 @@
                     if (toast.parentNode) toast.parentNode.removeChild(toast);
                 }, 250);
             }
-            
+
             if (typeof onClick === 'function') {
                 toast.style.cursor = 'pointer';
                 toast.onclick = function(e) {
@@ -8695,65 +8669,120 @@
         window.retrySession = retrySession;
 
 
+        var saveState = {phase: 'idle', promise: null};
+        var selectionSaveTimer = null;
+        var nativeSaveSnapshot = null;
+
+        window.captureSaveSnapshot = function() {
+            nativeSaveSnapshot = {deltas: JSON.parse(window.getDeltas()), history: historyStack.slice(0, historyIndex + 1)};
+            return JSON.stringify(nativeSaveSnapshot.deltas);
+        };
+        window.acknowledgeSaveSnapshot = function(serialized) {
+            if (!nativeSaveSnapshot || JSON.stringify(nativeSaveSnapshot.deltas) !== serialized) {
+                throw new Error('Save acknowledgment does not match the submitted snapshot');
+            }
+            acknowledgeSelections(nativeSaveSnapshot.deltas);
+            var submitted = nativeSaveSnapshot.history;
+            historyStack = historyStack.filter(function(action) { return submitted.indexOf(action) === -1; });
+            historyIndex = historyStack.length - 1;
+            nativeSaveSnapshot = null;
+            rebuildDeltas();
+            return window.isDirty();
+        };
+
+        function acknowledgeSelections(snapshot) {
+            var cards = window.WorkspaceTabs ? window.WorkspaceTabs.getCards() : [];
+            snapshot.filter(function(d) { return d.column === 'DeskSelected'; }).forEach(function(d) {
+                cards.forEach(function(card) {
+                    (card.words || []).forEach(function(word) {
+                        var sentence = word.sentence_idx !== undefined ? word.sentence_idx : card.sentence_idx;
+                        if (Number(sentence) === Number(d.sentence_idx) && Number(word.token_order) === Number(d.token_order)) {
+                            word.selected = d.value === '1' ? '1' : '0';
+                        }
+                    });
+                });
+                if (!cards.length) initialHighlights[String(d.row_id)] = d.value === '1';
+            });
+        }
+
+        function saveSnapshot(snapshot, submittedHistory) {
+            var token = getApiToken();
+            var headers = {'Content-Type': 'application/json'};
+            if (token) headers['X-API-Token'] = token;
+            var body = JSON.stringify({session_zid: getSessionZid(), language: getSessionLang(), token: token, deltas: snapshot});
+            var request;
+            if (window.ahkCall && (document.documentMode || typeof fetch === 'undefined')) {
+                request = Promise.resolve().then(function() {
+                    var data = JSON.parse(window.ahkCall('persist_selection', body));
+                    return {ok: data.ok !== false && !data.error, json: function() { return Promise.resolve(data); }};
+                });
+            } else {
+                request = fetch('/session/save', {
+                method: 'POST', headers: headers,
+                body: body
+                });
+            }
+            return request.then(function(res) {
+                return res.json().then(function(data) {
+                    if (!res.ok || !(data.ok || data.status === 'success')) throw new Error(formatErrorWithTrace(data, 'Save failed'));
+                    acknowledgeSelections(snapshot);
+                    historyStack = historyStack.filter(function(action) { return submittedHistory.indexOf(action) === -1; });
+                    historyIndex = historyStack.length - 1;
+                    rebuildDeltas();
+                });
+            });
+        }
+
+        function persistPending(selectionOnly) {
+            if (saveState.phase === 'saving') {
+                return saveState.promise.then(function() { return persistPending(selectionOnly); });
+            }
+            var snapshot = JSON.parse(window.getDeltas());
+            if (selectionOnly) snapshot = snapshot.filter(function(d) { return d.column === 'DeskSelected'; });
+            if (!snapshot.length) return Promise.resolve();
+            if (!getSessionZid()) return Promise.reject(new Error('Session ZID missing'));
+            var submitted = selectionOnly ? [] : historyStack.slice(0, historyIndex + 1);
+            var button = document.getElementById('kw-btn-save');
+            setButtonLoading(button, true, 'Saving...', 'Save (Ctrl+S)');
+            saveState.phase = 'saving';
+            saveState.promise = Promise.resolve().then(function() {
+                return saveSnapshot(snapshot, submitted);
+            }).finally(function() {
+                saveState.phase = 'idle';
+                saveState.promise = null;
+                setButtonLoading(button, false, '', 'Save (Ctrl+S)');
+                updateToolbarState();
+            });
+            return saveState.promise.then(function() {
+                // Acknowledgment may expose a newer reversal of a submitted value.
+                if (selectionOnly) return persistPending(true);
+            });
+        }
+
+        function scheduleSelectionSave() {
+            if (selectionSaveTimer) clearTimeout(selectionSaveTimer);
+            selectionSaveTimer = setTimeout(function() {
+                selectionSaveTimer = null;
+                persistPending(true).catch(function(err) {
+                    window.showToast('Selection save failed: ' + formatErrorWithTrace(err, 'Network error'), 'error');
+                });
+            }, 300);
+        }
+
+        window.flushPendingSaves = function() {
+            if (window.commitActiveEdit) window.commitActiveEdit();
+            return persistPending(false).then(function() {
+                if (window.isDirty()) return window.flushPendingSaves();
+            });
+        };
         window.onSaveClick = function(quiet) {
             if (window.commitActiveEdit) window.commitActiveEdit();
-            if (!window.isDirty()) {
-                if (!quiet) window.showToast("No changes to save.", "info");
-                return;
-            }
-            if (typeof fetch === 'undefined') {
-                if (!quiet) window.showToast("Network save unavailable in this environment.", "warning");
-                return;
-            }
-            var sZid = getSessionZid();
-            if (!sZid) {
-                if (!quiet) window.showToast("Session ZID missing, cannot save.", "error");
-                return;
-            }
-            var deltasJson = [];
-            try {
-                deltasJson = JSON.parse(window.getDeltas());
-            } catch(e) {
-                console.error('[Save] Failed to parse deltas JSON:', e);
-                return;
-            }
-            
-            var saveBtn = document.getElementById('kw-btn-save');
-            setButtonLoading(saveBtn, true, "Saving...", "Save (Ctrl+S)");
-
-            var tok = getApiToken();
-            var headers = { 'Content-Type': 'application/json' };
-            if (tok) headers['X-API-Token'] = tok;
-            var bodyPayload = {
-                session_zid: sZid,
-                deltas: deltasJson,
-                language: getSessionLang()
-            };
-            if (tok) bodyPayload.token = tok;
-
-            fetch('/session/save', {
-                method: 'POST',
-                headers: headers,
-                body: JSON.stringify(bodyPayload)
-            })
-            .then(function(res) {
-                return res.json().then(function(data) { return { status: res.status, ok: res.ok, data: data }; });
-            })
-            .then(function(resObj) {
-                setButtonLoading(saveBtn, false, "", "Save (Ctrl+S)");
-                if (resObj.ok && (resObj.data.ok || resObj.data.status === 'success')) {
-                    window.clearDirty();
-                    updateToolbarState();
-                    window.showToast("Edits saved successfully", "success");
-                } else {
-                    updateToolbarState();
-                    window.showToast("Save failed: " + formatErrorWithTrace(resObj, "Server error"), "error");
-                }
-            })
-            .catch(function(err) {
-                setButtonLoading(saveBtn, false, "", "Save (Ctrl+S)");
-                updateToolbarState();
-                window.showToast("Save error: " + formatErrorWithTrace(err, "Network error"), "error");
+            return persistPending(false).then(function() {
+                if (!quiet) window.showToast('Edits saved successfully', 'success');
+                return true;
+            }).catch(function(err) {
+                window.showToast('Save failed: ' + formatErrorWithTrace(err, 'Network error'), 'error');
+                return false;
             });
         };
 
@@ -9783,6 +9812,7 @@
         };
 
         function setHighlightSameLemma(active) {
+            if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_HIGHLIGHT_SAME_LEMMA', payload: !!active});
             if (window.AppState) {
                 window.AppState.highlightSameLemma = !!active;
             }
@@ -9806,7 +9836,7 @@
             try {
                 fetch('/api/v1/config', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
                     body: JSON.stringify({ section: 'rendering', key: 'highlight_same_lemma', value: String(!!active) })
                 }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
@@ -9839,6 +9869,7 @@
         }
 
         function setFilterSelectedOnly(active) {
+            if (window.AppStore) window.AppStore.dispatch({type: 'TOGGLE_FILTER_SELECTED', payload: !!active});
             if (window.AppState) {
                 window.AppState.filterSelectedOnly = !!active;
             }
@@ -9870,7 +9901,7 @@
             try {
                 fetch('/api/v1/config', {
                     method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
+                    headers: { 'Content-Type': 'application/json', 'X-API-Token': getApiToken() },
                     body: JSON.stringify({ section: 'rendering', key: 'filter_selected_only', value: String(!!active) })
                 }).catch(function(err) { console.debug("[Async] Non-fatal operation caught:", err); });
             } catch(e) { console.debug("[Diagnostic] Handled exception:", e); }
@@ -10048,6 +10079,19 @@
             }
         }
 
+        ['onUpdateClick', 'onRetextClick', 'onRewordClick', 'onSendToAnkiClick'].forEach(function(name) {
+            var command = window[name];
+            if (typeof command !== 'function') return;
+            window[name] = function() {
+                var args = arguments;
+                return window.flushPendingSaves().then(function() {
+                    return command.apply(window, args);
+                }).catch(function(err) {
+                    window.showToast('Save failed; action stopped: ' + formatErrorWithTrace(err, 'Network error'), 'error');
+                });
+            };
+        });
+
         var bootstrapScript = document.getElementById('kardenwort-bootstrap');
         if (bootstrapScript) {
             try {
@@ -10082,13 +10126,14 @@
         if (window.rebindMVPBookmarks) {
             window.rebindMVPBookmarks();
         }
+        window.reserveTextRegions(true);
     }
 
     function handleHorizontalScroll(e) {
         e = e || window.event;
         if (e.shiftKey || e.altKey) {
             var delta = e.wheelDelta ? -e.wheelDelta : (e.detail ? e.detail * 40 : 0);
-            
+
             var target = e.target || e.srcElement;
             var scrollCell = null;
             var curr = target;
@@ -10099,14 +10144,14 @@
                 }
                 curr = curr.parentNode;
             }
-            
+
             if (scrollCell) {
                 scrollCell.scrollLeft += delta;
             } else {
                 var scrollEl = document.documentElement || document.body;
                 scrollEl.scrollLeft += delta;
             }
-            
+
             if (e.preventDefault) { e.preventDefault(); } else { e.returnValue = false; }
             return false;
         }

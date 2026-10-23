@@ -682,4 +682,3 @@ def test_retext_child_card_translation_isolation(tmp_path, monkeypatch):
     assert by_idx[1] == "NEW:and mounting child nodes."
     assert by_idx[2] == "NEW:Applied matching type casting"
     assert "Applied" not in by_idx[1]
-

@@ -41,7 +41,7 @@ def test_render_flow_single_sentence_no_tabs(tmp_path):
     text = "Das Haus ist gross."
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nHaus\tHaus\tдом\t1\t\n", encoding="utf-8")
-    
+
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -53,7 +53,7 @@ def test_render_flow_single_sentence_no_tabs(tmp_path):
         spawn_children=False,
         return_children=False
     )
-    
+
     assert 'id="kw-workspace-tab-bar" style="display:none;"' in html
     assert '<script id="delivery-mode" type="text/plain">container</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">container</script>' in html
@@ -66,7 +66,7 @@ def test_render_flow_multi_sentence_container_tabs(tmp_path):
     text = "Das Haus ist gross. Die Katze schlaeft."
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nHaus\tHaus\tдом\t1\t\nKatze\tKatze\tкошка\t2\t\n", encoding="utf-8")
-    
+
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -78,7 +78,7 @@ def test_render_flow_multi_sentence_container_tabs(tmp_path):
         spawn_children=False,
         return_children=False
     )
-    
+
     assert '<div class="kw-workspace-tab-bar kw-tab-dock-top" id="kw-workspace-tab-bar">' in html
     assert 'has-dock-top' in html
     assert '<script id="tab-bar-position" type="text/plain">top</script>' in html
@@ -102,7 +102,7 @@ def test_render_flow_multi_sentence_tabs_mode(tmp_path):
     text = "Das Haus ist gross. Die Katze schlaeft."
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nHaus\tHaus\tдом\t1\t\nKatze\tKatze\tкошка\t2\t\n", encoding="utf-8")
-    
+
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -114,7 +114,7 @@ def test_render_flow_multi_sentence_tabs_mode(tmp_path):
         spawn_children=False,
         return_children=False
     )
-    
+
     assert 'id="kw-workspace-tab-bar" style="display:none;"' in html
     assert '<script id="delivery-mode" type="text/plain">multi_window</script>' in html
     assert '<script id="web-tab-mode" type="text/plain">tabs</script>' in html
@@ -127,7 +127,7 @@ def test_sentence_chunks_encapsulation_structure(tmp_path):
     text = "Erste Zeile.\nZweite Zeile.\nDritte Zeile."
     tsv_file = tmp_path / "20260828111800-test.de.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nZeile\tZeile\tстрока\t1\t\nZeile\tZeile\tстрока\t2\t\nZeile\tZeile\tстрока\t3\t\n", encoding="utf-8")
-    
+
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="de",
@@ -139,7 +139,7 @@ def test_sentence_chunks_encapsulation_structure(tmp_path):
         spawn_children=False,
         return_children=False
     )
-    
+
     assert '<span class="kw-sentence-chunk" data-sentence-idx="1">' in html
     assert '<span class="kw-sentence-chunk" data-sentence-idx="2">' in html
     assert '<span class="kw-sentence-chunk" data-sentence-idx="3">' in html
@@ -155,7 +155,7 @@ def test_window_title_parity_with_ahk(tmp_path):
     text = "First sentence.\nSecond sentence."
     tsv_file = tmp_path / "20260828161106-first-sentence-second-sentence.en.tsv"
     tsv_file.write_text("Quotation\tWordSource\tWordDestination\tSentenceSourceIndex\tDeskSelected\nFirst\tFirst\tпервый\t1\t\nSecond\tSecond\tвторой\t2\t\n", encoding="utf-8")
-    
+
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -168,7 +168,7 @@ def test_window_title_parity_with_ahk(tmp_path):
         return_children=False,
         seq_num=1
     )
-    
+
     import re
     m = re.search(r"<title>(.*?)</title>", html)
     actual_title = m.group(0) if m else ""
@@ -198,7 +198,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
-    
+
     # 5 sentences for scrolling verification
     text = "First sentence.\nSecond sentence.\nThird sentence.\nFourth sentence.\nFifth sentence."
     tsv_file = tmp_path / "20260828170000-first-sentence-second-sentence.en.tsv"
@@ -211,7 +211,7 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
         "Fifth\tFifth\tпятый\t5\t\n",
         encoding="utf-8"
     )
-    
+
     html = kardenwort_desk.run_render_flow(
         text=text,
         language="en",
@@ -224,30 +224,30 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
         return_children=False,
         seq_num=1
     )
-    
+
     page.set_content(html)
     page.wait_for_selector("#kw-workspace-tab-bar")
-    
+
     # Check initial active tab and title (no prefix)
     active_chip = page.locator(".kw-tab-chip.active")
     assert active_chip.inner_text() == "1"
     assert not page.title().startswith("[")
     assert page.title() == "Kardenwort - en (multi) - 20260828170000-first-sentence-second-sentence.en.tsv - Ready"
-    
+
     # Click Tab 2 (Sentence 1: sentence_idx = 1)
     tab2 = page.locator('.kw-tab-chip[data-tab-seq="2"]')
     tab2.click()
-    
+
     # Sentence 1 chunk should be visible, chunk 2 should be hidden
     chunk1 = page.locator('.kw-sentence-chunk[data-sentence-idx="1"]')
     chunk2 = page.locator('.kw-sentence-chunk[data-sentence-idx="2"]')
     assert chunk1.is_visible()
     assert not chunk2.is_visible()
-    
+
     # Check title updated for sentence 1 with distinct sentence slug and without prefix
     assert not page.title().startswith("[")
     assert page.title() == "Kardenwort - en (multi) - 20260828170001-first-sentence.en.tsv - Ready"
-    
+
     # Press ']' key to go to Tab 3 (Sentence 2: sentence_idx = 2)
     page.keyboard.press("]")
     chunk3 = page.locator('.kw-sentence-chunk[data-sentence-idx="3"]')
@@ -256,11 +256,11 @@ def test_playwright_workspace_tab_strip_and_navigation(page, tmp_path):
     assert not chunk3.is_visible()
     assert not page.title().startswith("[")
     assert page.title() == "Kardenwort - en (multi) - 20260828170002-second-sentence.en.tsv - Ready"
-    
+
     # Set narrow viewport so tab strip overflows and activates chevrons
     page.set_viewport_size({"width": 180, "height": 600})
     page.evaluate("window.WorkspaceTabs.init()")
-    
+
     next_btn = page.locator("#kw-tab-next")
     prev_btn = page.locator("#kw-tab-prev")
     assert not next_btn.is_disabled()
@@ -274,7 +274,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
     config, resolved_paths, _, _ = kardenwort_desk.load_config()
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
-    
+
     text = "First sentence.\nSecond sentence."
     tsv_file = tmp_path / "20260828180000-dock.en.tsv"
     tsv_file.write_text(
@@ -295,7 +295,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
     page.wait_for_selector("#kw-workspace-tab-bar")
     tab_bar = page.locator("#kw-workspace-tab-bar")
     container = page.locator(".container")
-    
+
     assert tab_bar.evaluate("el => window.getComputedStyle(el).position") == "fixed"
     assert tab_bar.evaluate("el => window.getComputedStyle(el).top") == "0px"
     assert tab_bar.evaluate("el => window.getComputedStyle(el).zIndex") == "1000"
@@ -313,7 +313,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
     page.wait_for_selector("#kw-workspace-tab-bar")
     tab_bar = page.locator("#kw-workspace-tab-bar")
     container = page.locator(".container")
-    
+
     assert tab_bar.evaluate("el => window.getComputedStyle(el).position") == "fixed"
     assert tab_bar.evaluate("el => window.getComputedStyle(el).bottom") == "50px"
     assert tab_bar.evaluate("el => window.getComputedStyle(el).zIndex") == "1000"
@@ -330,7 +330,7 @@ def test_playwright_tab_docking_positions(page, tmp_path):
     page.set_content(html_inline)
     page.wait_for_selector("#kw-workspace-tab-bar")
     tab_bar = page.locator("#kw-workspace-tab-bar")
-    
+
     assert tab_bar.evaluate("el => window.getComputedStyle(el).position") == "static"
     assert page.locator("body").evaluate("el => !el.classList.contains('has-dock-top') && !el.classList.contains('has-dock-bottom')") is True
     assert tab_bar.evaluate("el => el.classList.contains('kw-tab-dock-inline')") is True
@@ -342,7 +342,7 @@ def test_playwright_glassmorphic_styling_and_hover(page, tmp_path):
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "tab_bar_position", "top")
-    
+
     text = "First sentence.\nSecond sentence."
     tsv_file = tmp_path / "20260828180500-glass.en.tsv"
     tsv_file.write_text(
@@ -361,14 +361,14 @@ def test_playwright_glassmorphic_styling_and_hover(page, tmp_path):
     page.set_content(html_dark)
     page.wait_for_selector("#kw-workspace-tab-bar")
     tab_bar = page.locator("#kw-workspace-tab-bar")
-    
+
     bf = tab_bar.evaluate("el => window.getComputedStyle(el).backdropFilter || window.getComputedStyle(el).webkitBackdropFilter")
     assert "blur(8px)" in bf
-    
+
     # Idle translucent background (dark: rgba(22, 27, 34, 0.8))
     bg_idle = tab_bar.evaluate("el => window.getComputedStyle(el).backgroundColor")
     assert "rgba(22, 27, 34, 0.8)" in bg_idle or "0.8" in bg_idle
-    
+
     # Hover solid opaque background (dark: #161b22 -> rgb(22, 27, 34))
     tab_bar.hover()
     page.wait_for_timeout(300)
@@ -382,7 +382,7 @@ def test_playwright_dynamic_document_title_card_prefix(page, tmp_path):
     config.set("sentences_mode", "delivery_mode", "container")
     config.set("sentences_mode", "enabled", "true")
     config.set("sentences_mode", "spawn_order", "normal")
-    
+
     text = "First sentence.\nSecond sentence."
     tsv_file = tmp_path / "20260828181000-first-sentence-second-sentence.en.tsv"
     tsv_file.write_text(
@@ -515,9 +515,9 @@ def test_action_toolbar_glassmorphism_css(tmp_path):
     assert ".kw-action-toolbar {" in html_dark
     assert "backdrop-filter: blur(8px);" in html_dark
     assert "-webkit-backdrop-filter: blur(8px);" in html_dark
-    assert "background: rgba(22, 27, 34, 0.8);" in html_dark
+    assert "background: var(--toolbar-bg, rgba(22, 27, 34, 0.8));" in html_dark
     assert ".kw-action-toolbar:hover {" in html_dark
-    assert "background: #161b22;" in html_dark
+    assert "background: var(--toolbar-bg, #161b22);" in html_dark
 
     html_light = kardenwort_desk.run_render_flow(
         text="Test text.",
@@ -530,7 +530,7 @@ def test_action_toolbar_glassmorphism_css(tmp_path):
         spawn_children=False,
     )
     assert "body.theme-light .kw-action-toolbar" in html_light
-    assert "background: rgba(255, 255, 255, 0.85);" in html_light
+    assert "background: var(--toolbar-bg, rgba(255, 255, 255, 0.85));" in html_light
     assert "body.theme-light .kw-action-toolbar:hover" in html_light
 
 
@@ -1607,7 +1607,7 @@ def test_drag_selection_across_filled_reword_row_in_table_of_lemmas(page, tmp_pa
 def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_path):
     """
     Verifies cross-tab selection behavior: selecting words in Tab 2 ('the') and Tab 3 ('on')
-    synchronizes into Tab 1 (Overview) upon tab switching, while unselected words remain unselected.
+    remains separate from Tab 1 (Overview) upon tab switching, while unselected words remain unselected.
     """
     from kardenwort_db import KardenwortDB
     db_path = tmp_path / "test_tab1_clean.db"
@@ -1694,14 +1694,14 @@ def test_cross_tab_selection_isolation_preserves_clean_overview_tab(page, tmp_pa
     tab1.click()
     page.wait_for_selector('#lemma-table tbody tr')
 
-    # Tab 1 consolidates selections from other tabs: 'the' and 'on' are selected
+    # Overview keeps its independent empty selection set.
     tab1_the = page.locator('#lemma-table tbody tr[data-row-id="0"]')
-    assert tab1_the.get_attribute("data-selected") == "1"
-    assert "selected" in (tab1_the.get_attribute("class") or "")
+    assert tab1_the.get_attribute("data-selected") == "0"
+    assert "selected" not in (tab1_the.get_attribute("class") or "")
 
     tab1_on = page.locator('#lemma-table tbody tr[data-row-id="2"]')
-    assert tab1_on.get_attribute("data-selected") == "1"
-    assert "selected" in (tab1_on.get_attribute("class") or "")
+    assert tab1_on.get_attribute("data-selected") == "0"
+    assert "selected" not in (tab1_on.get_attribute("class") or "")
 
     # Unselected words on Tab 1 remain unselected
     tab1_first = page.locator('#lemma-table tbody tr[data-row-id="1"]')
@@ -2014,7 +2014,7 @@ def test_overview_tab_unification_article_pronoun_der(tmp_path):
     assert len(consolidated_word["all_row_ids"]) == 3
 
 
-def test_playwright_cross_tab_selection_synchronization(page, tmp_path):
+def test_playwright_cross_tab_selection_isolation(page, tmp_path):
     """
     Task 4.1: Verify cross-tab selection synchronization between Tab 1 and child sentence tabs.
     Selecting a lemma on Tab 1 (Master Overview) reflects across all child sentence tabs
@@ -2075,9 +2075,9 @@ def test_playwright_cross_tab_selection_synchronization(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="2"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # On Tab 2: "Haus" should be selected ("1"), "gross" should be unselected ("0")
+    # The child context remains unselected.
     haus_row_tab2 = page.locator("#lemma-table tbody tr", has_text="Haus").first
-    assert haus_row_tab2.get_attribute("data-selected") == "1"
+    assert haus_row_tab2.get_attribute("data-selected") == "0"
     gross_row_tab2 = page.locator("#lemma-table tbody tr", has_text="gross").first
     assert gross_row_tab2.get_attribute("data-selected") == "0"
 
@@ -2085,16 +2085,19 @@ def test_playwright_cross_tab_selection_synchronization(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # On Tab 3: "Haus" should be selected ("1"), "Katze" should be unselected ("0")
+    # The second child also remains independent.
     haus_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Haus").first
-    assert haus_row_tab3.get_attribute("data-selected") == "1"
+    assert haus_row_tab3.get_attribute("data-selected") == "0"
     katze_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Katze").first
     assert katze_row_tab3.get_attribute("data-selected") == "0"
 
 
-def test_playwright_cross_tab_deselection_global(page, tmp_path):
+    page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
+    assert page.locator("#lemma-table tbody tr", has_text="Haus").first.get_attribute("data-selected") == "1"
+
+def test_playwright_cross_tab_deselection_isolation(page, tmp_path):
     """
-    Task 4.2: Verify deselecting a word on Tab 2 unmarks it globally on Tab 1 and Tab 3.
+    Task 4.2: Verify deselecting a word on Tab 2 leaves the other contexts unchanged.
     """
     from kardenwort_db import KardenwortDB
     db_path = tmp_path / "test_cross_tab_desel.db"
@@ -2153,15 +2156,15 @@ def test_playwright_cross_tab_deselection_global(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # On Tab 3: "Haus" should now be unselected ("0")
+    # Tab 3 retains its previously selected Haus.
     haus_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Haus").first
-    assert haus_row_tab3.get_attribute("data-selected") == "0"
+    assert haus_row_tab3.get_attribute("data-selected") == "1"
 
     # Switch to Tab 1 (Master Overview)
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
-    # On Tab 1: "Haus" should also be unselected ("0")
+    # Overview retains its independent empty selection.
     haus_row_tab1 = page.locator("#lemma-table tbody tr", has_text="Haus").first
     assert haus_row_tab1.get_attribute("data-selected") == "0"
 
@@ -2174,17 +2177,19 @@ def test_playwright_cross_tab_deselection_global(page, tmp_path):
     page.locator('.kw-tab-chip[data-tab-seq="3"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
     katze_row_tab3 = page.locator("#lemma-table tbody tr", has_text="Katze").first
-    assert katze_row_tab3.get_attribute("data-selected") == "1"
+    assert katze_row_tab3.get_attribute("data-selected") == "0"
 
-    # Deselect "Katze" on Tab 3
+    # Toggle Katze independently on the child, ending deselected.
+    katze_row_tab3.click()
+    assert katze_row_tab3.get_attribute("data-selected") == "1"
     katze_row_tab3.click()
     assert katze_row_tab3.get_attribute("data-selected") == "0"
 
-    # Switch back to Tab 1: "Katze" is unselected
+    # Overview retains its own selected Katze.
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
     katze_row_tab1_back = page.locator("#lemma-table tbody tr", has_text="Katze").first
-    assert katze_row_tab1_back.get_attribute("data-selected") == "0"
+    assert katze_row_tab1_back.get_attribute("data-selected") == "1"
 
 
 def test_playwright_card_scoped_send_to_anki_export(page, tmp_path):
@@ -2276,6 +2281,8 @@ window.fetch = async function(url, options) {
     page.locator('.kw-tab-chip[data-tab-seq="1"]').click()
     page.wait_for_function("document.querySelector('#lemma-table tbody tr') !== null", timeout=5000)
 
+    # Overview has independent selections; choose its explicit export set.
+    page.evaluate("toggleRowSelection(0, true); toggleRowSelection(2, true); notifyAHKSelection()")
     # Click 'Send to Anki' from Tab 1 (Master Overview)
     page.locator("#kw-btn-export").click()
     page.wait_for_timeout(100)
@@ -3073,5 +3080,3 @@ def test_playwright_table_skeleton_zero_reflow_on_translation_arrival(page, tmp_
         for td_before, td_after in zip(r_before["tds"], r_after["tds"]):
             cell_h_diff = abs(td_after["cellDivBox"]["height"] - td_before["cellDivBox"]["height"])
             assert cell_h_diff < 0.05, f"Col {td_after['col']} in Row {r_idx} cell height shifted by {cell_h_diff}px"
-
-

@@ -5,34 +5,34 @@ import kardenwort_desk
 
 def test_playwright_dom_validation(page, tmp_path):
     tsv_path = tmp_path / "test.tsv"
-    
+
     # 2.2 Generate HTML
     config, resolved_paths, goldendict, wordfill = kardenwort_desk.load_config()
     headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI"]
     data_rows = [["Haus", "дом", "", ""]]
-    
+
     html = kardenwort_desk.render_lookup_html(
-        text="Das Haus", 
-        language="de", 
-        target_lang="ru", 
-        config=config, 
-        resolved_paths=resolved_paths, 
-        zid="000", 
-        goldendict=goldendict, 
-        comments=[], 
-        headers=headers, 
-        data_rows=data_rows, 
+        text="Das Haus",
+        language="de",
+        target_lang="ru",
+        config=config,
+        resolved_paths=resolved_paths,
+        zid="000",
+        goldendict=goldendict,
+        comments=[],
+        headers=headers,
+        data_rows=data_rows,
         sentence_translation="The house"
     )
-    
+
     html = html.replace("Das Haus", '<span class="word highlight-purple" data-word-idx="0">Das</span> <span class="word highlight-orange" data-word-idx="1">Haus</span>')
-    
+
     # Ensure it's valid HTML
     assert "<html>" in html
-    
+
     # 2.3 Load HTML into page
     page.set_content(html)
-    
+
     # Let's mock a payload and apply it
     role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
     import configparser
@@ -48,26 +48,26 @@ def test_playwright_dom_validation(page, tmp_path):
         translated_text="The house",
         config=dom_cfg
     )
-    
+
     # 2.6 Verify pathlib usage (already doing it here via tsv_path.parent)
     updates_dir = tsv_path.parent / f"{tsv_path.stem}.updates"
     js_files = list(updates_dir.glob("*.js"))
     assert len(js_files) == 1, "Expected exactly 1 JS payload file to be created"
-    
+
     # 2.4 Evaluate JS
     js_content = js_files[0].read_text(encoding="utf-8")
     page.evaluate(js_content)
-    
+
     # Wait for any potential async renders (though it should be sync)
     page.wait_for_selector(".highlight-purple")
-    
+
     # 2.5 Assert DOM structure preserved
     purple_spans = page.locator(".highlight-purple").count()
     assert purple_spans >= 1, "The <span class=\"highlight-purple\"> elements should be preserved after update"
-    
+
     orange_spans = page.locator(".highlight-orange").count()
     assert orange_spans >= 1, "The <span class=\"highlight-orange\"> elements should be preserved after update"
-    
+
     # Verify the table was updated with the payload
     assert page.locator("td:has-text('дом')").is_visible(), "Table should be updated with new destination word"
 
@@ -85,25 +85,25 @@ def test_handle_sent_text_rendered_html_scripts_load_without_syntax_errors(page,
     config.set("audio", "lmb_source", "lemma")
     resolved_paths["anki_tts_cli"] = Path("C:/fake/tts.py")
     resolved_paths["kardenwort_python"] = Path("python.exe")
-    
+
     tsv_file = tmp_path / "20260815180100-archive.en.tsv"
     tsv_file.write_text("# comment\nWordSource\tWordSourceInflectedForm\tWordDestination\narchive/20260815131120\tarchive/20260815131120-token-mapping/\tархив\n", encoding="utf-8")
-    
+
     html = kardenwort_desk.run_render_flow(
-        text="archive", 
-        language="en", 
+        text="archive",
+        language="en",
         zid="20260815180100",
         text_mode="single",
-        config=config, 
-        resolved_paths=resolved_paths, 
+        config=config,
+        resolved_paths=resolved_paths,
         tsv_path=str(tsv_file)
     )
-    
+
     page.set_content(html)
     assert len(errors) == 0, f"Page load caused JavaScript errors: {errors}"
-    
+
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
-    
+
     # Click table row 0
     row = page.locator("tr[data-row-id='0']")
     row.click(button="left")
@@ -808,7 +808,7 @@ def test_translation_token_hover_highlights_source_token(page, tmp_path):
         var targetTrans = transSpans[1]; // "синхронизированы"
         var evt = new MouseEvent('mouseover', { bubbles: true });
         targetTrans.dispatchEvent(evt);
-        
+
         var srcSpans = document.querySelectorAll('#source-container span.word');
         for (var i = 0; i < srcSpans.length; i++) {
             if (srcSpans[i].classList.contains('hl-mvp-hover')) {
@@ -825,7 +825,7 @@ def test_translation_token_hover_highlights_source_token(page, tmp_path):
         var targetTrans = transSpans[1];
         var evt = new MouseEvent('mouseout', { bubbles: true });
         targetTrans.dispatchEvent(evt);
-        
+
         var srcSpans = document.querySelectorAll('#source-container span.word');
         for (var i = 0; i < srcSpans.length; i++) {
             if (srcSpans[i].classList.contains('hl-mvp-hover')) {
@@ -1287,5 +1287,3 @@ def test_playwright_computed_style_token_and_row_highlight_states(page, tmp_path
     assert styles["selectedRowBg"] == "rgba(255, 204, 0, 0.15)"
     # Translation token padding preserves 0px (zero displacement, R48)
     assert styles["transPadding"] in ("0px 0px 0px 0px", "0px")
-
-

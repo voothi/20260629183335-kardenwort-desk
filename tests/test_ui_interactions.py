@@ -7,7 +7,7 @@ import kardenwort_desk
 def get_base_html():
     headers = ["WordSource", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "Oxford"]
     data_rows = [["Haus", "дом", "", "", ""]]
-    
+
     html = """<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -17,12 +17,12 @@ def get_base_html():
     <div class="section-title">Source Text</div>
     <div class="source-text" id="source-container">Das Haus</div>
   </div>
-  
+
   <div class="section">
     <div class="section-title">Translation</div>
     <div class="translation-text" id="translation-container">The house</div>
   </div>
-  
+
   <div class="section">
     <div class="section-title">Lemmas</div>
     <table id="lemma-table">
@@ -68,7 +68,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
             continue
         if in_js:
             js_lines.append(line)
-            
+
     js = "\n".join(js_lines)
     if not js.strip():
         modular_scripts = [
@@ -89,7 +89,7 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
         js = "\n".join(bundle)
     # Ensure init() runs immediately since page load already fired
     js = re.sub(r"window\.addEventListener\('load',\s*init,\s*false\);", "init();", js)
-    
+
     # Replace AHK python string formatting variables with valid defaults
     js = js.replace("{audio_lmb_play}", "true" if lmb_play else "false")
     js = js.replace("{audio_lmb_source}", f'"{lmb_source}"')
@@ -145,7 +145,7 @@ def extract_mvp_js():
         if in_js_block:
             if 'IE.document.parentWindow.execScript(js)' in line or 'ExecuteJavaScript(' in line or 'scriptEl.text :=' in line:
                 break
-            
+
             # Match strings enclosed in quotes, ignoring AHK concat operators
             # AHK string literals can contain escaped quotes as "" or `"
             match = re.search(r'"((?:[^"`]|""|`.)*)"', line)
@@ -155,7 +155,7 @@ def extract_mvp_js():
                 if 'window.setSelectableTextMode(' in code_line:
                     code_line = 'window.setSelectableTextMode(false);'
                 js_lines.append(code_line)
-                
+
             if '})();"' in line:
                 break
     return "\n".join(js_lines)
@@ -163,7 +163,7 @@ def extract_mvp_js():
 def init_appstate(page, data_rows, headers, source_text="Das Haus", translated_text="The house"):
     desk_js = extract_desk_js()
     page.evaluate(desk_js)
-    
+
     # We need to initialize the AppState by sending an initial payload
     # since we bypassed write_update_js
     role_fields = {"lemma": "WordSource", "word_translation": "WordDestination", "ipa": "WordSourceIPA", "morphology": "WordSourceMorphologyAI"}
@@ -176,7 +176,7 @@ def init_appstate(page, data_rows, headers, source_text="Das Haus", translated_t
             "ipa": row[2] if len(row) > 2 else "",
             "morph": row[3] if len(row) > 3 else ""
         }
-    
+
     payload = {
         "stage": "finished",
         "status": "success",
@@ -189,10 +189,10 @@ def init_appstate(page, data_rows, headers, source_text="Das Haus", translated_t
 
 def test_dynamic_labels(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
-    
+
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     update_data = {
         "stage": "finished",
         "rows": {
@@ -203,9 +203,9 @@ def test_dynamic_labels(page, tmp_path):
             }
         }
     }
-    
+
     page.evaluate(f"window.receiveUpdate({json.dumps(update_data)})")
-    
+
     # Assert dynamic styling for Oxford column
     oxford_cell = page.locator("td[data-col='Oxford'] span")
     assert oxford_cell.count() == 1
@@ -217,32 +217,32 @@ def test_hover_highlight_mvp(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     source_html = '<span class="word" data-word-idx="0" data-line-idx="0">Er</span> <span class="word" data-word-idx="1" data-line-idx="0">läuft</span>'
     trans_html = "<div>He is running.</div><div>He is walking.</div><div>He is jumping.</div>"
-    
+
     # Prepare the initial HTML blocks
     html = html.replace("The house", trans_html)
     html = html.replace("Das Haus", source_html)
     page.set_content(html)
-    
+
     # Initialize JS state with the span-rich text
     init_appstate(page, data_rows, headers, source_text=source_html, translated_text=trans_html)
-    
+
     mvp_js = extract_mvp_js()
     if not mvp_js:
         pytest.skip("AHK MVP JS not found")
-        
+
     page.evaluate("window.HoverHighlightMvpBookmarks = 2;")
     page.evaluate(mvp_js)
-    
+
     # Verify tokenization idempotent and correctly formed
     page.wait_for_selector("#translation-container span.word.hl-mvp", timeout=2000)
     spans = page.locator("#translation-container span.word.hl-mvp")
     assert spans.count() >= 3, "Should tokenize the translation text into spans"
-    
+
     # Verify hover interactions
     source_word = page.locator("span.word[data-word-idx='0']").first
     # Hover source word
     source_word.hover()
-    
+
     # Simulate Esc to clear bookmarks
     page.keyboard.press("Escape")
     pinned = page.locator(".hl-mvp-pin")
@@ -253,11 +253,11 @@ def test_appstate_partial_updates(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     update1 = {"stage": "translated_text", "translatedText": "New translation here"}
     page.evaluate(f"window.receiveUpdate({json.dumps(update1)})")
     assert page.locator("#translation-container").inner_text() == "New translation here"
-    
+
     update2 = {"stage": "translated_lemmas", "rows": {"0": {"lemma": "NewHaus"}}}
     page.evaluate(f"window.receiveUpdate({json.dumps(update2)})")
     assert page.locator("td").filter(has_text="NewHaus").is_visible()
@@ -266,16 +266,16 @@ def test_row_selection(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     row = page.locator("tr[data-row-id='0']")
     row.click()
-    
+
     assert "selected" in row.get_attribute("class")
-    
+
     # Check selection JS api
     selected_rows = page.evaluate("window.getSelectedRows()")
     assert selected_rows == '[0]'
-    
+
     # Deselect
     row.click(modifiers=["Control"])
     assert "selected" not in row.get_attribute("class") or row.get_attribute("class") is None
@@ -284,22 +284,22 @@ def test_cell_edit_and_undo(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Double click the translation cell to edit
     cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     cell.dblclick()
-    
+
     # Verify input element appears
     input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
     input_el.wait_for(state="visible", timeout=2000)
-    
+
     # Change text and press enter
     input_el.fill("новый дом")
     input_el.press("Enter")
-    
+
     # Verify it updated
     assert cell.locator(".scrollable-cell").inner_text() == "новый дом"
-    
+
     # Verify AppState deltas tracking
     deltas_json = page.evaluate("window.getDeltas()")
     deltas = json.loads(deltas_json)
@@ -308,7 +308,7 @@ def test_cell_edit_and_undo(page, tmp_path):
     assert deltas[0]["column"] == "WordDestination"
     assert deltas[0]["value"] == "новый дом"
     assert page.evaluate("window.isDirty()") is True
-    
+
     # Undo
     page.evaluate("window.undo()")
     assert cell.locator(".scrollable-cell").inner_text() == "дом"
@@ -318,20 +318,20 @@ def test_row_deletion_and_undo(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Select the row
     row = page.locator("tr[data-row-id='0']")
     row.click()
-    
+
     # Verify selected
     assert "selected" in row.get_attribute("class")
-    
+
     # Press Delete
     page.keyboard.press("Delete")
-    
+
     # Verify row is hidden
     assert row.evaluate("el => window.getComputedStyle(el).display") == "none"
-    
+
     # Verify AppState deltas tracking (should contain _delete)
     deltas_json = page.evaluate("window.getDeltas()")
     import json
@@ -340,10 +340,10 @@ def test_row_deletion_and_undo(page, tmp_path):
     assert deltas[0]["row_id"] == 0
     assert deltas[0]["column"] == "_delete"
     assert deltas[0]["value"] is True
-    
+
     # Undo
     page.evaluate("window.undo()")
-    
+
     # Verify row is visible again
     assert row.evaluate("el => window.getComputedStyle(el).display") != "none"
 
@@ -351,23 +351,23 @@ def test_cancel_edit(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Double click the translation cell to edit
     cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     page.evaluate("window.__selectableTextMode = false;")
     cell.dblclick()
-    
+
     # Verify input element appears
     input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
     input_el.wait_for(state='visible', timeout=2000)
-    
+
     # Change text and press Escape
     input_el.fill("новый дом")
     input_el.press("Escape")
-    
+
     # Verify it reverted back without pushing history
     assert cell.locator(".scrollable-cell").inner_text() == "дом"
-    
+
     # Verify AppState deltas tracking is empty
     deltas_json = page.evaluate("window.getDeltas()")
     import json
@@ -378,23 +378,23 @@ def test_global_undo_redo_shortcuts(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     row = page.locator("tr[data-row-id='0']")
     row.click()
     page.keyboard.press("Delete")
-    
+
     # Verify row is hidden
     assert row.evaluate("el => window.getComputedStyle(el).display") == "none"
-    
+
     # Press Ctrl+Z
     page.keyboard.press("Control+z")
-    
+
     # Verify row is visible again
     assert row.evaluate("el => window.getComputedStyle(el).display") != "none"
-    
+
     # Press Ctrl+Y
     page.keyboard.press("Control+y")
-    
+
     # Verify row is hidden again
     assert row.evaluate("el => window.getComputedStyle(el).display") == "none"
 
@@ -404,14 +404,14 @@ def test_global_select_all_shortcut(page, tmp_path):
     html = html.replace('</tbody>', '<tr data-row-id="1"><td class="col-checkbox" data-col="DeskSelected"></td><td data-col="WordSource"><div class="scrollable-cell">Hund</div></td><td data-col="WordDestination" class="editable"><div class="scrollable-cell">собака</div></td><td data-col="WordSourceIPA"><div class="scrollable-cell"></div></td><td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell"></div></td><td data-col="Oxford"><div class="scrollable-cell"></div></td></tr></tbody>')
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Press Ctrl+A
     page.keyboard.press("Control+a")
-    
+
     # Verify both rows are selected
     row0 = page.locator("tr[data-row-id='0']")
     row1 = page.locator("tr[data-row-id='1']")
-    
+
     assert "selected" in row0.get_attribute("class")
     assert "selected" in row1.get_attribute("class")
 
@@ -420,24 +420,24 @@ def test_keyboard_row_navigation_and_space_toggle(page, tmp_path):
     html = html.replace('</tbody>', '<tr data-row-id="1"><td class="col-checkbox" data-col="DeskSelected"></td><td data-col="WordSource"><div class="scrollable-cell">Hund</div></td><td data-col="WordDestination" class="editable"><div class="scrollable-cell">собака</div></td><td data-col="WordSourceIPA"><div class="scrollable-cell"></div></td><td class="col-morphology" data-col="WordSourceMorphologyAI"><div class="scrollable-cell"></div></td><td data-col="Oxford"><div class="scrollable-cell"></div></td></tr></tbody>')
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Focus table by pressing ArrowDown
     page.keyboard.press("ArrowDown")
-    
+
     row0 = page.locator("tr[data-row-id='0']")
     row1 = page.locator("tr[data-row-id='1']")
-    
+
     # Verify row 0 is focused (has outline style set)
     assert "solid" in row0.evaluate("el => el.style.outline")
-    
+
     # Press Space to toggle selection of row 0
     page.keyboard.press("Space")
     assert "selected" in row0.get_attribute("class")
-    
+
     # Press ArrowDown to navigate to row 1
     page.keyboard.press("ArrowDown")
     assert "solid" in row1.evaluate("el => el.style.outline")
-    
+
     # Press Space to toggle selection of row 1
     page.keyboard.press("Space")
     assert "selected" in row1.get_attribute("class")
@@ -447,15 +447,15 @@ def test_f2_shortcut_editing(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Click the destination cell to set lastClickedCell and focus
     cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     page.evaluate("window.__selectableTextMode = false;")
     cell.click()
-    
+
     # Press F2
     page.keyboard.press("F2")
-    
+
     # Verify input element appears
     input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
     input_el.wait_for(state="visible", timeout=2000)
@@ -466,22 +466,22 @@ def test_dirty_cell_class(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     page.evaluate("window.__selectableTextMode = false;")
     cell.dblclick()
-    
+
     input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
     input_el.wait_for(state="visible", timeout=2000)
     input_el.fill("новый дом")
     input_el.press("Enter")
-    
+
     # Verify td has dirty class
     assert "dirty" in cell.get_attribute("class")
-    
+
     # Undo edit
     page.evaluate("window.undo()")
-    
+
     # Verify dirty class is removed
     assert "dirty" not in (cell.get_attribute("class") or "")
 
@@ -489,7 +489,7 @@ def test_force_repaint_reflow(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Ensure window.forceRepaint executes without error
     page.evaluate("window.forceRepaint()")
     height = page.evaluate("document.body.offsetHeight")
@@ -500,12 +500,12 @@ def test_receive_update_resilience(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Call receiveUpdate with null, empty, or partial data
     page.evaluate("window.receiveUpdate(null)")
     page.evaluate("window.receiveUpdate({})")
     page.evaluate("window.receiveUpdate({stage: 'unknown', status: 'error'})")
-    
+
     # AppState should remain active and responsive
     assert page.evaluate("window.AppState.isFinished") is False or True
 
@@ -516,7 +516,7 @@ def test_skeleton_loader_cleanup_on_finish(page, tmp_path):
     html = html.replace('<div class="scrollable-cell">Haus</div>', '<div class="scrollable-cell"><span class="skeleton-loader">...</span></div>')
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Send finished update
     payload = {
         "stage": "finished",
@@ -525,7 +525,7 @@ def test_skeleton_loader_cleanup_on_finish(page, tmp_path):
     }
     import json
     page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
-    
+
     # Verify cell text was updated and skeleton loader replaced
     cell_text = page.locator("tr[data-row-id='0'] td[data-col='WordSource']").inner_text()
     assert "Haus" in cell_text
@@ -535,24 +535,24 @@ def test_pending_stub_preservation_and_smooth_update(page, tmp_path):
     # Inject pending skeleton stub into translation container
     html = html.replace('<div class="translation-text" id="translation-container">The house</div>', '<div class="translation-text" id="translation-container"><span data-pending="true" class="skeleton-loader">Loading translation...</span></div>')
     page.set_content(html)
-    
+
     desk_js = extract_desk_js()
     page.evaluate(desk_js)
-    
+
     # 1. Receive early intermediate stage with no translatedText yet
     payload = {"stage": "init", "status": "processing"}
     import json
     page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
-    
+
     # Verify the pending stub is preserved (did NOT collapse into empty blank space)
     container = page.locator("#translation-container")
     assert "Loading translation..." in container.inner_text()
     assert container.locator("[data-pending='true']").count() == 1
-    
+
     # 2. Receive actual translatedText payload
     payload_translated = {"stage": "translated_text", "translatedText": "Дом был красивым."}
     page.evaluate(f"window.receiveUpdate({json.dumps(payload_translated)})")
-    
+
     # Verify smooth in-place update replaces stub with actual text
     assert container.inner_text() == "Дом был красивым."
     assert container.locator("[data-pending='true']").count() == 0
@@ -598,10 +598,10 @@ def test_smooth_partial_cell_update_without_full_rerender(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Add a custom attribute to source container to detect if it gets re-rendered
     page.evaluate("document.getElementById('source-container').setAttribute('data-test-marker', 'active')")
-    
+
     # Send row-only update for translation
     payload = {
         "stage": "translated_words",
@@ -609,11 +609,11 @@ def test_smooth_partial_cell_update_without_full_rerender(page, tmp_path):
     }
     import json
     page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
-    
+
     # Verify row 0 translation cell updated
     trans_cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     assert "строение" in trans_cell.inner_text()
-    
+
     # Verify source-container marker remains intact (page was not re-rendered)
     assert page.locator("#source-container").get_attribute("data-test-marker") == "active"
 
@@ -621,20 +621,20 @@ def test_hand_tool_vs_select_text_mode(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     cell = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
-    
+
     # 1. Enable Select Text Mode (Hand Tool disabled)
     page.evaluate("window.__selectableTextMode = true;")
     cell.dblclick(force=True)
-    
+
     # Verify cell editing is BLOCKED when in Select Text mode
     assert page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input").count() == 0
-    
+
     # 2. Disable Select Text Mode (Hand Tool active)
     page.evaluate("window.__selectableTextMode = false;")
     cell.dblclick(force=True)
-    
+
     # Verify cell editing WORKS when Hand Tool is active
     input_el = page.locator("tr[data-row-id='0'] td[data-col='WordDestination'] input")
     input_el.wait_for(state="visible", timeout=2000)
@@ -645,23 +645,23 @@ def test_ahk_bridge_selected_rows_and_clear(page, tmp_path):
     html, _, _, headers, data_rows = get_base_html()
     page.set_content(html)
     init_appstate(page, data_rows, headers)
-    
+
     # Programmatically set selected rows via AHK bridge
     import json
     page.evaluate(f"window.setSelectedRows({json.dumps('[0]')})")
-    
+
     # Verify row has selected class
     row0 = page.locator("tr[data-row-id='0']")
     assert "selected" in row0.get_attribute("class")
-    
+
     # Verify getSelectedRows returns JSON string array with 0
     selected_raw = page.evaluate("window.getSelectedRows()")
     selected = json.loads(selected_raw) if isinstance(selected_raw, str) else selected_raw
     assert selected == [0] or selected == ["0"]
-    
+
     # Programmatically clear selections via AHK bridge
     page.evaluate("window.clearAllSelectionsAndNotify()")
-    
+
     # Verify selections are cleared
     selected_after_raw = page.evaluate("window.getSelectedRows()")
     selected_after = json.loads(selected_after_raw) if isinstance(selected_after_raw, str) else selected_after_raw
@@ -670,25 +670,25 @@ def test_ahk_bridge_selected_rows_and_clear(page, tmp_path):
 
 def test_ie_cache_busting_meta_header_and_in_place_updates(page, tmp_path):
     html_output, _, _, headers, data_rows = get_base_html()
-    
+
     # Inject X-UA-Compatible header if testing desk HTML generator template
     html_output = html_output.replace('<head><meta charset="utf-8"></head>', '<head><meta charset="utf-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"></head>')
-    
+
     # Load into Playwright
     page.set_content(html_output)
     desk_js = extract_desk_js()
     page.evaluate(desk_js)
-    
+
     # Verify <meta http-equiv="X-UA-Compatible" content="IE=edge"> tag is loaded in DOM
     meta_tag = page.locator("meta[http-equiv='X-UA-Compatible']")
     assert meta_tag.get_attribute("content") == "IE=edge"
-    
+
     # Verify in-place updates preserve the page URL (avoiding IE file re-navigation cache bugs)
     initial_url = page.url
     payload = {"stage": "finished", "status": "success", "rows": {"0": {"trans": "updated"}}}
     import json
     page.evaluate(f"window.receiveUpdate({json.dumps(payload)})")
-    
+
     assert page.url == initial_url
 
 
@@ -701,7 +701,7 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
         '<span class="word highlight-orange" data-word-idx="7" data-line-idx="0" data-lower-clean="case">case</span>'
         '():'
     )
-    
+
     token_manifest = [
         {"text": "def", "is_word": True, "visual_idx": 1},
         {"text": " ", "is_word": False, "visual_idx": 2},
@@ -714,7 +714,7 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
         {"text": ")", "is_word": False, "visual_idx": 9},
         {"text": ":", "is_word": False, "visual_idx": 10}
     ]
-    
+
     html = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -724,12 +724,12 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
     <div class="section-title">Source Text</div>
     <div class="source-text" id="source-container">{source_html}</div>
   </div>
-  
+
   <div class="section">
     <div class="section-title">Translation</div>
     <div class="translation-text" id="translation-container">definition</div>
   </div>
-  
+
   <div class="section">
     <div class="section-title">Lemmas</div>
     <table id="lemma-table">
@@ -771,20 +771,20 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
     page.set_content(html)
     desk_js = extract_desk_js()
     page.evaluate(desk_js)
-    
+
     span_split = page.locator("span[data-lower-clean='split']")
     span_camel = page.locator("span[data-lower-clean='camel']")
     span_case = page.locator("span[data-lower-clean='case']")
-    
+
     # 1. Test LMB click on camel:
     # All constituent sub-tokens highlighted in yellow, clicked sub-token gets active-subtoken
     span_camel.click(button="left")
-    
+
     assert "highlight-orange-active" in (span_split.get_attribute("class") or "")
     assert "highlight-orange-active" in (span_camel.get_attribute("class") or "")
     assert "highlight-orange-active" in (span_case.get_attribute("class") or "")
     assert "active-subtoken" in (span_camel.get_attribute("class") or "")
-    
+
     # 2. Test Full compound RMB flip when all sub-tokens are highlighted/selected:
     # All constituent sub-tokens flip simultaneously to their ordered translations
     span_camel.click(button="right")
@@ -794,13 +794,13 @@ def test_composite_identifier_unified_rmb_flip_and_lmb_symmetry(page):
     assert "flipped" in (span_split.get_attribute("class") or "")
     assert "flipped" in (span_camel.get_attribute("class") or "")
     assert "flipped" in (span_case.get_attribute("class") or "")
-    
+
     source_container = page.locator("#source-container")
     assert "расколоть_верблюд_случай" in source_container.inner_text()
-    
+
     # 3. Test RMB unflip on case when all are selected: unflips all spans together
     span_case.click(button="right")
-    
+
     assert span_split.inner_text() == "split"
     assert span_camel.inner_text() == "camel"
     assert span_case.inner_text() == "case"
@@ -823,7 +823,7 @@ def test_compound_audio_playback_resolution(page):
         {"text": "-", "is_word": False, "visual_idx": 1},
         {"text": "Manager", "is_word": True, "visual_idx": 2, "lower_clean": "manager", "row_ids": [1]},
     ]
-    
+
     html_pm = f"""<!DOCTYPE html>
 <html>
 <head><meta charset="utf-8"></head>
@@ -858,10 +858,10 @@ def test_compound_audio_playback_resolution(page):
     page.evaluate("window.__ahkCalls = []; window.ahkCall = function(action, arg) { window.__ahkCalls.push({action: action, arg: arg}); };")
     js_lemma = extract_desk_js(lmb_play=True, lmb_source="lemma")
     page.evaluate(js_lemma)
-    
+
     span_pm = page.locator("span[data-lower-clean='manager']")
     span_pm.click(button="left")
-    
+
     calls = page.evaluate("window.__ahkCalls")
     play_calls = [c for c in calls if c.get("action") == "play"]
     assert len(play_calls) == 1
@@ -1362,18 +1362,18 @@ def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
 
     page.set_content(html)
     page.evaluate(extract_desk_js())
-    
+
     span_viel = page.locator("span[data-lower-clean='viel']")
     span_zu = page.locator("span[data-lower-clean='zu']")
     span_besch = page.locator("span[data-lower-clean='beschäftigte']")
-    
+
     # 1. Right click on isolated sub-token 'beschäftigte' flips only that sub-token
     span_besch.click(button="right")
-    
+
     assert span_viel.inner_text() == "viel"
     assert span_zu.inner_text() == "zu"
     assert span_besch.inner_text() == "занимать"
-    
+
     # 2. Dragging across all constituent parts flips all of them cleanly without composite bleeding
     page.evaluate("""() => {
         const s1 = document.querySelector("span[data-lower-clean='viel']");
@@ -1386,7 +1386,7 @@ def test_rmb_flip_compound_with_shared_rows_no_bleeding(page):
     assert span_viel.inner_text() == "много"
     assert span_zu.inner_text() == "к"
     assert span_besch.inner_text() == "занимать"
-    
+
     source_container = page.locator("#source-container")
     assert "много-к-занимать" in source_container.inner_text()
 
@@ -1837,7 +1837,7 @@ def test_rmb_drag_flip_preserves_unconnected_words_and_numbers(page):
 
     span_version = page.locator("span[data-lower-clean='version']")
     span_unknown = page.locator("span[data-lower-clean='unknown']")
-    
+
     # RMB drag from Version across 2, 0, release, 100, unknown
     span_version.dispatch_event("mousedown", {"button": 2, "which": 3})
     page.locator("span[data-lower-clean='2']").dispatch_event("mouseover")
@@ -2039,7 +2039,7 @@ def test_compound_subtoken_lmb_selection(page):
 
     span_split = page.locator("span[data-lower-clean='split']")
     span_camel = page.locator("span[data-lower-clean='camel']")
-    
+
     # 1. Clicking on 'split' sub-token selects only its mapped rows (0, 3), not sibling rows (1, 2)
     span_split.click(button="left")
     selected_rows = json.loads(page.evaluate("window.getSelectedRows()"))
@@ -6713,40 +6713,3 @@ def test_same_lemma_button_zero_reflow_font_weight():
         "Active state must not override font-weight to 600; font metrics must remain invariant (zero-reflow)."
     )
     assert "font-weight" not in rule_block or "font-weight: 500" in rule_block
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-

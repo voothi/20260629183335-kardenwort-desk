@@ -30,26 +30,26 @@ parent_mode=table
         'kardenwort_workspace': tmp_path,
         'settings_file': tmp_path / 'settings.ini'
     }
-    
+
     mapping_file = tmp_path / "mapping.ini"
     mapping_file.write_text("[fields]\nWordSource=\nSentenceDestination=\nSentenceSourceIndex=\n[fields_mapping.word]\nWordSource=lemma\n[fields_mapping.sentence]\nSentenceDestination=sentence_destination\nSentenceSourceIndex=sentence_index\n")
-    
+
     return config, resolved_paths
 
 def test_progressive_bypassed(monkeypatch, tmp_path):
     config, resolved_paths = setup_test_env(tmp_path)
-    
+
     # Mock prepare_lookup_tsv
     def mock_prepare_lookup_tsv(*args, **kwargs):
         p = tmp_path / "mock.tsv"
         p.write_text("SentenceSourceIndex\tSentenceDestination\n1\t\n", encoding='utf-8')
         return p
-        
+
     # Mock translate_text with a slow delay
     def mock_translate_text(*args, **kwargs):
         time.sleep(3.0)
         return "Translated Text"
-        
+
     monkeypatch.setattr(desk, 'prepare_lookup_tsv', mock_prepare_lookup_tsv)
     monkeypatch.setattr(desk, 'translate_text', mock_translate_text)
     monkeypatch.setattr(desk, 'load_anki_mapping', lambda x: configparser.ConfigParser())
@@ -65,12 +65,12 @@ def test_progressive_bypassed(monkeypatch, tmp_path):
     start_time = time.time()
     html_out = desk.run_render_flow("Hello", "en", "123", "single", config, resolved_paths)
     end_time = time.time()
-    
+
     duration = end_time - start_time
-    
+
     # Should be instant, bypassing the 3-second delay
     assert duration < 1.0, f"Execution was too slow: {duration}s, progressive bypass failed"
-    
+
     # Should contain the skeleton loader
     assert "skeleton-loader" in html_out
     assert "data-pending=\"true\"" in html_out
@@ -1414,12 +1414,3 @@ api_key = test-secret-token-123
     assert len(popen_cmds) == 1
     assert popen_cmds[0][0] == str(custom_py)
     assert popen_cmds[0][2] == "progressive-worker"
-
-
-
-
-
-
-
-
-

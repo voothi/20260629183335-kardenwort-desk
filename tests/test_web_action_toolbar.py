@@ -256,10 +256,12 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     reword_btn.click()
     page.wait_for_timeout(100)
     fetches = page.evaluate("window.__fetches")
-    assert len(fetches) == 1
-    assert fetches[0]["url"] == "/session/reword"
-    assert fetches[0]["body"]["row_ids"] == [0]
-    assert fetches[0]["body"]["session_zid"] == "20260826214953"
+    assert len(fetches) == 2
+    assert fetches[0]["url"] == "/session/save"
+    assert all(d["column"] == "DeskSelected" for d in fetches[0]["body"]["deltas"])
+    assert fetches[1]["url"] == "/session/reword"
+    assert fetches[1]["body"]["row_ids"] == [0]
+    assert fetches[1]["body"]["session_zid"] == "20260826214953"
     assert page.evaluate("window.__reloads") == 0
     cell_trans = page.locator("tr[data-row-id='0'] td[data-col='WordDestination']")
     assert "новое_здание_reworded" in cell_trans.inner_text()
@@ -278,9 +280,9 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     retext_btn.click()
     page.wait_for_timeout(100)
     fetches = page.evaluate("window.__fetches")
-    assert len(fetches) == 2
-    assert fetches[1]["url"] == "/session/retext"
-    assert fetches[1]["body"]["session_zid"] == "20260826214953"
+    assert len(fetches) == 3
+    assert fetches[2]["url"] == "/session/retext"
+    assert fetches[2]["body"]["session_zid"] == "20260826214953"
     assert page.evaluate("window.__reloads") == 0
     trans_container = page.locator("#translation-container")
     assert "Переведенный текст обновлен" in trans_container.inner_text()
@@ -290,8 +292,8 @@ def test_reword_and_retext_rest_dispatch(page, tmp_path):
     update_btn.click()
     page.wait_for_timeout(100)
     fetches = page.evaluate("window.__fetches")
-    assert len(fetches) == 3
-    assert "/session/status" in fetches[2]["url"]
+    assert len(fetches) == 4
+    assert "/session/status" in fetches[3]["url"]
     assert page.evaluate("window.__reloads") == 0
     assert "дом_status_updated" in cell_trans.inner_text()
 
@@ -317,10 +319,11 @@ def test_send_to_anki_rest_dispatch(page, tmp_path):
     page.wait_for_timeout(100)
 
     fetches = page.evaluate("window.__fetches")
-    assert len(fetches) == 1
-    assert fetches[0]["url"] == "/session/export"
-    assert sorted(fetches[0]["body"]["row_ids"]) == [0, 1]
-    assert fetches[0]["body"]["session_zid"] == "20260826214953"
+    assert len(fetches) == 2
+    assert fetches[0]["url"] == "/session/save"
+    assert fetches[1]["url"] == "/session/export"
+    assert sorted(fetches[1]["body"]["row_ids"]) == [0, 1]
+    assert fetches[1]["body"]["session_zid"] == "20260826214953"
 
     toast_success = page.locator(".kw-toast-success")
     assert toast_success.is_visible()
@@ -483,10 +486,12 @@ def test_toolbar_api_token_propagation(page, tmp_path):
     page.wait_for_timeout(100)
 
     fetches = page.evaluate("window.__fetches")
-    assert len(fetches) == 3
-    assert fetches[2]["url"] == "/session/reword"
+    assert len(fetches) == 4
+    assert fetches[2]["url"] == "/session/save"
     assert fetches[2]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
-    assert fetches[2]["body"]["token"] == "secret-test-token-42"
+    assert fetches[3]["url"] == "/session/reword"
+    assert fetches[3]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
+    assert fetches[3]["body"]["token"] == "secret-test-token-42"
 
     # 4. Test Export
     export_btn = page.locator("#kw-btn-export")
@@ -494,10 +499,10 @@ def test_toolbar_api_token_propagation(page, tmp_path):
     page.wait_for_timeout(100)
 
     fetches = page.evaluate("window.__fetches")
-    assert len(fetches) == 4
-    assert fetches[3]["url"] == "/session/export"
-    assert fetches[3]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
-    assert fetches[3]["body"]["token"] == "secret-test-token-42"
+    assert len(fetches) == 5
+    assert fetches[4]["url"] == "/session/export"
+    assert fetches[4]["options"]["headers"]["X-API-Token"] == "secret-test-token-42"
+    assert fetches[4]["body"]["token"] == "secret-test-token-42"
 
 def test_toolbar_button_loading_states(page, tmp_path):
     # Inject a delayed mock fetch to observe in-flight loading text & disabled state
@@ -526,7 +531,9 @@ window.fetch = function(url, options) {
     assert not reword_btn.is_disabled()
 
     reword_btn.click()
-    page.wait_for_timeout(50)
+    page.wait_for_function("window.__fetchResolve !== null")
+    page.evaluate("window.__fetchResolve({ok:true,status:'success'})")
+    page.wait_for_function("document.getElementById('kw-btn-reword').disabled")
     assert reword_btn.inner_text() == "Rewording..."
     assert reword_btn.is_disabled()
 
@@ -572,6 +579,7 @@ def test_toolbar_error_trace_toast_and_state_recovery(page, tmp_path):
     error_fetch_script = """<script>
 window.__errorPayload = null;
 window.fetch = async function(url, options) {
+    if (url === "/session/save") return {ok:true,status:200,json:async()=>({ok:true})};
     return {
         ok: false,
         status: 500,
@@ -1247,6 +1255,7 @@ window.__fetches = [];
 window.__reloads = 0;
 window.fetch = async (url, options) => {
     var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    if (url === '/session/save') return {ok:true,status:200,json:async()=>({ok:true})};
     window.__fetches.push({ url: url, options: options, body: bodyObj });
     if (url === '/session/reword') {
         var rowIds = bodyObj.row_ids || [];
@@ -1431,11 +1440,11 @@ def test_table_row_drag_deadzone_and_range_drag(page, tmp_path):
     page.evaluate("""() => {
         var r0 = document.querySelector("tr[data-row-id='0']");
         var r1 = document.querySelector("tr[data-row-id='1']");
-        
+
         // Dispatch mousedown on row 0 at clientX=100, clientY=100
         var md = new MouseEvent('mousedown', { bubbles: true, cancelable: true, button: 0, clientX: 100, clientY: 100 });
         r0.dispatchEvent(md);
-        
+
         // Dispatch mouseover on row 1 with jitter only 2px away (clientX=101, clientY=101, dist ~ 1.41px < 5px)
         var moSmall = new MouseEvent('mouseover', { bubbles: true, cancelable: true, buttons: 1, clientX: 101, clientY: 101 });
         r1.dispatchEvent(moSmall);
@@ -1449,7 +1458,7 @@ def test_table_row_drag_deadzone_and_range_drag(page, tmp_path):
         var r1 = document.querySelector("tr[data-row-id='1']");
         var moBig = new MouseEvent('mouseover', { bubbles: true, cancelable: true, buttons: 1, clientX: 110, clientY: 110 });
         r1.dispatchEvent(moBig);
-        
+
         var mu = new MouseEvent('mouseup', { bubbles: true, cancelable: true, button: 0 });
         document.dispatchEvent(mu);
     }""")
@@ -1467,6 +1476,7 @@ def test_reword_with_frequency_shift_does_not_mutate_neighboring_rows(page, tmp_
 window.__fetches = [];
 window.fetch = async (url, options) => {
     var bodyObj = (options && options.body) ? JSON.parse(options.body) : {};
+    if (url === '/session/save') return {ok:true,status:200,json:async()=>({ok:true})};
     window.__fetches.push({ url: url, options: options, body: bodyObj });
     if (url === '/session/reword') {
         return {
@@ -1639,21 +1649,3 @@ window.fetch = async (url, options) => {
     assert len(save_fetches) == 1
     assert save_fetches[0]["options"]["keepalive"] is True
     assert save_fetches[0]["body"]["deltas"][0]["value"] == "жилище_onclose"
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
