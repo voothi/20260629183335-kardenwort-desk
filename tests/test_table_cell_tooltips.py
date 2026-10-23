@@ -313,7 +313,8 @@ def test_table_cell_tooltips_in_rendered_html(tmp_path):
     # 1. Verify inflected column title has bold header and sentence with bold token
     bold_hunde = to_unicode_bold("Hunde")
     assert f'Die {bold_hunde} schlafen im Haus.' in html_out
-    assert f'title="{html.escape(bold_hunde + "\nDie " + bold_hunde + " schlafen im Haus.")}"' in html_out
+    expected_title = html.escape(bold_hunde + "\nDie " + bold_hunde + " schlafen im Haus.")
+    assert f'title="{expected_title}"' in html_out
 
     # 2. Verify lemma column title has definite article for German nouns
     assert 'title="der Hund"' in html_out
@@ -715,5 +716,55 @@ def test_grammar_metadata_contract_server_client_parity(page, tmp_path):
         })()
     """)
     assert custom_pos == "CustomCategory"
+
+
+def test_normalize_gender_code():
+    from kardenwort_grammar import normalize_gender_code
+    # Test masculine mappings
+    assert normalize_gender_code("m") == "m"
+    assert normalize_gender_code("m.") == "m"
+    assert normalize_gender_code("MASC") == "m"
+    assert normalize_gender_code("masc") == "m"
+    assert normalize_gender_code("masculine") == "m"
+    assert normalize_gender_code("der") == "m"
+    assert normalize_gender_code("Der") == "m"
+
+    # Test feminine mappings
+    assert normalize_gender_code("f") == "f"
+    assert normalize_gender_code("f.") == "f"
+    assert normalize_gender_code("FEM") == "f"
+    assert normalize_gender_code("fem") == "f"
+    assert normalize_gender_code("feminine") == "f"
+    assert normalize_gender_code("die") == "f"
+    assert normalize_gender_code("Die") == "f"
+
+    # Test neuter mappings
+    assert normalize_gender_code("n") == "n"
+    assert normalize_gender_code("n.") == "n"
+    assert normalize_gender_code("NEUT") == "n"
+    assert normalize_gender_code("neut") == "n"
+    assert normalize_gender_code("neuter") == "n"
+    assert normalize_gender_code("das") == "n"
+    assert normalize_gender_code("Das") == "n"
+
+    # Test rejection of unrecognized or empty values
+    assert normalize_gender_code(None) is None
+    assert normalize_gender_code("") is None
+    assert normalize_gender_code("   ") is None
+    assert normalize_gender_code("other") is None
+    assert normalize_gender_code("unknown") is None
+    assert normalize_gender_code("pl") is None
+    assert normalize_gender_code("plural") is None
+
+
+def test_detect_german_gender_suffix_moment_exclusion():
+    from kardenwort_grammar import detect_german_gender_suffix
+    # Moment must be excluded from -ent suffix match
+    assert detect_german_gender_suffix("Moment", "m") is None
+    assert detect_german_gender_suffix("moment", "m") is None
+    # Valid -ent and -ismus suffixes should still match
+    assert detect_german_gender_suffix("Student", "m") == "-ent"
+    assert detect_german_gender_suffix("Optimismus", "m") == "-ismus"
+
 
 

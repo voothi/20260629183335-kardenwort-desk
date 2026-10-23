@@ -113,7 +113,8 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
     js = js.replace("{input_border}", "gray")
     js = js.replace("{ui_config_json}", "{}")
     js = js.replace("{workspace_tabs_component_js}", kardenwort_desk.get_workspace_tabs_js())
-    
+    anki_tts_cli_esc = anki_tts_cli.replace('\\', '\\\\')
+    python_exe_esc = python_exe.replace('\\', '\\\\')
     cfg_inject = (
         "window.__CONFIG__ = window.__CONFIG__ || {};\n"
         f"window.__CONFIG__.audio_lmb_play = {'true' if lmb_play else 'false'};\n"
@@ -124,9 +125,10 @@ def extract_desk_js(lmb_play=False, lmb_source="lemma", lmb_chain_mode="joined",
         f"window.__CONFIG__.audio_rmb_play = {'true' if rmb_play else 'false'};\n"
         f"window.__CONFIG__.audio_rmb_chain_mode = \"{rmb_chain_mode}\";\n"
         f"window.__CONFIG__.audio_rmb_source = \"{rmb_source}\";\n"
-        f"window.__CONFIG__.audio_anki_tts_cli = \"{anki_tts_cli.replace('\\', '\\\\')}\";\n"
-        f"window.__CONFIG__.audio_python_exe = \"{python_exe.replace('\\', '\\\\')}\";\n"
+        f"window.__CONFIG__.audio_anki_tts_cli = \"{anki_tts_cli_esc}\";\n"
+        f"window.__CONFIG__.audio_python_exe = \"{python_exe_esc}\";\n"
     )
+
     return cfg_inject + js
 
 def extract_mvp_js():
@@ -6689,6 +6691,29 @@ def test_dashes_are_not_grouped_on_client_or_server(page, tmp_path, monkeypatch)
 
     for entry in client_groups:
         assert entry["group"] == [entry["text"]], f"Span '{entry['text']}' should not group across dashes, got {entry['group']}"
+
+
+def test_same_lemma_button_zero_reflow_font_weight():
+    """
+    Verifies that .kw-action-toolbar button#kw-btn-same-lemma.active in table.css
+    does not override font-weight to 600, preserving invariant font-weight 500
+    for zero layout shift / reflow.
+    """
+    css_path = Path(__file__).parent.parent / "web" / "css" / "table.css"
+    content = css_path.read_text(encoding="utf-8")
+
+    match = re.search(
+        r"\.kw-action-toolbar\s+button#kw-btn-same-lemma\.active\s*\{([^}]+)\}",
+        content
+    )
+    assert match is not None, "Rule .kw-action-toolbar button#kw-btn-same-lemma.active not found in table.css"
+    rule_block = match.group(1)
+
+    assert "font-weight: 600" not in rule_block, (
+        "Active state must not override font-weight to 600; font metrics must remain invariant (zero-reflow)."
+    )
+    assert "font-weight" not in rule_block or "font-weight: 500" in rule_block
+
 
 
 
