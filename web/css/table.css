@@ -557,9 +557,12 @@ td.dirty {
 
 .skeleton-loader.kw-skeleton-cell,
 td.col-translation .skeleton-loader,
-td[data-col="WordDestination"] .skeleton-loader {
-    height: 20px;
-    min-height: 20px;
+td[data-col="WordDestination"] .skeleton-loader,
+td[data-col="WordSourceIPA"] .skeleton-loader,
+td[data-col="WordSourceMorphologyAI"] .skeleton-loader {
+    vertical-align: top;
+    height: 21px;
+    min-height: 21px;
     font-size: 11px;
     width: 100%;
     display: inline-flex;

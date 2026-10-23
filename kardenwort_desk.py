@@ -11813,11 +11813,11 @@ html, body {{
         
         # Skeleton loaders for cells pending when a configured provider is expected to fill them:
         if run_base == 'auto' and not trans_val.strip() and has_untranslated_lemmas:
-            trans_val = f'<span class="skeleton-loader" style="width: 60px;" title="{lemma_provider_label}">{lemma_provider_label}</span>'
+            trans_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{lemma_provider_label}">{lemma_provider_label}</span>'
         if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ipa_val.strip() and not llm_filled:
-            ipa_val = f'<span class="skeleton-loader" style="width: 50px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+            ipa_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
         if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not morph_val.strip() and not llm_filled:
-            morph_val = f'<span class="skeleton-loader" style="width: 80px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+            morph_val = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
         
         row_highlight_class = "highlight-purple" if (row_id in paired_rows) else "highlight-orange"
         
@@ -12231,11 +12231,11 @@ html, body {{
             ov_morph = ov_r[col_morph] if col_morph != -1 and len(ov_r) > col_morph else ""
             ov_ipa = ov_r[col_ipa] if col_ipa != -1 and len(ov_r) > col_ipa else ""
             if run_base == 'auto' and not ov_trans.strip() and has_untranslated_lemmas:
-                ov_trans = f'<span class="skeleton-loader" style="width: 60px;" title="{lemma_provider_label}">{lemma_provider_label}</span>'
+                ov_trans = f'<span class="skeleton-loader kw-skeleton-cell" title="{lemma_provider_label}">{lemma_provider_label}</span>'
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_ipa.strip() and not llm_filled:
-                ov_ipa = f'<span class="skeleton-loader" style="width: 50px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+                ov_ipa = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
             if run_enrich == 'auto' and enrich_provider == 'intellifiller' and not ov_morph.strip() and not llm_filled:
-                ov_morph = f'<span class="skeleton-loader" style="width: 80px;" title="{enrich_provider_label}">{enrich_provider_label}</span>'
+                ov_morph = f'<span class="skeleton-loader kw-skeleton-cell" title="{enrich_provider_label}">{enrich_provider_label}</span>'
             ov_token_order = ov_r[col_token_order] if col_token_order != -1 and len(ov_r) > col_token_order and str(ov_r[col_token_order]).strip() else str(ov_id)
             ov_is_sel = "0"
             if is_container:
