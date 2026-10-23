@@ -1628,6 +1628,62 @@ def pair_sentence_records(records: List[Dict[str, Any]]) -> Tuple[List[str], Lis
 # ---------------------------------------------------------------------------
 # In-Memory Session Arbiter & SSE Event Dispatcher
 # ---------------------------------------------------------------------------
+class EventDispatcher:
+    """
+    Thread-safe Server-Sent Events (SSE) dispatcher for session-scoped in-memory streams.
+    Manages subscriber queues without requiring disk-based update files.
+    """
+    _instance: Optional["EventDispatcher"] = None
+    _singleton_lock = threading.Lock()
+
+    def __init__(self):
+        self._subscribers: Dict[str, List[queue.Queue]] = {}
+        self._lock = threading.Lock()
+
+    @classmethod
+    def get_instance(cls) -> "EventDispatcher":
+        with cls._singleton_lock:
+            if cls._instance is None:
+                cls._instance = EventDispatcher()
+            return cls._instance
+
+    def register(self, session_zid: str) -> queue.Queue:
+        q = queue.Queue(maxsize=1000)
+        with self._lock:
+            if session_zid not in self._subscribers:
+                self._subscribers[session_zid] = []
+            self._subscribers[session_zid].append(q)
+        return q
+
+    def unregister(self, session_zid: str, q: queue.Queue):
+        with self._lock:
+            if session_zid in self._subscribers:
+                try:
+                    self._subscribers[session_zid].remove(q)
+                    if not self._subscribers[session_zid]:
+                        del self._subscribers[session_zid]
+                except ValueError:
+                    pass
+
+    def has_subscribers(self, session_zid: str) -> bool:
+        with self._lock:
+            return bool(self._subscribers.get(session_zid))
+
+    def publish(self, session_zid: str, event_data: Dict[str, Any]):
+        payload = dict(event_data)
+        if "timestamp" not in payload:
+            payload["timestamp"] = datetime.now(timezone.utc).isoformat()
+        payload["session_zid"] = session_zid
+        with self._lock:
+            queues = list(self._subscribers.get(session_zid, []))
+        for q in queues:
+            try:
+                q.put_nowait(payload)
+            except queue.Full:
+                pass
+
+
+# ---------------------------------------------------------------------------
 class SessionArbiter:
     """
     Maintains centralized in-memory session states, serializes concurrent mutations,
@@ -1639,7 +1695,6 @@ class SessionArbiter:
         self.resolved_paths = resolved_paths
         self.wordfill_cfg = wordfill_cfg or resolve_wordfill_config(config, resolved_paths)
         self.sessions: Dict[str, Dict[str, Any]] = {}
-        self.subscribers: Dict[str, List[queue.Queue]] = {}
         self._lock = threading.Lock()
         self.enrichment_queue = EnrichmentQueue(config, resolved_paths)
         try:
@@ -1677,43 +1732,20 @@ class SessionArbiter:
             event['active_lemma_provider'] = to_p
         self.emit_event(session_zid, event)
 
+    @property
+    def subscribers(self) -> Dict[str, List[queue.Queue]]:
+        return EventDispatcher.get_instance()._subscribers
+
     def register_subscriber(self, session_zid: str) -> queue.Queue:
-        q = queue.Queue(maxsize=1000)
-        with self._lock:
-            if session_zid not in self.subscribers:
-                self.subscribers[session_zid] = []
-            self.subscribers[session_zid].append(q)
-        return q
+        return EventDispatcher.get_instance().register(session_zid)
 
     def unregister_subscriber(self, session_zid: str, q: queue.Queue):
-        with self._lock:
-            if session_zid in self.subscribers:
-                try:
-                    self.subscribers[session_zid].remove(q)
-                    if not self.subscribers[session_zid]:
-                        del self.subscribers[session_zid]
-                except ValueError:
-                    pass
+        EventDispatcher.get_instance().unregister(session_zid, q)
 
     def emit_event(self, session_zid: str, event_data: Dict[str, Any]):
-        event_payload = dict(event_data)
-        event_payload["timestamp"] = datetime.now(timezone.utc).isoformat()
-        event_payload["session_zid"] = session_zid
+        EventDispatcher.get_instance().publish(session_zid, event_data)
 
-        with self._lock:
-            queues = list(self.subscribers.get(session_zid, []))
-
-        for q in queues:
-            try:
-                q.put_nowait(event_payload)
-            except queue.Full:
-                pass
-
-        try:
-            from http_server import EventDispatcher
-            EventDispatcher.get_instance().publish(session_zid, event_payload)
-        except Exception:
-            pass
+    _publish_event = emit_event
 
     def create_session(
         self,
@@ -3457,18 +3489,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
     def _handle_sse_events(self, zid: str):
         """Streams Server-Sent Events (SSE) for the specified session ZID."""
-        arbiter = getattr(self.server, 'arbiter', None)
-        try:
-            from http_server import EventDispatcher
-            dispatcher = EventDispatcher.get_instance()
-        except Exception:
-            dispatcher = None
-
-        q = None
-        if arbiter:
-            q = arbiter.register_subscriber(zid)
-        elif dispatcher:
-            q = dispatcher.register(zid)
+        dispatcher = EventDispatcher.get_instance()
+        q = dispatcher.register(zid)
 
         self.send_response(200)
         self._send_cors_headers()
@@ -3485,7 +3507,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         try:
             while True:
                 try:
-                    event = q.get(timeout=10.0) if q else queue.Queue().get(timeout=10.0)
+                    event = q.get(timeout=10.0)
                     msg = f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
                     self.wfile.write(msg.encode('utf-8'))
                     self.wfile.flush()
@@ -3496,10 +3518,7 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
         except (socket.error, ConnectionResetError, BrokenPipeError):
             pass
         finally:
-            if arbiter and q:
-                arbiter.unregister_subscriber(zid, q)
-            elif dispatcher and q:
-                dispatcher.unregister(zid, q)
+            dispatcher.unregister(zid, q)
 
     def _dispatch_route(self, method: str):
         parsed_url = urllib.parse.urlparse(self.path)
