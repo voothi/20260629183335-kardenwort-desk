@@ -548,9 +548,11 @@ td.dirty {
 }
 
 #translation-container .skeleton-loader {
-    min-height: 1.6em;
+    font-size: var(--font-size-md, 16px);
     height: 1.6em;
-    font-size: 13px;
+    min-height: 1.6em;
+    line-height: 1.6;
+    vertical-align: top;
     width: 100%;
     max-width: 500px;
 }

@@ -2944,3 +2944,134 @@ def test_container_tab_subtoken_isolation_and_overview_retext_distribution(page,
     assert "Он идет быстро." in overview_text
     assert "Она приходит поздно." in overview_text
 
+
+def test_playwright_table_skeleton_zero_reflow_on_translation_arrival(page, tmp_path, monkeypatch):
+    """
+    OpenSpec 20261023120229: Verifies that when progressive translations load
+    and replace table cell and container skeleton loaders with resolved text,
+    the table rows, scrollable cells, source container, and translation container
+    exhibit 0.0px bounding box shift (zero subpixel reflow).
+    """
+    import time
+    config, resolved_paths, _, _ = kardenwort_desk.load_config()
+    config.set("triggers", "run_lemma_base_translation", "auto")
+    config.set("triggers", "run_lemma_enrichment", "auto")
+    config.set("wordfill", "enabled", "false")
+    config.set("pipeline", "text_base_provider", "google")
+    config.set("pipeline", "lemma_base_provider", "google")
+
+    unique_zid = f"20261023{int(time.time() * 1000) % 1000000:06d}"
+    tsv_file = tmp_path / f"{unique_zid}-test.de.tsv"
+    tsv_content = (
+        "# Source: Die Katze schläft auf dem Sofa.\n"
+        "WordSource\tWordSourceInflectedForm\tWordDestination\tWordSourceIPA\tWordSourceMorphologyAI\tSentenceSourceIndex\tSentenceDestination\n"
+        "Katze\tKatze\t\t\t\t1\t\n"
+        "schlafen\tschläft\t\t\t\t1\t\n"
+        "Sofa\tSofa\t\t\t\t1\t\n"
+    )
+    tsv_file.write_text(tsv_content, encoding="utf-8")
+
+    storage_adapter = kardenwort_desk.get_storage_adapter(config, resolved_paths)
+    storage_adapter.save_session(
+        session_zid=unique_zid,
+        slug="die-katze-schlaeft",
+        source_language="de",
+        target_language="ru",
+        text_mode="single",
+        source_raw_text="Die Katze schläft auf dem Sofa.",
+        tsv_path=str(tsv_file),
+        headers=["WordSource", "WordSourceInflectedForm", "WordDestination", "WordSourceIPA", "WordSourceMorphologyAI", "SentenceSourceIndex", "SentenceDestination"],
+        comments=[],
+        data_rows=[
+            ["Katze", "Katze", "", "", "", "1", ""],
+            ["schlafen", "schläft", "", "", "", "1", ""],
+            ["Sofa", "Sofa", "", "", "", "1", ""],
+        ],
+        sentences=[{"session_zid": unique_zid, "sentence_index": 1, "sentence_source": "Die Katze schläft auf dem Sofa.", "sentence_destination": "", "sentence_destination2": ""}],
+    )
+
+    monkeypatch.setattr(kardenwort_desk, "prepare_lookup_tsv", lambda *args, **kwargs: tsv_file)
+    monkeypatch.setattr(kardenwort_desk, "run_progressive_worker_async", lambda *a, **k: None)
+    monkeypatch.setattr(kardenwort_desk, "write_update_js", lambda *a, **k: None)
+
+    html = kardenwort_desk._run_render_flow_impl(
+        text="Die Katze schläft auf dem Sofa.",
+        language="de",
+        zid=unique_zid,
+        text_mode="single",
+        config=config,
+        resolved_paths=resolved_paths,
+        tsv_path=str(tsv_file),
+        wordfill_cfg={"enabled": False},
+        spawn_children=False,
+        return_children=False,
+        seq_num=1,
+    )
+
+    page.set_content(html)
+    page.wait_for_selector("#lemma-table tbody tr")
+
+    # Verify skeleton loaders are initially present in table cells
+    skeletons = page.locator("td.col-translation .skeleton-loader")
+    assert skeletons.count() == 3
+
+    get_metrics = """() => {
+        function getBox(el) {
+            if (!el) return null;
+            const r = el.getBoundingClientRect();
+            return { x: r.x, y: r.y, width: r.width, height: r.height };
+        }
+        const sc = document.getElementById('source-container');
+        const tc = document.getElementById('translation-container');
+        const table = document.getElementById('lemma-table');
+        const rows = Array.from(document.querySelectorAll('#lemma-table tbody tr')).map(tr => ({
+            trBox: getBox(tr),
+            tds: Array.from(tr.querySelectorAll('td')).map(td => ({
+                col: td.getAttribute('data-col') || td.className,
+                cellDivBox: getBox(td.querySelector('.scrollable-cell') || td)
+            }))
+        }));
+        return { sc: getBox(sc), tc: getBox(tc), table: getBox(table), rows };
+    }"""
+
+    before = page.evaluate(get_metrics)
+
+    # Dispatch progressive translation arrival via receiveUpdate
+    page.evaluate("""() => {
+        const updatePayload = {
+            stage: "finished",
+            status: "success",
+            translatedText: "Кошка спит на диване.",
+            translated_text: "Кошка спит на диване.",
+            text_provenance: "live:google",
+            rows: {
+                "0": { TokenOrder: "0", WordSource: "Katze", WordDestination: "кошка", provenance: "live:google" },
+                "1": { TokenOrder: "1", WordSource: "schlafen", WordDestination: "спать", provenance: "live:google" },
+                "2": { TokenOrder: "2", WordSource: "Sofa", WordDestination: "диван", provenance: "live:google" }
+            }
+        };
+        window.receiveUpdate(updatePayload);
+    }""")
+    page.wait_for_timeout(100)
+
+    after = page.evaluate(get_metrics)
+
+    # 1. Source and translation containers must have zero height shift
+    assert abs(after["sc"]["height"] - before["sc"]["height"]) < 0.05
+    assert abs(after["tc"]["height"] - before["tc"]["height"]) < 0.05
+
+    # 2. Table vertical position must have zero displacement
+    assert abs(after["table"]["y"] - before["table"]["y"]) < 0.05
+
+    # 3. Every row must maintain invariant height and vertical offset (zero reflow)
+    for r_idx, (r_before, r_after) in enumerate(zip(before["rows"], after["rows"])):
+        tr_h_diff = abs(r_after["trBox"]["height"] - r_before["trBox"]["height"])
+        tr_y_diff = abs(r_after["trBox"]["y"] - r_before["trBox"]["y"])
+        assert tr_h_diff < 0.05, f"Row {r_idx} height shifted by {tr_h_diff}px"
+        assert tr_y_diff < 0.05, f"Row {r_idx} y-offset displaced by {tr_y_diff}px"
+
+        for td_before, td_after in zip(r_before["tds"], r_after["tds"]):
+            cell_h_diff = abs(td_after["cellDivBox"]["height"] - td_before["cellDivBox"]["height"])
+            assert cell_h_diff < 0.05, f"Col {td_after['col']} in Row {r_idx} cell height shifted by {cell_h_diff}px"
+
+

@@ -11705,7 +11705,7 @@ html, body {{
         )
         text_provider_label = format_provider_skeleton_label(main_text_provider)
         if is_progressive and run_text == 'auto' and not has_real_text:
-            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; min-height: 1.6em; height: 1.6em;" title="{text_provider_label}">{text_provider_label}</div>'
+            sentence_html = f'<div class="skeleton-loader" data-pending="true" style="width: 100%; max-width: 500px; min-height: 1.6em; height: 1.6em; line-height: 1.6;" title="{text_provider_label}">{text_provider_label}</div>'
         else:
             sentence_html = format_translated_html(sentence_translations, text_mode=text_mode, text=text, config=config)
 

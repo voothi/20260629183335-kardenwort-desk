@@ -565,12 +565,23 @@ def test_skeleton_loader_proportions_unified(mock_clean_context_env):
     assert "min-height: 1.6em;" in base_css
     assert "height: 1.6em;" in base_css
 
-    # 2. Translation container .skeleton-loader rule has min-height: 1.6em; height: 1.6em;
+    # 2. Translation container .skeleton-loader rule has min-height: 1.6em; height: 1.6em; line-height: 1.6; vertical-align: top; font-size: 16px
     tc_match = re.search(r'#translation-container\s+\.skeleton-loader\s*\{([^}]+)\}', html)
     assert tc_match is not None
     tc_css = tc_match.group(1)
     assert "min-height: 1.6em;" in tc_css
     assert "height: 1.6em;" in tc_css
+    assert "font-size: var(--font-size-md, 16px);" in tc_css
+    assert "line-height: 1.6;" in tc_css
+    assert "vertical-align: top;" in tc_css
+
+    # 3. Table cell skeleton rule has height: 21px; min-height: 21px; vertical-align: top;
+    cell_match = re.search(r'\.skeleton-loader\.kw-skeleton-cell[^{]*\{([^}]+)\}', html)
+    assert cell_match is not None
+    cell_css = cell_match.group(1)
+    assert "height: 21px;" in cell_css
+    assert "min-height: 21px;" in cell_css
+    assert "vertical-align: top;" in cell_css
 
 
 def test_regression_real_world_anki_mapping_multi_mode_isolation(tmp_path, monkeypatch):
