@@ -46,6 +46,7 @@ from kardenwort_grammar import (
     format_pos_tooltip as _grammar_format_pos_tooltip,
     format_gender_tooltip as _grammar_format_gender_tooltip,
     format_gender_badge as _grammar_format_gender_badge,
+    normalize_gender_code as _grammar_normalize_gender_code,
     get_grammar_payload,
 )
 
@@ -2816,6 +2817,10 @@ def is_ai_provenance(provenance: Optional[str]) -> bool:
 
 def format_gender_tooltip(gender_val: Optional[str], lemma: Optional[str] = None, provenance: Optional[str] = None) -> str:
     return _grammar_format_gender_tooltip(gender_val, lemma=lemma, provenance=provenance)
+
+
+def normalize_gender_code(val: Optional[str]) -> Optional[str]:
+    return _grammar_normalize_gender_code(val)
 
 
 def format_classification_tooltip(classification_val: Optional[str], role: str = "") -> str:

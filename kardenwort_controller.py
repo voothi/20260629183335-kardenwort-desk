@@ -1986,44 +1986,42 @@ class SessionArbiter:
         storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
+        sess_memo = {}
+        with self._lock:
+            if hasattr(self, 'sessions') and session_zid in self.sessions:
+                sess_memo = dict(self.sessions[session_zid])
+
         resolved_tsv_path: Optional[Path] = None
         if tsv_path:
             resolved_tsv_path = Path(tsv_path)
         else:
-            with self._lock:
-                if session_zid in self.sessions:
-                    cand_str = self.sessions[session_zid].get("tsv_path")
-                    if cand_str:
-                        resolved_tsv_path = Path(cand_str)
+            cand_str = sess_memo.get("tsv_path")
+            if cand_str:
+                resolved_tsv_path = Path(cand_str)
             if not resolved_tsv_path:
-                lang = (self.sessions.get(session_zid, {}).get("language")
-                        if session_zid in self.sessions else None) or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
+                lang = sess_memo.get("language") or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
                 results_dir = resolve_results_dir(self.resolved_paths, self.config)
                 resolved_tsv_path = find_working_tsv(results_dir, session_zid, lang, storage_adapter=storage_adapter)
                 if not resolved_tsv_path:
                     resolved_tsv_path = results_dir / f"{session_zid}.{lang}.tsv"
 
         if not resolved_tsv_path.exists():
-            with self._lock:
-                if session_zid in self.sessions:
-                    sess = self.sessions[session_zid]
-                    comments = sess.get("comments", [])
-                    headers = sess.get("headers", [])
-                    data_rows = sess.get("data_rows", [])
-                    if headers and data_rows:
-                        try:
-                            resolved_tsv_path.parent.mkdir(parents=True, exist_ok=True)
-                            save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
-                        except Exception:
-                            pass
+            comments = sess_memo.get("comments", [])
+            headers = sess_memo.get("headers", [])
+            data_rows = sess_memo.get("data_rows", [])
+            if headers and data_rows:
+                try:
+                    resolved_tsv_path.parent.mkdir(parents=True, exist_ok=True)
+                    save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
+                except Exception:
+                    pass
 
         eff_active_text_prov = active_text_prov or getattr(sentence_trans, "provenance", "live:retext")
 
         with storage_adapter.file_lock(resolved_tsv_path):
             comments, headers, data_rows = storage_adapter.load_tsv_rows(resolved_tsv_path)
             mapping = load_anki_mapping(self.resolved_paths['anki_mapping_file'])
-            role_fields = (self.sessions.get(session_zid, {}).get("role_fields")
-                           if session_zid in self.sessions else None) or get_role_fields(mapping, headers)
+            role_fields = sess_memo.get("role_fields") or get_role_fields(mapping, headers)
             col_sentence_dest = headers.index('SentenceDestination') if 'SentenceDestination' in headers else (headers.index(role_fields['sentence_destination']) if 'sentence_destination' in role_fields and role_fields['sentence_destination'] in headers else -1)
             col_sentence_dest2 = headers.index('SentenceDestination2') if 'SentenceDestination2' in headers else -1
             col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
@@ -2076,7 +2074,6 @@ class SessionArbiter:
 
         eff_translated_text = translated_text
         if eff_translated_text is None:
-            sess_memo = self.sessions.get(session_zid, {}) if hasattr(self, 'sessions') else {}
             eff_translated_text = format_translated_html(
                 sentence_trans,
                 text_mode=sess_memo.get("text_mode", "single"),

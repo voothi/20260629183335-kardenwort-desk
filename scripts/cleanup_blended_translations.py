@@ -64,15 +64,6 @@ def cleanup_blended_translations(db_path: Path, apply_changes: bool = False):
         if not clean_ru or ", " in clean_ru:
             continue
 
-        # If sentence_source is missing from sentences table, try reconstructing from other words or sessions
-        if not sent_source:
-            cursor.execute(
-                "SELECT sentence_source FROM sentences WHERE session_zid = ? AND sentence_index = ? LIMIT 1",
-                (sess_zid, sent_idx)
-            )
-            s_row = cursor.fetchone()
-            if s_row and s_row["sentence_source"]:
-                sent_source = s_row["sentence_source"].strip()
 
         # Check lemma occurrence count in sentence (fail-safe: require exactly 1 match)
         is_single_occurrence = False

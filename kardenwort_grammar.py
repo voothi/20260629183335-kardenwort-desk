@@ -61,6 +61,35 @@ POS_FULL_NAME_MAP: Dict[str, str] = {
     "interjection": "Interjection",
 }
 
+# Normative gender code / label mappings to canonical single-character codes
+GENDER_CODE_MAP: Dict[str, str] = {
+    "m": "m",
+    "masc": "m",
+    "masculine": "m",
+    "der": "m",
+    "f": "f",
+    "fem": "f",
+    "feminine": "f",
+    "die": "f",
+    "n": "n",
+    "neut": "n",
+    "neuter": "n",
+    "das": "n",
+}
+
+
+def normalize_gender_code(val: Optional[str]) -> Optional[str]:
+    """
+    Normalizes gender strings and aliases (m, masc, masculine, der -> m;
+    f, fem, feminine, die -> f; n, neut, neuter, das -> n) to canonical single-character
+    gender codes ('m', 'f', 'n') or None if unrecognized.
+    """
+    if val is None:
+        return None
+    cleaned = str(val).strip().rstrip('.').lower()
+    return GENDER_CODE_MAP.get(cleaned)
+
+
 # Normative gender code / label mappings to human-readable names
 GENDER_FULL_NAME_MAP: Dict[str, str] = {
     "m": "Masculine",
@@ -119,8 +148,13 @@ GERMAN_SUFFIX_EXCLUDED_IN: Set[str] = {
     "kinn", "sinn", "benzin", "ruin", "urin", "rubin", "cousin", "magazin", "berlin", "dublin",
 }
 
+# Common non-derived nominal stems ending in -ent that are NOT derived agent nouns
+GERMAN_SUFFIX_EXCLUDED_ENT: Set[str] = {
+    "moment", "element", "dokument", "talent", "argument", "patent", "zement",
+}
 
-def detect_german_gender_suffix(lemma: Optional[str], gender_code: str) -> Optional[str]:
+
+def detect_german_gender_suffix(lemma: Optional[str], gender_code: Optional[str]) -> Optional[str]:
     """
     Detects recognizable German derivational or compound gender suffixes.
     Returns format '-suffix' or None if no recognized suffix applies.
@@ -131,12 +165,18 @@ def detect_german_gender_suffix(lemma: Optional[str], gender_code: str) -> Optio
     if not w:
         return None
 
-    if gender_code == "m":
+    code = normalize_gender_code(gender_code)
+    if not code:
+        return None
+
+    if code == "m":
         for suf in GERMAN_GENDER_SUFFIXES_MASCULINE:
+            if suf == "ent" and (w in GERMAN_SUFFIX_EXCLUDED_ENT or any(w.endswith(ex) for ex in GERMAN_SUFFIX_EXCLUDED_ENT)):
+                continue
             min_len = 4 if suf in ("mann", "or") else (7 if suf == "partner" else (6 if suf == "ismus" else 5))
             if len(w) >= min_len and w.endswith(suf):
                 return f"-{suf}"
-    elif gender_code == "f":
+    elif code == "f":
         for suf in GERMAN_GENDER_SUFFIXES_FEMININE:
             if suf == "in":
                 if len(w) > 4 and w not in GERMAN_SUFFIX_EXCLUDED_IN and w.endswith("in"):
@@ -145,7 +185,7 @@ def detect_german_gender_suffix(lemma: Optional[str], gender_code: str) -> Optio
                 min_len = 4 if suf in ("ik", "ei") else (6 if suf == "schaft" else 5)
                 if len(w) >= min_len and w.endswith(suf):
                     return f"-{suf}"
-    elif gender_code == "n":
+    elif code == "n":
         for suf in GERMAN_GENDER_SUFFIXES_NEUTER:
             min_len = 4 if suf in ("tum", "um") else 5
             if len(w) >= min_len and w.endswith(suf):
@@ -196,12 +236,12 @@ def format_lemma_article_tooltip(
             if lower_lemma in GERMAN_PRONOUNS:
                 return clean_lemma
 
-        g = (str(gender) if gender is not None else "").strip().rstrip('.').lower()
-        if g in ("m", "masc", "masculine", "der"):
+        g = normalize_gender_code(gender)
+        if g == "m":
             return f"der {clean_lemma}"
-        elif g in ("f", "fem", "feminine", "die"):
+        elif g == "f":
             return f"die {clean_lemma}"
-        elif g in ("n", "neut", "neuter", "das"):
+        elif g == "n":
             return f"das {clean_lemma}"
     return clean_lemma
 
@@ -238,20 +278,10 @@ def format_gender_tooltip(
     """
     Formats unabbreviated grammatical gender name with optional AI source and suffix derivation annotation.
     """
-    if not gender_val:
+    g_code = normalize_gender_code(gender_val)
+    if not g_code:
         return ""
-    g_clean = str(gender_val).strip().rstrip('.').lower()
-    if g_clean not in GENDER_FULL_NAME_MAP:
-        return ""
-    gender_name = GENDER_FULL_NAME_MAP[g_clean]
-
-    g_code = ""
-    if g_clean in ("m", "masc", "masculine", "der"):
-        g_code = "m"
-    elif g_clean in ("f", "fem", "feminine", "die"):
-        g_code = "f"
-    elif g_clean in ("n", "neut", "neuter", "das"):
-        g_code = "n"
+    gender_name = {"m": "Masculine", "f": "Feminine", "n": "Neuter"}[g_code]
 
     ai_flag = is_ai_provenance(provenance)
     suffix = detect_german_gender_suffix(lemma, g_code)
@@ -269,12 +299,12 @@ def format_gender_badge(gender_val: Optional[str]) -> str:
     """
     Renders styled HTML badge for grammatical gender (e.g. m, f, n).
     """
-    g = (str(gender_val) if gender_val is not None else "").strip().rstrip('.').lower()
-    if g in ("m", "masc", "masculine", "der"):
+    g = normalize_gender_code(gender_val)
+    if g == "m":
         return '<span class="kw-gender kw-gender-m">m</span>'
-    elif g in ("f", "fem", "feminine", "die"):
+    elif g == "f":
         return '<span class="kw-gender kw-gender-f">f</span>'
-    elif g in ("n", "neut", "neuter", "das"):
+    elif g == "n":
         return '<span class="kw-gender kw-gender-n">n</span>'
     return ""
 
@@ -295,6 +325,7 @@ def get_grammar_payload() -> Dict[str, Any]:
         "suffixes_feminine": list(GERMAN_GENDER_SUFFIXES_FEMININE),
         "suffixes_neuter": list(GERMAN_GENDER_SUFFIXES_NEUTER),
         "suffix_excluded_in": sorted(list(GERMAN_SUFFIX_EXCLUDED_IN)),
+        "suffix_excluded_ent": sorted(list(GERMAN_SUFFIX_EXCLUDED_ENT)),
         # CamelCase aliases for client JS convenience
         "posMap": dict(POS_FULL_NAME_MAP),
         "genderMap": dict(GENDER_FULL_NAME_MAP),
@@ -306,4 +337,5 @@ def get_grammar_payload() -> Dict[str, Any]:
         "suffixesFeminine": list(GERMAN_GENDER_SUFFIXES_FEMININE),
         "suffixesNeuter": list(GERMAN_GENDER_SUFFIXES_NEUTER),
         "suffixExcludedIn": sorted(list(GERMAN_SUFFIX_EXCLUDED_IN)),
+        "suffixExcludedEnt": sorted(list(GERMAN_SUFFIX_EXCLUDED_ENT)),
     }

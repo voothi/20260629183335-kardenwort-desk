@@ -1074,7 +1074,7 @@ def test_unslop_code_hygiene_and_contract_hardening(page, test_server):
         btn.classList.remove('active');
         return weight;
     }""")
-    assert btn_weight in ('600', 'bold')
+    assert btn_weight in ('500', 'normal')
 
     # 4. Fail-fast error throwing on malformed #kardenwort-bootstrap JSON
     error_thrown = page.evaluate("""() => {
@@ -1447,7 +1447,7 @@ def test_toolbar_buttons_active_style_and_specificity_under_light_compact_white_
         assert res["filterBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for filter button in {theme}, got {res['filterBg']}"
         assert res["lemmaBg"] == "rgb(210, 153, 34)", f"Expected golden #d29922 for lemma button in {theme}, got {res['lemmaBg']}"
         assert res["filterFw"] in ["600", "bold"], f"Expected font-weight 600 for filter button in {theme}, got {res['filterFw']}"
-        assert res["lemmaFw"] in ["600", "bold"], f"Expected font-weight 600 for lemma button in {theme}, got {res['lemmaFw']}"
+        assert res["lemmaFw"] in ["500", "normal"], f"Expected invariant font-weight 500 for lemma button in {theme}, got {res['lemmaFw']}"
         assert "56, 166, 255" in res["handBg"], f"Expected active blue background for hand tool in {theme}, got {res['handBg']}"
 
         # Verify delete button hover style under theme
