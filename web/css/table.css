@@ -530,14 +530,15 @@ td.dirty {
     min-height: 1.6em;
     height: 1.6em;
     width: 100%;
-    background: linear-gradient(-90deg, var(--table-border, rgba(255, 255, 255, 0.05)) 0%, var(--table-th-border, rgba(255, 255, 255, 0.1)) 50%, var(--table-border, rgba(255, 255, 255, 0.05)) 100%);
+    background: var(--skeleton-bg, linear-gradient(-90deg, var(--table-border, rgba(255, 255, 255, 0.05)) 0%, var(--table-th-border, rgba(255, 255, 255, 0.1)) 50%, var(--table-border, rgba(255, 255, 255, 0.05)) 100%));
     background-size: 400% 400%;
     animation: pulse-skeleton 1.5s ease infinite;
-    border-radius: 4px;
+    border-radius: var(--radius-md, 4px);
     vertical-align: middle;
+    font-family: var(--font-sans);
     font-size: 11px;
     font-weight: 500;
-    color: var(--text-muted);
+    color: var(--skeleton-text, var(--text-muted));
     letter-spacing: 0.05em;
     user-select: none;
     -webkit-user-select: none;
@@ -547,7 +548,8 @@ td.dirty {
     text-overflow: ellipsis;
 }
 
-#translation-container .skeleton-loader {
+#source-container .skeleton-loader {
+    font-family: var(--font-sans);
     font-size: var(--font-size-md, 16px);
     height: 1.6em;
     min-height: 1.6em;
@@ -555,6 +557,19 @@ td.dirty {
     vertical-align: top;
     width: 100%;
     max-width: 500px;
+    border-radius: var(--radius-md, 4px);
+}
+
+#translation-container .skeleton-loader {
+    font-family: var(--font-sans);
+    font-size: var(--font-size-md, 16px);
+    height: 1.6em;
+    min-height: 1.6em;
+    line-height: 1.6;
+    vertical-align: top;
+    width: 100%;
+    max-width: 500px;
+    border-radius: var(--radius-md, 4px);
 }
 
 .skeleton-loader.kw-skeleton-cell,
@@ -565,12 +580,14 @@ td[data-col="WordSourceMorphologyAI"] .skeleton-loader {
     vertical-align: top;
     height: 21px;
     min-height: 21px;
+    font-family: var(--font-sans);
     font-size: 11px;
     width: 100%;
     display: inline-flex;
     align-items: center;
     justify-content: center;
     box-sizing: border-box;
+    border-radius: var(--radius-sm, 3px);
 }
 
 @keyframes pulse-skeleton {

@@ -8559,16 +8559,16 @@
             var tr = document.querySelector('tr[data-row-id="' + rowId + '"]');
             var cellDiv = null;
             if (tr) {
-                var tds = tr.getElementsByTagName('td');
-                if (tds.length >= 3) {
-                    cellDiv = tds[2].querySelector('.scrollable-cell') || tds[2];
+                var cell = tr.querySelector('td.col-translation, td[data-col="WordDestination"], td[data-col="word_translation"]') || tr.getElementsByTagName('td')[2];
+                if (cell) {
+                    cellDiv = cell.querySelector('.scrollable-cell') || cell;
                 }
             }
             if (btnElement) {
                 btnElement.disabled = true;
             }
             if (cellDiv) {
-                cellDiv.innerHTML = '<span class="skeleton-loader" style="width: 60px;"></span>';
+                cellDiv.innerHTML = '<span class="skeleton-loader" data-pending="true" title="Retrying..."></span>';
             }
 
             var token = getApiToken ? getApiToken() : "";

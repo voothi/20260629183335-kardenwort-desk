@@ -365,12 +365,11 @@ de_prompt=
     )
 
     # Translation cell is pending and a provider is expected to fill it -> skeleton.
-    assert "skeleton-loader" in html_out, "Master window translation cell must emit a skeleton loader"
-    assert 'width: 60px' in html_out, "Translation skeleton (width 60px) must be present"
-
-    # IPA / Morphology are manual -> must NOT shimmer.
-    assert 'width: 50px' not in html_out, "IPA skeleton must not appear when run_lemma_enrichment = manual"
-    assert 'width: 80px' not in html_out, "Morphology skeleton must not appear when run_lemma_enrichment = manual"
+    assert "<tbody>" in html_out and "</tbody>" in html_out
+    table_body = html_out[html_out.index("<tbody"):html_out.index("</tbody>")]
+    assert "skeleton-loader" in table_body, "Master window translation cell must emit a skeleton loader"
+    assert "kw-skeleton-cell" in table_body, "Translation skeleton (kw-skeleton-cell) must be present"
+    assert table_body.count("skeleton-loader") == 1, "Only translation cell must shimmer; IPA/Morphology must not shimmer when manual"
 
 
 def test_progressive_worker_child_single_mode_syncs_with_siblings(monkeypatch, tmp_path):
