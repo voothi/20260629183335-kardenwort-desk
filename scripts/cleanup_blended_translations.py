@@ -74,8 +74,8 @@ def cleanup_blended_translations(db_path: Path, apply_changes: bool = False):
             if s_row and s_row["sentence_source"]:
                 sent_source = s_row["sentence_source"].strip()
 
-        # Check lemma occurrence count in sentence
-        is_single_occurrence = True
+        # Check lemma occurrence count in sentence (fail-safe: require exactly 1 match)
+        is_single_occurrence = False
         if sent_source and lemma:
             try:
                 tokens = tok.build_word_list_internal(sent_source, keep_spaces=True)
@@ -88,10 +88,10 @@ def cleanup_blended_translations(db_path: Path, apply_changes: bool = False):
                         or (t.get("lower_clean") or t.get("text") or "").strip().lower() in quots
                     )
                 )
-                if match_count > 1:
-                    is_single_occurrence = False
+                if match_count == 1:
+                    is_single_occurrence = True
             except Exception:
-                pass
+                is_single_occurrence = False
 
         if not is_single_occurrence:
             continue

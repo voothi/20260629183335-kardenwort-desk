@@ -4895,19 +4895,13 @@ class SqliteStorageAdapter(StorageAdapter):
                                 token_global_indices.append(g_idx)
 
                             target_set = set(target_vidxs)
-                            # Assert coordinate alignment if target coordinates and sentence offsets are known
-                            if target_vidxs and s_offset is not None:
-                                if not any(g in target_set for g in token_global_indices):
-                                    raise ValueError(
-                                        f"Coordinate alignment violation in session '{session_zid}': "
-                                        f"target visual indices {target_vidxs} do not match sentence {sent_idx} "
-                                        f"candidate token coordinates {token_global_indices} for lemma '{w_lem}'"
-                                    )
-                            elif not any(g in target_set for g in token_global_indices) and s_offset is None:
-                                # Fallback: match by lemma occurrence ordinal within the sentence when offset cannot be resolved
-                                for ord_i, g_idx in enumerate(token_global_indices):
-                                    if ord_i < len(target_vidxs):
-                                        target_set.add(g_idx)
+                            # Assert coordinate alignment if target coordinates are known
+                            if target_vidxs and not any(g in target_set for g in token_global_indices):
+                                raise ValueError(
+                                    f"Coordinate alignment violation in session '{session_zid}': "
+                                    f"target visual indices {target_vidxs} do not match sentence {sent_idx} "
+                                    f"candidate token coordinates {token_global_indices} for lemma '{w_lem}'"
+                                )
 
                             # Assign new enrichment values to targeted occurrences
                             for g_idx in token_global_indices:
@@ -13486,10 +13480,11 @@ def get_bundled_css(web_dir=None) -> str:
     css_parts = []
     for css_file in ("variables.css", "tokens.css", "table.css", "main.css"):
         p_css = web_dir / "css" / css_file
-        if p_css.is_file():
-            css_text = p_css.read_text(encoding="utf-8")
-            css_text = re.sub(r'@import\s+url\([^)]+\);\s*', '', css_text)
-            css_parts.append(css_text)
+        if not p_css.is_file():
+            raise FileNotFoundError(f"Required CSS asset not found: {p_css}")
+        css_text = p_css.read_text(encoding="utf-8")
+        css_text = re.sub(r'@import\s+url\([^)]+\);\s*', '', css_text)
+        css_parts.append(css_text)
     return "\n".join(css_parts)
 
 _WORKSPACE_TABS_JS_CACHE = None
@@ -13506,10 +13501,9 @@ def get_workspace_tabs_js(web_dir=None, reload=False) -> str:
         elif isinstance(web_dir, str):
             web_dir = Path(web_dir)
         p = web_dir / "js" / "components" / "WorkspaceTabs.js"
-        if p.is_file():
-            _WORKSPACE_TABS_JS_CACHE = p.read_text(encoding="utf-8")
-        else:
-            _WORKSPACE_TABS_JS_CACHE = ""
+        if not p.is_file():
+            raise FileNotFoundError(f"Required component JS not found: {p}")
+        _WORKSPACE_TABS_JS_CACHE = p.read_text(encoding="utf-8")
     return _WORKSPACE_TABS_JS_CACHE
 
 _LEMMA_TABLE_JS_CACHE = None
@@ -13526,10 +13520,9 @@ def get_lemma_table_js(web_dir=None, reload=False) -> str:
         elif isinstance(web_dir, str):
             web_dir = Path(web_dir)
         p = web_dir / "js" / "components" / "LemmaTable.js"
-        if p.is_file():
-            _LEMMA_TABLE_JS_CACHE = p.read_text(encoding="utf-8")
-        else:
-            _LEMMA_TABLE_JS_CACHE = ""
+        if not p.is_file():
+            raise FileNotFoundError(f"Required component JS not found: {p}")
+        _LEMMA_TABLE_JS_CACHE = p.read_text(encoding="utf-8")
     return _LEMMA_TABLE_JS_CACHE
 
 _SOURCE_VIEWER_JS_CACHE = None
@@ -13546,10 +13539,9 @@ def get_source_viewer_js(web_dir=None, reload=False) -> str:
         elif isinstance(web_dir, str):
             web_dir = Path(web_dir)
         p = web_dir / "js" / "components" / "SourceViewer.js"
-        if p.is_file():
-            _SOURCE_VIEWER_JS_CACHE = p.read_text(encoding="utf-8")
-        else:
-            _SOURCE_VIEWER_JS_CACHE = ""
+        if not p.is_file():
+            raise FileNotFoundError(f"Required component JS not found: {p}")
+        _SOURCE_VIEWER_JS_CACHE = p.read_text(encoding="utf-8")
     return _SOURCE_VIEWER_JS_CACHE
 
 _TRANSLATION_VIEW_JS_CACHE = None
@@ -13566,10 +13558,9 @@ def get_translation_view_js(web_dir=None, reload=False) -> str:
         elif isinstance(web_dir, str):
             web_dir = Path(web_dir)
         p = web_dir / "js" / "components" / "TranslationView.js"
-        if p.is_file():
-            _TRANSLATION_VIEW_JS_CACHE = p.read_text(encoding="utf-8")
-        else:
-            _TRANSLATION_VIEW_JS_CACHE = ""
+        if not p.is_file():
+            raise FileNotFoundError(f"Required component JS not found: {p}")
+        _TRANSLATION_VIEW_JS_CACHE = p.read_text(encoding="utf-8")
     return _TRANSLATION_VIEW_JS_CACHE
 
 _WEB_INDEX_HTML_CACHE = None
