@@ -4663,7 +4663,15 @@
             if (!span) return null;
             var wordIdx = parseInt(span.getAttribute('data-word-idx') || span.getAttribute('data-order') || span.getAttribute('data-token-order'), 10);
             var spanText = (span.getAttribute('data-word') || span.textContent || '').trim().toLowerCase();
-            var spanSent = parseInt(span.getAttribute('data-sentence-idx'), 10) || 1;
+            var rawSent = parseInt(span.getAttribute('data-sentence-idx'), 10);
+            var spanSent = isNaN(rawSent) ? null : rawSent;
+
+            function resolveSent(wObj, card) {
+                if (spanSent !== null) return spanSent;
+                var w = parseInt(wObj.sentence_idx, 10);
+                if (!isNaN(w)) return w;
+                return (card && card.sentence_idx > 0) ? card.sentence_idx : null;
+            }
 
             for (var i = 0; i < tokenMap.length; i++) {
                 var t = tokenMap[i];
@@ -4687,36 +4695,46 @@
                                 row_ids: [wObj.row_id],
                                 atomic_row_ids: [wObj.row_id],
                                 is_word: true,
-                                sentence_idx: cards[c].seq_num || 1
+                                sentence_idx: resolveSent(wObj, cards[c])
                             };
                         }
                     }
                 }
                 if (spanText) {
+                    var candidates = [];
+                    var seenRowIds = {};
                     for (var c = 0; c < cards.length; c++) {
-                        var cSeq = cards[c].seq_num || (c + 1);
                         var words = cards[c].words || [];
                         for (var w = 0; w < words.length; w++) {
                             var wObj = words[w];
                             if (wObj.word && wObj.word.trim().toLowerCase() === spanText) {
-                                var wOrder = wObj.token_order !== undefined ? wObj.token_order : wObj.row_id;
-                                return {
-                                    text: wObj.word,
-                                    lemma: wObj.lemma,
-                                    visual_idx: wOrder,
-                                    token_order: wOrder,
-                                    row_ids: [wObj.row_id],
-                                    atomic_row_ids: [wObj.row_id],
-                                    is_word: true,
-                                    sentence_idx: cSeq
-                                };
+                                if (spanSent === null || String(wObj.sentence_idx) === String(spanSent)) {
+                                    if (!seenRowIds[wObj.row_id]) {
+                                        seenRowIds[wObj.row_id] = true;
+                                        var wOrder = wObj.token_order !== undefined ? wObj.token_order : wObj.row_id;
+                                        candidates.push({
+                                            text: wObj.word,
+                                            lemma: wObj.lemma,
+                                            visual_idx: wOrder,
+                                            token_order: wOrder,
+                                            row_ids: [wObj.row_id],
+                                            atomic_row_ids: [wObj.row_id],
+                                            is_word: true,
+                                            sentence_idx: resolveSent(wObj, cards[c])
+                                        });
+                                    }
+                                }
                             }
                         }
+                    }
+                    if (candidates.length === 1) {
+                        return candidates[0];
                     }
                 }
             }
             if (spanText) {
                 var rows = document.querySelectorAll('#lemma-table tbody tr[data-row-id]');
+                var matchedRows = [];
                 for (var r = 0; r < rows.length; r++) {
                     var tr = rows[r];
                     var rId = parseInt(tr.getAttribute('data-row-id'), 10);
@@ -4725,7 +4743,7 @@
                     var t1 = (srcInfCell ? (srcInfCell.textContent || '') : '').trim().toLowerCase();
                     var t2 = (srcCell ? (srcCell.textContent || '') : '').trim().toLowerCase();
                     if (t1 === spanText || t2 === spanText) {
-                        return {
+                        matchedRows.push({
                             text: spanText,
                             lemma: t2 || t1,
                             visual_idx: wordIdx,
@@ -4734,8 +4752,11 @@
                             atomic_row_ids: [rId],
                             is_word: true,
                             sentence_idx: spanSent
-                        };
+                        });
                     }
+                }
+                if (matchedRows.length === 1) {
+                    return matchedRows[0];
                 }
             }
             return null;

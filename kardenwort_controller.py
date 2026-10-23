@@ -1587,6 +1587,44 @@ class EnrichmentQueue:
         self._progressive_executor.shutdown(wait=wait)
 
 
+def to_one_based_sentence_map(raw) -> Tuple[Dict[int, str], Dict[int, str]]:
+    """Convert translate_source_text() output (0-based keys) into 1-based (main, padded) maps."""
+    if isinstance(raw, str):
+        if not raw.strip():
+            raise StructuredError(ErrorCode.DESK_FAILED, "Translation output is empty.")
+        return {1: raw}, {}
+    if not isinstance(raw, dict):
+        raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"Unsupported translation output type: {type(raw).__name__}")
+
+    def _convert(d) -> Dict[int, str]:
+        out: Dict[int, str] = {}
+        for k, v in d.items():
+            if isinstance(k, bool) or not str(k).isdigit():
+                continue
+            if v is None:
+                continue
+            out[int(k) + 1] = str(v)
+        return out
+
+    main = _convert(raw)
+    padded = _convert(raw.get('PADDED') or {}) if isinstance(raw.get('PADDED'), dict) else {}
+    if not main and raw.get('FULL_TEXT'):
+        main = {1: str(raw['FULL_TEXT'])}
+    if not main:
+        raise StructuredError(ErrorCode.DESK_FAILED, "Translation output has no sentence entries.")
+    return main, padded
+
+
+def pair_sentence_records(records: List[Dict[str, Any]]) -> Tuple[List[str], List[str]]:
+    """Build aligned (sources, destinations) lists from sentence records, omitting incomplete pairs."""
+    ordered = sorted(records or [], key=lambda s: int(s.get("sentence_index") or 0))
+    pairs = [(str(s.get("sentence_source") or "").strip(), str(s.get("sentence_destination") or "").strip()) for s in ordered]
+    pairs = [(src, dst) for src, dst in pairs if src and dst]
+    srcs = [p[0] for p in pairs]
+    dests = [p[1] for p in pairs]
+    return srcs, dests
+
+
 # ---------------------------------------------------------------------------
 # In-Memory Session Arbiter & SSE Event Dispatcher
 # ---------------------------------------------------------------------------
@@ -1892,12 +1930,27 @@ class SessionArbiter:
         tsv_path: Optional[Union[Path, str]] = None,
         active_text_provider: Optional[str] = None,
         translated_text: Optional[str] = None,
+        sentence_map: Optional[Dict[int, str]] = None,
+        padded_map: Optional[Dict[int, str]] = None,
     ) -> Dict[str, Any]:
         """
         Encapsulates row updates, SQLite sentence translation updates, and TSV synchronization
         for a session's sentence translation deltas.
         """
         req_zid = req_zid or generate_unique_zid()
+
+        if sentence_map is None:
+            if not isinstance(sentence_trans, dict):
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Retext persistence requires a 1-based sentence map.")
+            sentence_map = {int(k): str(v) for k, v in sentence_trans.items() if not isinstance(k, bool) and str(k).isdigit() and v is not None}
+            if padded_map is None and isinstance(sentence_trans.get('PADDED'), dict):
+                padded_map = {int(k): str(v) for k, v in sentence_trans['PADDED'].items() if str(k).isdigit() and v is not None}
+        padded_map = padded_map or {}
+        if not sentence_map:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Retext persistence requires a non-empty 1-based sentence map.")
+        if 0 in sentence_map or 0 in padded_map:
+            raise StructuredError(ErrorCode.INVALID_PAYLOAD, "Retext persistence keys must be 1-based; key 0 is not allowed.")
+
         storage_adapter = getattr(self, 'storage_adapter', None) or get_storage_adapter(self.config, self.resolved_paths)
         is_sqlite = (getattr(storage_adapter, 'backend_name', '') == 'sqlite')
 
@@ -1944,36 +1997,32 @@ class SessionArbiter:
             col_sent = headers.index(role_fields.get('sentence_index', 'SentenceSourceIndex')) if role_fields.get('sentence_index', 'SentenceSourceIndex') in headers else -1
 
             if col_sentence_dest != -1 or col_sentence_dest2 != -1:
-                padded_dict = (sentence_trans.get('PADDED') or {}) if isinstance(sentence_trans, dict) else {}
-                is_zero_based = isinstance(sentence_trans, dict) and (0 in sentence_trans or '0' in sentence_trans)
-                for row in data_rows:
-                    if sentence_trans:
-                        s_idx_val = int(row[col_sent]) if col_sent != -1 and len(row) > col_sent and str(row[col_sent]).strip().isdigit() else 1
-                        trans_key = (s_idx_val - 1) if is_zero_based else s_idx_val
-                        if col_sentence_dest != -1 and len(row) > col_sentence_dest:
-                            if isinstance(sentence_trans, dict):
-                                trans_val = (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) or
-                                             (padded_dict.get(trans_key) or padded_dict.get(str(trans_key))) or
-                                             (list(sentence_trans.values())[0] if len(sentence_trans) == 1 else ""))
-                                row[col_sentence_dest] = str(trans_val)
-                            else:
-                                row[col_sentence_dest] = str(sentence_trans)
-                        if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2 and (padded_dict or sentence_trans):
-                            p_val = (padded_dict.get(trans_key) or padded_dict.get(str(trans_key)) or
-                                     (sentence_trans.get(trans_key) or sentence_trans.get(str(trans_key)) if isinstance(sentence_trans, dict) else str(sentence_trans)))
-                            if p_val:
-                                row[col_sentence_dest2] = str(p_val)
+                if col_sent == -1 and len(sentence_map) > 1:
+                    raise StructuredError(ErrorCode.INVALID_STATE, "Cannot align multi-sentence retext without SentenceSourceIndex column.")
 
-                if is_sqlite and isinstance(sentence_trans, dict):
-                    padded_dict = sentence_trans.get('PADDED') or {}
-                    is_zero_based = (0 in sentence_trans or '0' in sentence_trans)
-                    for s_idx_raw, trans in sentence_trans.items():
-                        if s_idx_raw in ('FULL_TEXT', 'PADDED') or not (isinstance(s_idx_raw, int) or str(s_idx_raw).isdigit()):
-                            continue
-                        s_idx = int(s_idx_raw) + 1 if is_zero_based else int(s_idx_raw)
-                        if s_idx <= 0:
-                            continue
-                        if trans and isinstance(trans, str):
+                single_main_val = list(sentence_map.values())[0] if len(sentence_map) == 1 else None
+                single_padded_val = list(padded_map.values())[0] if len(padded_map) == 1 else None
+
+                for row in data_rows:
+                    if col_sent == -1:
+                        if col_sentence_dest != -1 and len(row) > col_sentence_dest and single_main_val and str(single_main_val).strip():
+                            row[col_sentence_dest] = str(single_main_val)
+                        if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2 and single_padded_val and str(single_padded_val).strip():
+                            row[col_sentence_dest2] = str(single_padded_val)
+                    else:
+                        sent_cell = str(row[col_sent]).strip() if len(row) > col_sent else ""
+                        if sent_cell.isdigit():
+                            s_idx = int(sent_cell)
+                            if s_idx in sentence_map and str(sentence_map[s_idx]).strip():
+                                if col_sentence_dest != -1 and len(row) > col_sentence_dest:
+                                    row[col_sentence_dest] = str(sentence_map[s_idx])
+                            if s_idx in padded_map and str(padded_map[s_idx]).strip():
+                                if col_sentence_dest2 != -1 and len(row) > col_sentence_dest2:
+                                    row[col_sentence_dest2] = str(padded_map[s_idx])
+
+                if is_sqlite:
+                    for s_idx, trans in sentence_map.items():
+                        if trans and isinstance(trans, str) and trans.strip():
                             try:
                                 storage_adapter.update_sentence_translation(
                                     session_zid, s_idx, trans, target_field="sentence_destination", zid=req_zid, provenance=eff_active_text_prov
@@ -1988,36 +2037,21 @@ class SessionArbiter:
                             except Exception as e:
                                 logger.warning(f"Failed to update sentence {s_idx} translation in DB: {e}")
 
-                        if padded_dict:
-                            padded_trans = padded_dict.get(s_idx_raw) or padded_dict.get(int(s_idx_raw) if str(s_idx_raw).isdigit() else s_idx_raw)
-                            if padded_trans and isinstance(padded_trans, str):
+                    for s_idx, padded_trans in padded_map.items():
+                        if padded_trans and isinstance(padded_trans, str) and padded_trans.strip():
+                            try:
+                                storage_adapter.update_sentence_translation(
+                                    session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=eff_active_text_prov
+                                )
+                            except TypeError:
                                 try:
                                     storage_adapter.update_sentence_translation(
-                                        session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid, provenance=eff_active_text_prov
+                                        session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid
                                     )
-                                except TypeError:
-                                    try:
-                                        storage_adapter.update_sentence_translation(
-                                            session_zid, s_idx, padded_trans, target_field="sentence_destination2", zid=req_zid
-                                        )
-                                    except Exception as e:
-                                        logger.warning(f"Failed to update sentence {s_idx} destination2 in DB: {e}")
                                 except Exception as e:
                                     logger.warning(f"Failed to update sentence {s_idx} destination2 in DB: {e}")
-                elif is_sqlite and isinstance(sentence_trans, str):
-                    try:
-                        storage_adapter.update_sentence_translation(
-                            session_zid, 1, sentence_trans, target_field="sentence_destination", zid=req_zid, provenance=eff_active_text_prov
-                        )
-                    except TypeError:
-                        try:
-                            storage_adapter.update_sentence_translation(
-                                session_zid, 1, sentence_trans, target_field="sentence_destination", zid=req_zid
-                            )
-                        except Exception as e:
-                            logger.warning(f"Failed to update sentence 1 translation in DB: {e}")
-                    except Exception as e:
-                        logger.warning(f"Failed to update sentence 1 translation in DB: {e}")
+                            except Exception as e:
+                                logger.warning(f"Failed to update sentence {s_idx} destination2 in DB: {e}")
 
                 storage_adapter.save_tsv_rows_safely(resolved_tsv_path, comments, headers, data_rows)
 
@@ -2199,6 +2233,8 @@ class SessionArbiter:
 
         active_text_prov = getattr(sentence_trans, "provenance", f"live:{active_text_provider}")
 
+        main_map, padded_map = to_one_based_sentence_map(sentence_trans)
+
         # Enforce discrete <div> containers per sentence when multiple sentences exist
         translated_html = format_translated_html(sentence_trans, text_mode=eff_retext_mode, text=eff_retext_text, config=self.config)
 
@@ -2210,6 +2246,8 @@ class SessionArbiter:
             tsv_path=tsv_path,
             active_text_provider=active_text_provider,
             translated_text=translated_html,
+            sentence_map=main_map,
+            padded_map=padded_map,
         )
 
         data_rows = persist_res["data_rows"]
@@ -2217,25 +2255,7 @@ class SessionArbiter:
         role_fields = persist_res["role_fields"]
         new_fp = persist_res["fingerprint"]
 
-        # Enforce strict server payload contract: normalize sentences to 1-indexed integers
-        normalized_sentences: Dict[int, str] = {}
-        if isinstance(sentence_trans, dict):
-            is_zero_based = (0 in sentence_trans or '0' in sentence_trans)
-            for k, v in sentence_trans.items():
-                if k in ('FULL_TEXT', 'PADDED') or not (isinstance(k, int) or str(k).isdigit()):
-                    continue
-                s_idx = (int(k) + 1) if is_zero_based else int(k)
-                if s_idx > 0 and v is not None:
-                    normalized_sentences[s_idx] = str(v)
-            if not normalized_sentences:
-                fallback_txt = sentence_trans.get('FULL_TEXT')
-                if fallback_txt:
-                    normalized_sentences[1] = str(fallback_txt)
-        elif sentence_trans:
-            normalized_sentences[1] = str(sentence_trans)
-
-        if not normalized_sentences:
-            raise StructuredError(ErrorCode.DESK_FAILED, "Retext translation produced no valid sentence mapping.")
+        normalized_sentences = main_map
 
         sorted_rows = sort_session_data_rows(data_rows, headers, language, self.config, self.resolved_paths, role_fields=role_fields)
         structured_rows = format_update_rows_dict(sorted_rows, headers, role_fields)
@@ -2399,6 +2419,12 @@ class SessionArbiter:
         sentence_idx: Optional[int] = None,
     ) -> Dict[str, Any]:
         req_zid = zid or generate_unique_zid()
+        if sentence_idx is not None:
+            if isinstance(sentence_idx, bool) or not str(sentence_idx).strip().lstrip('-').isdigit():
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"sentence_idx must be a non-negative integer, got {sentence_idx!r}")
+            sentence_idx = int(sentence_idx)
+            if sentence_idx < 0:
+                raise StructuredError(ErrorCode.INVALID_PAYLOAD, f"sentence_idx must be a non-negative integer, got {sentence_idx}")
         lang = language or self.config.get(SEC_SETTINGS, 'default_language', fallback='en')
         target_lang = self.config.get(SEC_SETTINGS, 'default_target_language', fallback='ru') if self.config else 'ru'
         prompt_name = prompt or self.config.get(SEC_LANGUAGES, f"{lang}_prompt", fallback="")
@@ -2484,26 +2510,7 @@ class SessionArbiter:
         target_token_orders = list(dict.fromkeys(target_token_orders))
         selected_row_indices = set(target_row_indices)
 
-        if sentence_idx is None and target_coordinates:
-            for tc in target_coordinates:
-                if isinstance(tc, dict) and tc.get('sentence_idx') is not None:
-                    try:
-                        sentence_idx = int(tc.get('sentence_idx'))
-                        break
-                    except (ValueError, TypeError):
-                        pass
-
-        if sentence_idx is None and col_sent != -1 and target_row_indices:
-            row_sents = set()
-            for r in target_row_indices:
-                if r < len(data_rows) and len(data_rows[r]) > col_sent:
-                    val = str(data_rows[r][col_sent]).strip()
-                    if val.isdigit():
-                        row_sents.add(int(val))
-            if len(row_sents) == 1:
-                sentence_idx = list(row_sents)[0]
-
-        is_master_overview = (sentence_idx is None or int(sentence_idx) == 0)
+        is_master_overview = (sentence_idx is None or sentence_idx == 0)
 
         if selected_row_indices and provider != 'none':
             reword_prov_tag = f"live:{provider}"
@@ -3828,10 +3835,8 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
                                 try:
                                     db_sents = storage_adapter.db.get_sentences_by_session(zid)
                                     if db_sents:
-                                        sorted_db_sents = sorted(db_sents, key=lambda x: x.get("sentence_index", 1))
-                                        s_dests = [str(s.get("sentence_destination") or "").strip() for s in sorted_db_sents if s.get("sentence_destination")]
+                                        s_srcs, s_dests = pair_sentence_records(db_sents)
                                         if s_dests:
-                                            s_srcs = [str(s.get("sentence_source") or "").strip() for s in sorted_db_sents if s.get("sentence_source")]
                                             st_mode = "multi" if len(s_dests) >= 2 else safe_sess.get("text_mode", "single")
                                             st_text = "\n".join(s_srcs) if len(s_srcs) >= 2 else (safe_sess.get("text", "") or " ".join(s_srcs))
                                             formatted_tt = format_translated_html(
@@ -4081,15 +4086,15 @@ class ControllerRequestHandler(BaseHTTPRequestHandler):
 
             rows_dict = format_update_rows_dict(data_rows, headers, role_fields, row_provenances=fallback_row_provs)
             if len(sentences_list) >= 2:
-                eff_status_mode = "multi"
-                eff_status_text = "\n".join(s["sentence_source"] for s in sentences_list if s.get("sentence_source"))
-                clean_sents = [s["sentence_destination"] for s in sentences_list if s.get("sentence_destination")]
+                s_srcs, s_dests = pair_sentence_records(sentences_list)
+                eff_status_mode = "multi" if len(s_dests) >= 2 else text_mode
+                eff_status_text = "\n".join(s_srcs) if len(s_srcs) >= 2 else (source_text or " ".join(s_srcs))
                 translated_html = format_translated_html(
-                    clean_sents,
+                    s_dests,
                     text_mode=eff_status_mode,
                     text=eff_status_text,
                     config=self.server.config
-                ) if clean_sents else ""
+                ) if s_dests else ""
             else:
                 translated_html = format_translated_html(
                     sentence_translation,

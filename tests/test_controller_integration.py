@@ -142,8 +142,8 @@ def test_retext_payload_structure_and_multidiv_separation(running_controller, mo
     def mock_translate_text(text, src, tgt, *a, **kw):
         lines = [l.strip() for l in text.split("\n") if l.strip()]
         return MockResult({
-            1: f"DEEPL:{lines[0]}" if len(lines) > 0 else "DEEPL:1",
-            2: f"DEEPL:{lines[1]}" if len(lines) > 1 else "DEEPL:2"
+            0: f"DEEPL:{lines[0]}" if len(lines) > 0 else "DEEPL:1",
+            1: f"DEEPL:{lines[1]}" if len(lines) > 1 else "DEEPL:2"
         })
 
     monkeypatch.setattr("kardenwort_controller.translate_source_text", mock_translate_text)
